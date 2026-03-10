@@ -1186,9 +1186,10 @@ async def show_instruction(callback: CallbackQuery):
 4. Дождитесь надписи «Connected»
 
 📱 <b>ШАГ 5: ПРОВЕРЯЕМ РАБОТУ</b>
-1. Откройте Safari или любой браузер
+1. Откройте Safari или любой другой браузер
 2. Зайдите на: <code>https://bymevpn.duckdns.org:8443/</code>
-3. Если IP изменился — VPN работает! ✅
+3. Если IP-адрес изменился — Доступ работает! ✅
+4. Попробуйте зайти на любые сайты
 
 🔧 <b>ЕСЛИ ЧТО-ТО НЕ РАБОТАЕТ:</b>
 • Перезапустите приложение
@@ -1238,8 +1239,8 @@ async def show_instruction(callback: CallbackQuery):
 💡 <b>СОВЕТЫ:</b>
 • Включите «Global Routing» для всего трафика
 • Можно добавить несколько ключей для резерва""",
-        "windows": "<b>🖥️ Windows — инструкция</b>\n\n1. Скопируйте ключ из сообщения бота\n2. Скачайте и запустите Nekobox\n3. Nekobox → Import → From clipboard\n4. Выберите конфигурацию → нажмите «Connect»\n5. Разрешите доступ в брандмауэре\n\n✅ Проверка: зайдите на https://bymevpn.duckdns.org:8443/",
-        "macos": "<b>🍎 macOS — инструкция</b>\n\n1. Скопируйте ключ из сообщения бота\n2. Установите Shadowrocket из App Store\n3. Shadowrocket → «+» → Import from Clipboard\n4. Включите переключатель\n5. Разрешите настройку системных прокси\n\n✅ Проверка: зайдите на https://bymevpn.duckdns.org:8443/",
+        "windows": "<b>🖥️ Windows — инструкция</b>\n\n1. Скопируйте ключ из сообщения бота\n2. Скачайте и запустите Nekobox\n3. Nekobox → Import → From clipboard\n4. Выберите конфигурацию → нажмите «Connect»\n5. Разрешите доступ в брандмауэре\n\n✅ Проверка: проверьте на https://bymevpn.duckdns.org:8443/",
+        "macos": "<b>🍎 macOS — инструкция</b>\n\n1. Скопируйте ключ из сообщения бота\n2. Установите Shadowrocket из App Store\n3. Shadowrocket → «+» → Import from Clipboard\n4. Включите переключатель\n5. Разрешите настройку системных прокси\n\n✅ Проверка: проверьте на https://bymevpn.duckdns.org:8443/",
         "linux": "<b>🐧 Linux — инструкция</b>\n\n1. Скопируйте ключ из сообщения бота\n2. Установите Nekoray: wget + chmod\n3. Nekoray → «+» → Import from clipboard\n4. Выберите конфигурацию → нажмите «Connect»\n\n✅ Проверка: curl ifconfig.me"
     }
     

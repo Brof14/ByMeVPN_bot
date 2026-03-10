@@ -411,7 +411,7 @@ async def send_success_animation(bot: Bot, chat_id: int, message_text: str):
             text=animation_text,
             parse_mode="HTML"
         )
-        
+        logger.info(f"Success animation sent to chat {chat_id}")
     except Exception as e:
         logger.error(f"Error sending success animation: {e}")
 
@@ -419,13 +419,7 @@ async def send_welcome_animation_sequence(bot: Bot, chat_id: int, user_name: str
     """Send welcome animation sequence for new users"""
     try:
         # Step 1: Welcome animation
-        welcome_text = f"""
-{get_emoji('rocket', EmojiTheme.SUCCESS)} {get_emoji('star', EmojiTheme.PREMIUM)} {get_emoji('gift', EmojiTheme.SUCCESS)}
-
-<b>Добро пожаловать, {user_name}!</b>
-
-{get_emoji('shield', EmojiTheme.DEFAULT)} Готовимся запустить ваш VPN...
-"""
+        welcome_text = build_welcome_text(user_name, 0)
         
         await bot.send_message(chat_id=chat_id, text=welcome_text, parse_mode="HTML")
         await asyncio.sleep(1)  # Small delay for effect
