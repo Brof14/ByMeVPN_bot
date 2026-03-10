@@ -1,0 +1,78 @@
+"""
+Utils package for ByMeVPN bot
+"""
+
+from .helpers import (
+    update_menu,
+    create_beautiful_qr_code,
+    generate_simple_qr_fallback,
+    generate_and_send_beautiful_qr,
+    create_user_profile_card,
+    create_subscription_progress_card,
+    send_popup_alert,
+    send_success_animation,
+    send_welcome_animation_sequence,
+    send_expiry_warning_animation,
+    detect_user_theme,
+    get_theme_colors,
+    create_themed_message,
+    format_expiry_date,
+    get_time_until_expiry,
+    format_time_remaining,
+    create_progress_bar,
+    get_subscription_status_text,
+    format_number,
+    generate_referral_link,
+    export_keys_to_file,
+    safe_send_message,
+    safe_edit_message,
+    validate_payment_payload,
+    get_plan_indicator,
+    get_payment_method_indicator,
+    handle_bot_error,
+    read_legal_file,
+    get_legal_document_content,
+)
+
+from .xui_api import (
+    login,
+    add_client,
+    generate_vless,
+)
+
+__all__ = [
+    # From helpers
+    "update_menu",
+    "create_beautiful_qr_code",
+    "generate_simple_qr_fallback",
+    "generate_and_send_beautiful_qr",
+    "create_user_profile_card",
+    "create_subscription_progress_card",
+    "send_popup_alert",
+    "send_success_animation",
+    "send_welcome_animation_sequence",
+    "send_expiry_warning_animation",
+    "detect_user_theme",
+    "get_theme_colors",
+    "create_themed_message",
+    "format_expiry_date",
+    "get_time_until_expiry",
+    "format_time_remaining",
+    "create_progress_bar",
+    "get_subscription_status_text",
+    "format_number",
+    "generate_referral_link",
+    "export_keys_to_file",
+    "safe_send_message",
+    "safe_edit_message",
+    "validate_payment_payload",
+    "get_plan_indicator",
+    "get_payment_method_indicator",
+    "handle_bot_error",
+    "read_legal_file",
+    "get_legal_document_content",
+    # From xui_api
+    "login",
+    "add_client",
+    "generate_vless",
+]
