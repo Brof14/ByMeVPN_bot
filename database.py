@@ -8,6 +8,73 @@ DB_FILE = "byemevpn.db"
 logger = logging.getLogger(__name__)
 
 
+async def verify_database_integrity() -> dict:
+    """Verify database integrity and return status"""
+    integrity_report = {
+        "status": "ok",
+        "issues": [],
+        "tables": {},
+        "fixes_applied": []
+    }
+    
+    try:
+        async with aiosqlite.connect(DB_FILE) as db:
+            # Check tables exist
+            cursor = await db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = [row[0] for row in await cursor.fetchall()]
+            
+            required_tables = ['users', 'keys', 'payments', 'tournaments', 'tournament_participants']
+            
+            for table in required_tables:
+                if table in tables:
+                    # Check table structure
+                    cursor = await db.execute(f"PRAGMA table_info({table})")
+                    columns = [row[1] for row in await cursor.fetchall()]
+                    integrity_report["tables"][table] = {"exists": True, "columns": columns}
+                else:
+                    integrity_report["tables"][table] = {"exists": False}
+                    integrity_report["issues"].append(f"Missing table: {table}")
+                    integrity_report["status"] = "error"
+            
+            # Check indexes
+            cursor = await db.execute("SELECT name FROM sqlite_master WHERE type='index'")
+            indexes = [row[0] for row in await cursor.fetchall()]
+            
+            required_indexes = [
+                'idx_users_referrer', 'idx_users_notifications', 'idx_users_created',
+                'idx_keys_user', 'idx_keys_expiry', 'idx_tournaments_active',
+                'idx_tournaments_dates', 'idx_tournament_participants_tournament',
+                'idx_tournament_participants_user', 'idx_tournament_participants_progress',
+                'idx_payments_user', 'idx_payments_created'
+            ]
+            
+            for index in required_indexes:
+                if index not in indexes:
+                    integrity_report["issues"].append(f"Missing index: {index}")
+                    # Try to create missing indexes
+                    try:
+                        if index == 'idx_users_created':
+                            await db.execute("CREATE INDEX IF NOT EXISTS idx_users_created ON users(created)")
+                            integrity_report["fixes_applied"].append(f"Created index: {index}")
+                    except Exception as e:
+                        logger.warning(f"Could not create index {index}: {e}")
+            
+            # Verify foreign keys
+            cursor = await db.execute("PRAGMA foreign_key_list(keys)")
+            foreign_keys = await cursor.fetchall()
+            if not foreign_keys:
+                integrity_report["issues"].append("Foreign keys not properly configured in keys table")
+            
+            await db.commit()
+            
+    except Exception as e:
+        integrity_report["status"] = "error"
+        integrity_report["issues"].append(f"Database verification failed: {str(e)}")
+        logger.error(f"Database integrity check failed: {e}")
+    
+    return integrity_report
+
+
 async def init_db():
     async with aiosqlite.connect(DB_FILE) as db:
         # Сначала создаем таблицы без новых колонок (для совместимости)
@@ -139,6 +206,17 @@ async def init_db():
 
         await db.commit()
         print("База данных и индексы инициализированы")
+        
+        # Verify database integrity
+        integrity_check = await verify_database_integrity()
+        if integrity_check["status"] == "ok":
+            print("✅ Целостность базы данных подтверждена")
+            if integrity_check["fixes_applied"]:
+                print(f"🔧 Применены исправления: {', '.join(integrity_check['fixes_applied'])}")
+        else:
+            print(f"⚠️ Обнаружены проблемы с базой данных: {', '.join(integrity_check['issues'])}")
+            for issue in integrity_check["issues"]:
+                print(f"   - {issue}")
 
 
 async def add_user_key(user_id: int, key: str, remark: str, days: int):
@@ -677,6 +755,41 @@ async def get_server_stats() -> Dict:
             "failed_keys": failed_keys,
             "check_rate": round((checked_keys / active_keys * 100) if active_keys > 0 else 0, 1)
         }
+
+
+async def user_exists(user_id: int) -> bool:
+    """Check if user exists in database"""
+    async with aiosqlite.connect(DB_FILE) as db:
+        cursor = await db.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
+        row = await cursor.fetchone()
+        return row is not None
+
+
+async def extend_existing_key(user_id: int, key_info: dict, additional_days: int) -> bool:
+    """Extend an existing key's expiry date"""
+    async with aiosqlite.connect(DB_FILE) as db:
+        # Calculate new expiry date
+        current_expiry = key_info['expiry']
+        new_expiry = current_expiry + (additional_days * 86400)
+        
+        # Update the key in database
+        cursor = await db.execute(
+            "UPDATE keys SET expiry = ? WHERE user_id = ? AND key = ?",
+            (new_expiry, user_id, key_info['key'])
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def delete_user_key(user_id: int, key: str) -> bool:
+    """Delete a specific user key"""
+    async with aiosqlite.connect(DB_FILE) as db:
+        cursor = await db.execute(
+            "DELETE FROM keys WHERE user_id = ? AND key = ?",
+            (user_id, key)
+        )
+        await db.commit()
+        return cursor.rowcount > 0
 
 
 async def log_key_replacement(user_id: int, old_key_id: int, new_key: str, reason: str) -> None:

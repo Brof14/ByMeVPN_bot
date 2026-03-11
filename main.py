@@ -30,7 +30,7 @@ from aiogram.types import (
     FSInputFile,
 )
 
-from config import BOT_TOKEN, ADMIN_ID, REF_BONUS_DAYS, SUPPORT_USERNAME, MENU_PHOTO
+from config import BOT_TOKEN, ADMIN_ID, REF_BONUS_DAYS, SUPPORT_USERNAME, MENU_PHOTO, ADMIN_PASSWORD
 from database import (
     init_db,
     add_user_key,
@@ -51,6 +51,10 @@ from database import (
     get_admin_stats,
     has_used_trial,
     mark_trial_used,
+    delete_user_key,
+    extend_existing_key,
+    user_exists,
+    get_server_stats,
 )
 from emojis import get_emoji, EmojiTheme, format_text_with_emojis
 from keyboards import (
@@ -112,7 +116,7 @@ def build_welcome_text(user_name: str, monthly_count: int = None) -> str:
     
     welcome_text = (
         f"👋 <b>Здравствуйте, {user_name}!</b>\n\n"
-        "🌟 <i>Этот бот поможет вам получить доступ к</i> <b>быстрому и безопасному VPN</b>, <i>который стабильно работает и обходит любые блокировки.</i>\n\n"
+        "🌟 <i>Этот бот поможет вам получить доступ к</i> <b>быстрому и безопасному VPN</b>, <i>который стабильно работает и обеспечивает доступ к интернету.</i>\n\n"
         "🎁 <b>Любой тариф</b>, включая <i>пробный на 7 дней</i>, открывает <u>полный доступ к интернету</u> без ограничений скорости и трафика.\n\n"
         "📱 <b>VPN доступен на всех основных платформах:</b> <i>iOS, Android, Windows, macOS и Linux.</i>\n\n"
         "💫 <b>После оплаты</b> бот <u>автоматически отправит вам ключ</u> и <i>подскажет, в какое приложение его вставить.</i>\n\n"
@@ -136,11 +140,11 @@ OFFER_TEXT = """
 
 1.3. Исполнитель предоставляет Услуги по принципу «как есть», то есть без каких‑либо явных или подразумеваемых гарантий бесперебойной работы, постоянной доступности, определённой скорости соединения или отсутствия технических сбоев. Пользователь осознаёт и соглашается, что технические характеристики сервиса могут изменяться.
 
-1.4. **Важное примечание:** Сервис использует технологию VLESS с протоколом Reality для максимальной безопасности и обхода блокировок. Все данные шифруются end-to-end.
+1.4. **Важное примечание:** Сервис использует технологию VLESS с протоколом Reality для максимальной безопасности и стабильности соединения. Все данные шифруются end-to-end.
 
 📋 **2. Предмет договора**
 
-2.1. Исполнитель предоставляет Пользователю платный и/или пробный доступ к VPN‑инфраструктуре, позволяющей шифровать сетевой трафик и обходить сетевые ограничения и блокировки, а Пользователь обязуется оплачивать такие Услуги в соответствии с выбранным тарифом.
+2.1. Исполнитель предоставляет Пользователю платный и/или пробный доступ к VPN‑инфраструктуре, позволяющей шифровать сетевой трафик и обеспечивать стабильный доступ к интернету, а Пользователь обязуется оплачивать такие Услуги в соответствии с выбранным тарифом.
 
 2.2. Конкретный объём Услуг, срок действия подписки, количество одновременно поддерживаемых устройств и иные параметры определяются выбранным Пользователем тарифным планом, опубликованным в интерфейсе Telegram‑бота или на иных ресурсах Исполнителя.
 
@@ -509,15 +513,62 @@ async def give_subscription(
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
 
-    # Рефералка
+    user_id = message.from_user.id
+    user_name = message.from_user.first_name or "друг"
+    
+    # Enhanced referral logic
     args = message.text.split()
     if len(args) > 1 and args[1].isdigit():
         ref_id = int(args[1])
-        if ref_id != message.from_user.id:
-            await set_referrer(message.from_user.id, ref_id)
+        
+        # Check different referral scenarios
+        if ref_id == user_id:
+            # User trying to refer themselves
+            referral_text = (
+                "🔄 <b>Попытка реферального самоцитирования</b>\n\n"
+                "❌ <i>Переходить по своей рефералке — не очень хорошая идея</i>\n\n"
+                "🎁 <b>Но вы всё равно можете:</b>\n"
+                "• Начать с <b>7 дней бесплатно</b>\n"
+                "• Выбрать подходящий тариф\n\n"
+                "💫 <b>Добро пожаловать в ByMeVPN!</b>"
+            )
+            await message.answer(referral_text, parse_mode="HTML")
+        else:
+            # Check if user is new or existing
+            is_new_user = not await user_exists(user_id)
+            
+            if is_new_user:
+                # New user - set referrer and give bonus
+                await set_referrer(user_id, ref_id)
+                referral_text = (
+                    f"🎉 <b>Добро пожаловать, {user_name}!</b>\n\n"
+                    f"🎁 <b>Вы перешли по реферальной ссылке!</b>\n"
+                    f"✨ <i>Мы дарим вам <b>7 дней бесплатно</b> в подарок!</i>\n\n"
+                    f"🌟 <i>Этот бот поможет вам получить доступ к</i> <b>быстрому и безопасному VPN</b>, <i>который стабильно работает и обеспечивает доступ к интернету.</i>\n\n"
+                    f"🎁 <b>Любой тариф</b>, включая <i>пробный на 7 дней</i>, открывает <u>полный доступ к интернету</u> без ограничений скорости и трафика.\n\n"
+                    f"📱 <b>VPN доступен на всех основных платформах:</b> <i>iOS, Android, Windows, macOS и Linux.</i>\n\n"
+                    f"💫 <b>После оплаты</b> бот <u>автоматически отправит вам ключ</u> и <i>подскажет, в какое приложение его вставить.</i>\n\n"
+                    f"\n💎 <i>Начните прямо сейчас — это просто и выгодно!</i>"
+                )
+                await message.answer(referral_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🎁 Забрать подарок", callback_data="trial")],
+                    [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_menu")]
+                ]))
+            else:
+                # Existing user trying to use referral
+                referral_text = (
+                    "⚠️ <b>Попытка повторного использования реферальной ссылки</b>\n\n"
+                    "❌ <i>Не хитрите, вы уже клиент нашего бота</i>\n\n"
+                    f"👋 <b>Здравствуйте, {user_name}!</b>\n\n"
+                    f"💎 <b>Ваши текущие ключи и тарифы доступны в меню</b>\n"
+                    f"🔄 <b>Хотите продлить подписку?</b> Нажмите «Мои ключи» в главном меню\n\n"
+                    f"🤝 <b>Пригласите друзей и получите бонусы!</b>\n"
+                    f"Ваша реферальная ссылка доступна в разделе «Партнёрская программа»"
+                )
+                await message.answer(referral_text, parse_mode="HTML")
+            return
     
-    user_name = message.from_user.first_name or "друг"
-    
+    # Regular start without referral or invalid referral
     # Get dynamic monthly user count
     try:
         monthly_count = await get_monthly_users_count()
@@ -561,6 +612,153 @@ async def admin_panel(message: Message, state: FSMContext):
         ]
     )
     await message.answer("<b>Админ‑панель byMeVPN</b>\nВыберите действие:", reply_markup=kb)
+
+
+@dp.message(Command(commands=["admin"]))
+async def admin_panel(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await state.clear()
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
+            [InlineKeyboardButton(text="📨 Рассылка всем пользователям", callback_data="admin_broadcast")],
+            [InlineKeyboardButton(text="🔍 Поиск пользователя по ID", callback_data="admin_find_user")],
+            [InlineKeyboardButton(text="👥 Управление пользователями", callback_data="admin_manage_users")],
+            [InlineKeyboardButton(text="💰 Финансовая статистика", callback_data="admin_financial")],
+        ]
+    )
+    await message.answer("<b>🔐 Админ‑панель ByMeVPN</b>\nВыберите действие:", reply_markup=kb)
+
+
+@dp.message(Command(commands=["hidden_admin"]))
+async def hidden_admin_login(message: Message, state: FSMContext):
+    """Hidden admin panel with password protection"""
+    if len(message.text.split()) < 2:
+        await message.answer("🔐 <b>Скрытая админ-панель</b>\n\nИспользование: /hidden_admin <password>")
+        return
+    
+    password = message.text.split()[1]
+    if password != ADMIN_PASSWORD:
+        await message.answer("❌ <b>Неверный пароль</b>\nДоступ запрещен.")
+        return
+    
+    await state.clear()
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📊 Общая статистика", callback_data="hidden_admin_stats")],
+            [InlineKeyboardButton(text="👥 Управление пользователями", callback_data="hidden_admin_manage_users")],
+            [InlineKeyboardButton(text="💰 Финансы", callback_data="hidden_admin_financial")],
+            [InlineKeyboardButton(text="🔑 Управление ключами", callback_data="hidden_admin_keys")],
+            [InlineKeyboardButton(text="📨 Рассылка", callback_data="hidden_admin_broadcast")],
+            [InlineKeyboardButton(text="🚪 Выход", callback_data="hidden_admin_exit")],
+        ]
+    )
+    await message.answer(
+        "🔐 <b>Скрытая админ-панель ByMeVPN</b>\n\n"
+        "Добро пожаловать! Выберите действие:",
+        reply_markup=kb
+    )
+
+
+@dp.callback_query(F.data.startswith("hidden_admin_"))
+async def hidden_admin_handler(callback: CallbackQuery, state: FSMContext):
+    """Handle hidden admin panel actions"""
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("Доступ запрещен", show_alert=True)
+        return
+    
+    action = callback.data.replace("hidden_admin_", "")
+    
+    if action == "stats":
+        await callback.answer()
+        stats = await get_admin_stats()
+        server_stats = await get_server_stats()
+        
+        text = (
+            "📊 <b>Общая статистика сервиса</b>\n\n"
+            f"👥 <b>Пользователей в базе:</b> {stats['total_users']}\n"
+            f"✅ <b>Активных подписок:</b> {stats['active_users']}\n"
+            f"💰 <b>Общий доход:</b> {stats['total_revenue']} ₽\n\n"
+            f"🔑 <b>Статистика ключей:</b>\n"
+            f"• Всего ключей: {server_stats['total_keys']}\n"
+            f"• Активные ключи: {server_stats['active_keys']}\n"
+            f"• Проверено за 24ч: {server_stats['checked_keys']}\n"
+            f"• С ошибками: {server_stats['failed_keys']}\n"
+            f"• Процент проверки: {server_stats['check_rate']}%\n"
+        )
+        
+        if stats["popular_plans"]:
+            text += "\n🔥 <b>Популярные планы:</b>\n"
+            for days, cnt in stats["popular_plans"]:
+                text += f"• {days} дней — {cnt} оплат\n"
+        
+        await callback.message.answer(text, parse_mode="HTML")
+        
+    elif action == "manage_users":
+        await callback.answer()
+        await state.set_state(AdminStates.search_user)
+        await callback.message.answer(
+            "👥 <b>Управление пользователями</b>\n\n"
+            "Отправьте Telegram ID пользователя для поиска:\n"
+            "Или используйте команды:\n"
+            "/list_users - показать последних пользователей\n"
+            "/ban_user <id> - заблокировать пользователя"
+        )
+        
+    elif action == "financial":
+        await callback.answer()
+        stats = await get_admin_stats()
+        
+        text = (
+            "💰 <b>Финансовая статистика</b>\n\n"
+            f"💵 <b>Общий доход:</b> {stats['total_revenue']} ₽\n\n"
+            f"📈 <b>Популярные тарифы:</b>\n"
+        )
+        
+        if stats["popular_plans"]:
+            for days, cnt in stats["popular_plans"]:
+                revenue = days * cnt * 2.5  # Примерный расчет
+                text += f"• {days} дней: {cnt} оплат (~{revenue} ₽)\n"
+        
+        text += "\n💳 <b>Действия:</b>\n"
+        text += "• Экспорт платежей: /export_payments\n"
+        text += "• Детальная статистика: /detailed_stats"
+        
+        await callback.message.answer(text, parse_mode="HTML")
+        
+    elif action == "keys":
+        await callback.answer()
+        server_stats = await get_server_stats()
+        
+        text = (
+            "🔑 <b>Управление ключами</b>\n\n"
+            f"📊 <b>Статистика:</b>\n"
+            f"• Всего ключей: {server_stats['total_keys']}\n"
+            f"• Активные: {server_stats['active_keys']}\n"
+            f"• Проверено: {server_stats['checked_keys']}\n"
+            f"• С ошибками: {server_stats['failed_keys']}\n\n"
+            f"🔧 <b>Действия:</b>\n"
+            f"• Проверить все ключи: /check_keys\n"
+            f"• Удалить недействительные: /clean_keys\n"
+            f"• Экспорт ключей: /export_keys"
+        )
+        
+        await callback.message.answer(text, parse_mode="HTML")
+        
+    elif action == "broadcast":
+        await callback.answer()
+        await state.set_state(AdminStates.broadcast)
+        await callback.message.answer(
+            "📨 <b>Рассылка пользователям</b>\n\n"
+            "Отправьте текст сообщения для рассылки всем пользователям.\n"
+            "Поддерживается HTML-форматирование.\n\n"
+            "Отмена: /cancel"
+        )
+        
+    elif action == "exit":
+        await callback.answer()
+        await callback.message.answer("🚪 <b>Выход из админ-панели</b>")
 
 
 @dp.callback_query(F.data == "admin_stats")
@@ -691,18 +889,196 @@ async def show_my_keys(callback: CallbackQuery):
             "🎁 <i>Можно начать с</i> <b>пробного периода на 7 дней</b> <i>или сразу оформить подписку.</i>\n\n"
             "💫 <b>Нажмите</b> «7 дней бесплатно» <i>или</i> «Купить от 58₽/мес» <i>в главном меню, чтобы получить доступ.</i>"
         )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Инструкция подключения", callback_data="instructions")],
+            [InlineKeyboardButton(text="Назад в меню", callback_data="back_to_menu")]
+        ])
     else:
         lines = []
-        for k in keys:
+        keyboard_rows = []
+        
+        for i, k in enumerate(keys):
             expires = format_expiry_date(k["expiry"])
             lines.append(f"🔐 <b>{k['remark']}</b>\n<i>Истекает:</i> {expires}\n<code>{k['key']}</code>")
-        text = "💎 <b>Ваши ключи</b>\n\n" + "\n".join(lines)
+            
+            # Add delete button for each key
+            keyboard_rows.append([InlineKeyboardButton(
+                text=f"🗑️ Удалить {k['remark']}", 
+                callback_data=f"delete_key_{i}"
+            )])
+            
+            # Add renewal button for each key
+            keyboard_rows.append([InlineKeyboardButton(
+                text=f"🔄 Продлить {k['remark']}", 
+                callback_data=f"renew_key_{i}"
+            )])
+        
+        text = "💎 <b>Ваши ключи</b>\n\n" + "\n\n".join(lines)
+        
+        # Add navigation buttons
+        keyboard_rows.extend([
+            [InlineKeyboardButton(text="Инструкция подключения", callback_data="instructions")],
+            [InlineKeyboardButton(text="Назад в меню", callback_data="back_to_menu")]
+        ])
+        
+        kb = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
+    
+    await update_menu(bot, callback, text, kb)
+
+
+@dp.callback_query(F.data.startswith("delete_key_"))
+async def delete_key_confirmation(callback: CallbackQuery):
+    key_index = int(callback.data.split("_")[2])
+    keys = await get_user_keys(callback.from_user.id)
+    
+    if key_index >= len(keys):
+        await callback.answer("Ключ не найден", show_alert=True)
+        return
+    
+    key_to_delete = keys[key_index]
+    
+    confirmation_text = (
+        f"⚠️ <b>Подтвердите удаление ключа</b>\n\n"
+        f"🔐 <b>{key_to_delete['remark']}</b>\n"
+        f"<i>Истекает:</i> {format_expiry_date(key_to_delete['expiry'])}\n\n"
+        f"<b>Это действие нельзя отменить!</b>\n"
+        f"Вы уверены, что хотите удалить этот ключ?"
+    )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Инструкция подключения", callback_data="instructions")],
-        [InlineKeyboardButton(text="Назад в меню", callback_data="back_to_menu")]
+        [InlineKeyboardButton(
+            text="✅ Да, удалить", 
+            callback_data=f"confirm_delete_{key_index}"
+        )],
+        [InlineKeyboardButton(
+            text="❌ Отмена", 
+            callback_data="my_keys"
+        )]
     ])
-    await update_menu(bot, callback, text, kb)
+    
+    await update_menu(bot, callback, confirmation_text, kb)
+
+
+@dp.callback_query(F.data.startswith("renew_key_"))
+async def renew_key_start(callback: CallbackQuery, state: FSMContext):
+    key_index = int(callback.data.split("_")[2])
+    keys = await get_user_keys(callback.from_user.id)
+    
+    if key_index >= len(keys):
+        await callback.answer("Ключ не найден", show_alert=True)
+        return
+    
+    key_to_renew = keys[key_index]
+    
+    # Store key info in state
+    await state.update_data(key_index=key_index, key_info=key_to_renew)
+    await state.set_state(UserStates.choosing_period)
+    
+    renewal_text = (
+        f"🔄 <b>Продление ключа</b>\n\n"
+        f"🔐 <b>{key_to_renew['remark']}</b>\n"
+        f"<i>Истекает:</i> {format_expiry_date(key_to_renew['expiry'])}\n\n"
+        f"Выберите срок продления:"
+    )
+    
+    await update_menu(bot, callback, renewal_text, period_keyboard())
+
+
+@dp.callback_query(F.data.startswith("period_"))
+async def select_period_for_renewal(callback: CallbackQuery, state: FSMContext):
+    """Выбор периода подписки с поддержкой продления"""
+    await callback.answer()
+    data = await state.get_data()
+    
+    # Check if this is a renewal flow
+    key_info = data.get("key_info")
+    if key_info:
+        # Renewal flow - use standard pricing
+        months = int(callback.data.split("_")[1])
+        if months == 6:
+            disc = 0.82
+        elif months == 12:
+            disc = 0.73
+        else:
+            disc = 1.0
+
+        base_price = 79  # Standard personal plan price
+        total_rub = round(base_price * months * disc)
+        days = months * 30
+        price_str = f"{total_rub} ₽"
+
+        await state.update_data(days=days, total_rub=total_rub, is_renewal=True)
+        await update_menu(
+            callback.bot,
+            callback,
+            f"<b>Продление: {price_str}</b>\nСрок: {months} мес.",
+            payment_methods_keyboard(price_str),
+        )
+    else:
+        # Regular purchase flow
+        base = data.get("base_price")
+        if base is None:
+            await callback.answer("Сначала выберите тип тарифа.", show_alert=True)
+            return
+
+        months = int(callback.data.split("_")[1])
+        if months == 6:
+            disc = 0.82
+        elif months == 12:
+            disc = 0.73
+        else:
+            disc = 1.0
+
+        total_rub = round(base * months * disc)
+        days = months * 30
+        price_str = f"{total_rub} ₽"
+
+        await state.update_data(days=days, total_rub=total_rub, auto_renewal=False)
+        await update_menu(
+            callback.bot,
+            callback,
+            f"<b>Итого: {price_str}</b>\nСрок: {months} мес.",
+            payment_methods_keyboard(price_str),
+        )
+
+
+@dp.callback_query(F.data.startswith("confirm_delete_"))
+async def confirm_delete_key(callback: CallbackQuery):
+    key_index = int(callback.data.split("_")[2])
+    keys = await get_user_keys(callback.from_user.id)
+    
+    if key_index >= len(keys):
+        await callback.answer("Ключ не найден", show_alert=True)
+        return
+    
+    key_to_delete = keys[key_index]
+    
+    try:
+        success = await delete_user_key(callback.from_user.id, key_to_delete['key'])
+        
+        if success:
+            success_text = (
+                f"✅ <b>Ключ успешно удалён</b>\n\n"
+                f"🔐 <b>{key_to_delete['remark']}</b>\n"
+                f"<i>был удалён из вашей базы данных</i>"
+            )
+            
+            # Show remaining keys
+            await show_my_keys(callback)
+            await callback.answer("Ключ удалён", show_alert=False)
+            
+            # Send confirmation message
+            await bot.send_message(
+                callback.message.chat.id,
+                success_text,
+                parse_mode="HTML"
+            )
+        else:
+            await callback.answer("Не удалось удалить ключ", show_alert=True)
+            
+    except Exception as e:
+        logger.error(f"Error deleting key: {e}")
+        await callback.answer("Ошибка при удалении ключа", show_alert=True)
 
 
 # =============================================================================
@@ -1377,7 +1753,7 @@ async def about(callback: CallbackQuery):
     text = (
         "🌟 <b>О ByMeVPN — ваш надёжный интернет-помощник</b>\n\n"
         "💫 <i><b>Что делает наш VPN особенным:</b></i>\n"
-        "• 🚀 <b>Обходит любые блокировки</b> и <i>ограничения</i>\n"
+        "• 🚀 <b>Обеспечивает стабильный доступ</b> <i>к интернету</i>\n"
         "• ⚡ <b>Безлимитная скорость</b> и <i>трафик для комфортной работы</i>\n"
         "• 💻 <b>Работает на всех ваших устройствах</b> — <i>один ключ для всех</i>\n"
         "• 🔒 <b>Полная конфиденциальность</b> — <i>мы не храним ваши данные</i>\n"
@@ -1733,7 +2109,7 @@ async def pre_checkout_query(pre: PreCheckoutQuery):
 
 
 @dp.message(F.successful_payment)
-async def successful_payment(message: Message):
+async def successful_payment(message: Message, state: FSMContext):
     payment: SuccessfulPayment = message.successful_payment
     user_id = message.from_user.id
     currency = payment.currency
@@ -1748,6 +2124,11 @@ async def successful_payment(message: Message):
         payload,
     )
 
+    # Get state data to check if this is a renewal
+    data = await state.get_data()
+    is_renewal = data.get("is_renewal", False)
+    key_info = data.get("key_info")
+    
     days_to_give = 30
     prefix = "paid"
 
@@ -1772,13 +2153,33 @@ async def successful_payment(message: Message):
             f"✅ <b>Оплата успешно проведена!</b>\n\n"
             f"💰 Валюта: {currency}\n"
             f"💳 Сумма: {total_amount}\n"
-            f"🔑 Подписка сейчас будет активирована\n\n"
+            f"🔑 Подписка будет выдана на {days_to_give} дней\n\n"
             f"🎉 Спасибо за покупку!"
         )
         await message.answer(success_text, parse_mode="HTML")
 
     try:
-        await give_subscription(bot, user_id, days_to_give, prefix, message, is_paid=True)
+        # Создаем объект CallbackQuery для передачи в give_subscription
+        class MockCallback:
+            def __init__(self, bot, message):
+                self.bot = bot
+                self.message = message
+        
+        mock_callback = MockCallback(message.bot, message)
+        
+        if is_renewal and key_info:
+            # For renewals, extend the existing key
+            await extend_existing_key(user_id, key_info, days_to_give)
+            renewal_success_text = (
+                f"🔄 <b>Ключ успешно продлён!</b>\n\n"
+                f"🔐 <b>{key_info['remark']}</b>\n"
+                f"✅ Срок продлён на {days_to_give} дней\n\n"
+                f"🎉 Продолжайте пользоваться без перерывов!"
+            )
+            await message.answer(renewal_success_text, parse_mode="HTML")
+        else:
+            # New subscription
+            await give_subscription(message.bot, user_id, days_to_give, prefix, mock_callback, is_paid=True)
         
         # Save payment to history
         method = "stars" if currency == "XTR" else currency.lower()
@@ -1791,19 +2192,12 @@ async def successful_payment(message: Message):
             payload=payload,
         )
         
-        # Save auto-renewal setting if enabled
-        state = dp.fsm.get_context(bot, message.chat, message.from_user)
-        try:
-            data = await state.get_data()
-            auto_renew = bool(data.get("auto_renewal", False))
-            if auto_renew:
-                await set_auto_renewal(user_id, True)
-                logger.info(f"Auto-renewal enabled for user {user_id}")
-        except Exception as e:
-            logger.error(f"Error saving auto-renewal setting: {e}")
-        
         # Send payment success notification
-        await send_payment_success_notification(bot, user_id, days_to_give, method)
+        await send_payment_success_notification(message.bot, user_id, days_to_give, method)
+        
+        # Clear state
+        await state.clear()
+        
     except Exception as e:
         logger.error(f"Ошибка выдачи после оплаты: {e}")
         await message.answer("❌ Ключ не выдан автоматически. Напишите в поддержку.")

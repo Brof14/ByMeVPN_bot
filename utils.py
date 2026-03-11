@@ -131,7 +131,7 @@ def create_beautiful_qr_code(key: str, add_logo: bool = True) -> BytesIO:
                 margin = logo_size // 8
                 logo_draw.ellipse(
                     [margin, margin, logo_size - margin, logo_size - margin],
-                    fill=(70, 130, 255, 255),  # Blue color
+                    fill=(26, 26, 26, 255),  # Dark gray color instead of blue
                     outline=(255, 255, 255, 255),
                     width=2
                 )
@@ -188,40 +188,48 @@ async def generate_and_send_beautiful_qr(
     reply_markup: InlineKeyboardMarkup = None,
     use_beautiful_qr: bool = True
 ):
-    """Enhanced QR code generation with beautiful design"""
-    try:
-        # Generate beautiful QR code
-        if use_beautiful_qr:
-            qr_bio = create_beautiful_qr_code(key, add_logo=True)
-        else:
-            qr_bio = generate_simple_qr_fallback(key)
-        
-        # Send photo with QR code
-        await bot.send_photo(
-            chat_id,
-            photo=BufferedInputFile(qr_bio.read(), "bymevpn_qr.png"),
-            caption=f"{caption}\n\n<code>{key}</code>",
-            parse_mode="HTML",
-            reply_markup=reply_markup
-        )
-        
-        logger.info(f"Beautiful QR code sent successfully to user {chat_id}")
-        
-    except Exception as e:
-        logger.error(f"Error generating beautiful QR code for user {chat_id}: {e}")
-        
-        # Fallback: send key as text
-        fallback_text = f"{caption}\n\n<code>{key}</code>"
+    """Enhanced QR code generation with beautiful design and error handling"""
+    max_retries = 3
+    for attempt in range(max_retries):
         try:
-            await bot.send_message(
-                chat_id,
-                fallback_text,
+            # Generate QR code with fallback on each attempt
+            if attempt == 0 and use_beautiful_qr:
+                qr_bio = create_beautiful_qr_code(key, add_logo=True)
+            elif attempt == 1:
+                qr_bio = create_beautiful_qr_code(key, add_logo=False)
+            else:
+                qr_bio = generate_simple_qr_fallback(key)
+            
+            # Send photo with QR code
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=BufferedInputFile(qr_bio.getvalue(), "qrcode.png"),
+                caption=caption,
                 parse_mode="HTML",
                 reply_markup=reply_markup
             )
-        except Exception as fallback_error:
-            logger.error(f"Fallback message also failed: {fallback_error}")
-            raise
+            logger.info(f"QR code sent successfully to user {chat_id} on attempt {attempt + 1}")
+            return
+            
+        except Exception as e:
+            logger.warning(f"QR code generation attempt {attempt + 1} failed: {e}")
+            if attempt == max_retries - 1:
+                # Final fallback - send key as text
+                error_caption = (
+                    f"{caption}\n\n"
+                    f"⚠️ <b>QR-код не удалось сгенерировать</b>\n"
+                    f"📋 <b>Ваш ключ:</b>\n"
+                    f"<code>{key}</code>"
+                )
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=error_caption,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup
+                )
+                logger.error(f"All QR generation attempts failed for user {chat_id}, sent text fallback")
+            else:
+                await asyncio.sleep(0.5)  # Brief delay between retries
 
 def create_user_profile_card(user_data: Dict, keys_data: List[Dict]) -> str:
     """

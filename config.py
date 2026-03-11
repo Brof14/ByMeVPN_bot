@@ -5,6 +5,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")  # Change for security
 REF_BONUS_DAYS = int(os.getenv("REF_BONUS_DAYS", 7))
 REF_BONUS_RUB = int(os.getenv("REF_BONUS_RUB", 50))
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@ByMeVPN_support")

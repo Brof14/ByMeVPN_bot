@@ -68,5 +68,5 @@ async def add_client(days: int, remark: str) -> str:
 
 def generate_vless(client_uuid: str) -> str:
     """Генерация VLESS-ключа"""
-    params = f"type=tcp&security=reality&fp={REALITY_FP}&pbk={REALITY_PBK}&sni={REALITY_SNI}&sid={REALITY_SID}&spx=%2F"
+    params = f"type=xhttp&security=reality&fp={REALITY_FP}&pbk={REALITY_PBK}&sni={REALITY_SNI}&sid={REALITY_SID}&spx=%2F"
     return f"vless://{client_uuid}@{REALITY_HOST}:{REALITY_PORT}?{params}#ByMeVPN"
