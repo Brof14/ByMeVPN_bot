@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  vpnbot:
+    build: .
+    container_name: vpnbot
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env:ro
