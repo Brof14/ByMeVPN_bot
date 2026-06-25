@@ -312,21 +312,16 @@ async def cmd_start(message: Message, bot: Bot) -> None:
 # ---------------------------------------------------------------------------
 
 @router.callback_query(F.data.startswith("claim_trial:"))
-async def cb_claim_trial(callback: CallbackQuery, bot: Bot):
-    """Handle claim trial button from referral link"""
+async def cb_claim_trial(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    """Handle claim trial button from referral link."""
     await safe_answer(callback)
-    
+
     user_id = callback.from_user.id
     ref_id = int(callback.data.split(":")[1])
-    
-    from database import has_trial_used, create_key, get_user_keys
-    from referral_system_new import claim_referral_bonus
-    import time
-    
-    # Check if user already has a key or used trial
+
     existing_keys = await get_user_keys(user_id)
     trial_used = await has_trial_used(user_id)
-    
+
     if existing_keys or trial_used:
         await callback.message.edit_text(
             "❌ Вы уже используете VPN или уже получали пробный период.\n\n"
@@ -336,65 +331,41 @@ async def cb_claim_trial(callback: CallbackQuery, bot: Bot):
             ]])
         )
         return
-    
-    # Create trial key (3 days)
-    try:
-        from marzban_client import create_marzban_user
-        from database import add_key
-        user_result = await create_marzban_user(user_id=user_id, days=3, data_limit_gb=0)
 
-        if user_result:
-            subscription_url = user_result.get("subscription_url", "")
-            # Получаем VLESS ключи
-            vless_links = user_result.get("vless_links", [])
-            vless_key = vless_links[0] if vless_links else ""
-            
-            await add_key(
-                user_id=user_id,
-                key=subscription_url,
-                remark="Реферальный триал",
-                uuid=vless_key,
-                days=3,
-                limit_ip=5
-            )
-            
-            # Claim referral bonus for referrer
-            await claim_referral_bonus(bot, ref_id, user_id, "trial_bonus")
-            
-            text = (
-                "🎉 <b>Ваш пробный ключ создан!</b>\n\n"
-                f"🔗 <b>Ссылка на подписку:</b> <code>{subscription_url}</code>\n"
-                f"⏳ <b>Срок:</b> 3 дня\n"
-                f"📱 <b>Устройств:</b> 5\n\n"
-                "🚀 Подключайтесь и пользуйтесь!"
-            )
-            
-            # Добавляем VLESS ключ если он есть
-            if vless_key:
-                text += (
-                    f"\n\n🔑 <b>VLESS ключ (для прямого подключения):</b>\n"
-                    f"<code>{vless_key}</code>"
-                )
-            
-            await callback.message.edit_text(
-                text,
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="📱 Инструкция", callback_data="guide"),
-                    InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu")
-                ]])
-            )
-        else:
-            await callback.message.edit_text(
-                "❌ Не удалось создать ключ. Попробуйте позже.",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu")
-                ]])
-            )
-    except Exception as e:
-        logger.error("Error creating trial key for referral: %s", e)
+    claimed = await try_claim_trial(user_id)
+    if not claimed:
         await callback.message.edit_text(
-            "❌ Произошла ошибка. Попробуйте позже.",
+            "❌ Пробный период уже был использован.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu")
+            ]])
+        )
+        return
+
+    success = await ask_config_name(
+        bot, callback, state,
+        context={
+            "days": TRIAL_DAYS,
+            "prefix": "trial_ref",
+            "is_paid": False,
+            "amount": 0,
+            "currency": "RUB",
+            "method": "trial",
+            "payload": f"trial_ref_{user_id}",
+            "_trial_user_id": user_id,
+            "limit_ip": 5,
+        },
+    )
+
+    if success:
+        try:
+            from referral_system_new import claim_referral_bonus
+            await claim_referral_bonus(bot, ref_id, user_id, "trial_bonus")
+        except Exception as e:
+            logger.error("Error claiming referral bonus for user %d: %s", user_id, e)
+    else:
+        await callback.message.answer(
+            "❌ Не удалось создать ключ. Попробуйте позже или обратитесь в поддержку.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu")
             ]])

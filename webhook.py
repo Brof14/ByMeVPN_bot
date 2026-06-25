@@ -33,7 +33,7 @@ from config import (
     YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY,
     WEBHOOK_HOST, WEBHOOK_PORT, ADMIN_ID,
 )
-from database import init_db, add_payment, is_yookassa_processed, mark_yookassa_processed, add_referral_earning, get_referrer
+from database import init_db, is_yookassa_processed, mark_yookassa_processed, add_referral_earning, get_referrer
 from subscription import deliver_key
 
 logger = logging.getLogger(__name__)
@@ -194,56 +194,30 @@ async def _process_payment(bot: Bot, payment_id: str) -> None:
             payment_id, user_id, days, devices, amount_rub,
         )
 
-        # ── Step 4: Store pending delivery for config name input ──
-        import aiosqlite
-        from database import DB_FILE
-
-        async with aiosqlite.connect(DB_FILE) as db:
-            await db.execute(
-                """INSERT OR REPLACE INTO yookassa_pending
-                   (payment_id, user_id, days, devices, amount_rub)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (payment_id, user_id, days, devices, amount_rub)
-            )
-            await db.commit()
-
-        logger.info("YooKassa payment stored as pending: user=%d days=%d devices=%d",
-                   user_id, days, devices)
-
-        # Notify user to provide config name
-        try:
-            device_label = "до 5 устройств" if days > 3 else "1 устройство"  # Trial (3 days) = 1 device, paid plans = 5 devices
-            text = (
-                "💰 <b>Оплата успешно получена!</b>\n\n"
-                f"📋 Срок: <b>{days} дней</b>\n"
-                f"📱 Устройств: <b>{device_label}</b>\n"
-                f"💰 Сумма: <b>{amount_rub} ₽</b>\n\n"
-                "📝 <b>Теперь введите имя конфига</b>\n"
-                "Это имя будет видно в вашем VPN приложении.\n\n"
-                "Например: MyVPN, Work, Phone и т.д."
-            )
-
-            await bot.send_message(
-                chat_id=user_id,
-                text=text,
-                parse_mode="HTML"
-            )
-
-            # Set state for config name input
-            from states import BuyFlow
-            from aiogram.fsm.context import FSMContext
-            state = FSMContext(dispatcher=None, bot=bot, user_id=user_id, chat_id=user_id)
-            await state.set_state(BuyFlow.waiting_for_config_name)
-
-        except Exception as e:
-            logger.error("Failed to notify user about pending key delivery: %s", e)
-        
-        await add_payment(
-            user_id, amount_rub, "RUB", "yookassa", days, payment_id,
-            status="success", tariff=f"{days} дней", devices=devices
+        # ── Step 4: Deliver VPN key directly (auto-generated config name) ──
+        config_name = f"yookassa_{user_id}"
+        success = await deliver_key(
+            bot=bot,
+            user_id=user_id,
+            chat_id=user_id,
+            config_name=config_name,
+            days=days,
+            limit_ip=devices,
+            is_paid=True,
+            amount=amount_rub,
+            currency="RUB",
+            method="yookassa",
+            payload=payment_id,
         )
-        
-        # Log payment completion
+
+        if not success:
+            logger.error("Webhook: key delivery failed for payment %s user %d", payment_id, user_id)
+            await _notify_admin(
+                bot,
+                f"⚠️ YooKassa payment {payment_id}: key delivery failed for user {user_id}",
+            )
+            return
+
         logger.info("Payment completed: user_id=%d amount=%d method=yookassa days=%d", user_id, amount_rub, days)
         
         # Начисляем бонус рефереалу за первую оплату (50₽)

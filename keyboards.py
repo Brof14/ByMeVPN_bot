@@ -212,8 +212,10 @@ def confirm_delete_kb(key_id: int) -> InlineKeyboardMarkup:
 # After key delivery
 # ---------------------------------------------------------------------------
 
-def after_key_kb() -> InlineKeyboardMarkup:
+def after_key_kb(subscription_url: str | None = None) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    if subscription_url and subscription_url.startswith("http"):
+        kb.row(InlineKeyboardButton(text="🔗 Открыть подписку", url=subscription_url))
     kb.row(InlineKeyboardButton(text="Инструкция подключения", callback_data="connection_guide"))
     kb.row(
         InlineKeyboardButton(text="Назад в меню", callback_data="back_to_menu"),

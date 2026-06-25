@@ -321,15 +321,9 @@ async def on_successful_payment(message: Message, bot: Bot, state: FSMContext):
 
 @router.message(F.text, BuyFlow.waiting_for_config_name)
 async def handle_yookassa_config_name(message: Message, bot: Bot, state: FSMContext):
-    """Handle config name input after YooKassa payment."""
+    """Legacy fallback: deliver key for old YooKassa pending records."""
     user_id = message.from_user.id
-    config_name = message.text.strip()
 
-    if not config_name:
-        await message.answer("❌ Пожалуйста, введите имя конфига.")
-        return
-
-    # Get pending payment data
     from database import get_yookassa_pending
     pending = await get_yookassa_pending(str(user_id))
 
@@ -338,16 +332,14 @@ async def handle_yookassa_config_name(message: Message, bot: Bot, state: FSMCont
         await state.clear()
         return
 
-    # Extract data from pending payment
     days = pending.get("days", 30)
     devices = pending.get("devices", 5)
     amount_rub = pending.get("amount_rub", 0)
     payment_id = pending.get("payment_id", "")
+    config_name = message.text.strip() or f"yookassa_{user_id}"
 
-    # Clear state before delivery
     await state.clear()
 
-    # Deliver key
     from subscription import deliver_key
     success = await deliver_key(
         bot=bot,
@@ -364,14 +356,11 @@ async def handle_yookassa_config_name(message: Message, bot: Bot, state: FSMCont
     )
 
     if success:
-        # Delete pending record
         from database import delete_yookassa_pending
         try:
             await delete_yookassa_pending(payment_id)
         except Exception as e:
             logger.error("Could not delete pending yk payment %s: %s", payment_id, e)
-    else:
-        await message.answer("❌ Ошибка при выдаче ключа. Пожалуйста, свяжитесь с поддержкой.")
 
 
 # ---------------------------------------------------------------------------
