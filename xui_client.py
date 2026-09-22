@@ -37,13 +37,8 @@ async def _get_api() -> AsyncApi:
             return _api_pool
         
         # py3xui требует полный URL с путем к панели
-        # Важно: для локальных адресов принудительно используем HTTP
-        api_url = XUI_API_URL
-        
-        # Если URL начинается с https:// но указан 127.0.0.1 или localhost, меняем на http
-        if api_url.startswith("https://") and ("127.0.0.1" in api_url or "localhost" in api_url):
-            api_url = api_url.replace("https://", "http://")
-            logger.info("Changed HTTPS to HTTP for local address: %s", api_url)
+        # Try using the public URL with the correct path
+        api_url = XUI_API_URL or XUI_URL
         
         _api_pool = AsyncApi(
             api_url,
@@ -222,17 +217,17 @@ async def create_xui_user(
     limit_ip: int = 0,
 ) -> Optional[Dict[str, Any]]:
     """
-    Создать клиента в инбаундах ID: 2 и 3 (VLESS) через py3xui HTTP API.
+    Создать клиента в инбаундах через py3xui HTTP API.
     
     Простой алгоритм:
     1. Принудительно удалить существующего клиента (если есть)
-    2. Создать нового клиента в инбаундах 2 и 3
+    2. Создать нового клиента в инбаундах из конфигурации
     3. Получить конкретную конфигурацию VLESS
     """
     email = str(user_id)
     expiry_ms = int((datetime.now() + timedelta(days=days)).timestamp() * 1000)
     total_gb_limit = data_limit_gb  # 0 = безлимит
-    inbound_ids = [2, 3]  # VLESS инбаунды
+    inbound_ids = XUI_INBOUND_IDS  # Use configured inbound IDs
 
     logger.info(
         "create_xui_user: email=%s days=%d limit_ip=%d inbounds=%s",
@@ -270,7 +265,12 @@ async def create_xui_user(
         sub_id = client_uuid.replace("-", "")[:16]
 
         # Названия для инбаундов (используем при создании клиентов и генерации ссылок)
-        inbound_names = {2: "🇳🇱Netherlands", 3: "🇳🇱Netherlands-2"}
+        inbound_names = {
+            2: "🇳🇱Netherlands",
+            3: "🇳🇱Netherlands-2",
+            5: "🇩🇪Germany",
+            6: "🇩🇪Germany-2",
+        }
 
         success_count = 0
         create_tasks = []
@@ -278,25 +278,32 @@ async def create_xui_user(
         for inbound_id in inbound_ids:
             async def create_in_inbound(iid):
                 nonlocal success_count, sub_id, client_uuid
+                logger.info("=== Starting creation for inbound %d ===", iid)
                 try:
                     # Устанавливаем remark для каждого инбаунда отдельно
                     inbound_name = inbound_names.get(iid, "🇳🇱Netherlands")
-                    client_with_remark = Client(
-                        email=email,
-                        uuid=client_uuid,
-                        enable=True,
-                        expiry_time=expiry_ms,
-                        limit_ip=limit_ip,
-                        total_gb=total_gb_limit,
-                        sub_id=sub_id,
-                        remark=inbound_name,
-                        tg_id=user_id,  # Set tg_id as integer to avoid type error
-                    )
-                    await _api_call_with_retry(api.client.add, iid, [client_with_remark])
-                    logger.info("Successfully added client %s to inbound %d with remark %s", email, iid, inbound_name)
+                    logger.info("Inbound %d: name=%s, email=%s", iid, inbound_name, email)
+                    
+                    # Create client dict directly to avoid py3xui Client model issues
+                    client_dict = {
+                        "email": email,
+                        "id": client_uuid,
+                        "enable": True,
+                        "expiry_time": expiry_ms,
+                        "limit_ip": limit_ip,
+                        "total_gb": total_gb_limit,
+                        "sub_id": sub_id,
+                        "remark": inbound_name,
+                    }
+                    logger.info("Inbound %d: client_dict prepared, calling API add...", iid)
+                    
+                    # Use API directly with dict
+                    await _api_call_with_retry(api.client.add, iid, [Client(**client_dict)])
+                    logger.info("✅ Successfully added client %s to inbound %d with remark %s", email, iid, inbound_name)
                     return True
                 except Exception as e:
                     err_str = str(e)
+                    logger.error("❌ Inbound %d failed: %s", iid, err_str)
                     if "Duplicate" in err_str or "duplicate" in err_str.lower() or "already exists" in err_str.lower():
                         # Клиент уже существует - пробуем получить реальные данные из client_stats
                         logger.info("Client %s already exists in inbound %d, searching in client_stats", email, iid)
@@ -321,6 +328,95 @@ async def create_xui_user(
         
         results = await asyncio.gather(*create_tasks, return_exceptions=True)
         success_count = sum(1 for r in results if r is True)
+        
+        # Log detailed results
+        logger.info("=== Creation results for %s ===", email)
+        for idx, (iid, result) in enumerate(zip(inbound_ids, results)):
+            if isinstance(result, Exception):
+                logger.error("Inbound %d: Exception - %s", iid, str(result))
+            elif result is True:
+                logger.info("Inbound %d: ✅ SUCCESS", iid)
+            else:
+                logger.error("Inbound %d: ❌ FAILED (returned False)", iid)
+        logger.info("Total successful: %d/%d", success_count, len(inbound_ids))
+        
+        # Remote nodes (5,6) need sync verification - check if client actually exists on remote node
+        remote_inbounds = [iid for iid in inbound_ids if iid in (5, 6)]
+        if remote_inbounds:
+            logger.info("Verifying remote node sync for inbounds %s...", remote_inbounds)
+            await asyncio.sleep(2)  # Small initial delay for sync to start
+            
+            # Track client state to detect disappear/reappear pattern
+            client_state = {iid: None for iid in remote_inbounds}
+            
+            for attempt in range(15):  # Check up to 15 times (more attempts for longer monitoring)
+                all_remote_ok = True
+                state_changed = False
+                
+                for iid in remote_inbounds:
+                    try:
+                        inbound = await _api_call_with_retry(api.inbound.get_by_id, iid)
+                        if inbound and inbound.client_stats:
+                            client_exists = any(c.email == email for c in inbound.client_stats)
+                            
+                            if client_exists != client_state[iid]:
+                                state_changed = True
+                                if client_exists:
+                                    logger.info("🔄 Remote inbound %d: client APPEARED (attempt %d)", iid, attempt + 1)
+                                else:
+                                    logger.warning("🔄 Remote inbound %d: client DISAPPEARED (attempt %d)", iid, attempt + 1)
+                                client_state[iid] = client_exists
+                            
+                            if client_exists:
+                                logger.debug("Remote inbound %d: client exists (attempt %d)", iid, attempt + 1)
+                            else:
+                                logger.warning("Remote inbound %d: client not found (attempt %d)", iid, attempt + 1)
+                                all_remote_ok = False
+                        else:
+                            logger.warning("Remote inbound %d: no client_stats (attempt %d)", iid, attempt + 1)
+                            all_remote_ok = False
+                    except Exception as e:
+                        logger.warning("Remote inbound %d: check failed (attempt %d): %s", iid, attempt + 1, e)
+                        all_remote_ok = False
+                
+                if state_changed:
+                    logger.info("Client state changed on attempt %d: %s", attempt + 1, client_state)
+                
+                if all_remote_ok and all(client_state.values()):
+                    # Client exists on all remote inbounds - wait a bit more to ensure stability
+                    logger.info("All remote inbounds have client, waiting 10s to verify stability...")
+                    await asyncio.sleep(10)
+                    
+                    # Final check
+                    final_ok = True
+                    for iid in remote_inbounds:
+                        try:
+                            inbound = await _api_call_with_retry(api.inbound.get_by_id, iid)
+                            if inbound and inbound.client_stats:
+                                if not any(c.email == email for c in inbound.client_stats):
+                                    logger.warning("Remote inbound %d: client disappeared during stability check!", iid)
+                                    final_ok = False
+                            else:
+                                final_ok = False
+                        except Exception as e:
+                            logger.warning("Final check failed for inbound %d: %s", iid, e)
+                            final_ok = False
+                    
+                    if final_ok:
+                        logger.info("✅ All remote inbounds stable - sync verified")
+                        break
+                    else:
+                        logger.warning("Client became unstable, continuing monitoring...")
+                
+                if attempt < 14:  # Don't sleep on last attempt
+                    delay = 5  # Fixed 5s delay for consistent monitoring
+                    logger.info("Waiting %ds before next sync check (attempt %d/15)...", delay, attempt + 1)
+                    await asyncio.sleep(delay)
+            
+            # Final state report
+            logger.info("Final remote node state: %s", client_state)
+            if not all(client_state.values()):
+                logger.warning("⚠️ Some remote inbounds still missing client after monitoring period")
 
         if success_count == 0:
             logger.error("Failed to add client %s to any inbound", email)
@@ -431,7 +527,7 @@ async def get_xui_user(user_id: int) -> Optional[Dict[str, Any]]:
 
         client: Optional[Client] = await _api_call_with_retry(api.client.get_by_email, email)
         if client is None:
-            logger.warning("get_xui_user: client %s not found", email)
+            logger.debug("get_xui_user: client %s not found", email)
             return None
 
         used_traffic = (client.up or 0) + (client.down or 0)
@@ -444,14 +540,21 @@ async def get_xui_user(user_id: int) -> Optional[Dict[str, Any]]:
             "data_limit": data_limit_bytes,
         }
 
+    except ValueError as e:
+        # Expected case: user not found in 3x-ui panel
+        if "record not found" in str(e).lower():
+            logger.debug("get_xui_user: user %d not found in panel", user_id)
+        else:
+            logger.warning("get_xui_user: ValueError for user=%d: %s", user_id, e)
+        return None
     except Exception as e:
-        logger.exception("get_xui_user FAILED for user=%d: %s", user_id, e)
+        logger.error("get_xui_user FAILED for user=%d: %s", user_id, e)
         return None
 
 
 async def delete_xui_user(user_id: int) -> bool:
     email = str(user_id)
-    inbound_ids = [2, 3]  # VLESS инбаунды (те же, что и при создании)
+    inbound_ids = XUI_INBOUND_IDS  # Use configured inbound IDs
     logger.info("delete_xui_user: email=%s inbounds=%s", email, inbound_ids)
 
     try:
@@ -540,6 +643,7 @@ async def update_xui_user_expiry(user_id: int, days: int) -> bool:
         sub_id = current_sub_id or client_uuid.replace("-", "")[:16]
         updated = Client(
             email=email,
+            id=client_uuid,
             uuid=client_uuid,
             enable=True,
             expiry_time=new_expiry_ms,

@@ -13,7 +13,7 @@ _SUPPORT_URL = (
 def main_menu_new_user() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="Попробовать БЕСПЛАТНО 3 дня", callback_data="trial", style="success"))
-    kb.row(InlineKeyboardButton(text="Купить от 39 ₽ в месяц", callback_data="buy_vpn", style="primary"))
+    kb.row(InlineKeyboardButton(text="Купить от 59 ₽ в месяц", callback_data="buy_vpn", style="primary"))
     kb.row(InlineKeyboardButton(text="Я уже клиент ByMeVPN", callback_data="auth_existing_client"))
     kb.row(InlineKeyboardButton(text="Партнёрская программа", callback_data="partner"))
     kb.row(
@@ -25,7 +25,7 @@ def main_menu_new_user() -> InlineKeyboardMarkup:
 
 def main_menu_existing() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="Купить от 39 ₽ в месяц", callback_data="buy_vpn", style="primary"))
+    kb.row(InlineKeyboardButton(text="Купить от 59 ₽ в месяц", callback_data="buy_vpn", style="primary"))
     kb.row(InlineKeyboardButton(text="Я уже клиент ByMeVPN", callback_data="auth_existing_client"))
     kb.row(InlineKeyboardButton(text="Партнёрская программа", callback_data="partner"))
     kb.row(
@@ -45,7 +45,7 @@ def main_menu_with_keys(trial_used: bool = False) -> InlineKeyboardMarkup:
     # Show trial button only if user hasn't used trial yet
     if not trial_used:
         kb.row(InlineKeyboardButton(text="Попробовать БЕСПЛАТНО 3 дня", callback_data="trial", style="success"))
-    kb.row(InlineKeyboardButton(text="Купить от 39 ₽ в месяц", callback_data="buy_vpn", style="primary"))
+    kb.row(InlineKeyboardButton(text="Купить от 59 ₽ в месяц", callback_data="buy_vpn", style="primary"))
     kb.row(InlineKeyboardButton(text="Мои ключи", callback_data="my_keys"))
     kb.row(InlineKeyboardButton(text="Войти в другой аккаунт", callback_data="auth_existing_client"))
     kb.row(InlineKeyboardButton(text="Партнёрская программа", callback_data="partner"))
@@ -206,6 +206,7 @@ def key_detail_kb(key_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="🗑 Удалить", callback_data=f"key_delete:{key_id}"),
     )
     kb.row(InlineKeyboardButton(text="📋 Инструкция подключения", callback_data="connection_guide"))
+    kb.row(InlineKeyboardButton(text="🌐 Как не отключать VPN для РФ-приложений", callback_data="rf_apps_guide"))
     kb.row(
         InlineKeyboardButton(text="◀️ Назад", callback_data="my_keys"),
         InlineKeyboardButton(text="🏠 Меню", callback_data="back_to_menu")
@@ -245,7 +246,7 @@ def partner_kb(link: str) -> InlineKeyboardMarkup:
         "🎁 3 дня бесплатно (без карты)\n"
         "📱 До 5 устройств\n"
         "⚡ Всё открывается без лагов\n\n"
-        "💰 От 39 ₽/мес\n\n"
+        "💰 От 59 ₽/мес\n\n"
         f"Попробуй:\n{link}"
     )
     kb = InlineKeyboardBuilder()

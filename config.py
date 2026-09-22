@@ -79,8 +79,8 @@ if not XUI_API_URL:
 XUI_USERNAME = os.getenv("XUI_USERNAME", "")
 XUI_PASSWORD = os.getenv("XUI_PASSWORD", "")
 
-# Список инбаундов через запятую: XUI_INBOUND_IDS=2,3 (VLESS)
-_xui_ids_raw = os.getenv("XUI_INBOUND_IDS", os.getenv("XUI_INBOUND_ID", "2,3"))
+# Список инбаундов через запятую: XUI_INBOUND_IDS=2,3,5,6 (VLESS)
+_xui_ids_raw = os.getenv("XUI_INBOUND_IDS", os.getenv("XUI_INBOUND_ID", "2,3,5,6"))
 XUI_INBOUND_IDS: list[int] = [
     int(x.strip()) for x in _xui_ids_raw.split(",") if x.strip()
 ]
@@ -125,15 +125,15 @@ REF_BONUS_DAYS = int(os.getenv("REF_BONUS_DAYS", "3"))
 # ============================================================================
 # Pricing Configuration
 # Updated prices (aligned with constants.py PRICE_CONFIG):
-#   1  мес.            → 69 ₽
-#   3  мес. + 1 мес 🎁 → 236 ₽ (59 ₽/мес)
-#   6  мес. + 2 мес 🎁 → 392 ₽ (49 ₽/мес)
-#   12 мес. + 3 мес 🎁 → 585 ₽ (39 ₽/мес)
+#   1  мес.            → 89 ₽
+#   3  мес. + 1 мес 🎁 → 316 ₽ (79 ₽/мес)
+#   6  мес. + 2 мес 🎁 → 552 ₽ (69 ₽/мес)
+#   12 мес. + 3 мес 🎁 → 885 ₽ (59 ₽/мес)
 # ============================================================================
-PRICE_1_MONTH = 69
-PRICE_3_MONTHS = 236
-PRICE_6_MONTHS = 392
-PRICE_12_MONTHS = 585
+PRICE_1_MONTH = 89
+PRICE_3_MONTHS = 316
+PRICE_6_MONTHS = 552
+PRICE_12_MONTHS = 885
 
 DAYS_1M  = 30
 DAYS_3M  = 120

@@ -24,13 +24,18 @@ class PaymentMonitor:
         self.headers = {"Authorization": f"Basic {self.auth}"}
         self.check_interval = 30  # 30 секунд
         self.running = False
+        self.start_time = datetime.utcnow()  # Track when monitor started
         
     async def get_successful_payments(self, minutes_back: int = 5) -> List[Dict]:
-        """Получить успешные платежи за последние N минут"""
+        """Получить успешные платежи за последние N минут, но только после старта монитора"""
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                # Получаем платежи за последние 5 минут
-                created_at_gte = (datetime.utcnow() - timedelta(minutes=minutes_back)).isoformat() + 'Z'
+                # Use the later of: 5 minutes ago OR monitor start time
+                cutoff_time = max(
+                    datetime.utcnow() - timedelta(minutes=minutes_back),
+                    self.start_time
+                )
+                created_at_gte = cutoff_time.isoformat() + 'Z'
                 
                 url = f"https://api.yookassa.ru/v3/payments?limit=50&status=succeeded&created_at.gte={created_at_gte}"
                 resp = await client.get(url, headers=self.headers)
@@ -119,6 +124,7 @@ class CryptoPaymentMonitor:
         self.bot = bot
         self.check_interval = 30  # секунд
         self.running = False
+        self.start_time = datetime.utcnow()  # Track when monitor started
 
     async def check_and_process_payments(self):
         """Проверить и обработать неучтённые оплаченные инвойсы"""
@@ -137,6 +143,18 @@ class CryptoPaymentMonitor:
 
                 if await is_crypto_processed(invoice_id):
                     continue
+
+                # Skip invoices created before monitor start (to avoid notifications after restart)
+                invoice_created_at = invoice.get("created_at")
+                if invoice_created_at:
+                    try:
+                        # Parse timestamp (Crypto Bot returns Unix timestamp in seconds)
+                        created_time = datetime.fromtimestamp(invoice_created_at)
+                        if created_time < self.start_time:
+                            logger.info(f"Crypto monitor: skipping invoice {invoice_id} created before monitor start")
+                            continue
+                    except (ValueError, TypeError) as e:
+                        logger.debug(f"Crypto monitor: could not parse created_at for invoice {invoice_id}: {e}")
 
                 logger.info(f"Crypto monitor: processing new invoice {invoice_id}")
                 await _process_crypto_invoice(self.bot, invoice)

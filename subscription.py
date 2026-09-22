@@ -178,6 +178,7 @@ async def deliver_key_with_generated_name(
         config_name=config_name, days=days, limit_ip=limit_ip,
         is_paid=is_paid, amount=amount, currency=currency,
         method=method, payload=payload,
+        extend_existing=False,  # Always create new key for generated names
     )
 
     # Clean up YooKassa pending record after successful delivery
@@ -209,15 +210,106 @@ async def deliver_key(
     currency: str = "RUB",
     method: str = "trial",
     payload: str = "",
+    extend_existing: bool = True,
 ) -> bool:
     """
     Создать клиента в 3x-ui, сохранить в БД, отправить ссылку на подписку пользователю.
     limit_ip — количество одновременных подключений устройств (1, 2 или 5).
+    extend_existing — если True, продлевает существующий ключ вместо создания нового.
     Возвращает True при успехе.
     """
     # Validate device limit (1, 2 or 5 — anything else falls back to a safe default)
     from constants import validate_device_limit as const_validate_device_limit
     limit_ip = const_validate_device_limit(limit_ip)
+
+    # Check if user has existing keys to extend (if extend_existing is True)
+    if extend_existing:
+        from database import get_user_keys, extend_key
+        import time
+        
+        existing_keys = await get_user_keys(user_id)
+        current_time = int(time.time())
+        
+        # Find active or expired keys (extend even expired keys within 7 days grace period)
+        extendable_keys = [k for k in existing_keys if k.get("expiry", 0) > current_time - 7*86400]
+        
+        if extendable_keys:
+            # Sort by expiry (most recent first) and extend the first one
+            extendable_keys.sort(key=lambda k: k.get("expiry", 0), reverse=True)
+            key_to_extend = extendable_keys[0]
+            key_id = key_to_extend["id"]
+            old_expiry = key_to_extend["expiry"]
+            
+            # Extend the key in database
+            success = await extend_key(key_id, days)
+            
+            if success:
+                # Update expiry in 3x-ui
+                from xui_client import update_xui_user_expiry
+                xui_updated = await update_xui_user_expiry(user_id, days)
+                
+                if not xui_updated:
+                    logger.warning("Failed to update 3x-ui user expiry for user %d", user_id)
+                
+                # Add payment record
+                if is_paid and amount > 0:
+                    tariff_name = f"Продление {days} дней (до 5 устройств)"
+                    await add_payment(
+                        user_id, amount, currency, method, days, payload,
+                        status="success", tariff=tariff_name, devices=limit_ip
+                    )
+                
+                new_expiry = old_expiry + days * 86400
+
+                # Get subscription URL from existing key
+                existing_key = key_to_extend.get("key", "")
+
+                # Always get fresh subscription URL from 3x-ui to ensure correct format
+                try:
+                    from xui_client import get_xui_user
+                    xui_user = await get_xui_user(user_id)
+                    if xui_user and xui_user.get("subscription_url"):
+                        key_to_show = xui_user["subscription_url"]
+                        # Update database with fresh URL
+                        from database import update_key_uuid
+                        await update_key_uuid(key_id, key_to_show)
+                        logger.info("Updated subscription URL for user %d during extension", user_id)
+                    else:
+                        logger.warning("No subscription links returned from 3x-ui for user %d, using existing key", user_id)
+                        key_to_show = existing_key
+                except Exception as e:
+                    logger.exception("Failed to get fresh subscription URL for user %d: %s", user_id, e)
+                    key_to_show = existing_key
+
+                text = (
+                    f"✅ <b>Ключ продлен!</b>\n\n"
+                    f"🔑 <b>Ключ #{key_id}</b> продлен на <b>{days} дней</b>\n"
+                    f"📅 Новый срок: до <b>{format_timestamp(new_expiry)[:10]}</b>\n\n"
+                    f"🔑 <b>Ваша подписка:</b>\n"
+                    f"<code>{key_to_show}</code>\n\n"
+                    f"Ключ остался прежним — всё работает как раньше!"
+                )
+                
+                from keyboards import after_key_kb
+                from utils import send_with_photo, LOGO_URL
+                await bot.send_photo(
+                    chat_id=chat_id, photo=LOGO_URL,
+                    caption=text, parse_mode="HTML", reply_markup=after_key_kb(),
+                )
+                
+                # Process referral bonuses for paid extensions
+                if is_paid and amount > 0:
+                    try:
+                        from referral_system_new import process_payment_referral_bonus
+                        logger.info(f"Processing referral bonus for extension: user {user_id}, amount {amount}")
+                        result = await process_payment_referral_bonus(user_id, amount, bot)
+                        logger.info(f"Referral bonus result for extension: {result}")
+                    except ImportError:
+                        logger.warning("Referral system module not available, skipping bonus processing")
+                    except Exception as e:
+                        logger.error("Referral bonus error: %s", e)
+                
+                return True
 
     try:
         logger.info("deliver_key: user=%d name='%s' days=%d limit_ip=%d method=%s", user_id, config_name, days, limit_ip, method)

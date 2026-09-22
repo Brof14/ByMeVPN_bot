@@ -240,6 +240,7 @@ async def cmd_give_trial_all(message: Message, bot: Bot):
                 currency="RUB",
                 method="admin_mass_trial",
                 payload=f"mass_trial_{user_id}_{days}d",
+                extend_existing=False,  # Always create new key for mass trials
             )
             
             if success:
@@ -309,26 +310,33 @@ async def cb_stats(callback: CallbackQuery):
     if not _is_admin(callback.from_user.id):
         await safe_answer(callback, "Нет доступа.", alert=True); return
     await safe_answer(callback)
-    s = await get_admin_stats()
-    text = (
-        "⚡ <b>ByMeVPN — Статистика</b>\n"
-        "━━━━━━━━━━━━━━━\n\n"
-        "👥 <b>Пользователи:</b>\n"
-        f"  📊 Всего: <b>{s['total_users']}</b>\n"
-        f"  ✅ Активные: <b>{s['active_users']}</b>\n"
-        f"  📈 Конверсия: <b>{(s['active_users']/max(s['total_users'],1)*100):.1f}%</b>\n\n"
-        "💰 <b>Доходы:</b>\n"
-        f"  📅 Сегодня: <b>{s['today_revenue']} ₽</b>\n"
-        f"  📆 Неделя: <b>{s['week_revenue']} ₽</b>\n"
-        f"  📅 Месяц: <b>{s['month_revenue']} ₽</b>\n\n"
-        f"🤝 <b>Рефералов:</b> <code>{s['total_referrals']}</code>"
-    )
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_stats"),
-         InlineKeyboardButton(text="📈 Подробнее", callback_data="admin_stats_ext")],
-        [InlineKeyboardButton(text="🔙 Главное меню", callback_data="admin_menu")],
-    ])
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    try:
+        s = await get_admin_stats()
+        text = (
+            "⚡ <b>ByMeVPN — Статистика</b>\n"
+            "━━━━━━━━━━━━━━━\n\n"
+            "👥 <b>Пользователи:</b>\n"
+            f"  📊 Всего: <b>{s['total_users']}</b>\n"
+            f"  ✅ Активные: <b>{s['active_users']}</b>\n"
+            f"  📈 Конверсия: <b>{(s['active_users']/max(s['total_users'],1)*100):.1f}%</b>\n\n"
+            "💰 <b>Доходы:</b>\n"
+            f"  📅 Сегодня: <b>{s['today_revenue']} ₽</b>\n"
+            f"  📆 Неделя: <b>{s['week_revenue']} ₽</b>\n"
+            f"  📅 Месяц: <b>{s['month_revenue']} ₽</b>\n\n"
+            f"🤝 <b>Рефералов:</b> <code>{s['total_referrals']}</code>"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_stats"),
+             InlineKeyboardButton(text="📈 Подробнее", callback_data="admin_stats_ext")],
+            [InlineKeyboardButton(text="🔙 Главное меню", callback_data="admin_menu")],
+        ])
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    except Exception as e:
+        logger.error("Error updating admin stats: %s", e)
+        try:
+            await callback.answer("❌ Ошибка обновления", show_alert=True)
+        except:
+            pass
 
 
 @router.callback_query(F.data == "admin_stats_ext")
@@ -336,36 +344,43 @@ async def cb_stats_ext(callback: CallbackQuery):
     if not _is_admin(callback.from_user.id):
         await safe_answer(callback, "Нет доступа.", alert=True); return
     await safe_answer(callback)
-    s = await get_extended_stats()
-    refund_stats = await get_refund_stats()
+    try:
+        s = await get_extended_stats()
+        refund_stats = await get_refund_stats()
 
-    top_text = ""
-    if s["top_refs"]:
-        top_text = "\n👑 <b>Топ рефераторов:</b>\n"
-        for i, r in enumerate(s["top_refs"], 1):
-            top_text += f"  {i}. ID {r['user_id']} — {r['count']} платных рефералов\n"
+        top_text = ""
+        if s["top_refs"]:
+            top_text = "\n👑 <b>Топ рефераторов:</b>\n"
+            for i, r in enumerate(s["top_refs"], 1):
+                top_text += f"  {i}. ID {r['user_id']} — {r['count']} платных рефералов\n"
 
-    text = (
-        "📈 <b>Детальная статистика</b>\n\n"
-        "👤 <b>Новые пользователи:</b>\n"
-        f"  📅 За 24ч: {s['new_day']}\n"
-        f"  📆 За неделю: {s['new_week']}\n"
-        f"  📅 За месяц: {s['new_month']}\n\n"
-        "🔑 <b>Активные подписки:</b>\n"
-        f"  1️⃣ месяц: {s.get('active_1m', 0)}\n"
-        f"  6️⃣ месяцев: {s.get('active_6m', 0)}\n"
-        f"  🔢 год: {s.get('active_12m', 0)}\n"
-        f"  2️⃣ года: {s.get('active_24m', 0)}\n\n"
-        "� <b>Возвраты:</b>\n"
-        f"  📅 30 дней: {refund_stats['count_30d']} ({refund_stats['sum_30d']} ₽)\n"
-        f"  🔢 Всего: {refund_stats['count_total']} ({refund_stats['sum_total']} ₽)\n"
-        f"{top_text}"
-    )
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_stats_ext")],
-        [InlineKeyboardButton(text="🔙 Главное меню", callback_data="admin_menu")],
-    ])
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+        text = (
+            "📈 <b>Детальная статистика</b>\n\n"
+            "👤 <b>Новые пользователи:</b>\n"
+            f"  📅 За 24ч: {s['new_day']}\n"
+            f"  📆 За неделю: {s['new_week']}\n"
+            f"  📅 За месяц: {s['new_month']}\n\n"
+            "🔑 <b>Активные подписки:</b>\n"
+            f"  1️⃣ месяц: {s.get('active_1m', 0)}\n"
+            f"  6️⃣ месяцев: {s.get('active_6m', 0)}\n"
+            f"  🔢 год: {s.get('active_12m', 0)}\n"
+            f"  2️⃣ года: {s.get('active_24m', 0)}\n\n"
+            "💰 <b>Возвраты:</b>\n"
+            f"  📅 30 дней: {refund_stats['count_30d']} ({refund_stats['sum_30d']} ₽)\n"
+            f"  🔢 Всего: {refund_stats['count_total']} ({refund_stats['sum_total']} ₽)\n"
+            f"{top_text}"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_stats_ext")],
+            [InlineKeyboardButton(text="🔙 Главное меню", callback_data="admin_menu")],
+        ])
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    except Exception as e:
+        logger.error("Error updating admin extended stats: %s", e)
+        try:
+            await callback.answer("❌ Ошибка обновления", show_alert=True)
+        except:
+            pass
 
 
 # ── Broadcast ──────────────────────────────────────────────────────────────
@@ -415,51 +430,58 @@ async def cb_user_list(callback: CallbackQuery):
         await safe_answer(callback, "Нет доступа.", alert=True); return
     await safe_answer(callback)
 
-    page = int(callback.data.split(":")[1])
-    per_page = 10
-    offset = page * per_page
-    total = await get_users_count()
-    users = await get_all_users_paginated(limit=per_page, offset=offset)
+    try:
+        page = int(callback.data.split(":")[1])
+        per_page = 10
+        offset = page * per_page
+        total = await get_users_count()
+        users = await get_all_users_paginated(limit=per_page, offset=offset)
 
-    if not users:
+        if not users:
+            await callback.message.edit_text(
+                "Пользователей нет.", reply_markup=_back_kb()
+            ); return
+
+        lines = [f"👥 <b>Пользователи</b> (стр. {page+1}):\n"]
+        for u in users:
+            reg = fmt_date(u["created"]) if u["created"] else "?"
+            lines.append(
+                f"• <code>{u['user_id']}</code> — "
+                f"{'✅' if u.get('active_keys', 0) > 0 else '❌'} "
+                f"ключей: {u.get('total_keys', 0)}, рег: {reg}"
+            )
+
+        # Pagination + user buttons
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton(text="◀", callback_data=f"admin_users:{page-1}"))
+        if offset + per_page < total:
+            nav_row.append(InlineKeyboardButton(text="▶", callback_data=f"admin_users:{page+1}"))
+
+        user_rows = [
+            [InlineKeyboardButton(
+                text=f"👤 {u['user_id']}",
+                callback_data=f"admin_user:{u['user_id']}"
+            )]
+            for u in users
+        ]
+
+        kb_rows = user_rows
+        if nav_row:
+            kb_rows = kb_rows + [nav_row]
+        kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")])
+
         await callback.message.edit_text(
-            "Пользователей нет.", reply_markup=_back_kb()
-        ); return
-
-    lines = [f"👥 <b>Пользователи</b> (стр. {page+1}):\n"]
-    for u in users:
-        reg = fmt_date(u["created"]) if u["created"] else "?"
-        lines.append(
-            f"• <code>{u['user_id']}</code> — "
-            f"{'✅' if u.get('active_keys', 0) > 0 else '❌'} "
-            f"ключей: {u.get('total_keys', 0)}, рег: {reg}"
+            "\n".join(lines),
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows)
         )
-
-    # Pagination + user buttons
-    nav_row = []
-    if page > 0:
-        nav_row.append(InlineKeyboardButton(text="◀", callback_data=f"admin_users:{page-1}"))
-    if offset + per_page < total:
-        nav_row.append(InlineKeyboardButton(text="▶", callback_data=f"admin_users:{page+1}"))
-
-    user_rows = [
-        [InlineKeyboardButton(
-            text=f"👤 {u['user_id']}",
-            callback_data=f"admin_user:{u['user_id']}"
-        )]
-        for u in users
-    ]
-
-    kb_rows = user_rows
-    if nav_row:
-        kb_rows = kb_rows + [nav_row]
-    kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")])
-
-    await callback.message.edit_text(
-        "\n".join(lines),
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows)
-    )
+    except Exception as e:
+        logger.error("Error in admin user list: %s", e)
+        try:
+            await callback.answer("❌ Ошибка загрузки", show_alert=True)
+        except:
+            pass
 
 
 # ── Extended User list with Keys ───────────────────────────────────────────
@@ -547,63 +569,61 @@ async def cb_all_keys(callback: CallbackQuery):
         await safe_answer(callback, "Нет доступа.", alert=True); return
     await safe_answer(callback)
 
-    page = int(callback.data.split(":")[1])
-    per_page = 10
-    offset = page * per_page
-    total = await get_keys_count()
-    keys = await get_all_keys_paginated(limit=per_page, offset=offset)
+    try:
+        page = int(callback.data.split(":")[1])
+        per_page = 10
+        offset = page * per_page
+        total = await get_keys_count()
+        keys = await get_all_keys_paginated(limit=per_page, offset=offset)
 
-    if not keys:
+        if not keys:
+            await callback.message.edit_text(
+                "🗝 <b>Все ключи</b>\n\n"
+                "📭 Ключей пока нет.\n\n"
+                "🔙 Вернуться в меню для создания ключей или просмотра пользователей.",
+                parse_mode="HTML", reply_markup=_back_kb()
+            ); return
+
+        import time
+        now = int(time.time())
+        lines = [f"🗝 <b>Все ключи</b> (стр. {page+1} из {(total//per_page)+1}):\n"]
+        lines.append(f"📊 Всего ключей: {total}\n")
+
+        for k in keys:
+            status = "✅" if k["is_active"] else "❌"
+            days_left = (k["expiry"] - now) // 86400 if k["expiry"] > now else 0
+            total_paid = k.get("total_paid") or 0
+            paid = "💰" if total_paid > 0 else "🆓"
+            key_name = k.get('remark', f"#{k['id']}")[:12]
+
+            lines.append(
+                f"{status} <b>{key_name}</b> | 👤 {k['user_id']} | "
+                f"{paid} | {days_left}дн. | 📅 {fmt_date(k['expiry'])[:10]}"
+            )
+
+        # Pagination
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton(text="◀", callback_data=f"admin_all_keys:{page-1}"))
+        if offset + per_page < total:
+            nav_row.append(InlineKeyboardButton(text="▶", callback_data=f"admin_all_keys:{page+1}"))
+
+        kb_rows = []
+        if nav_row:
+            kb_rows.append(nav_row)
+        kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")])
+
         await callback.message.edit_text(
-            "🗝 <b>Все ключи</b>\n\n"
-            "📭 Ключей пока нет.\n\n"
-            "🔙 Вернуться в меню для создания ключей или просмотра пользователей.",
-            parse_mode="HTML", reply_markup=_back_kb()
-        ); return
-
-    import time
-    now = int(time.time())
-    lines = [f"🗝 <b>Все ключи</b> (стр. {page+1} из {(total//per_page)+1}):\n"]
-    lines.append(f"📊 Всего ключей: {total}\n")
-
-    for k in keys:
-        status = "✅" if k["is_active"] else "❌"
-        days_left = (k["expiry"] - now) // 86400 if k["expiry"] > now else 0
-        total_paid = k.get("total_paid") or 0
-        paid = "💰" if total_paid > 0 else "🆓"
-        key_name = k.get('remark', f"#{k['id']}")[:12]
-
-        lines.append(
-            f"{status} <b>{key_name}</b> | 👤 {k['user_id']} | "
-            f"{paid} | {days_left}дн. | 📅 {fmt_date(k['expiry'])[:10]}"
+            "\n".join(lines),
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows)
         )
-
-    # Pagination
-    nav_row = []
-    if page > 0:
-        nav_row.append(InlineKeyboardButton(text="◀", callback_data=f"admin_all_keys:{page-1}"))
-    if offset + per_page < total:
-        nav_row.append(InlineKeyboardButton(text="▶", callback_data=f"admin_all_keys:{page+1}"))
-
-    kb_rows = []
-    if nav_row:
-        kb_rows.append(nav_row)
-    kb_rows.append([
-        InlineKeyboardButton(text="🔙 Главное меню", callback_data="admin_menu"),
-        InlineKeyboardButton(text="📋 Юзеры+Ключи", callback_data="admin_users_ext:0")
-    ])
-    
-    # Truncate text if too long
-    text = "\n".join(lines)
-
-    text = "\n".join(lines)
-    if len(text) > 4000:
-        text = text[:3990] + "\n... (обрезано)"
-
-    await callback.message.edit_text(
-        text, parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows)
-    )
+    except Exception as e:
+        logger.error("Error in admin all keys view: %s", e)
+        try:
+            await callback.answer("❌ Ошибка загрузки", show_alert=True)
+        except:
+            pass
 
 
 # ── User search ────────────────────────────────────────────────────────────
@@ -912,6 +932,7 @@ async def cb_grant_trial(callback: CallbackQuery, bot: Bot, state: FSMContext):
         currency="RUB",
         method="admin_trial",
         payload=f"admin_trial_{uid}",
+        extend_existing=False,  # Always create new key for admin trials
     )
 
     if success:
@@ -1366,61 +1387,64 @@ async def cb_payments_list(callback: CallbackQuery):
         await safe_answer(callback, "Нет доступа.", alert=True); return
     await safe_answer(callback)
     
-    from database import get_all_payments
-    
-    # Parse method filter
-    parts = callback.data.split(":")
-    method = parts[1] if len(parts) > 1 else None
-    
-    payments = await get_all_payments(limit=30, method=method)
-    
-    if not payments:
-        method_text = f" ({method})" if method else ""
-        await callback.message.edit_text(
-            f"💳 <b>Платежи{method_text}</b>\n\n"
-            "📭 Платежи не найдены.\n\n"
-            "🔍 Попробуйте изменить фильтр или вернуться в меню.",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="◀️ Назад", callback_data="admin_payments")
-            ]])
-        )
-        return
-    
-    title = f"💳 <b>Платежи{f' - {method}' if method else ''}</b>\n\n"
-    text = title
-    
-    for p in payments[:15]:  # Show last 15 to avoid message length issues
-        dt = fmt_date(p["created"])
-        status_emoji = "✅" if p["status"] == "success" else "❌"
-        text += (
-            f"{status_emoji} {dt} — {p['amount']} {p['currency']}\n"
-            f"  Юзер: {p['user_id']}\n"
-            f"  Метод: {p['method']}, тариф: {p['tariff'] or 'Не указан'}\n"
-            f"  Устройств: {p['devices']}, дней: {p['days']}\n\n"
-        )
-    
-    if len(payments) > 15:
-        text += f"... и еще {len(payments) - 15} платежей\n\n"
-    
-    # Navigation buttons
-    nav_buttons = []
-    if method:
-        nav_buttons.append(InlineKeyboardButton(text="◀️ Все платежи", callback_data="admin_payments_list"))
-    nav_buttons.append(InlineKeyboardButton(text="🔄 Обновить", callback_data=callback.data))
-    
-    kb_rows = [nav_buttons] if nav_buttons else []
-    kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_payments")])
-    
-    # Truncate text if too long
-    if len(text) > 4000:
-        text = text[:3990] + "\n... (обрезано)"
-    
-    await callback.message.edit_text(
-        text,
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows)
-    )
+    try:
+        from database import get_all_payments
+        
+        # Parse method filter
+        parts = callback.data.split(":")
+        method = parts[1] if len(parts) > 1 else None
+        
+        payments = await get_all_payments(limit=30, method=method)
+        
+        if not payments:
+            method_text = f" ({method})" if method else ""
+            await callback.message.edit_text(
+                f"💳 <b>Платежи{method_text}</b>\n\n"
+                "📭 Платежи не найдены.\n\n"
+                "🔍 Попробуйте изменить фильтр или вернуться в меню.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="◀️ Назад", callback_data="admin_payments")
+                ]])
+            )
+            return
+        
+        title = f"💳 <b>Платежи{f' - {method}' if method else ''}</b>\n\n"
+        text = title
+        
+        for p in payments[:15]:  # Show last 15 to avoid message length issues
+            dt = fmt_date(p["created"])
+            status_emoji = "✅" if p["status"] == "success" else "❌"
+            text += (
+                f"{status_emoji} {dt} — {p['amount']} {p['currency']}\n"
+                f"  Юзер: {p['user_id']}\n"
+                f"  Метод: {p['method']}, тариф: {p['tariff'] or 'Не указан'}\n"
+                f"  Устройств: {p['devices']}, дней: {p['days']}\n\n"
+            )
+        
+        if len(payments) > 15:
+            text += f"... и еще {len(payments) - 15} платежей\n\n"
+        
+        # Navigation buttons
+        nav_buttons = []
+        if method:
+            nav_buttons.append(InlineKeyboardButton(text="◀️ Все платежи", callback_data="admin_payments_list"))
+        nav_buttons.append(InlineKeyboardButton(text="🔄 Обновить", callback_data=callback.data))
+        
+        kb_rows = [nav_buttons] if nav_buttons else []
+        kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_payments")])
+        
+        # Truncate text if too long
+        if len(text) > 4000:
+            text = text[:3990] + "\n... (обрезано)"
+        
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
+    except Exception as e:
+        logger.error("Error in admin payments list: %s", e)
+        try:
+            await callback.answer("❌ Ошибка загрузки", show_alert=True)
+        except:
+            pass
 
 
 @router.callback_query(F.data == "admin_payments_search")
@@ -2044,6 +2068,7 @@ async def receive_grant_key_days(message: Message, bot: Bot, state: FSMContext):
         currency="RUB",
         method="admin_grant",
         payload=f"admin_grant_{uid}_{days}",
+        extend_existing=False,  # Always create new key for admin grants
     )
     
     if success:
@@ -2541,7 +2566,8 @@ async def cb_mass_trial_confirm(callback: CallbackQuery, bot: Bot):
                 days=3,
                 limit_ip=1,
                 is_paid=False,
-                method="trial"
+                method="trial",
+                extend_existing=False,  # Always create new key for trials
             )
             
             if success:
@@ -2659,6 +2685,7 @@ async def cb_mass_trial_5d_confirm(callback: CallbackQuery, bot: Bot):
                 currency="RUB",
                 method="admin_mass_trial_5d",
                 payload=f"mass_trial_5d_{user_id}",
+                extend_existing=False,  # Always create new key for mass trials
             )
             
             if success:
@@ -3064,6 +3091,7 @@ async def msg_mass_trial_days(message: Message, state: FSMContext, bot: Bot):
                 currency="RUB",
                 method="admin_mass_trial",
                 payload=f"mass_trial_{user_id}_{days}d",
+                extend_existing=False,  # Always create new key for mass trials
             )
             
             if success:

@@ -130,7 +130,7 @@ async def _send_main_menu(
             "• До 5 устройств по одной подписке\n"
             "• Быстрое подключение за 30 секунд\n\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
-            "💰 Дальше — от 39 ₽/мес\n"
+            "💰 Дальше — от 59 ₽/мес\n"
             "(в 2–3 раза дешевле большинства VPN)\n"
             "━━━━━━━━━━━━━━━━━━━━━\n\n"
             "⏳ Бесплатный доступ ограничен — лучше проверить сейчас\n\n"
@@ -356,12 +356,13 @@ async def cb_claim_trial(callback: CallbackQuery, bot: Bot):
         chat_id=callback.message.chat.id,
         config_name=config_name,
         days=3,
-        limit_ip=5,
+        limit_ip=1,
         is_paid=False,
         amount=0,
         currency="RUB",
         method="trial",
         payload=f"claim_trial_{user_id}",
+        extend_existing=False,  # Always create new key for trials
     )
 
     if success and ref_id and ref_id != user_id:

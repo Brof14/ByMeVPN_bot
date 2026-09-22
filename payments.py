@@ -158,6 +158,16 @@ async def get_paid_crypto_invoices(limit: int = 50) -> list[dict]:
                 return data.get("result", {}).get("items", [])
             logger.error("Crypto Bot getInvoices error: %s", data.get("error"))
             return []
+    except httpx.HTTPStatusError as e:
+        # Crypto Bot often returns 500/520 errors - log as warning instead of error
+        if e.response.status_code in (500, 520):
+            logger.warning("Crypto Bot server error %d (expected, will retry): %s", e.response.status_code, str(e)[:100])
+        else:
+            logger.error("Crypto Bot HTTP error %d: %s", e.response.status_code, str(e)[:200])
+        return []
+    except httpx.RequestError as e:
+        logger.warning("Crypto Bot request error (network issue): %s", str(e)[:100])
+        return []
     except Exception as e:
-        logger.error("Crypto Bot getInvoices request failed: %s", str(e))
+        logger.error("Crypto Bot getInvoices unexpected error: %s", str(e))
         return []

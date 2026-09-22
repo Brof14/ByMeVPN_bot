@@ -37,18 +37,18 @@ SUPPORT_URL_TEMPLATE = "https://t.me/ByMeVPN_support_bot?text={}"
 #   12 мес. + 3 мес 🎁 → 450 дней (15 мес)
 # ============================================================================
 PRICE_CONFIG = {
-    1:  (69,  30),   # 1 мес.            — 69 ₽
-    3:  (236, 120),  # 3 мес. + 1 мес 🎁 — 59 ₽/мес (итого 236 ₽)
-    6:  (392, 240),  # 6 мес. + 2 мес 🎁 — 49 ₽/мес (итого 392 ₽)
-    12: (585, 450),  # 12 мес. + 3 мес 🎁 — 39 ₽/мес (итого 585 ₽)
+    1:  (89,  30),   # 1 мес.            — 89 ₽
+    3:  (316, 120),  # 3 мес. + 1 мес 🎁 — 79 ₽/мес (итого 316 ₽)
+    6:  (552, 240),  # 6 мес. + 2 мес 🎁 — 69 ₽/мес (итого 552 ₽)
+    12: (885, 450),  # 12 мес. + 3 мес 🎁 — 59 ₽/мес (итого 885 ₽)
 }
 
 # Monthly display price (per-month cost, shown in tariff buttons)
 MONTHLY_PRICE_DISPLAY = {
-    1:  69,
-    3:  59,
-    6:  49,
-    12: 39,
+    1:  89,
+    3:  79,
+    6:  69,
+    12: 59,
 }
 
 # ============================================================================
@@ -82,7 +82,7 @@ def get_price_for_months(months: int) -> tuple[int, int]:
         Tuple of (price_in_rub, total_days)
         Defaults to (69, 30) for invalid month values
     """
-    return PRICE_CONFIG.get(months, (69, 30))
+    return PRICE_CONFIG.get(months, (89, 30))
 
 
 def get_period_label(months: int) -> str:

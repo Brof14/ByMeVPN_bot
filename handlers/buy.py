@@ -417,6 +417,8 @@ async def handle_yookassa_config_name(message: Message, bot: Bot, state: FSMCont
 
     # Deliver key
     from subscription import deliver_key
+    # Extend existing key for paid renewals, create new for trials
+    extend_existing = (method != "trial")
     success = await deliver_key(
         bot=bot,
         user_id=user_id,
@@ -429,6 +431,7 @@ async def handle_yookassa_config_name(message: Message, bot: Bot, state: FSMCont
         currency="RUB",
         method=method,
         payload=str(payment_id),
+        extend_existing=extend_existing,
     )
 
     if success:
