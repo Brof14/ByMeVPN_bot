@@ -171,10 +171,9 @@ async def _process_payment(bot: Bot, payment_id: str) -> None:
             await _notify_admin(bot, f"⚠️ YooKassa payment {payment_id}: bad metadata {metadata}")
             return
 
-        # Validate devices — only 1, 2, 5 allowed; anything else → 1
-        if devices not in (1, 2, 5):
-            logger.warning("Webhook: invalid devices=%d in payment %s, defaulting to 1", devices, payment_id)
-            devices = 1
+        # Validate devices with single source of truth
+        from constants import validate_device_limit
+        devices = validate_device_limit(devices)
 
         amount_str = payment.get("amount", {}).get("value", "0")
         try:
@@ -187,102 +186,84 @@ async def _process_payment(bot: Bot, payment_id: str) -> None:
             payment_id, user_id, days, devices, amount_rub,
         )
 
-        # ── Step 4: Store pending delivery for config name input ──
-        # FIX: this used to open a second, independent aiosqlite connection
-        # directly (`aiosqlite.connect(DB_FILE)`), bypassing the shared pool
-        # in database.py entirely. That connection had none of the pool's
-        # PRAGMA settings (WAL mode, busy_timeout=30000), so under load it
-        # could hit "database is locked" with sqlite's default 0-second
-        # busy timeout while the main pool connection was mid-write. Reusing
-        # the existing add_yookassa_pending() helper routes this through the
-        # same pooled connection as everything else.
-        from database import add_yookassa_pending
-        await add_yookassa_pending(payment_id, user_id, days, devices, amount_rub)
+        from database import (
+            record_payment_idempotent, update_payment_status,
+            use_promo_code, delete_yookassa_pending,
+        )
 
-        logger.info("YooKassa payment stored as pending: user=%d days=%d devices=%d",
-                   user_id, days, devices)
+        # Idempotent DB record
+        tariff_name = f"Подписка {days} дней ({devices} устр.)"
+        is_new, pay_db_id = await record_payment_idempotent(
+            user_id=user_id,
+            amount=amount_rub,
+            currency="RUB",
+            method="yookassa",
+            days=days,
+            payload=payment_id,
+            status="processing",
+            tariff=tariff_name,
+            devices=devices,
+            provider="yookassa",
+            provider_payment_id=payment_id,
+        )
 
-        # Notify user to provide config name
-        try:
-            device_label = "до 5 устройств" if days > 3 else "1 устройство"  # Trial (3 days) = 1 device, paid plans = 5 devices
-            text = (
-                "💰 <b>Оплата успешно получена!</b>\n\n"
-                f"📋 Срок: <b>{days} дней</b>\n"
-                f"📱 Устройств: <b>{device_label}</b>\n"
-                f"💰 Сумма: <b>{amount_rub} ₽</b>\n\n"
-                "📝 <b>Теперь введите имя конфига</b>\n"
-                "Это имя будет видно в вашем VPN приложении.\n\n"
-                "Например: MyVPN, Work, Phone и т.д."
-            )
+        if not is_new:
+            logger.info("Webhook: payment %s already processed in DB, skipping duplicate", payment_id)
+            await mark_yookassa_processed(payment_id)
+            return
 
-            await bot.send_message(
-                chat_id=user_id,
-                text=text,
-                parse_mode="HTML"
-            )
+        # Deliver or extend key immediately without blocking on user input
+        success = await deliver_key(
+            bot=bot,
+            user_id=user_id,
+            chat_id=user_id,
+            config_name=f"ByMeVPN_{user_id}",
+            days=days,
+            limit_ip=devices,
+            is_paid=True,
+            amount=amount_rub,
+            currency="RUB",
+            method="yookassa",
+            payload=payment_id,
+            extend_existing=True,
+        )
 
-            # Set state for config name input.
-            #
-            # FIX: FSMContext in aiogram 3.x is constructed as
-            # FSMContext(storage=..., key=StorageKey(bot_id, chat_id, user_id))
-            # — NOT FSMContext(dispatcher=..., bot=..., user_id=..., chat_id=...).
-            # The old call raised TypeError every single time, which was
-            # silently swallowed by the except block below, so the FSM state
-            # was NEVER actually set after a YooKassa payment. The user would
-            # then type a config name, handle_yookassa_config_name's state
-            # filter would not match (no state was set), the message fell
-            # through to the fallback handler, and no key was ever delivered.
-            from states import BuyFlow
-            from aiogram.fsm.context import FSMContext
-            from aiogram.fsm.storage.base import StorageKey
+        if success:
+            await update_payment_status(pay_db_id, "success")
+            await mark_yookassa_processed(payment_id)
+            try:
+                await delete_yookassa_pending(payment_id)
+            except Exception:
+                pass
+            promo_code = metadata.get("promo_code")
+            if promo_code:
+                await use_promo_code(promo_code, user_id)
+            logger.info("YooKassa payment %s successfully fulfilled for user %d", payment_id, user_id)
 
-            if dispatcher is not None:
-                storage_key = StorageKey(bot_id=bot.id, chat_id=user_id, user_id=user_id)
-                state = FSMContext(storage=dispatcher.storage, key=storage_key)
-                await state.set_state(BuyFlow.waiting_for_config_name)
-            else:
-                logger.error(
-                    "Webhook: dispatcher not set, cannot set FSM state for user %d. "
-                    "Config name prompt will not be answered correctly.",
-                    user_id,
-                )
-
-        except Exception as e:
-            logger.error("Failed to notify user about pending key delivery: %s", e)
-        
-        # Mark as processed AFTER successful delivery setup
-        await mark_yookassa_processed(payment_id)
-        logger.info("Webhook: payment %s marked as processed", payment_id)
-        
-        # NOTE: payment is recorded inside subscription.deliver_key() once the
-        # key has actually been delivered (after the user enters a config
-        # name). We deliberately do NOT call add_payment() here anymore —
-        # this used to record every YooKassa payment TWICE (once here, once
-        # in deliver_key), inflating revenue stats and per-user totals.
-        logger.info("Payment verified: user_id=%d amount=%d method=yookassa days=%d — awaiting config name",
-                    user_id, amount_rub, days)
-        
-        # Начисляем бонус рефереалу за первую оплату (50₽)
-        try:
-            referrer_id = await get_referrer(user_id)
-            if referrer_id:
-                from database import add_referral_earning
-                bonus_added = await add_referral_earning(referrer_id, user_id, 50, payment_id)
-                if bonus_added:
-                    logger.info("Referral bonus 50₽ added for referrer %d from user %d YooKassa payment", referrer_id, user_id)
-                    # Уведомляем реферера
-                    try:
-                        await bot.send_message(
-                            referrer_id,
-                            f"🎉 <b>Поздравляем!</b>\n\n"
-                            f"Ваш приглашённый оформил платную подписку.\n"
-                            f"Начислено: +50 ₽\n"
-                            f"Текущий баланс обновлён в партнёрской программе."
-                        )
-                    except Exception as notify_error:
-                        logger.error("Failed to notify referrer %d: %s", referrer_id, notify_error)
-        except Exception as e:
-            logger.error("Error processing referral bonus for YooKassa user %d: %s", user_id, e)
+            # Начисляем бонус рефералу за первую оплату (50₽)
+            try:
+                referrer_id = await get_referrer(user_id)
+                if referrer_id:
+                    bonus_added = await add_referral_earning(referrer_id, user_id, 50, payment_id)
+                    if bonus_added:
+                        logger.info("Referral bonus 50₽ added for referrer %d from user %d YooKassa payment", referrer_id, user_id)
+                        try:
+                            await bot.send_message(
+                                referrer_id,
+                                f"🎉 <b>Поздравляем!</b>\n\n"
+                                f"Ваш приглашённый оформил платную подписку.\n"
+                                f"Начислено: +50 ₽\n"
+                                f"Текущий баланс обновлён в партнёрской программе.",
+                                parse_mode="HTML"
+                            )
+                        except Exception as notify_error:
+                            logger.error("Failed to notify referrer %d: %s", referrer_id, notify_error)
+            except Exception as e:
+                logger.error("Error processing referral bonus for YooKassa user %d: %s", user_id, e)
+        else:
+            await update_payment_status(pay_db_id, "failed")
+            logger.error("YooKassa payment %s provisioning failed for user %d", payment_id, user_id)
+            await _notify_admin(bot, f"⚠️ Не удалось выдать VPN по платежу YooKassa {payment_id} (user {user_id}). Статус помечен как failed.")
 
     except Exception as e:
         logger.exception("Webhook: unexpected error processing payment %s: %s", payment_id, e)
@@ -337,62 +318,86 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
             invoice_id, user_id, days, devices, amount_rub,
         )
 
-        # Re-store (idempotent — same values) so downstream lookups by
-        # invoice_id keep working even if this runs more than once.
-        await add_crypto_pending(invoice_id, user_id, days, devices, amount_rub)
+        # Validate devices with single source of truth
+        from constants import validate_device_limit
+        devices = validate_device_limit(devices)
 
-        try:
-            device_label = "до 5 устройств" if days > 3 else "1 устройство"
-            text = (
-                "💰 <b>Оплата успешно получена!</b>\n\n"
-                f"📋 Срок: <b>{days} дней</b>\n"
-                f"📱 Устройств: <b>{device_label}</b>\n"
-                f"💰 Сумма: <b>{amount_rub} ₽</b>\n\n"
-                "📝 <b>Теперь введите имя конфига</b>\n"
-                "Это имя будет видно в вашем VPN приложении.\n\n"
-                "Например: MyVPN, Work, Phone и т.д."
-            )
-            await bot.send_message(chat_id=user_id, text=text, parse_mode="HTML")
+        from database import (
+            record_payment_idempotent, update_payment_status,
+            use_promo_code, delete_crypto_pending,
+        )
 
-            from states import BuyFlow
-            from aiogram.fsm.context import FSMContext
-            from aiogram.fsm.storage.base import StorageKey
+        tariff_name = f"Подписка {days} дней ({devices} устр.)"
+        is_new, pay_db_id = await record_payment_idempotent(
+            user_id=user_id,
+            amount=amount_rub,
+            currency="RUB",
+            method="cryptobot",
+            days=days,
+            payload=str(invoice_id),
+            status="processing",
+            tariff=tariff_name,
+            devices=devices,
+            provider="cryptobot",
+            provider_payment_id=str(invoice_id),
+        )
 
-            if dispatcher is not None:
-                storage_key = StorageKey(bot_id=bot.id, chat_id=user_id, user_id=user_id)
-                state = FSMContext(storage=dispatcher.storage, key=storage_key)
-                await state.set_state(BuyFlow.waiting_for_config_name)
-            else:
-                logger.error(
-                    "Crypto monitor: dispatcher not set, cannot set FSM state for user %d",
-                    user_id,
-                )
-        except Exception as e:
-            logger.error("Failed to notify user about pending crypto key delivery: %s", e)
+        if not is_new:
+            logger.info("Crypto monitor: invoice %s already processed in DB, skipping duplicate", invoice_id)
+            await mark_crypto_processed(invoice_id)
+            return
 
-        await mark_crypto_processed(invoice_id)
-        logger.info("Crypto monitor: invoice %s marked as processed", invoice_id)
+        success = await deliver_key(
+            bot=bot,
+            user_id=user_id,
+            chat_id=user_id,
+            config_name=f"ByMeVPN_{user_id}",
+            days=days,
+            limit_ip=devices,
+            is_paid=True,
+            amount=amount_rub,
+            currency="RUB",
+            method="cryptobot",
+            payload=str(invoice_id),
+            extend_existing=True,
+        )
 
-        # Referral bonus (mirrors YooKassa's 50₽ first-payment bonus)
-        try:
-            referrer_id = await get_referrer(user_id)
-            if referrer_id:
-                bonus_added = await add_referral_earning(referrer_id, user_id, 50, str(invoice_id))
-                if bonus_added:
-                    logger.info("Referral bonus 50₽ added for referrer %d from user %d Crypto Bot payment", referrer_id, user_id)
-                    try:
-                        await bot.send_message(
-                            referrer_id,
-                            "🎉 <b>Поздравляем!</b>\n\n"
-                            "Ваш приглашённый оформил платную подписку.\n"
-                            "Начислено: +50 ₽\n"
-                            "Текущий баланс обновлён в партнёрской программе.",
-                            parse_mode="HTML",
-                        )
-                    except Exception as notify_error:
-                        logger.error("Failed to notify referrer %d: %s", referrer_id, notify_error)
-        except Exception as e:
-            logger.error("Error processing referral bonus for Crypto Bot user %d: %s", user_id, e)
+        if success:
+            await update_payment_status(pay_db_id, "success")
+            await mark_crypto_processed(invoice_id)
+            try:
+                await delete_crypto_pending(invoice_id)
+            except Exception:
+                pass
+            promo_code = pending.get("promo_code")
+            if promo_code:
+                await use_promo_code(promo_code, user_id)
+            logger.info("CryptoBot invoice %s successfully fulfilled for user %d", invoice_id, user_id)
+
+            # Referral bonus (mirrors YooKassa's 50₽ first-payment bonus)
+            try:
+                referrer_id = await get_referrer(user_id)
+                if referrer_id:
+                    bonus_added = await add_referral_earning(referrer_id, user_id, 50, str(invoice_id))
+                    if bonus_added:
+                        logger.info("Referral bonus 50₽ added for referrer %d from user %d Crypto Bot payment", referrer_id, user_id)
+                        try:
+                            await bot.send_message(
+                                referrer_id,
+                                "🎉 <b>Поздравляем!</b>\n\n"
+                                "Ваш приглашённый оформил платную подписку.\n"
+                                "Начислено: +50 ₽\n"
+                                "Текущий баланс обновлён в партнёрской программе.",
+                                parse_mode="HTML",
+                            )
+                        except Exception as notify_error:
+                            logger.error("Failed to notify referrer %d: %s", referrer_id, notify_error)
+            except Exception as e:
+                logger.error("Error processing referral bonus for Crypto Bot user %d: %s", user_id, e)
+        else:
+            await update_payment_status(pay_db_id, "failed")
+            logger.error("CryptoBot invoice %s provisioning failed for user %d", invoice_id, user_id)
+            await _notify_admin(bot, f"⚠️ Не удалось выдать VPN по CryptoBot инвойсу {invoice_id} (user {user_id}). Статус помечен как failed.")
 
     except Exception as e:
         logger.exception("Crypto monitor: unexpected error processing invoice %s: %s", invoice_id, e)

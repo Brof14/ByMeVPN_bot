@@ -2,7 +2,11 @@ from urllib.parse import quote_plus
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from constants import PRICE_CONFIG, PERIOD_LABELS, MONTHLY_PRICE_DISPLAY
+from constants import (
+    PRICE_CONFIG, PERIOD_LABELS, MONTHLY_PRICE_DISPLAY,
+    VALID_DEVICE_LIMITS, DEFAULT_DEVICE_LIMIT, DEVICE_CONFIG,
+    get_price_for_months, get_monthly_display, validate_device_limit,
+)
 
 _SUPPORT_URL = (
     "https://t.me/ByMeVPNSupportBot?text="
@@ -75,16 +79,19 @@ def authorized_user_menu() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def tariff_selection_kb(discount_percent: int = 0) -> InlineKeyboardMarkup:
-    """Tariff selection with bonuses. Shows per-month price.
-    
-    Тарифная сетка (без скидки):
-      1 мес.            — 69 ₽
-      3 мес. + 1 мес 🎁 — 59 ₽ / мес
-      6 мес. + 2 мес 🎁 — 49 ₽ / мес
-      12 мес. + 3 мес 🎁 — 39 ₽ / мес
-    """
+def tariff_selection_kb(devices: int = DEFAULT_DEVICE_LIMIT, discount_percent: int = 0) -> InlineKeyboardMarkup:
+    """Tariff selection with device tiers (2, 5, 10 devices) and duration bonuses."""
+    devices = validate_device_limit(devices)
     kb = InlineKeyboardBuilder()
+
+    # Device selector row: 2, 5, 10 devices
+    dev_btns = []
+    for d in VALID_DEVICE_LIMITS:
+        label = f"📱 {d} устр."
+        if d == devices:
+            label = f"🟢 {d} устр."
+        dev_btns.append(InlineKeyboardButton(text=label, callback_data=f"devtier_{d}"))
+    kb.row(*dev_btns)
 
     # (months, bonus_label)
     tariff_rows = [
@@ -95,8 +102,8 @@ def tariff_selection_kb(discount_percent: int = 0) -> InlineKeyboardMarkup:
     ]
 
     for months, bonus in tariff_rows:
-        total_price = PRICE_CONFIG[months][0]
-        monthly_price = MONTHLY_PRICE_DISPLAY[months]
+        total_price, days = get_price_for_months(months, devices)
+        monthly_price = get_monthly_display(months, devices)
 
         if discount_percent > 0:
             discounted_total = int(total_price * (100 - discount_percent) / 100)
@@ -116,7 +123,7 @@ def tariff_selection_kb(discount_percent: int = 0) -> InlineKeyboardMarkup:
 
         kb.row(InlineKeyboardButton(
             text=text,
-            callback_data=f"tariff_{months}",
+            callback_data=f"tariff_{months}_{devices}",
         ))
 
     kb.row(
@@ -126,7 +133,7 @@ def tariff_selection_kb(discount_percent: int = 0) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def payment_kb(price_rub: int, days: int, yookassa_url: str = "") -> InlineKeyboardMarkup:
+def payment_kb(price_rub: int, days: int, devices: int = DEFAULT_DEVICE_LIMIT, yookassa_url: str = "") -> InlineKeyboardMarkup:
     """Stars = rubles (1:1, intentional — covers Telegram commission)."""
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(
@@ -138,10 +145,10 @@ def payment_kb(price_rub: int, days: int, yookassa_url: str = "") -> InlineKeybo
         callback_data="pay_yookassa",
     ))
     kb.row(InlineKeyboardButton(
-        text=f"₿CryptoBot {price_rub} ₽",
+        text=f"₿ CryptoBot {price_rub} ₽",
         callback_data="pay_crypto",
     ))
-    kb.row(InlineKeyboardButton(text="Назад", callback_data="back_to_menu"))
+    kb.row(InlineKeyboardButton(text="Назад", callback_data=f"devtier_{devices}"))
     return kb.as_markup()
 
 

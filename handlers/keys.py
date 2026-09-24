@@ -41,8 +41,8 @@ async def cmd_keys(message: Message, bot: Bot):
     lines = ["🔑 <b>Ваши ключи:</b>\n"]
     for k in keys:
         status = "✅ активен" if k["expiry"] > now else "❌ истёк"
-        devices = k.get("limit_ip", 1)
-        device_label = {1: "1 уст.", 2: "2 уст.", 5: "5 уст."}.get(devices, f"{devices} уст.")
+        devices = k.get("limit_ip", 2)
+        device_label = {2: "2 уст.", 5: "5 уст.", 10: "10 уст."}.get(devices, f"{devices} уст.")
         lines.append(
             f"<b>{k.get('remark') or 'Ключ #' + str(k['id'])}</b>\n"
             f"  Статус: {status} · {device_label}\n"
@@ -76,8 +76,8 @@ async def cb_my_keys(callback: CallbackQuery, bot: Bot):
     lines = ["🔑 <b>Ваши ключи:</b>\n"]
     for k in keys:
         status = "✅ активен" if k["expiry"] > now else "❌ истёк"
-        devices = k.get("limit_ip", 1)
-        device_label = {1: "1 уст.", 2: "2 уст.", 5: "5 уст."}.get(devices, f"{devices} уст.")
+        devices = k.get("limit_ip", 2)
+        device_label = {2: "2 уст.", 5: "5 уст.", 10: "10 уст."}.get(devices, f"{devices} уст.")
         lines.append(
             f"<b>{k.get('remark') or 'Ключ #' + str(k['id'])}</b>\n"
             f"  Статус: {status} · {device_label}\n"
@@ -106,8 +106,8 @@ async def cb_key_info(callback: CallbackQuery, bot: Bot):
 
     now = int(time.time())
     status = "✅ активен" if k["expiry"] > now else "❌ истёк"
-    devices = k.get("limit_ip", 1)
-    device_label = f"{devices} устройств" if devices > 1 else f"{devices} устройство"
+    devices = k.get("limit_ip", 2)
+    device_label = f"{devices} устройств" if devices in (5, 6, 7, 8, 9, 10, 0) else (f"{devices} устройства" if devices in (2, 3, 4) else f"{devices} устройство")
     
     # Получаем ссылку на подписку из БД
     subscription_url = k.get('key', '')

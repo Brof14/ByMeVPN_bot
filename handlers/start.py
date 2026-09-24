@@ -219,84 +219,112 @@ async def cmd_start(message: Message, bot: Bot) -> None:
     # Register user (idempotent)
     await ensure_user(user_id)
 
-    # Process referral link if provided
+    # Process start parameters if provided
     args = message.text.split()
     is_new_referral = False
     referral_processed = False
     
-    if len(args) > 1 and args[1].isdigit():
-        ref_id = int(args[1])
-        
-        # Process referral (set referrer + give bonus +5 days)
-        if ref_id != user_id:
+    if len(args) > 1:
+        param = args[1].strip()
+
+        # Source tracking: /start src_<source> (vk, tiktok, website, telegram, etc.)
+        if param.startswith("src_"):
+            source = param[4:].strip()
+            if source:
+                from database import set_user_source, log_analytics_event
+                await set_user_source(user_id, source)
+                await log_analytics_event(user_id=user_id, event_type="source_visit", source=source)
+                logger.info("User %d attributed to source: %s", user_id, source)
+
+        # Giveaway link: /start gw_<id> or /start giveaway_<id>
+        elif param.startswith("gw_") or param.startswith("giveaway_"):
             try:
-                from database import set_referrer, get_user_keys, extend_key
-                from referral_system_new import process_referral_click
-                
-                existing_keys = await get_user_keys(user_id)
-                if not existing_keys:
-                    # New referral - show welcome screen
-                    is_new_referral = True
-                    referral_processed = True
+                gw_id = int(param.split("_")[1])
+                from database import join_giveaway
+                joined = await join_giveaway(gw_id, user_id)
+                if joined:
+                    await message.answer(
+                        "🎉 <b>Вы успешно зарегистрировались в розыгрыше!</b>\n\n"
+                        "Результаты будут подведены автоматически. Удачи! 🍀",
+                        parse_mode="HTML"
+                    )
+            except Exception as e:
+                logger.error("Error joining giveaway %s for user %d: %s", param, user_id, e)
+
+        # Referral link: /start 123456 or /start ref_123456
+        elif param.isdigit() or (param.startswith("ref_") and param[4:].isdigit()):
+            ref_id = int(param[4:]) if param.startswith("ref_") else int(param)
+            
+            # Process referral (set referrer + give bonus)
+            if ref_id != user_id:
+                try:
+                    from database import set_referrer, get_user_keys, extend_key
+                    from referral_system_new import process_referral_click
                     
-                    # Set referrer
-                    await set_referrer(user_id, ref_id)
-                    
-                    # Process referral click using referral_system_new
-                    await process_referral_click(ref_id, user_id)
-                    
-                    # Extend referrer's key by 15 days
-                    referrer_keys = await get_user_keys(ref_id)
-                    if referrer_keys:
-                        # Extend the first active key
-                        for key in referrer_keys:
-                            if key['expiry'] > int(time.time()):
-                                await extend_key(key['id'], 15)
-                                # Notify referrer with beautiful text
-                                try:
-                                    await bot.send_message(
-                                        ref_id,
-                                        "🎊 <b>Привлекли нового реферала!</b>\n\n"
-                                        "✨ По вашей ссылке перешёл новый пользователь\n"
-                                        "🔑 Ваш ключ продлён на 15 дней\n"
-                                        "💚 Продолжайте приглашать друзей!",
-                                        parse_mode="HTML"
-                                    )
-                                except Exception as notify_error:
-                                    logger.error("Failed to notify referrer: %s", notify_error)
-                                break
-                    else:
-                        # Referrer has no active key - notify them anyway
+                    existing_keys = await get_user_keys(user_id)
+                    if not existing_keys:
+                        # New referral - show welcome screen
+                        is_new_referral = True
+                        referral_processed = True
+                        
+                        # Set referrer
+                        await set_referrer(user_id, ref_id)
+                        
+                        # Process referral click using referral_system_new
+                        await process_referral_click(ref_id, user_id)
+                        
+                        # Extend referrer's key by 15 days
+                        referrer_keys = await get_user_keys(ref_id)
+                        if referrer_keys:
+                            # Extend the first active key
+                            for key in referrer_keys:
+                                if key['expiry'] > int(time.time()):
+                                    await extend_key(key['id'], 15)
+                                    # Notify referrer with beautiful text
+                                    try:
+                                        await bot.send_message(
+                                            ref_id,
+                                            "🎊 <b>Привлекли нового реферала!</b>\n\n"
+                                            "✨ По вашей ссылке перешёл новый пользователь\n"
+                                            "🔑 Ваш ключ продлён на 15 дней\n"
+                                            "💚 Продолжайте приглашать друзей!",
+                                            parse_mode="HTML"
+                                        )
+                                    except Exception as notify_error:
+                                        logger.error("Failed to notify referrer: %s", notify_error)
+                                    break
+                        else:
+                            # Referrer has no active key - notify them anyway
+                            try:
+                                await bot.send_message(
+                                    ref_id,
+                                    "🎊 <b>Привлекли нового реферала!</b>\n\n"
+                                    "✨ По вашей ссылке перешёл новый пользователь\n"
+                                    "💡 У вас нет активного ключа для продления\n"
+                                    "💚 Оформите подписку и получите +15 дней бонуса!",
+                                    parse_mode="HTML"
+                                )
+                            except Exception as notify_error:
+                                logger.error("Failed to notify referrer: %s", notify_error)
+                        
+                        # Send beautiful message to new user with button
                         try:
                             await bot.send_message(
-                                ref_id,
-                                "🎊 <b>Привлекли нового реферала!</b>\n\n"
-                                "✨ По вашей ссылке перешёл новый пользователь\n"
-                                "💡 У вас нет активного ключа для продления\n"
-                                "💚 Оформите подписку и получите +15 дней бонуса!",
-                                parse_mode="HTML"
+                                user_id,
+                                "🎁 <b>Поздравляем! Вы перешли по реферальной ссылке</b>\n\n"
+                                "🌟 Для вас подарок — <b>3 дня бесплатно</b>\n"
+                                "🚀 Нажмите кнопку ниже, чтобы забрать свой ключ",
+                                parse_mode="HTML",
+                                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                                    InlineKeyboardButton(text="🎁 Забрать 3 дня бесплатно", callback_data=f"claim_trial:{ref_id}")
+                                ]])
                             )
-                        except Exception as notify_error:
-                            logger.error("Failed to notify referrer: %s", notify_error)
-                    
-                    # Send beautiful message to new user with button
-                    try:
-                        await bot.send_message(
-                            user_id,
-                            "🎁 <b>Поздравляем! Вы перешли по реферальной ссылке</b>\n\n"
-                            "🌟 Для вас подарок — <b>3 дня бесплатно</b>\n"
-                            "🚀 Нажмите кнопку ниже, чтобы забрать свой ключ",
-                            parse_mode="HTML",
-                            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                                InlineKeyboardButton(text="🎁 Забрать 3 дня бесплатно", callback_data=f"claim_trial:{ref_id}")
-                            ]])
-                        )
-                    except Exception as msg_error:
-                        logger.error("Failed to send referral welcome message: %s", msg_error)
-                    
-                    logger.info("Referral click from user %s with code %s", user_id, args[1])
-            except Exception as e:
-                logger.error("Error processing referral: %s", e)
+                        except Exception as msg_error:
+                            logger.error("Failed to send referral welcome message: %s", msg_error)
+                        
+                        logger.info("Referral click from user %s with code %s", user_id, args[1])
+                except Exception as e:
+                    logger.error("Error processing referral: %s", e)
 
     # Send appropriate menu
     await _send_main_menu(

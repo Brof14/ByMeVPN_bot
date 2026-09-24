@@ -14,7 +14,8 @@ async def create_yookassa_payment(
     description: str,
     user_id: int,
     days: int,
-    devices: int = 1,
+    devices: int = 2,
+    promo_code: Optional[str] = None,
 ) -> Optional[str]:
     if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
         logger.warning("YooKassa credentials not configured")
@@ -28,15 +29,23 @@ async def create_yookassa_payment(
         "Content-Type": "application/json",
     }
     
+    metadata = {
+        "user_id": str(user_id),
+        "days": str(days),
+        "devices": str(devices),
+    }
+    if promo_code:
+        metadata["promo_code"] = str(promo_code)
+
     payload = {
         "amount": {"value": f"{amount_rub}.00", "currency": "RUB"},
         "confirmation": {"type": "redirect", "return_url": "https://t.me/"},
         "capture": True,
         "description": description,
-        "metadata": {"user_id": str(user_id), "days": str(days), "devices": str(devices)},
+        "metadata": metadata,
     }
 
-    logger.info("create_yookassa_payment: user_id=%d days=%d devices=%d amount=%d", user_id, days, devices, amount_rub)
+    logger.info("create_yookassa_payment: user_id=%d days=%d devices=%d amount=%d promo=%s", user_id, days, devices, amount_rub, promo_code)
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -68,18 +77,12 @@ async def create_crypto_payment(
     description: str,
     user_id: int,
     days: int,
-    devices: int = 1,
+    devices: int = 2,
+    promo_code: Optional[str] = None,
 ) -> Optional[tuple[str, str]]:
     """Create payment via Crypto Bot (@send).
 
     Returns (pay_url, invoice_id) on success, None on failure.
-
-    FIX: this used to send `"asset": "USDT", "amount": str(amount_rub)`,
-    which created an invoice for e.g. 69 *USDT* (~6900 RUB) instead of
-    69 RUB worth of crypto — a ~100x overcharge. Crypto Pay supports fiat
-    invoices directly (`currency_type: "fiat", "fiat": "RUB"`), where it
-    auto-converts to the crypto amount at the current rate, so we now
-    charge the correct RUB-equivalent instead of a raw USDT figure.
     """
     if not CRYPTO_BOT_TOKEN:
         logger.warning("Crypto Bot token not configured")
@@ -100,7 +103,7 @@ async def create_crypto_payment(
         "paid_btn_url": "https://t.me/ByMeVPN_bot",
         "expires_in": 3600,  # 1 hour
         "hidden_message": f"User ID: {user_id}, Days: {days}, Devices: {devices}",
-        "payload": f"{user_id}:{days}:{devices}",
+        "payload": f"{user_id}:{days}:{devices}:{promo_code or ''}",
     }
 
     logger.info("create_crypto_payment: user_id=%d days=%d devices=%d amount=%d", user_id, days, devices, amount_rub)

@@ -237,32 +237,25 @@ async def create_xui_user(
     try:
         api = await _get_api()
 
-        # Шаг 1: Принудительно удалить существующего клиента из инбаундов 2 и 3 (parallel)
+        # Шаг 1: Проверяем, существует ли уже клиент в 3x-ui
         existing_uuid = await _find_client_uuid(api, email)
         
         if existing_uuid:
-            # Delete from all inbounds in parallel
-            delete_tasks = []
-            for inbound_id in inbound_ids:
-                async def delete_from_inbound(iid):
-                    try:
-                        logger.info("Force deleting existing client %s (uuid=%s) from inbound %d", email, existing_uuid, iid)
-                        await _api_call_with_retry(api.client.delete, iid, existing_uuid)
-                        logger.info("Deleted client %s from inbound %d", email, iid)
-                    except Exception as del_err:
-                        logger.debug("Failed to delete client %s from inbound %d: %s", email, iid, del_err)
-                
-                delete_tasks.append(delete_from_inbound(inbound_id))
-            
-            await asyncio.gather(*delete_tasks, return_exceptions=True)
+            logger.info("Client %s already exists in 3x-ui (uuid=%s) - PRESERVING UUID and updating", email, existing_uuid)
+            existing_sub_id = await _find_client_sub_id(api, email) or existing_uuid.replace("-", "")[:16]
+            update_res = await update_xui_user(user_id, days=days, limit_ip=limit_ip)
+            if update_res:
+                return update_res
+            # Fallback: keep existing UUID if update failed
+            client_uuid = existing_uuid
+            sub_id = existing_sub_id
         else:
-            logger.info("No existing client found for %s", email)
-        
-        # Шаг 2: Создаем нового клиента в обоих инбаундах (parallel)
-        logger.info("Creating new client %s in inbounds %s", email, inbound_ids)
-        
-        client_uuid = str(uuid_lib.uuid4())
-        sub_id = client_uuid.replace("-", "")[:16]
+            logger.info("No existing client found for %s, creating new", email)
+            client_uuid = str(uuid_lib.uuid4())
+            sub_id = client_uuid.replace("-", "")[:16]
+
+        # Шаг 2: Создаем клиента в инбаундах (parallel)
+        logger.info("Adding client %s in inbounds %s", email, inbound_ids)
 
         # Названия для инбаундов (используем при создании клиентов и генерации ссылок)
         inbound_names = {
@@ -596,73 +589,112 @@ async def delete_xui_user(user_id: int) -> bool:
         return False
 
 
-async def update_xui_user_expiry(user_id: int, days: int) -> bool:
+async def update_xui_user(
+    user_id: int,
+    days: int = 0,
+    limit_ip: Optional[int] = None,
+    new_expiry_ms: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Safely update client in 3x-ui WITHOUT deleting or changing UUID/sub_id.
+    Updates expiry_time and limit_ip (device limit).
+    """
     email = str(user_id)
-    logger.info("update_xui_user_expiry: email=%s days=%d", email, days)
+    logger.info("update_xui_user: email=%s days=%d limit_ip=%s new_expiry_ms=%s", email, days, limit_ip, new_expiry_ms)
 
     try:
         api = await _get_api()
-
         client_uuid = await _find_client_uuid(api, email)
 
         if not client_uuid:
-            logger.warning("update_xui_user_expiry: client %s not found — recreating", email)
-            result = await create_xui_user(user_id, days)
-            return result is not None
+            logger.info("update_xui_user: client %s not found in 3x-ui", email)
+            return None
 
         # Получаем текущие настройки клиента
+        client = None
         try:
             client = await _api_call_with_retry(api.client.get_by_email, email)
-            if client:
-                current_limit_ip = client.limit_ip or 0
-                current_total_gb = client.total_gb or 0
-                current_sub_id = client.sub_id or ""
-            else:
-                current_limit_ip = 0
-                current_total_gb = 0
-                current_sub_id = ""
         except Exception as e:
-            logger.debug("update_xui_user_expiry: failed to get client settings: %s", e)
-            current_limit_ip = 0
-            current_total_gb = 0
-            current_sub_id = ""
+            logger.debug("update_xui_user: failed to get client settings: %s", e)
+
+        current_limit_ip = client.limit_ip if (client and client.limit_ip) else 2
+        current_total_gb = client.total_gb if (client and client.total_gb) else 0
+        current_sub_id = client.sub_id if (client and client.sub_id) else ""
+        sub_id = current_sub_id or client_uuid.replace("-", "")[:16]
+
+        final_limit_ip = limit_ip if (limit_ip is not None and limit_ip > 0) else current_limit_ip
 
         import time
         now_ms = int(time.time() * 1000)
-        current_expiry_ms = 0
-        
-        # Пробуем получить текущий expiry из client
-        if client and client.expiry_time:
-            current_expiry_ms = client.expiry_time
-        
-        if current_expiry_ms > now_ms:
-            new_expiry_ms = current_expiry_ms + days * 86400 * 1000
-        else:
-            new_expiry_ms = now_ms + days * 86400 * 1000
+        current_expiry_ms = (client.expiry_time or 0) if client else 0
 
-        sub_id = current_sub_id or client_uuid.replace("-", "")[:16]
+        if new_expiry_ms is not None:
+            final_expiry_ms = new_expiry_ms
+        else:
+            base_ms = max(current_expiry_ms, now_ms)
+            final_expiry_ms = base_ms + days * 86400 * 1000
+
         updated = Client(
             email=email,
             id=client_uuid,
             uuid=client_uuid,
             enable=True,
-            expiry_time=new_expiry_ms,
-            limit_ip=current_limit_ip,
+            expiry_time=final_expiry_ms,
+            limit_ip=final_limit_ip,
             total_gb=current_total_gb,
             sub_id=sub_id,
         )
         await _api_call_with_retry(api.client.update, client_uuid, updated)
         logger.info(
-            "update_xui_user_expiry: %s → new expiry %s (+%d days)",
+            "update_xui_user: %s updated (uuid=%s, limit_ip=%d, expiry=%s)",
             email,
-            datetime.fromtimestamp(new_expiry_ms / 1000).strftime("%d.%m.%Y"),
-            days,
+            client_uuid,
+            final_limit_ip,
+            datetime.fromtimestamp(final_expiry_ms / 1000).strftime("%d.%m.%Y"),
         )
-        return True
+
+        subscription_url = _build_sub_url(sub_id)
+        return {
+            "subscription_url": subscription_url,
+            "username": email,
+            "uuid": client_uuid,
+            "sub_id": sub_id,
+            "expiry_time": final_expiry_ms,
+            "limit_ip": final_limit_ip,
+        }
 
     except Exception as e:
-        logger.exception("update_xui_user_expiry FAILED for user=%d: %s", user_id, e)
-        return False
+        logger.exception("update_xui_user FAILED for user=%d: %s", user_id, e)
+        return None
+
+
+async def update_xui_user_expiry(user_id: int, days: int, limit_ip: Optional[int] = None) -> bool:
+    """Backward-compatible wrapper to update client expiry and optional limit_ip."""
+    res = await update_xui_user(user_id, days=days, limit_ip=limit_ip)
+    return res is not None
+
+
+async def get_xui_client_details(user_id: int) -> Optional[Dict[str, Any]]:
+    """Get full details of client in 3x-ui including UUID and sub_id."""
+    email = str(user_id)
+    try:
+        api = await _get_api()
+        client = await _api_call_with_retry(api.client.get_by_email, email)
+        if not client or not client.uuid:
+            return None
+        sub_id = client.sub_id or client.uuid.replace("-", "")[:16]
+        return {
+            "uuid": client.uuid,
+            "sub_id": sub_id,
+            "email": email,
+            "limit_ip": client.limit_ip or 2,
+            "expiry_time": client.expiry_time or 0,
+            "subscription_url": _build_sub_url(sub_id),
+            "enable": client.enable,
+        }
+    except Exception as e:
+        logger.debug("get_xui_client_details failed for user %d: %s", user_id, e)
+        return None
 
 
 async def get_user_subscription_links(user_id: int) -> Optional[List[str]]:

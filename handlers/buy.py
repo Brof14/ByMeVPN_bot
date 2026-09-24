@@ -12,21 +12,29 @@ from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton,
 )
 
-from constants import PRICE_CONFIG, PERIOD_LABELS, TRIAL_DAYS
+from constants import (
+    PRICE_CONFIG, PERIOD_LABELS, TRIAL_DAYS,
+    VALID_DEVICE_LIMITS, DEFAULT_DEVICE_LIMIT, DEVICE_CONFIG,
+    get_price_for_months, get_monthly_display, validate_device_limit,
+)
 from config import PRICE_1_MONTH, DAYS_1M
 from states import BuyFlow
 from keyboards import tariff_selection_kb, payment_kb
 from payments import create_yookassa_payment, create_crypto_payment
-from subscription import ask_config_name
-from database import ensure_user, add_referral_earning, get_referrer
-from utils import send_with_photo, safe_answer
+from subscription import deliver_key, ask_config_name
+from database import (
+    ensure_user, add_referral_earning, get_referrer,
+    record_payment_idempotent, update_payment_status,
+    use_promo_code, validate_promo_code, has_user_used_promo,
+)
+from utils import send_with_photo, send_or_edit, safe_answer
 
 logger = logging.getLogger(__name__)
 router = Router()
 
 
 # ---------------------------------------------------------------------------
-# Step 1: Choose plan type
+# Step 1: Choose plan type & devices
 # ---------------------------------------------------------------------------
 
 @router.callback_query(F.data == "buy_vpn")
@@ -37,11 +45,45 @@ async def cb_buy_vpn(callback: CallbackQuery, bot: Bot, state: FSMContext):
     # Check if user has active promo code
     data = await state.get_data()
     promo_discount = data.get("promo_discount", 0)
+    devices = validate_device_limit(data.get("devices", DEFAULT_DEVICE_LIMIT))
+    await state.update_data(devices=devices)
     
+    text = (
+        "<b>Выберите количество устройств и срок подписки</b>\n\n"
+        "Чем дольше срок, тем ниже стоимость одного месяца.\n"
+        "Все тарифы поддерживают стабильное и быстрое подключение."
+    )
     await send_with_photo(
         bot, callback,
-        "<b>Выберите срок подписки</b>\n\nЧем дольше срок, тем ниже стоимость одного месяца.\n\nВсе тарифы включают до 5 устройств одновременно.",
-        tariff_selection_kb(discount_percent=promo_discount),
+        text,
+        tariff_selection_kb(devices=devices, discount_percent=promo_discount),
+    )
+
+
+@router.callback_query(F.data.startswith("devtier_"))
+async def cb_select_devtier(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    """Switch device tier (2, 5, 10 devices)."""
+    await safe_answer(callback)
+    try:
+        devices = int(callback.data.split("_")[1])
+    except (IndexError, ValueError):
+        devices = DEFAULT_DEVICE_LIMIT
+    devices = validate_device_limit(devices)
+
+    data = await state.get_data()
+    promo_discount = data.get("promo_discount", 0)
+    await state.update_data(devices=devices)
+
+    dev_info = DEVICE_CONFIG.get(devices, DEVICE_CONFIG[DEFAULT_DEVICE_LIMIT])
+    text = (
+        f"<b>Тариф: {dev_info['name']} ({dev_info['badge']})</b>\n"
+        f"<i>{dev_info['description']}</i>\n\n"
+        "<b>Выберите срок подписки:</b>"
+    )
+    await send_or_edit(
+        bot, callback,
+        text,
+        tariff_selection_kb(devices=devices, discount_percent=promo_discount),
     )
 
 
@@ -52,16 +94,22 @@ async def cb_buy_vpn(callback: CallbackQuery, bot: Bot, state: FSMContext):
 @router.callback_query(F.data.startswith("tariff_"))
 async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await safe_answer(callback)
-    months = int(callback.data.split("_", 1)[1])
+    parts = callback.data.split("_")
+    months = int(parts[1])
+    
+    data = await state.get_data()
+    if len(parts) >= 3:
+        devices = validate_device_limit(int(parts[2]))
+    else:
+        devices = validate_device_limit(data.get("devices", DEFAULT_DEVICE_LIMIT))
 
-    price_rub, days = PRICE_CONFIG.get(months, PRICE_CONFIG[1])
+    price_rub, days = get_price_for_months(months, devices)
 
     # Check for promo discount
-    data = await state.get_data()
     promo_info = data.get("promo_info", {})
     original_price = price_rub
 
-    logger.info(f"Selecting tariff: months={months}, original_price={original_price}, promo_info={promo_info}")
+    logger.info(f"Selecting tariff: months={months}, devices={devices}, original_price={original_price}, promo_info={promo_info}")
 
     if promo_info:
         promo_type = promo_info.get("promo_type", "percent")
@@ -74,7 +122,6 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
             price_rub = max(0, price_rub - discount_value)
             promo_text = f" (скидка {discount_value} ₽ применена)"
         elif promo_type == "free_days":
-            # Free days promo - add days instead of discount
             days += discount_value
             promo_text = f" (+{discount_value} дней бесплатно)"
         else:
@@ -82,27 +129,27 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
     else:
         promo_text = ""
 
-    await state.update_data(months=months, price_rub=price_rub, days=days, original_price=original_price)
+    await state.update_data(months=months, devices=devices, price_rub=price_rub, days=days, original_price=original_price)
 
     period_name = PERIOD_LABELS.get(months, f"{months} мес.")
+    dev_name = DEVICE_CONFIG.get(devices, {}).get("name", f"{devices} устройств")
 
     text = (
         f"<b>Вы покупаете доступ на {days} дней.</b>\n\n"
-        f"Стоимость: <b>{price_rub} ₽</b>{promo_text}\n"
+        f"📱 Устройств: <b>{dev_name}</b>\n"
+        f"💰 Стоимость: <b>{price_rub} ₽</b>{promo_text}\n"
     )
 
     if promo_info and promo_info.get("promo_type") in ["percent", "fixed_rub"]:
         text += f"<s>Без скидки: {original_price} ₽</s>\n"
 
     text += (
-        f"Устройств: до 5 одновременно\n\n"
-        "Оплачивая подписку, вы соглашаетесь с <a href='https://telegra.ph/POLITIKA-KONFIDENCIALNOSTI-ByMeVPN-03-12'>политикой обработки персональных данных</a>, с <a href='https://telegra.ph/DOGOVOR-PUBLICHNOJ-OFERTY-ByMyVPN-03-12'>договором оферты</a> и с <a href='https://telegra.ph/SOGLASHENIE-O-REGULYARNYH-REKURRENTNYH-PLATEZHAH-ByMeVPN-03-12'>соглашением о присоединении к рекуррентной системе платежей</a>.\n\n"
-        "Все подписки продлеваются автоматически. Отмена подписки возможна в любой момент.\n\n"
-        "После оплаты бот отправит вам ключ для приложения и подробную инструкцию по установке.\n\n"
+        "\nОплачивая подписку, вы соглашаетесь с <a href='https://telegra.ph/POLITIKA-KONFIDENCIALNOSTI-ByMeVPN-03-12'>политикой обработки персональных данных</a>, с <a href='https://telegra.ph/DOGOVOR-PUBLICHNOJ-OFERTY-ByMyVPN-03-12'>договором оферты</a> и с <a href='https://telegra.ph/SOGLASHENIE-O-REGULYARNYH-REKURRENTNYH-PLATEZHAH-ByMeVPN-03-12'>соглашением о присоединении к рекуррентной системе платежей</a>.\n\n"
+        "После оплаты подписка будет активирована автоматически.\n\n"
         "<b>Выберите способ оплаты:</b>"
     )
 
-    await send_with_photo(bot, callback, text, payment_kb(price_rub, days))
+    await send_with_photo(bot, callback, text, payment_kb(price_rub, days, devices=devices))
 
 
 # ---------------------------------------------------------------------------
@@ -113,10 +160,9 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
 @router.callback_query(F.data.startswith("period_"))
 async def cb_select_period_legacy(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await safe_answer(callback)
-    # Redirect to new tariff selection
     await send_with_photo(
         bot, callback,
-        "<b>Выберите срок подписки</b>\n\nЧем дольше срок, тем ниже стоимость одного месяца.\n\nВсе тарифы включают до 5 устройств одновременно.",
+        "<b>Выберите срок подписки</b>\n\nЧем дольше срок, тем ниже стоимость одного месяца.",
         tariff_selection_kb(),
     )
 
@@ -132,29 +178,26 @@ async def cb_pay_stars(callback: CallbackQuery, bot: Bot, state: FSMContext):
     price_rub: int = data.get("price_rub", PRICE_1_MONTH)
     days: int = data.get("days", DAYS_1M)
     months: int = data.get("months", 1)
-    # All plans now support up to 5 devices
-    devices: int = 5
+    devices: int = validate_device_limit(data.get("devices", DEFAULT_DEVICE_LIMIT))
+    promo_code = data.get("promo_code", "")
     user_id = callback.from_user.id
 
-    # Stars amount = rubles (1:1) — intentional, to cover Telegram commission
+    # Stars amount = rubles (1:1)
     stars = price_rub
-    # Encode months in payload so we can recover if FSM is lost
-    payload = f"stars_{user_id}_{days}_{months}_{int(time.time())}"
+    payload = f"stars_{user_id}_{days}_{devices}_{months}_{promo_code}_{int(time.time())}"
 
     try:
-        # Отправляем инвойс сразу без промежуточных сообщений
         await bot.send_invoice(
             chat_id=user_id,
-            title="ByMeVPN — подписка",
-            description=f"Доступ к VPN на {days} дней (VLESS + Reality)",
+            title=f"ByMeVPN — {days} дней",
+            description=f"VPN подписка на {days} дней ({devices} устр., VLESS + Reality)",
             payload=payload,
-            provider_token="",  # empty string for Telegram Stars
+            provider_token="",  # Stars
             currency="XTR",
             prices=[LabeledPrice(label=f"VPN на {days} дней", amount=stars)],
         )
     except Exception as e:
         logger.error("Stars invoice error for user %d: %s", user_id, e)
-        # Отправляем сообщение об ошибке, если инвойс не удался
         try:
             await bot.send_message(
                 chat_id=user_id,
@@ -176,12 +219,12 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
     price_rub: int = data.get("price_rub", PRICE_1_MONTH)
     days: int = data.get("days", DAYS_1M)
     months: int = data.get("months", 1)
-    # All plans now support up to 5 devices
-    devices: int = 5
+    devices: int = validate_device_limit(data.get("devices", DEFAULT_DEVICE_LIMIT))
+    promo_code = data.get("promo_code")
     user_id = callback.from_user.id
 
     url = await create_yookassa_payment(
-        price_rub, f"ByMeVPN {days} дней", user_id, days, devices,
+        price_rub, f"ByMeVPN {days} дней ({devices} устр.)", user_id, days, devices, promo_code=promo_code,
     )
 
     if not url:
@@ -192,11 +235,9 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
         )
         return
 
-    # Показываем сообщение с кнопкой для перехода на страницу оплаты
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"💳 Оплатить {price_rub} ₽", url=url)],
-        [InlineKeyboardButton(text="Назад", callback_data="back_to_menu")]
+        [InlineKeyboardButton(text="Назад", callback_data=f"devtier_{devices}")]
     ])
     
     await send_with_photo(
@@ -205,8 +246,8 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
         f"Нажмите кнопку ниже для перехода на страницу оплаты.\n\n"
         f"Сумма: <b>{price_rub} ₽</b>\n"
         f"Срок: {days} дней\n"
-        f"Устройств: до 5 одновременно\n\n"
-        f"После оплаты вы получите ключ автоматически.",
+        f"Устройств: до {devices} одновременно\n\n"
+        f"После оплаты подписка будет активирована автоматически.",
         kb,
     )
 
@@ -222,12 +263,12 @@ async def cb_pay_crypto(callback: CallbackQuery, bot: Bot, state: FSMContext):
     price_rub: int = data.get("price_rub", PRICE_1_MONTH)
     days: int = data.get("days", DAYS_1M)
     months: int = data.get("months", 1)
-    # All plans now support up to 5 devices
-    devices: int = 5
+    devices: int = validate_device_limit(data.get("devices", DEFAULT_DEVICE_LIMIT))
+    promo_code = data.get("promo_code")
     user_id = callback.from_user.id
 
     result = await create_crypto_payment(
-        price_rub, f"ByMeVPN {days} дней", user_id, days, devices,
+        price_rub, f"ByMeVPN {days} дней ({devices} устр.)", user_id, days, devices, promo_code=promo_code,
     )
 
     if not result:
@@ -240,19 +281,12 @@ async def cb_pay_crypto(callback: CallbackQuery, bot: Bot, state: FSMContext):
 
     url, invoice_id = result
 
-    # FIX: previously the invoice was created and shown to the user, but
-    # nothing ever recorded it or checked whether it got paid — CryptoBot
-    # has no built-in callback here, so paid invoices just vanished and no
-    # key was ever delivered. Store it as pending so payment_monitor.py's
-    # CryptoPaymentMonitor can pick it up once CryptoBot reports it as paid.
     from database import add_crypto_pending
     await add_crypto_pending(invoice_id, user_id, days, devices, price_rub)
 
-    # Показываем сообщение с кнопкой для перехода на страницу оплаты
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"₿ Оплатить {price_rub} ₽", url=url)],
-        [InlineKeyboardButton(text="Назад", callback_data="back_to_menu")]
+        [InlineKeyboardButton(text="Назад", callback_data=f"devtier_{devices}")]
     ])
     
     await send_with_photo(
@@ -261,8 +295,8 @@ async def cb_pay_crypto(callback: CallbackQuery, bot: Bot, state: FSMContext):
         f"Нажмите кнопку ниже для перехода на страницу оплаты.\n\n"
         f"Сумма: <b>{price_rub} ₽</b>\n"
         f"Срок: {days} дней\n"
-        f"Устройств: до 5 одновременно\n\n"
-        f"После оплаты вы получите ключ автоматически.",
+        f"Устройств: до {devices} одновременно\n\n"
+        f"После оплаты подписка будет активирована автоматически.",
         kb,
     )
 
@@ -277,7 +311,7 @@ async def pre_checkout(pre: PreCheckoutQuery):
 
 
 # ---------------------------------------------------------------------------
-# Successful Stars payment → ask config name → deliver key
+# Successful Stars payment → idempotent delivery
 # ---------------------------------------------------------------------------
 
 @router.message(F.successful_payment)
@@ -289,50 +323,90 @@ async def on_successful_payment(message: Message, bot: Bot, state: FSMContext):
     payload = payment.invoice_payload
     stars = payment.total_amount
     currency = payment.currency  # XTR
+    charge_id = payment.telegram_payment_charge_id or payload
 
-    # Parse days and months from payload: "stars_{user_id}_{days}_{months}_{ts}"
+    # Parse payload
     parts = payload.split("_")
-    try:
-        days = int(parts[2])
-    except Exception:
-        days = DAYS_1M
-    try:
-        # New format has months at index 3; old format (4 parts) falls back to FSM
-        months_from_payload = int(parts[3]) if len(parts) >= 5 else None
-    except Exception:
-        months_from_payload = None
+    days = DAYS_1M
+    devices = DEFAULT_DEVICE_LIMIT
+    promo_from_payload = None
 
-    # Retrieve months from FSM; payload value is authoritative fallback if FSM is gone
+    if len(parts) >= 7:
+        try:
+            days = int(parts[2])
+            devices = validate_device_limit(int(parts[3]))
+            promo_from_payload = parts[5] if parts[5] else None
+        except Exception:
+            pass
+    elif len(parts) >= 5:
+        try:
+            days = int(parts[2])
+        except Exception:
+            pass
+    elif len(parts) >= 3:
+        try:
+            days = int(parts[2])
+        except Exception:
+            pass
+
     data = await state.get_data()
-    fsm_months = data.get("months")
-    months = fsm_months or months_from_payload or 1
-    
-    # All paid plans support up to 5 devices
-    devices = 5
+    if "devices" in data:
+        devices = validate_device_limit(data["devices"])
+    promo_code = data.get("promo_code") or promo_from_payload
 
     try:
         await message.delete()
     except Exception:
         pass
 
-    # NOTE: the payment itself is recorded inside subscription.deliver_key()
-    # once the key has actually been delivered. We deliberately do NOT call
-    # add_payment() here — this used to record every Stars payment TWICE
-    # (once here, once in deliver_key), inflating revenue stats and
-    # per-user totals shown in the admin panel.
-    payment_id = None
+    # Idempotent payment recording with provider='stars', provider_payment_id=charge_id
+    tariff_name = f"Stars {days} дней ({devices} устр.)"
+    is_new, pay_db_id = await record_payment_idempotent(
+        user_id=user_id,
+        amount=stars,
+        currency=currency,
+        method="stars",
+        days=days,
+        payload=payload,
+        status="processing",
+        tariff=tariff_name,
+        devices=devices,
+        provider="stars",
+        provider_payment_id=charge_id,
+    )
 
-    # Начисляем бонус рефереалу за первую оплату (50₽)
-    referrer_id = None
-    try:
-        referrer_id = await get_referrer(user_id)
-        if referrer_id:
-            try:
-                from database import add_referral_earning
-                bonus_added = await add_referral_earning(referrer_id, user_id, 50, payment_id)
+    if not is_new:
+        logger.info("Stars duplicate payment for charge_id=%s, user=%d - skipping", charge_id, user_id)
+        return
+
+    # Deliver key immediately
+    success = await deliver_key(
+        bot=bot,
+        user_id=user_id,
+        chat_id=message.chat.id,
+        config_name=f"ByMeVPN_{user_id}",
+        days=days,
+        limit_ip=devices,
+        is_paid=True,
+        amount=stars,
+        currency=currency,
+        method="stars",
+        payload=payload,
+        extend_existing=True,
+    )
+
+    if success:
+        await update_payment_status(pay_db_id, "success")
+        if promo_code:
+            await use_promo_code(promo_code, user_id)
+        await state.clear()
+        
+        # Referral bonus
+        try:
+            referrer_id = await get_referrer(user_id)
+            if referrer_id:
+                bonus_added = await add_referral_earning(referrer_id, user_id, 50, charge_id)
                 if bonus_added:
-                    logger.info("Referral bonus 50₽ added for referrer %d from user %d payment", referrer_id, user_id)
-                    # Уведомляем реферера
                     try:
                         await bot.send_message(
                             referrer_id,
@@ -343,27 +417,11 @@ async def on_successful_payment(message: Message, bot: Bot, state: FSMContext):
                         )
                     except Exception as notify_error:
                         logger.error("Failed to notify referrer %d: %s", referrer_id, notify_error)
-            except Exception as e:
-                logger.error("Error processing referral bonus for user %d: %s", user_id, e)
-    except Exception as e:
-        logger.error("Error getting referrer for user %d: %s", user_id, e)
-
-    # Ask for config name before delivering key
-    await ask_config_name(
-        bot, message, state,
-        context={
-            "days": days,
-            "prefix": "stars",
-            "is_paid": True,
-            "amount": stars,
-            "currency": currency,
-            "method": "stars",
-            "payload": payload,
-        }
-    )
-
-# YooKassa payments are now processed automatically in webhook.py
-# No manual delivery needed anymore
+        except Exception as e:
+            logger.error("Error processing referral bonus for Stars user %d: %s", user_id, e)
+    else:
+        await update_payment_status(pay_db_id, "failed")
+        logger.error("Stars delivery failed for user %d, charge_id %s", user_id, charge_id)
 
 
 # ---------------------------------------------------------------------------
@@ -466,8 +524,6 @@ async def cb_activate_promo(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
 
     # Validate promo code
-    from database import validate_promo_code, use_promo_code
-
     promo = await validate_promo_code(code)
     if not promo:
         await callback.message.edit_text(
@@ -481,9 +537,8 @@ async def cb_activate_promo(callback: CallbackQuery, state: FSMContext):
         )
         return
 
-    # Mark promo code as used
-    success = await use_promo_code(code, user_id)
-    if not success:
+    # Check if user already used this promo code
+    if await has_user_used_promo(code, user_id):
         await callback.message.edit_text(
             "❌ <b>Вы уже использовали этот промокод</b>\n\n"
             "Каждый промокод можно использовать только один раз.",
@@ -491,20 +546,24 @@ async def cb_activate_promo(callback: CallbackQuery, state: FSMContext):
         )
         return
 
-    # Save promo info to state for next purchase
+    # Save promo info to state for next purchase (without burning yet!)
     promo_type = promo["promo_type"]
     discount_value = promo["discount_value"]
 
     if promo_type == "percent":
         discount_text = f"{discount_value}%"
+        promo_discount = discount_value
     elif promo_type == "fixed_rub":
         discount_text = f"{discount_value} ₽"
+        promo_discount = 0
     elif promo_type == "free_days":
         discount_text = f"+{discount_value} дней"
+        promo_discount = 0
     else:
         discount_text = f"{discount_value}"
+        promo_discount = 0
 
-    await state.update_data(promo_info=promo, promo_code=code)
+    await state.update_data(promo_info=promo, promo_code=code, promo_discount=promo_discount)
 
     logger.info(f"Promo code {code} activated via button for user {user_id} with type {promo_type} value {discount_value}")
 
@@ -544,8 +603,6 @@ async def cmd_promo(message: Message, state: FSMContext):
         user_id = message.from_user.id
 
         # Validate promo code
-        from database import validate_promo_code, use_promo_code
-
         promo = await validate_promo_code(code)
         if not promo:
             await message.answer(
@@ -559,9 +616,8 @@ async def cmd_promo(message: Message, state: FSMContext):
             )
             return
 
-        # Mark promo code as used
-        success = await use_promo_code(code, user_id)
-        if not success:
+        # Check if user already used this promo code
+        if await has_user_used_promo(code, user_id):
             await message.answer(
                 "❌ <b>Вы уже использовали этот промокод</b>\n\n"
                 "Каждый промокод можно использовать только один раз.",
@@ -569,20 +625,24 @@ async def cmd_promo(message: Message, state: FSMContext):
             )
             return
 
-        # Save promo info to state for next purchase
+        # Save promo info to state for next purchase (without burning yet!)
         promo_type = promo["promo_type"]
         discount_value = promo["discount_value"]
 
         if promo_type == "percent":
             discount_text = f"{discount_value}%"
+            promo_discount = discount_value
         elif promo_type == "fixed_rub":
             discount_text = f"{discount_value} ₽"
+            promo_discount = 0
         elif promo_type == "free_days":
             discount_text = f"+{discount_value} дней"
+            promo_discount = 0
         else:
             discount_text = f"{discount_value}"
+            promo_discount = 0
 
-        await state.update_data(promo_info=promo, promo_code=code)
+        await state.update_data(promo_info=promo, promo_code=code, promo_discount=promo_discount)
 
         logger.info(f"Promo code {code} activated for user {user_id} with type {promo_type} value {discount_value}")
 

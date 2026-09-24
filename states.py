@@ -28,6 +28,10 @@ class AdminFlow(StatesGroup):
     add_days_value = State()     # waiting for days to add to user
     mass_trial_days = State()    # waiting for days for mass trial
     mass_extend_days = State()   # waiting for days for mass extend
+    giveaway_title = State()     # waiting for giveaway title
+    giveaway_prize = State()     # waiting for prize days
+    giveaway_winners = State()   # waiting for winner count
+    giveaway_duration = State()  # waiting for duration in hours
 
 
 class EmailAuth(StatesGroup):

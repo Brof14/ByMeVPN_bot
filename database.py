@@ -554,6 +554,98 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
     except Exception:
         pass
 
+    # Migration: add source tracking to users
+    try:
+        await db.execute("ALTER TABLE users ADD COLUMN source TEXT DEFAULT 'direct'")
+        logger.info("Migration: added source column to users")
+    except Exception:
+        pass
+
+    # Migration: add provider and provider_payment_id to payments with unique index
+    try:
+        await db.execute("ALTER TABLE payments ADD COLUMN provider TEXT")
+        logger.info("Migration: added provider column to payments")
+    except Exception:
+        pass
+
+    try:
+        await db.execute("ALTER TABLE payments ADD COLUMN provider_payment_id TEXT")
+        logger.info("Migration: added provider_payment_id column to payments")
+    except Exception:
+        pass
+
+    try:
+        await db.execute("UPDATE payments SET provider = method WHERE provider IS NULL OR provider = ''")
+        await db.execute("UPDATE payments SET provider_payment_id = payload WHERE provider_payment_id IS NULL OR provider_payment_id = ''")
+        # Deduplicate historical legacy rows so UNIQUE index can be created safely
+        await db.execute("""
+            UPDATE payments 
+            SET provider_payment_id = provider_payment_id || '_legacy_' || id 
+            WHERE id NOT IN (
+                SELECT MIN(id) FROM payments WHERE provider IS NOT NULL AND provider_payment_id IS NOT NULL 
+                GROUP BY provider, provider_payment_id
+            )
+        """)
+        await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_provider_id ON payments(provider, provider_payment_id)")
+        logger.info("Migration: created unique index idx_payments_provider_id on payments(provider, provider_payment_id)")
+    except Exception as e:
+        logger.warning("Migration: idx_payments_provider_id notice: %s", e)
+
+    # Migration: create analytics_events table
+    try:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS analytics_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                event_type TEXT NOT NULL,
+                tariff TEXT,
+                devices INTEGER,
+                amount INTEGER,
+                source TEXT,
+                promo TEXT,
+                payment_provider TEXT,
+                timestamp INTEGER DEFAULT (strftime('%s','now')),
+                details TEXT
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_analytics_event_type ON analytics_events(event_type)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_analytics_timestamp ON analytics_events(timestamp)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_analytics_user ON analytics_events(user_id)")
+        logger.info("Migration: created analytics_events table")
+    except Exception as e:
+        logger.warning("Migration: analytics_events notice: %s", e)
+
+    # Migration: create giveaways tables
+    try:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS giveaways (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                description TEXT,
+                prize_days INTEGER DEFAULT 30,
+                winners_count INTEGER DEFAULT 1,
+                end_date INTEGER NOT NULL,
+                is_active INTEGER DEFAULT 1,
+                created_at INTEGER DEFAULT (strftime('%s','now'))
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS giveaway_participants (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                giveaway_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                joined_at INTEGER DEFAULT (strftime('%s','now')),
+                is_winner INTEGER DEFAULT 0,
+                UNIQUE(giveaway_id, user_id),
+                FOREIGN KEY(giveaway_id) REFERENCES giveaways(id)
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_giveaway_active ON giveaways(is_active)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_giveaway_participants_user ON giveaway_participants(user_id)")
+        logger.info("Migration: created giveaways tables")
+    except Exception as e:
+        logger.warning("Migration: giveaways notice: %s", e)
+
 
 async def init_db() -> None:
     """Initialize database with WAL mode and run migrations."""
@@ -908,15 +1000,83 @@ async def add_payment(
     status: str = "success",
     tariff: str = None,
     devices: int = 1,
+    provider: str = None,
+    provider_payment_id: str = None,
 ) -> int:
+    prov = provider or method
+    prov_id = provider_payment_id or payload or f"tx_{user_id}_{int(time.time())}"
     db = await get_db()
-    cur = await db.execute(
-        "INSERT INTO payments(user_id, amount, currency, method, days, created, payload, status, tariff, devices) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?)",
-        (user_id, amount, currency, method, days, int(time.time()), payload, status, tariff, devices),
-    )
-    await db.commit()
-    return cur.lastrowid
+    async with _db_semaphore:
+        cur = await db.execute(
+            "INSERT INTO payments(user_id, amount, currency, method, days, created, payload, status, tariff, devices, provider, provider_payment_id) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (user_id, amount, currency, method, days, int(time.time()), payload or prov_id, status, tariff, devices, prov, prov_id),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def record_payment_idempotent(
+    user_id: int,
+    amount: int,
+    currency: str,
+    method: str,
+    days: int,
+    payload: str = None,
+    status: str = "success",
+    tariff: str = None,
+    devices: int = 1,
+    provider: str = None,
+    provider_payment_id: str = None,
+) -> tuple[bool, Optional[int]]:
+    """
+    Atomically records payment if (provider, provider_payment_id) has not been processed.
+    Returns (is_new, payment_id).
+    If already exists, returns (False, existing_payment_id).
+    """
+    prov = provider or method
+    prov_id = provider_payment_id or payload
+    if not prov_id:
+        prov_id = f"{prov}_{user_id}_{int(time.time())}"
+
+    db = await get_db()
+    async with _db_semaphore:
+        # Check existing payment
+        cur = await db.execute(
+            "SELECT id, status FROM payments WHERE provider = ? AND provider_payment_id = ?",
+            (prov, prov_id),
+        )
+        existing = await cur.fetchone()
+        if existing:
+            logger.info("Payment %s:%s already exists (id=%d, status=%s)", prov, prov_id, existing[0], existing[1])
+            return False, existing[0]
+
+        try:
+            cur = await db.execute(
+                "INSERT INTO payments(user_id, amount, currency, method, days, created, payload, status, tariff, devices, provider, provider_payment_id) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (user_id, amount, currency, method, days, int(time.time()), payload or prov_id, status, tariff, devices, prov, prov_id),
+            )
+            await db.commit()
+            return True, cur.lastrowid
+        except Exception as e:
+            if "UNIQUE constraint failed" in str(e):
+                cur = await db.execute(
+                    "SELECT id FROM payments WHERE provider = ? AND provider_payment_id = ?",
+                    (prov, prov_id),
+                )
+                r = await cur.fetchone()
+                return False, r[0] if r else None
+            raise
+
+
+async def update_payment_status(payment_id: int, status: str) -> bool:
+    """Update status of a payment (e.g. 'processing' -> 'success' or 'failed')."""
+    db = await get_db()
+    async with _db_semaphore:
+        cur = await db.execute("UPDATE payments SET status = ? WHERE id = ?", (status, payment_id))
+        await db.commit()
+        return cur.rowcount > 0
 
 
 async def get_user_payments(user_id: int) -> list[dict]:
@@ -1372,11 +1532,20 @@ async def has_paid_subscription(user_id: int) -> bool:
 
 
 async def try_claim_trial(user_id: int) -> bool:
-    """Try to claim trial - returns True if successful"""
-    if await has_trial_used(user_id):
-        return False
-    await set_trial_used(user_id)
-    return True
+    """Atomically claim trial using single SQL statement to prevent race conditions."""
+    db = await get_db()
+    async with _db_semaphore:
+        # Ensure user row exists with trial_used=0
+        await db.execute("INSERT OR IGNORE INTO users(user_id, trial_used) VALUES(?, 0)", (user_id,))
+        cur = await db.execute(
+            "UPDATE users SET trial_used = 1 WHERE user_id = ? AND trial_used = 0",
+            (user_id,)
+        )
+        await db.commit()
+        success = cur.rowcount > 0
+        if success:
+            invalidate_user_cache(user_id)
+        return success
 
 
 async def get_all_payments(limit: int = 50, offset: int = 0, method: str = None) -> list[dict]:
@@ -1865,12 +2034,61 @@ async def get_extended_stats() -> dict:
     cur = await db.execute("SELECT COUNT(DISTINCT user_id) FROM keys WHERE expiry > ?", (current_time,))
     active_7d = (await cur.fetchone())[0]
     
-    cur = await db.execute("SELECT COUNT(DISTINCT user_id) FROM keys WHERE expiry > ?", (current_time,))
-    active_30d = (await cur.fetchone())[0]
-    
+    # Device tier distribution (active keys)
+    cur = await db.execute("""
+        SELECT COALESCE(limit_ip, 2) as devices, COUNT(*) 
+        FROM keys 
+        WHERE expiry > ? 
+        GROUP BY devices
+    """, (current_time,))
+    device_dist = {2: 0, 5: 0, 10: 0}
+    for row in await cur.fetchall():
+        d = row[0]
+        # Map 1 to 2 for backward compat
+        mapped_d = 2 if d <= 2 else (5 if d <= 5 else 10)
+        device_dist[mapped_d] = device_dist.get(mapped_d, 0) + row[1]
+
+    # Conversion metrics
+    cur = await db.execute("SELECT COUNT(DISTINCT user_id) FROM payments WHERE status = 'success'")
+    paid_users = (await cur.fetchone())[0]
+
+    conversion_trial_pct = round((paid_users / trial_users * 100), 1) if trial_users > 0 else 0.0
+    total_users = basic_stats.get("total_users", 0) or 1
+    conversion_overall_pct = round((paid_users / total_users * 100), 1)
+
+    # Pending payments
+    pending_yk = 0
+    try:
+        cur = await db.execute("SELECT COUNT(*) FROM yookassa_pending")
+        pending_yk = (await cur.fetchone())[0]
+    except Exception:
+        pass
+
+    pending_crypto = 0
+    try:
+        cur = await db.execute("SELECT COUNT(*) FROM crypto_pending")
+        pending_crypto = (await cur.fetchone())[0]
+    except Exception:
+        pass
+
+    # Provisioning errors
+    key_errors_count = 0
+    try:
+        cur = await db.execute("SELECT COUNT(*) FROM key_errors")
+        key_errors_count = (await cur.fetchone())[0]
+    except Exception:
+        pass
+
     return {
         **basic_stats,
         "trial_users": trial_users,
+        "paid_users": paid_users,
+        "conversion_trial_pct": conversion_trial_pct,
+        "conversion_overall_pct": conversion_overall_pct,
+        "device_dist": device_dist,
+        "pending_yk": pending_yk,
+        "pending_crypto": pending_crypto,
+        "key_errors_count": key_errors_count,
         "expired_keys": expired_keys,
         "total_referrals": total_referrals,
         "top_refs": top_refs,
@@ -2064,32 +2282,32 @@ async def get_payment_stats() -> dict:
     }
 
 
-async def extend_key(key_id: int, additional_days: int) -> bool:
-    """Extend key by additional days in both DB and 3x-UI panel"""
+async def extend_key(key_id: int, additional_days: int, limit_ip: Optional[int] = None) -> bool:
+    """Extend key by additional days from max(current_expiry, now) and optionally update device limit atomically."""
     db = await get_db()
-    cur = await db.execute("SELECT expiry, uuid FROM keys WHERE id=?", (key_id,))
-    row = await cur.fetchone()
-    if not row:
-        logger.warning("Key %d not found for extension", key_id)
-        return False
-    
-    current_expiry, client_uuid = row
-    new_expiry = current_expiry + additional_days * 86400
-    
-    # Update database
-    cur = await db.execute(
-        "UPDATE keys SET expiry=? WHERE id=?",
-        (new_expiry, key_id)
-    )
-    await db.commit()
-    
-    if cur.rowcount == 0:
-        logger.warning("Failed to update expiry in DB for key %d", key_id)
-        return False
-    
-    logger.info("Extended key %d by %d days (expiry: %s -> %s)", key_id, additional_days, current_expiry, new_expiry)
-    
-    return True
+    async with _db_semaphore:
+        # Atomic update directly in SQL
+        cur = await db.execute("""
+            UPDATE keys 
+            SET expiry = MAX(COALESCE(expiry, 0), cast(strftime('%s','now') as integer)) + (? * 86400),
+                limit_ip = CASE WHEN ? IS NOT NULL AND ? > 0 THEN ? ELSE limit_ip END
+            WHERE id = ?
+        """, (additional_days, limit_ip, limit_ip, limit_ip, key_id))
+        await db.commit()
+
+        if cur.rowcount == 0:
+            logger.warning("Key %d not found for extension", key_id)
+            return False
+
+        cur = await db.execute("SELECT expiry, limit_ip FROM keys WHERE id=?", (key_id,))
+        row = await cur.fetchone()
+        new_expiry, final_limit = row[0], row[1]
+
+        logger.info(
+            "Extended key %d by %d days (new expiry: %s, limit_ip: %s)",
+            key_id, additional_days, new_expiry, final_limit,
+        )
+        return True
 
 
 async def get_all_refunds() -> list[dict]:
@@ -2435,6 +2653,16 @@ async def validate_promo_code(code: str, tariff_months: int = None) -> Optional[
     }
 
 
+async def has_user_used_promo(code: str, user_id: int) -> bool:
+    """Check if user has already used this promo code."""
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT 1 FROM promo_code_uses WHERE code=? AND user_id=?",
+        (code.upper(), user_id),
+    )
+    return await cur.fetchone() is not None
+
+
 async def use_promo_code(code: str, user_id: int) -> bool:
     """Mark promo code as used by user."""
     db = await get_db()
@@ -2741,6 +2969,171 @@ async def delete_key_error(error_id: int) -> bool:
     cur = await db.execute("DELETE FROM key_errors WHERE id=?", (error_id,))
     await db.commit()
     return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Analytics Events & Source Tracking
+# ---------------------------------------------------------------------------
+
+async def log_analytics_event(
+    user_id: Optional[int],
+    event_type: str,
+    tariff: Optional[str] = None,
+    devices: Optional[int] = None,
+    amount: Optional[int] = None,
+    source: Optional[str] = None,
+    promo: Optional[str] = None,
+    payment_provider: Optional[str] = None,
+    details: Optional[str] = None,
+) -> None:
+    """Log an analytics event without collecting personal sensitive data."""
+    try:
+        db = await get_db()
+        async with _db_semaphore:
+            await db.execute(
+                """
+                INSERT INTO analytics_events(user_id, event_type, tariff, devices, amount, source, promo, payment_provider, timestamp, details)
+                VALUES(?,?,?,?,?,?,?,?,strftime('%s','now'),?)
+                """,
+                (user_id, event_type, tariff, devices, amount, source, promo, payment_provider, details)
+            )
+            await db.commit()
+    except Exception as e:
+        logger.debug("Failed to log analytics event %s: %s", event_type, e)
+
+
+async def set_user_source(user_id: int, source: str) -> bool:
+    """Set the acquisition source for a user (if not already set)."""
+    try:
+        db = await get_db()
+        async with _db_semaphore:
+            await db.execute(
+                "UPDATE users SET source = ? WHERE user_id = ? AND (source IS NULL OR source = 'direct')",
+                (source, user_id)
+            )
+            await db.commit()
+            return True
+    except Exception as e:
+        logger.error("Failed to set user source: %s", e)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Giveaways (Розыгрыши и акции)
+# ---------------------------------------------------------------------------
+
+async def create_giveaway(
+    title: str,
+    description: str,
+    prize_days: int = 30,
+    winners_count: int = 1,
+    end_date: int = 0,
+) -> int:
+    """Create a new giveaway."""
+    db = await get_db()
+    async with _db_semaphore:
+        cur = await db.execute(
+            """
+            INSERT INTO giveaways(title, description, prize_days, winners_count, end_date, is_active, created_at)
+            VALUES(?,?,?,?,?,1,strftime('%s','now'))
+            """,
+            (title, description, prize_days, winners_count, end_date)
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def get_all_giveaways() -> list[dict]:
+    """Get all giveaways."""
+    db = await get_db()
+    cur = await db.execute("SELECT id, title, description, prize_days, winners_count, end_date, is_active, created_at FROM giveaways ORDER BY id DESC")
+    rows = await cur.fetchall()
+    return [
+        {
+            "id": r[0], "title": r[1], "description": r[2], "prize_days": r[3],
+            "winners_count": r[4], "end_date": r[5], "is_active": r[6], "created_at": r[7],
+        }
+        for r in rows
+    ]
+
+
+async def get_active_giveaways() -> list[dict]:
+    """Get active giveaways whose end date has not passed."""
+    db = await get_db()
+    now_ts = int(time.time())
+    cur = await db.execute(
+        "SELECT id, title, description, prize_days, winners_count, end_date, is_active, created_at FROM giveaways WHERE is_active = 1 AND end_date > ? ORDER BY id DESC",
+        (now_ts,)
+    )
+    rows = await cur.fetchall()
+    return [
+        {
+            "id": r[0], "title": r[1], "description": r[2], "prize_days": r[3],
+            "winners_count": r[4], "end_date": r[5], "is_active": r[6], "created_at": r[7],
+        }
+        for r in rows
+    ]
+
+
+async def join_giveaway(giveaway_id: int, user_id: int) -> bool:
+    """User joins a giveaway. Returns True if successfully registered, False if already joined."""
+    db = await get_db()
+    async with _db_semaphore:
+        try:
+            await db.execute(
+                "INSERT INTO giveaway_participants(giveaway_id, user_id, joined_at) VALUES(?,?,strftime('%s','now'))",
+                (giveaway_id, user_id)
+            )
+            await db.commit()
+            return True
+        except Exception as e:
+            if "UNIQUE constraint failed" in str(e):
+                return False
+            raise
+
+
+async def get_giveaway_participants_count(giveaway_id: int) -> int:
+    """Get number of participants in a giveaway."""
+    db = await get_db()
+    cur = await db.execute("SELECT COUNT(*) FROM giveaway_participants WHERE giveaway_id = ?", (giveaway_id,))
+    row = await cur.fetchone()
+    return row[0] if row else 0
+
+
+async def pick_giveaway_winners(giveaway_id: int) -> list[int]:
+    """Randomly pick winners for a giveaway and mark them as winners."""
+    import random
+    db = await get_db()
+    async with _db_semaphore:
+        cur = await db.execute("SELECT winners_count FROM giveaways WHERE id = ?", (giveaway_id,))
+        g_row = await cur.fetchone()
+        if not g_row:
+            return []
+        winners_count = g_row[0]
+
+        cur = await db.execute("SELECT user_id FROM giveaway_participants WHERE giveaway_id = ?", (giveaway_id,))
+        participants = [r[0] for r in await cur.fetchall()]
+        if not participants:
+            return []
+
+        selected = random.sample(participants, min(len(participants), winners_count))
+        for uid in selected:
+            await db.execute(
+                "UPDATE giveaway_participants SET is_winner = 1 WHERE giveaway_id = ? AND user_id = ?",
+                (giveaway_id, uid)
+            )
+        await db.execute("UPDATE giveaways SET is_active = 0 WHERE id = ?", (giveaway_id,))
+        await db.commit()
+        return selected
+
+
+async def set_giveaway_status(giveaway_id: int, is_active: int) -> bool:
+    """Activate or deactivate a giveaway."""
+    db = await get_db()
+    async with _db_semaphore:
+        cur = await db.execute("UPDATE giveaways SET is_active = ? WHERE id = ?", (is_active, giveaway_id))
+        await db.commit()
+        return cur.rowcount > 0
 
 
 # ---------------------------------------------------------------------------
