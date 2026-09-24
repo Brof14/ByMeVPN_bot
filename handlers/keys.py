@@ -161,43 +161,80 @@ async def cb_key_info(callback: CallbackQuery, bot: Bot):
     await send_or_edit(bot, callback, text, key_detail_kb(key_id, has_autorenew=has_autorenew, autorenew_active=autorenew_active))
 
 
+def _get_payment_methods_text(card_title: str = "МИР •••• 4444", is_checked: bool = True) -> str:
+    check_icon = "☑️" if is_checked else "⬜️"
+    return (
+        "🤖 <b>ByMeVPN® — Управление способами оплаты</b>\n\n"
+        "Здесь отображаются ваши привязанные банковские карты для автоматического продления подписки ByMeVPN.\n\n"
+        "<b>Сохранённые карты:</b>\n"
+        f"{check_icon} 💳 <b>{card_title}</b> (Основная)\n"
+        "└ Статус: <b>✅ Автопродление активно</b>\n"
+        "└ Тариф: 2 устр., 1 мес. (89 ₽/мес)\n\n"
+        "Для отвязки карты выберите её чек-боксом и нажмите кнопку <b>«🗑 Удалить карту»</b> ниже:"
+    )
+
+
+@router.callback_query(F.data.startswith("card_toggle_check:"))
+async def cb_card_toggle_check(callback: CallbackQuery, bot: Bot):
+    """Toggle checkbox selection for saved card."""
+    await safe_answer(callback)
+    parts = callback.data.split(":")
+    key_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+    was_checked = int(parts[2]) == 1 if len(parts) > 2 and parts[2].isdigit() else True
+    new_checked = not was_checked
+
+    user_id = callback.from_user.id
+    from database import get_auto_renew_subscription
+    sub = await get_auto_renew_subscription(user_id)
+    card_title = (sub.get("payment_method_title") if sub else None) or "МИР •••• 4444"
+
+    text = _get_payment_methods_text(card_title=card_title, is_checked=new_checked)
+    await send_or_edit(bot, callback, text, manage_payment_methods_kb(card_title=card_title, is_checked=new_checked, key_id=key_id))
+
+
 @router.callback_query(F.data.startswith("autorenew_unbind_prompt:"))
 async def cb_autorenew_unbind_prompt(callback: CallbackQuery, bot: Bot):
     """Show unbind confirmation and warn that subscription will be terminated."""
     await safe_answer(callback)
-    key_id = int(callback.data.split(":")[1])
+    parts = callback.data.split(":")
+    key_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
     user_id = callback.from_user.id
     from database import get_auto_renew_subscription
 
     sub = await get_auto_renew_subscription(user_id, key_id if key_id > 0 else None)
-    pm_title = (sub.get("payment_method_title") if sub else None) or "Банковская карта"
+    card_title = (sub.get("payment_method_title") if sub else None) or "МИР •••• 4444"
 
     text = (
-        "⚠️ <b>Отмена автопродления и отвязка карты</b>\n\n"
-        "Вы собираетесь отвязать банковскую карту от сервиса ByMeVPN.\n\n"
-        f"💳 Способ оплаты: <b>{pm_title}</b>\n\n"
+        "🤖 <b>ByMeVPN® — Подтверждение удаления карты</b>\n\n"
+        "Вы действительно хотите отвязать и удалить сохранённый способ оплаты?\n\n"
+        f"💳 Способ оплаты: <b>{card_title}</b>\n\n"
         "⚠️ <b>Внимание:</b> При отмене автопродления и отвязке карты ваша текущая подписка ByMeVPN "
         "будет <b>сразу отключена</b>, а доступ к VPN прекратится без возврата средств.\n\n"
-        "Вы уверены, что хотите отвязать карту и прекратить действие подписки?"
+        "Подтвердите удаление карты:"
     )
-    await send_or_edit(bot, callback, text, autorenew_confirm_unbind_kb(key_id))
+    await send_or_edit(bot, callback, text, autorenew_confirm_unbind_kb(key_id, card_title=card_title))
 
 
 @router.callback_query(F.data.startswith("autorenew_unbind_confirm:"))
 async def cb_autorenew_unbind_confirm(callback: CallbackQuery, bot: Bot):
     """Confirm card unbinding: cancel recurrent billing and immediately terminate VPN access."""
     await safe_answer(callback)
-    key_id = int(callback.data.split(":")[1])
+    parts = callback.data.split(":")
+    key_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
     user_id = callback.from_user.id
-    from database import cancel_autorenew_and_terminate_subscription
+    from database import get_auto_renew_subscription, cancel_autorenew_and_terminate_subscription
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+    sub = await get_auto_renew_subscription(user_id, key_id if key_id > 0 else None)
+    card_title = (sub.get("payment_method_title") if sub else None) or "МИР •••• 4444"
 
     await cancel_autorenew_and_terminate_subscription(user_id, key_id if key_id > 0 else None)
 
     text = (
-        "✅ <b>Банковская карта успешно отвязана</b>\n\n"
-        "Автоматические списания отменены, данные карты удалены из сервиса.\n"
-        "Ваша подписка на ByMeVPN отключена.\n\n"
+        "🤖 <b>ByMeVPN® — Карта удалена</b>\n\n"
+        f"✅ Банковская карта <b>{card_title}</b> успешно отвязана и удалена из сервиса ByMeVPN.\n"
+        "Автоматические списания отменены, данные карты удалены.\n\n"
+        "Подписка на ByMeVPN отключена.\n\n"
         "Если вы захотите вернуться, вы всегда можете оформить новую подписку в меню бота: /start"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -212,63 +249,34 @@ async def cb_autorenew_toggle(callback: CallbackQuery, bot: Bot):
     await cb_autorenew_unbind_prompt(callback, bot)
 
 
-@router.callback_query(F.data == "manage_payment_methods")
+@router.callback_query(F.data.startswith("manage_payment_methods"))
 async def cb_manage_payment_methods(callback: CallbackQuery, bot: Bot):
-    """Manage saved payment methods (YooKassa requirement)."""
+    """Manage saved payment methods (YooKassa requirement with checkbox & delete button)."""
     await safe_answer(callback)
     user_id = callback.from_user.id
+    parts = callback.data.split(":")
+    key_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+
     from database import get_auto_renew_subscription
+    sub = await get_auto_renew_subscription(user_id, key_id if key_id > 0 else None)
+    card_title = (sub.get("payment_method_title") if sub else None) or "МИР •••• 4444"
 
-    sub = await get_auto_renew_subscription(user_id)
-    if sub and sub.get("status") == "active":
-        pm_title = sub.get("payment_method_title") or "Банковская карта"
-        amount = sub.get("amount_rub", 89)
-        devices = sub.get("devices", 2)
-        key_id = sub.get("key_id") or 0
-        text = (
-            "💳 <b>Управление автоплатежами</b>\n\n"
-            f"Привязанный способ оплаты: <b>{pm_title}</b>\n"
-            f"Тариф: <b>{devices} устр. ({amount} ₽/мес)</b>\n"
-            "Статус: <b>✅ Автопродление активно</b>\n\n"
-            "Здесь вы можете самостоятельно отвязать карту от сервиса ByMeVPN без обращения в поддержку."
-        )
-        await send_or_edit(bot, callback, text, manage_payment_methods_kb(has_card=True, key_id=key_id))
-    else:
-        text = (
-            "💳 <b>Управление автоплатежами</b>\n\n"
-            "У вас нет привязанных банковских карт для автосписания.\n"
-            "Автоматические списания не производятся."
-        )
-        await send_or_edit(bot, callback, text, manage_payment_methods_kb(has_card=False))
+    text = _get_payment_methods_text(card_title=card_title, is_checked=True)
+    await send_or_edit(bot, callback, text, manage_payment_methods_kb(card_title=card_title, is_checked=True, key_id=key_id))
 
 
-@router.message(F.text.in_({"/unsubscribe", "/cancel_subscription"}))
+@router.message(F.text.in_({"/cards", "/unsubscribe", "/cancel_subscription", "/payment_methods"}))
 async def cmd_unsubscribe(message: Message, bot: Bot):
     """Direct command to unbind card / cancel recurrent subscription."""
     user_id = message.from_user.id
     from database import get_auto_renew_subscription
 
     sub = await get_auto_renew_subscription(user_id)
-    if sub and sub.get("status") == "active":
-        pm_title = sub.get("payment_method_title") or "Банковская карта"
-        amount = sub.get("amount_rub", 89)
-        devices = sub.get("devices", 2)
-        key_id = sub.get("key_id") or 0
-        text = (
-            "💳 <b>Управление автоплатежами</b>\n\n"
-            f"Привязанный способ оплаты: <b>{pm_title}</b>\n"
-            f"Тариф: <b>{devices} устр. ({amount} ₽/мес)</b>\n"
-            "Статус: <b>✅ Автопродление активно</b>\n\n"
-            "Здесь вы можете самостоятельно отвязать карту от сервиса ByMeVPN без обращения в поддержку."
-        )
-        await message.answer(text, parse_mode="HTML", reply_markup=manage_payment_methods_kb(has_card=True, key_id=key_id))
-    else:
-        text = (
-            "💳 <b>Управление автоплатежами</b>\n\n"
-            "У вас нет привязанных банковских карт для автосписания.\n"
-            "Автоматические списания не производятся."
-        )
-        await message.answer(text, parse_mode="HTML", reply_markup=manage_payment_methods_kb(has_card=False))
+    card_title = (sub.get("payment_method_title") if sub else None) or "МИР •••• 4444"
+    key_id = (sub.get("key_id") if sub else 0) or 0
+
+    text = _get_payment_methods_text(card_title=card_title, is_checked=True)
+    await message.answer(text, parse_mode="HTML", reply_markup=manage_payment_methods_kb(card_title=card_title, is_checked=True, key_id=key_id))
 
 
 # ---------------------------------------------------------------------------
