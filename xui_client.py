@@ -594,13 +594,14 @@ async def update_xui_user(
     days: int = 0,
     limit_ip: Optional[int] = None,
     new_expiry_ms: Optional[int] = None,
+    enable: Optional[bool] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Safely update client in 3x-ui WITHOUT deleting or changing UUID/sub_id.
-    Updates expiry_time and limit_ip (device limit).
+    Updates expiry_time, limit_ip (device limit), and enable state.
     """
     email = str(user_id)
-    logger.info("update_xui_user: email=%s days=%d limit_ip=%s new_expiry_ms=%s", email, days, limit_ip, new_expiry_ms)
+    logger.info("update_xui_user: email=%s days=%d limit_ip=%s new_expiry_ms=%s enable=%s", email, days, limit_ip, new_expiry_ms, enable)
 
     try:
         api = await _get_api()
@@ -634,11 +635,13 @@ async def update_xui_user(
             base_ms = max(current_expiry_ms, now_ms)
             final_expiry_ms = base_ms + days * 86400 * 1000
 
+        is_enabled = enable if enable is not None else True
+
         updated = Client(
             email=email,
             id=client_uuid,
             uuid=client_uuid,
-            enable=True,
+            enable=is_enabled,
             expiry_time=final_expiry_ms,
             limit_ip=final_limit_ip,
             total_gb=current_total_gb,

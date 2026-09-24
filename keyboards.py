@@ -184,12 +184,12 @@ def my_keys_list_kb(keys: list) -> InlineKeyboardMarkup:
         kid = k["id"]
         remark = k.get("remark") or f"#{kid}"
         kb.row(InlineKeyboardButton(
-            text=f"Key {remark}",
+            text=f"🔑 {remark}",
             callback_data=f"key_info:{kid}",
         ))
     kb.row(
-        InlineKeyboardButton(text="Back", callback_data="back_to_menu"),
-        InlineKeyboardButton(text="Support", url=_SUPPORT_URL)
+        InlineKeyboardButton(text="Назад", callback_data="back_to_menu"),
+        InlineKeyboardButton(text="Поддержка", url=_SUPPORT_URL)
     )
     return kb.as_markup()
 
@@ -201,11 +201,8 @@ def key_detail_kb(key_id: int, has_autorenew: bool = False, autorenew_active: bo
         InlineKeyboardButton(text="🔄 Продлить", callback_data=f"key_renew:{key_id}"),
         InlineKeyboardButton(text="🗑 Удалить", callback_data=f"key_delete:{key_id}"),
     )
-    if has_autorenew:
-        if autorenew_active:
-            kb.row(InlineKeyboardButton(text="⏹ Отключить автопродление", callback_data=f"autorenew_toggle:{key_id}"))
-        else:
-            kb.row(InlineKeyboardButton(text="▶️ Включить автопродление", callback_data=f"autorenew_toggle:{key_id}"))
+    if has_autorenew and autorenew_active:
+        kb.row(InlineKeyboardButton(text="💳 Отвязать карту и отменить подписку", callback_data=f"autorenew_unbind_prompt:{key_id}"))
     kb.row(InlineKeyboardButton(text="📋 Инструкция подключения", callback_data="connection_guide"))
     kb.row(InlineKeyboardButton(text="🌐 Как не отключать VPN для РФ-приложений", callback_data="rf_apps_guide"))
     kb.row(
@@ -213,6 +210,26 @@ def key_detail_kb(key_id: int, has_autorenew: bool = False, autorenew_active: bo
         InlineKeyboardButton(text="🏠 Меню", callback_data="back_to_menu")
     )
     return kb.as_markup()
+
+
+def autorenew_confirm_unbind_kb(key_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="❌ Отвязать карту и отключить VPN", callback_data=f"autorenew_unbind_confirm:{key_id}"))
+    kb.row(InlineKeyboardButton(text="◀️ Отмена (оставить подписку)", callback_data=f"key_info:{key_id}"))
+    return kb.as_markup()
+
+
+def manage_payment_methods_kb(has_card: bool, key_id: int = 0) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    if has_card:
+        kb.row(InlineKeyboardButton(text="💳 Отвязать карту и отменить подписку", callback_data=f"autorenew_unbind_prompt:{key_id}"))
+    kb.row(
+        InlineKeyboardButton(text="Назад", callback_data="back_to_menu"),
+        InlineKeyboardButton(text="Поддержка", url=_SUPPORT_URL),
+    )
+    return kb.as_markup()
+
+
 def confirm_delete_kb(key_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(
@@ -328,6 +345,7 @@ def legal_kb() -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="Договор публичной оферты", url="https://telegra.ph/DOGOVOR-PUBLICHNOJ-OFERTY-ByMyVPN-03-12"))
     kb.row(InlineKeyboardButton(text="Политика конфиденциальности", url="https://telegra.ph/POLITIKA-KONFIDENCIALNOSTI-ByMeVPN-03-12"))
     kb.row(InlineKeyboardButton(text="Соглашение о регулярных платежах", url="https://telegra.ph/SOGLASHENIE-O-REGULYARNYH-REKURRENTNYH-PLATEZHAH-ByMeVPN-03-12"))
+    kb.row(InlineKeyboardButton(text="💳 Отвязка карты и отмена подписки", callback_data="manage_payment_methods"))
     kb.row(
         InlineKeyboardButton(text="Назад", callback_data="back_to_menu"),
         InlineKeyboardButton(text="Поддержка", url=_SUPPORT_URL)

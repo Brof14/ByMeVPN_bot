@@ -649,6 +649,82 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
 
         asyncio.run(run_test())
 
+    # ------------------------------------------------------------------------
+    # Test 13: Card unbinding, auto-renew cancellation, and immediate VPN shutoff
+    # ------------------------------------------------------------------------
+    def test_13_card_unbinding_and_immediate_subscription_termination(self):
+        """
+        Verify that when user unbinds card / cancels subscription:
+        1. auto_renew_subscriptions is marked cancelled and payment_method_id cleared.
+        2. Active key expiry in DB is immediately expired (now - 1).
+        3. 3x-ui client is updated with enable=False and expiry in the past.
+        4. No more auto-renew debits are scheduled.
+        """
+        from database import (
+            init_db, ensure_user, add_key, get_key_by_id,
+            save_auto_renew_subscription, get_auto_renew_subscription,
+            cancel_autorenew_and_terminate_subscription,
+            get_expiring_auto_renew_subscriptions,
+        )
+        import time
+
+        async def run_test():
+            await init_db()
+            user_id = 777321
+            await ensure_user(user_id)
+
+            # User has an active key with 30 days left
+            key_id = await add_key(user_id, "vless://test_unbind", "Active Key", "uuid-unbind-123", 30, 2)
+            sub_id = await save_auto_renew_subscription(
+                user_id=user_id,
+                key_id=key_id,
+                payment_method_id="pm_saved_card_999",
+                payment_method_title="*9999",
+                payment_method_type="bank_card",
+                months=1,
+                days=30,
+                devices=2,
+                amount_rub=89,
+            )
+
+            # Pre-conditions
+            sub_before = await get_auto_renew_subscription(user_id, key_id)
+            self.assertEqual(sub_before["status"], "active")
+            key_before = await get_key_by_id(key_id)
+            self.assertGreater(key_before["expiry"], int(time.time()))
+
+            # Mock xui_client to verify enable=False is sent to 3x-ui
+            with patch("xui_client.update_xui_user", new_callable=AsyncMock) as mock_xui_update:
+                mock_xui_update.return_value = {"success": True}
+
+                # User initiates unbind / cancellation
+                res = await cancel_autorenew_and_terminate_subscription(user_id, key_id)
+
+                self.assertTrue(res["unbound"])
+                self.assertEqual(res["terminated_keys"], 1)
+                self.assertEqual(res["pm_title"], "*9999")
+
+                # Verify 3x-ui was instructed to disable client
+                mock_xui_update.assert_called_once()
+                call_kwargs = mock_xui_update.call_args.kwargs
+                self.assertEqual(call_kwargs.get("enable"), False)
+                self.assertLess(call_kwargs.get("new_expiry_ms"), int(time.time() * 1000))
+
+            # Post-condition 1: auto_renew_subscriptions is cancelled and card unbound
+            sub_after = await get_auto_renew_subscription(user_id, key_id)
+            self.assertEqual(sub_after["status"], "cancelled")
+            self.assertEqual(sub_after["payment_method_id"], "")
+
+            # Post-condition 2: key expiry is set to past in DB (subscription immediately turned off)
+            key_after = await get_key_by_id(key_id)
+            self.assertLessEqual(key_after["expiry"], int(time.time()))
+
+            # Post-condition 3: user is NOT in expiring list
+            expiring = await get_expiring_auto_renew_subscriptions()
+            self.assertNotIn(sub_id, [s["sub_id"] for s in expiring])
+
+        asyncio.run(run_test())
+
 
 if __name__ == "__main__":
     unittest.main()

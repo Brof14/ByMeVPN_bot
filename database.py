@@ -1436,6 +1436,71 @@ async def set_auto_renew_status_by_key(user_id: int, key_id: int, status: str) -
     return cur.rowcount > 0
 
 
+async def cancel_autorenew_and_terminate_subscription(user_id: int, key_id: Optional[int] = None) -> dict:
+    """
+    Cancel recurring subscription, unbind saved payment method, and immediately
+    terminate the active VPN subscription (expire key in DB and disable in 3x-ui).
+    Returns dict with details: {'unbound': bool, 'terminated_keys': int, 'pm_title': str}.
+    """
+    db = await get_db()
+    pm_title = ""
+    sub_id = None
+
+    # 1. Find and update auto-renew subscription
+    if key_id:
+        cur = await db.execute(
+            "SELECT id, payment_method_title FROM auto_renew_subscriptions WHERE user_id = ? AND key_id = ?",
+            (user_id, key_id)
+        )
+    else:
+        cur = await db.execute(
+            "SELECT id, payment_method_title FROM auto_renew_subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+            (user_id,)
+        )
+    row = await cur.fetchone()
+    if row:
+        sub_id = row[0]
+        pm_title = row[1] or "Банковская карта"
+        await db.execute(
+            """UPDATE auto_renew_subscriptions
+               SET status = 'cancelled',
+                   payment_method_id = '',
+                   payment_method_title = 'Отвязана',
+                   updated_at = strftime('%s','now')
+               WHERE id = ?""",
+            (sub_id,)
+        )
+
+    # 2. Immediately expire key(s) in SQLite
+    now_ts = int(time.time())
+    if key_id:
+        cur_keys = await db.execute(
+            "UPDATE keys SET expiry = ? WHERE id = ? AND user_id = ?",
+            (now_ts - 1, key_id, user_id)
+        )
+    else:
+        cur_keys = await db.execute(
+            "UPDATE keys SET expiry = ? WHERE user_id = ? AND expiry > ?",
+            (now_ts - 1, user_id, now_ts)
+        )
+    terminated_count = cur_keys.rowcount
+    await db.commit()
+
+    # 3. Disable client in 3x-ui immediately so VPN connection is dropped
+    try:
+        from xui_client import update_xui_user
+        await update_xui_user(user_id, enable=False, new_expiry_ms=(now_ts - 10) * 1000)
+    except Exception as e:
+        logger.error("Failed to disable 3x-ui client on subscription cancellation for user %d: %s", user_id, e)
+
+    return {
+        "unbound": sub_id is not None,
+        "terminated_keys": terminated_count,
+        "pm_title": pm_title,
+    }
+
+
+
 async def update_auto_renew_charge_success(sub_id: int, new_days: int, new_amount: int) -> None:
     """Record successful recurrent charge."""
     db = await get_db()
