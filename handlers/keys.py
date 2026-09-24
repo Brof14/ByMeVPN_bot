@@ -126,19 +126,61 @@ async def cb_key_info(callback: CallbackQuery, bot: Bot):
     except Exception as e:
         logger.error("Failed to get traffic info: %s", e)
     
+    from database import get_auto_renew_subscription, set_auto_renew_status
+    sub = await get_auto_renew_subscription(callback.from_user.id, key_id)
+    has_autorenew = sub is not None
+    autorenew_active = sub is not None and sub.get("status") == "active"
+
+    if has_autorenew:
+        if autorenew_active:
+            pm_title = sub.get("payment_method_title") or "карта"
+            ar_line = f"🔄 Автопродление: <b>✅ Включено</b> ({pm_title})\n"
+        elif sub.get("status") == "failed":
+            ar_line = "🔄 Автопродление: <b>⚠️ Ошибка списания</b>\n"
+        else:
+            ar_line = "🔄 Автопродление: <b>⏹ Отключено</b>\n"
+    else:
+        ar_line = ""
+
     text = (
         f"🔑 <b>{k.get('remark') or 'Ключ #' + str(k['id'])}</b>\n\n"
         f"Статус: {status}\n"
         f"Устройств: {device_label}\n"
         f"Действует до: {fmt_date(k['expiry'])}\n"
         f"Осталось: {fmt_days_left(k['expiry'])}\n"
+        f"{ar_line}"
         f"{traffic_info}\n"
-        f"� <b>Ваша подписка:</b>\n"
+        f"🌐 <b>Ваша подписка:</b>\n"
         f"<code>{subscription_url}</code>"
     )
 
-    keys = await get_user_keys(callback.from_user.id)
-    await send_or_edit(bot, callback, text, key_detail_kb(key_id))
+    await send_or_edit(bot, callback, text, key_detail_kb(key_id, has_autorenew=has_autorenew, autorenew_active=autorenew_active))
+
+
+@router.callback_query(F.data.startswith("autorenew_toggle:"))
+async def cb_autorenew_toggle(callback: CallbackQuery, bot: Bot):
+    """Toggle auto-renew status for a key."""
+    key_id = int(callback.data.split(":")[1])
+    user_id = callback.from_user.id
+    from database import get_auto_renew_subscription, set_auto_renew_status
+    sub = await get_auto_renew_subscription(user_id, key_id)
+    if not sub:
+        await safe_answer(callback, "Автопродление не найдено для этого ключа.", alert=True)
+        return
+
+    current_status = sub.get("status", "active")
+    new_status = "cancelled" if current_status == "active" else "active"
+    await set_auto_renew_status(sub["id"], new_status)
+
+    alert_msg = (
+        "Автопродление отключено. Списаний больше не будет."
+        if new_status == "cancelled"
+        else "Автопродление успешно включено!"
+    )
+    await safe_answer(callback, alert_msg, alert=True)
+
+    # Re-render key info
+    await cb_key_info(callback, bot)
 
 
 # ---------------------------------------------------------------------------

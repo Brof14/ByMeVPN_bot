@@ -16,6 +16,7 @@ async def create_yookassa_payment(
     days: int,
     devices: int = 2,
     promo_code: Optional[str] = None,
+    months: int = 1,
 ) -> Optional[str]:
     if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
         logger.warning("YooKassa credentials not configured")
@@ -33,19 +34,22 @@ async def create_yookassa_payment(
         "user_id": str(user_id),
         "days": str(days),
         "devices": str(devices),
+        "months": str(months),
     }
     if promo_code:
         metadata["promo_code"] = str(promo_code)
 
     payload = {
         "amount": {"value": f"{amount_rub}.00", "currency": "RUB"},
-        "confirmation": {"type": "redirect", "return_url": "https://t.me/"},
+        "confirmation": {"type": "redirect", "return_url": "https://t.me/ByMeVPN_bot"},
         "capture": True,
+        "save_payment_method": True,
         "description": description,
         "metadata": metadata,
     }
 
-    logger.info("create_yookassa_payment: user_id=%d days=%d devices=%d amount=%d promo=%s", user_id, days, devices, amount_rub, promo_code)
+    logger.info("create_yookassa_payment: user_id=%d days=%d devices=%d months=%d amount=%d promo=%s",
+                user_id, days, devices, months, amount_rub, promo_code)
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -64,11 +68,72 @@ async def create_yookassa_payment(
         return None
     except httpx.RequestError as e:
         logger.error("YooKassa request error for user %d: %s", user_id, str(e))
-        logger.error("Request details: timeout=%s, headers=%s", str(client.timeout), str(headers)[:100])
         return None
     except Exception as e:
         logger.error("YooKassa error for user %d: %s", user_id, str(e))
-        logger.error("Payload: %s", str(payload)[:200])
+        return None
+
+
+async def charge_yookassa_recurrent(
+    amount_rub: int,
+    description: str,
+    user_id: int,
+    days: int,
+    devices: int,
+    months: int,
+    key_id: int,
+    payment_method_id: str,
+) -> Optional[dict]:
+    """
+    Charge a saved payment method via YooKassa API for auto-renewal.
+    Returns the created payment dictionary from YooKassa if successful, None on error.
+    """
+    if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
+        logger.warning("YooKassa credentials not configured")
+        return None
+
+    auth = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
+    idempotence_key = f"autorenew_{user_id}_{key_id}_{int(time.time())}"
+    headers = {
+        "Authorization": f"Basic {auth}",
+        "Idempotence-Key": idempotence_key,
+        "Content-Type": "application/json",
+    }
+
+    metadata = {
+        "user_id": str(user_id),
+        "days": str(days),
+        "devices": str(devices),
+        "months": str(months),
+        "key_id": str(key_id),
+        "auto_renew": "1",
+    }
+
+    payload = {
+        "amount": {"value": f"{amount_rub}.00", "currency": "RUB"},
+        "capture": True,
+        "payment_method_id": payment_method_id,
+        "description": description,
+        "metadata": metadata,
+    }
+
+    logger.info("charge_yookassa_recurrent: user_id=%d key_id=%d days=%d devices=%d amount=%d pm=%s",
+                user_id, key_id, days, devices, amount_rub, payment_method_id)
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.post("https://api.yookassa.ru/v3/payments", json=payload, headers=headers)
+            r.raise_for_status()
+            data = r.json()
+            logger.info("YooKassa recurrent payment response for user %d: id=%s status=%s",
+                        user_id, data.get("id"), data.get("status"))
+            return data
+    except httpx.HTTPStatusError as e:
+        error_msg = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
+        logger.error("YooKassa recurrent HTTP error for user %d: %s", user_id, error_msg)
+        return None
+    except Exception as e:
+        logger.error("YooKassa recurrent payment error for user %d: %s", user_id, e)
         return None
 
 

@@ -246,6 +246,30 @@ CREATE TABLE IF NOT EXISTS admin_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_admin_logs_admin ON admin_logs(admin_id);
 CREATE INDEX IF NOT EXISTS idx_admin_logs_created ON admin_logs(created);
+
+-- YooKassa Auto-Renew Subscriptions
+CREATE TABLE IF NOT EXISTS auto_renew_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    key_id INTEGER,
+    payment_method_id TEXT NOT NULL,
+    payment_method_title TEXT,
+    payment_method_type TEXT,
+    months INTEGER NOT NULL DEFAULT 1,
+    days INTEGER NOT NULL,
+    devices INTEGER NOT NULL DEFAULT 2,
+    amount_rub INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    fail_count INTEGER NOT NULL DEFAULT 0,
+    last_charge_at INTEGER,
+    last_charge_status TEXT,
+    next_retry_at INTEGER,
+    created_at INTEGER DEFAULT (strftime('%s','now')),
+    updated_at INTEGER DEFAULT (strftime('%s','now')),
+    UNIQUE(user_id, key_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ars_user ON auto_renew_subscriptions(user_id);
+CREATE INDEX IF NOT EXISTS idx_ars_status ON auto_renew_subscriptions(status);
 """
 
 
@@ -645,6 +669,36 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         logger.info("Migration: created giveaways tables")
     except Exception as e:
         logger.warning("Migration: giveaways notice: %s", e)
+
+    # Migration: auto-renew subscriptions for YooKassa
+    try:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS auto_renew_subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                key_id INTEGER,
+                payment_method_id TEXT NOT NULL,
+                payment_method_title TEXT,
+                payment_method_type TEXT,
+                months INTEGER NOT NULL DEFAULT 1,
+                days INTEGER NOT NULL,
+                devices INTEGER NOT NULL DEFAULT 2,
+                amount_rub INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                fail_count INTEGER NOT NULL DEFAULT 0,
+                last_charge_at INTEGER,
+                last_charge_status TEXT,
+                next_retry_at INTEGER,
+                created_at INTEGER DEFAULT (strftime('%s','now')),
+                updated_at INTEGER DEFAULT (strftime('%s','now')),
+                UNIQUE(user_id, key_id)
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_ars_user ON auto_renew_subscriptions(user_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_ars_status ON auto_renew_subscriptions(status)")
+        logger.info("Migration: created auto_renew_subscriptions table")
+    except Exception as e:
+        logger.warning("Migration: auto_renew_subscriptions notice: %s", e)
 
 
 async def init_db() -> None:
@@ -1253,6 +1307,271 @@ async def get_yookassa_pending_by_user(user_id: int) -> Optional[dict]:
         "amount_rub": row[3],
         "created": row[4],
     }
+
+
+# ---------------------------------------------------------------------------
+# YooKassa Auto-Renew Subscriptions
+# ---------------------------------------------------------------------------
+
+async def save_auto_renew_subscription(
+    user_id: int,
+    key_id: Optional[int],
+    payment_method_id: str,
+    payment_method_title: str = "",
+    payment_method_type: str = "bank_card",
+    months: int = 1,
+    days: int = 30,
+    devices: int = 2,
+    amount_rub: int = 89,
+) -> int:
+    """Save or update auto-renew subscription parameters for a user/key."""
+    db = await get_db()
+    k_id = key_id if (key_id and key_id > 0) else None
+
+    # Check if a subscription already exists for this user (and key)
+    cur = await db.execute(
+        "SELECT id FROM auto_renew_subscriptions WHERE user_id = ? AND (key_id = ? OR (key_id IS NULL AND ? IS NULL))",
+        (user_id, k_id, k_id),
+    )
+    row = await cur.fetchone()
+
+    if row:
+        sub_id = row[0]
+        await db.execute(
+            """UPDATE auto_renew_subscriptions
+               SET key_id = ?, payment_method_id = ?, payment_method_title = ?,
+                   payment_method_type = ?, months = ?, days = ?, devices = ?,
+                   amount_rub = ?, status = 'active', fail_count = 0,
+                   next_retry_at = NULL, updated_at = strftime('%s','now')
+               WHERE id = ?""",
+            (k_id, payment_method_id, payment_method_title, payment_method_type,
+             months, days, devices, amount_rub, sub_id),
+        )
+    else:
+        cur = await db.execute(
+            """INSERT INTO auto_renew_subscriptions (
+                   user_id, key_id, payment_method_id, payment_method_title,
+                   payment_method_type, months, days, devices, amount_rub,
+                   status, fail_count
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 0)""",
+            (user_id, k_id, payment_method_id, payment_method_title,
+             payment_method_type, months, days, devices, amount_rub),
+        )
+        sub_id = cur.lastrowid
+
+    await db.commit()
+    logger.info("Auto-renew subscription %d saved for user %d, key %s (devices=%d, days=%d, amount=%d)",
+                sub_id, user_id, k_id, devices, days, amount_rub)
+    return sub_id
+
+
+async def get_auto_renew_subscription(user_id: int, key_id: Optional[int] = None) -> Optional[dict]:
+    """Get auto-renew subscription record for user and optional key."""
+    db = await get_db()
+    if key_id:
+        cur = await db.execute(
+            """SELECT id, user_id, key_id, payment_method_id, payment_method_title,
+                      payment_method_type, months, days, devices, amount_rub,
+                      status, fail_count, last_charge_at, last_charge_status,
+                      next_retry_at, created_at, updated_at
+               FROM auto_renew_subscriptions
+               WHERE user_id = ? AND key_id = ?
+               LIMIT 1""",
+            (user_id, key_id),
+        )
+    else:
+        cur = await db.execute(
+            """SELECT id, user_id, key_id, payment_method_id, payment_method_title,
+                      payment_method_type, months, days, devices, amount_rub,
+                      status, fail_count, last_charge_at, last_charge_status,
+                      next_retry_at, created_at, updated_at
+               FROM auto_renew_subscriptions
+               WHERE user_id = ?
+               ORDER BY id DESC LIMIT 1""",
+            (user_id,),
+        )
+    row = await cur.fetchone()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "user_id": row[1],
+        "key_id": row[2],
+        "payment_method_id": row[3],
+        "payment_method_title": row[4],
+        "payment_method_type": row[5],
+        "months": row[6],
+        "days": row[7],
+        "devices": row[8],
+        "amount_rub": row[9],
+        "status": row[10],
+        "fail_count": row[11],
+        "last_charge_at": row[12],
+        "last_charge_status": row[13],
+        "next_retry_at": row[14],
+        "created_at": row[15],
+        "updated_at": row[16],
+    }
+
+
+async def set_auto_renew_status(sub_id: int, status: str) -> bool:
+    """Set status ('active', 'cancelled', 'failed') for auto-renew subscription."""
+    db = await get_db()
+    cur = await db.execute(
+        "UPDATE auto_renew_subscriptions SET status = ?, updated_at = strftime('%s','now') WHERE id = ?",
+        (status, sub_id),
+    )
+    await db.commit()
+    return cur.rowcount > 0
+
+
+async def set_auto_renew_status_by_key(user_id: int, key_id: int, status: str) -> bool:
+    """Set status ('active', 'cancelled', 'failed') for auto-renew subscription by key."""
+    db = await get_db()
+    cur = await db.execute(
+        "UPDATE auto_renew_subscriptions SET status = ?, updated_at = strftime('%s','now') WHERE user_id = ? AND key_id = ?",
+        (status, user_id, key_id),
+    )
+    await db.commit()
+    return cur.rowcount > 0
+
+
+async def update_auto_renew_charge_success(sub_id: int, new_days: int, new_amount: int) -> None:
+    """Record successful recurrent charge."""
+    db = await get_db()
+    await db.execute(
+        """UPDATE auto_renew_subscriptions
+           SET last_charge_at = strftime('%s','now'),
+               last_charge_status = 'success',
+               fail_count = 0,
+               next_retry_at = NULL,
+               days = ?,
+               amount_rub = ?,
+               updated_at = strftime('%s','now')
+           WHERE id = ?""",
+        (new_days, new_amount, sub_id),
+    )
+    await db.commit()
+
+
+async def update_auto_renew_charge_success_by_user_key(user_id: int, key_id: Optional[int], new_days: int, new_amount: int) -> None:
+    """Record successful recurrent charge by user_id and key_id."""
+    db = await get_db()
+    if key_id:
+        await db.execute(
+            """UPDATE auto_renew_subscriptions
+               SET last_charge_at = strftime('%s','now'),
+                   last_charge_status = 'success',
+                   fail_count = 0,
+                   next_retry_at = NULL,
+                   days = ?,
+                   amount_rub = ?,
+                   updated_at = strftime('%s','now')
+               WHERE user_id = ? AND key_id = ?""",
+            (new_days, new_amount, user_id, key_id),
+        )
+    else:
+        await db.execute(
+            """UPDATE auto_renew_subscriptions
+               SET last_charge_at = strftime('%s','now'),
+                   last_charge_status = 'success',
+                   fail_count = 0,
+                   next_retry_at = NULL,
+                   days = ?,
+                   amount_rub = ?,
+                   updated_at = strftime('%s','now')
+               WHERE user_id = ? AND id = (SELECT id FROM auto_renew_subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1)""",
+            (new_days, new_amount, user_id, user_id),
+        )
+    await db.commit()
+
+
+async def update_auto_renew_charge_failure(sub_id: int, error_message: str, max_fails: int = 3) -> bool:
+    """
+    Record failed recurrent charge attempt.
+    Increments fail_count, sets next retry time in 4 hours.
+    If fail_count >= max_fails, sets status='failed'.
+    Returns True if permanently disabled (status='failed'), False if will retry.
+    """
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT fail_count FROM auto_renew_subscriptions WHERE id = ?",
+        (sub_id,),
+    )
+    row = await cur.fetchone()
+    fail_count = (row[0] if row else 0) + 1
+
+    now = int(time.time())
+    next_retry = now + 4 * 3600  # retry in 4 hours
+    is_disabled = fail_count >= max_fails
+    new_status = 'failed' if is_disabled else 'active'
+
+    await db.execute(
+        """UPDATE auto_renew_subscriptions
+           SET fail_count = ?,
+               last_charge_status = ?,
+               next_retry_at = ?,
+               status = ?,
+               updated_at = strftime('%s','now')
+           WHERE id = ?""",
+        (fail_count, f"failed: {error_message[:100]}", next_retry, new_status, sub_id),
+    )
+    await db.commit()
+    logger.warning("Auto-renew subscription %d failed (%d/%d): %s (disabled=%s)",
+                   sub_id, fail_count, max_fails, error_message, is_disabled)
+    return is_disabled
+
+
+async def get_expiring_auto_renew_subscriptions(now: Optional[int] = None) -> list[dict]:
+    """
+    Find active auto-renew subscriptions where the associated key has expired or reached expiry time.
+    Guaranteed not to double-charge for the same expiry period.
+    """
+    if now is None:
+        now = int(time.time())
+
+    db = await get_db()
+    cur = await db.execute(
+        """SELECT s.id, s.user_id, s.key_id, s.payment_method_id,
+                  s.payment_method_title, s.payment_method_type, s.months,
+                  s.days, s.devices, s.amount_rub, s.fail_count,
+                  k.expiry, k.remark, k.key, k.uuid
+           FROM auto_renew_subscriptions s
+           JOIN keys k ON (s.key_id = k.id OR (s.key_id IS NULL AND k.user_id = s.user_id))
+           WHERE s.status = 'active'
+             AND k.expiry <= ?
+             AND k.expiry > (? - 7 * 86400)
+             AND (s.last_charge_at IS NULL OR s.last_charge_at < k.expiry)
+             AND (s.next_retry_at IS NULL OR s.next_retry_at <= ?)
+           ORDER BY k.expiry ASC""",
+        (now, now, now),
+    )
+    rows = await cur.fetchall()
+    results = []
+    seen_subs = set()
+    for row in rows:
+        sub_id = row[0]
+        if sub_id in seen_subs:
+            continue
+        seen_subs.add(sub_id)
+        results.append({
+            "sub_id": row[0],
+            "user_id": row[1],
+            "key_id": row[2],
+            "payment_method_id": row[3],
+            "payment_method_title": row[4],
+            "payment_method_type": row[5],
+            "months": row[6],
+            "days": row[7],
+            "devices": row[8],
+            "amount_rub": row[9],
+            "fail_count": row[10],
+            "expiry": row[11],
+            "remark": row[12],
+            "key": row[13],
+            "uuid": row[14],
+        })
+    return results
 
 
 # ---------------------------------------------------------------------------

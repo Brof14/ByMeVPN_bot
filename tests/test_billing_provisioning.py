@@ -491,6 +491,164 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Другой Linux", other_text)
         self.assertIn("v2rayN-linux-64.zip", other_text)
 
+    # ------------------------------------------------------------------------
+    # Test 11: Device switching edits caption and preserves photo (no deletion)
+    # ------------------------------------------------------------------------
+    def test_11_device_switching_preserves_photo_and_edits_caption(self):
+        """
+        Verify that send_or_edit and send_with_photo on a photo message edit caption
+        in-place rather than deleting the message or sending a new text message.
+        """
+        from utils import send_or_edit, send_with_photo
+        from unittest.mock import AsyncMock, MagicMock
+        from aiogram.types import CallbackQuery, Message, PhotoSize
+
+        async def run_test():
+            bot = MagicMock()
+            bot.edit_message_caption = AsyncMock()
+            bot.edit_message_text = AsyncMock()
+            bot.delete_message = AsyncMock()
+            bot.send_message = AsyncMock()
+            bot.send_photo = AsyncMock()
+
+            # Create mock message with a photo
+            msg = MagicMock(spec=Message)
+            msg.chat = MagicMock(id=12345)
+            msg.message_id = 999
+            msg.photo = [MagicMock(spec=PhotoSize)]  # Has photo!
+
+            callback = MagicMock(spec=CallbackQuery)
+            callback.message = msg
+
+            # 1. Test send_or_edit on a photo message
+            await send_or_edit(bot, callback, "Updated caption 1")
+            bot.edit_message_caption.assert_called_once_with(
+                chat_id=12345,
+                message_id=999,
+                caption="Updated caption 1",
+                parse_mode="HTML",
+                reply_markup=None,
+            )
+            bot.delete_message.assert_not_called()
+            bot.send_message.assert_not_called()
+
+            # 2. Test send_with_photo on a photo message
+            bot.edit_message_caption.reset_mock()
+            bot.delete_message.reset_mock()
+            await send_with_photo(bot, callback, "Updated caption 2")
+            bot.edit_message_caption.assert_called_once_with(
+                chat_id=12345,
+                message_id=999,
+                caption="Updated caption 2",
+                parse_mode="HTML",
+                reply_markup=None,
+            )
+            bot.delete_message.assert_not_called()
+            bot.send_photo.assert_not_called()
+
+        asyncio.run(run_test())
+
+    # ------------------------------------------------------------------------
+    # Test 12: Auto-renew database lifecycle, status toggling, and expiry worker
+    # ------------------------------------------------------------------------
+    def test_12_autorenew_database_lifecycle_and_recurrent_charge(self):
+        """
+        Verify auto_renew_subscriptions creation, status toggling,
+        failure backoff, and get_expiring_auto_renew_subscriptions logic.
+        """
+        from database import (
+            init_db, ensure_user, add_key,
+            save_auto_renew_subscription, get_auto_renew_subscription,
+            set_auto_renew_status, set_auto_renew_status_by_key,
+            update_auto_renew_charge_success, update_auto_renew_charge_failure,
+            get_expiring_auto_renew_subscriptions,
+        )
+        import time
+
+        async def run_test():
+            await init_db()
+            user_id = 888123
+            await ensure_user(user_id)
+
+            now = int(time.time())
+            # Add key expiring in the past (expired 1 hour ago)
+            key_id = await add_key(user_id, "vless://test", "test_key", "uuid-123", 30, 2)
+            # Manually set key expiry to now - 3600 (expired 1h ago)
+            from database import get_db
+            db = await get_db()
+            await db.execute("UPDATE keys SET expiry = ? WHERE id = ?", (now - 3600, key_id))
+            await db.commit()
+
+            # 1. Save auto-renew subscription
+            sub_id = await save_auto_renew_subscription(
+                user_id=user_id,
+                key_id=key_id,
+                payment_method_id="pm_test_card_123",
+                payment_method_title="*4444",
+                payment_method_type="bank_card",
+                months=1,
+                days=30,
+                devices=2,
+                amount_rub=89,
+            )
+            self.assertGreater(sub_id, 0)
+
+            # 2. Get auto-renew subscription
+            sub = await get_auto_renew_subscription(user_id, key_id)
+            self.assertIsNotNone(sub)
+            self.assertEqual(sub["status"], "active")
+            self.assertEqual(sub["payment_method_id"], "pm_test_card_123")
+            self.assertEqual(sub["amount_rub"], 89)
+
+            # 3. Check expiring subscriptions
+            expiring = await get_expiring_auto_renew_subscriptions(now=now)
+            exp_sub_ids = [s["sub_id"] for s in expiring]
+            self.assertIn(sub_id, exp_sub_ids, "Expired key with active auto-renew must be returned")
+
+            # 4. Toggle status to cancelled
+            await set_auto_renew_status_by_key(user_id, key_id, "cancelled")
+            sub_cancelled = await get_auto_renew_subscription(user_id, key_id)
+            self.assertEqual(sub_cancelled["status"], "cancelled")
+
+            # Must NOT be returned when cancelled
+            expiring = await get_expiring_auto_renew_subscriptions(now=now)
+            self.assertNotIn(sub_id, [s["sub_id"] for s in expiring])
+
+            # Re-activate
+            await set_auto_renew_status(sub_id, "active")
+
+            # 5. Simulate charge success
+            await update_auto_renew_charge_success(sub_id, new_days=30, new_amount=89)
+            # Also extend key into the future
+            await db.execute("UPDATE keys SET expiry = ? WHERE id = ?", (now + 30 * 86400, key_id))
+            await db.commit()
+
+            # Since key is now in the future, it must NOT be returned
+            expiring = await get_expiring_auto_renew_subscriptions(now=now)
+            self.assertNotIn(sub_id, [s["sub_id"] for s in expiring])
+
+            # 6. Test failure increments and disabling
+            # Set key back to expired
+            await db.execute("UPDATE keys SET expiry = ? WHERE id = ?", (now - 100, key_id))
+            await db.execute("UPDATE auto_renew_subscriptions SET last_charge_at = NULL, next_retry_at = NULL WHERE id = ?", (sub_id,))
+            await db.commit()
+
+            # 1st fail
+            is_dis = await update_auto_renew_charge_failure(sub_id, "funds error", max_fails=3)
+            self.assertFalse(is_dis)
+            # 2nd fail
+            is_dis = await update_auto_renew_charge_failure(sub_id, "funds error", max_fails=3)
+            self.assertFalse(is_dis)
+            # 3rd fail -> disabled
+            is_dis = await update_auto_renew_charge_failure(sub_id, "funds error", max_fails=3)
+            self.assertTrue(is_dis)
+
+            sub_failed = await get_auto_renew_subscription(user_id, key_id)
+            self.assertEqual(sub_failed["status"], "failed")
+            self.assertEqual(sub_failed["fail_count"], 3)
+
+        asyncio.run(run_test())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -240,6 +240,64 @@ async def _process_payment(bot: Bot, payment_id: str) -> None:
                 await use_promo_code(promo_code, user_id)
             logger.info("YooKassa payment %s successfully fulfilled for user %d", payment_id, user_id)
 
+            # Auto-renew handling
+            is_autorenew = metadata.get("auto_renew") == "1"
+            from database import (
+                get_user_keys,
+                save_auto_renew_subscription,
+                update_auto_renew_charge_success_by_user_key,
+            )
+            user_keys = await get_user_keys(user_id)
+            key_id = user_keys[0]["id"] if user_keys else None
+
+            if is_autorenew:
+                await update_auto_renew_charge_success_by_user_key(user_id, key_id, days, amount_rub)
+                try:
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text=(
+                            f"🔄 <b>Автопродление выполнено успешно!</b>\n\n"
+                            f"Сумма: <b>{amount_rub} ₽</b>\n"
+                            f"Подписка продлена на: <b>{days} дней</b> ({devices} устр.)\n\n"
+                            f"VPN продолжает работать без перебоев!"
+                        ),
+                        parse_mode="HTML",
+                    )
+                except Exception as notify_e:
+                    logger.debug("Failed to send autorenew notification to user %d: %s", user_id, notify_e)
+            else:
+                pm = payment.get("payment_method") or {}
+                if pm.get("saved") and pm.get("id"):
+                    pm_id = pm["id"]
+                    pm_title = pm.get("title", "")
+                    pm_type = pm.get("type", "bank_card")
+                    months = int(metadata.get("months", 1))
+                    await save_auto_renew_subscription(
+                        user_id=user_id,
+                        key_id=key_id,
+                        payment_method_id=pm_id,
+                        payment_method_title=pm_title,
+                        payment_method_type=pm_type,
+                        months=months,
+                        days=days,
+                        devices=devices,
+                        amount_rub=amount_rub,
+                    )
+                    logger.info("Saved auto-renew subscription for user %d (key=%s, pm_id=%s)", user_id, key_id, pm_id)
+                    try:
+                        await bot.send_message(
+                            chat_id=user_id,
+                            text=(
+                                f"🔄 <b>Автопродление подключено</b>\n\n"
+                                f"По окончании срока подписки ({days} дн.) с вашей карты "
+                                f"автоматически спишется {amount_rub} ₽ для продления.\n\n"
+                                f"Вы можете в любой момент отключить автопродление в меню ключа."
+                            ),
+                            parse_mode="HTML",
+                        )
+                    except Exception as notify_e:
+                        logger.debug("Failed to send autorenew confirmation to user %d: %s", user_id, notify_e)
+
             # Начисляем бонус рефералу за первую оплату (50₽)
             try:
                 referrer_id = await get_referrer(user_id)

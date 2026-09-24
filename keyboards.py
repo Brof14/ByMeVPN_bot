@@ -195,12 +195,17 @@ def my_keys_list_kb(keys: list) -> InlineKeyboardMarkup:
 
 
 # Key detail view (Renew/Delete/Instruction/Back/Support)
-def key_detail_kb(key_id: int) -> InlineKeyboardMarkup:
+def key_detail_kb(key_id: int, has_autorenew: bool = False, autorenew_active: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(
         InlineKeyboardButton(text="🔄 Продлить", callback_data=f"key_renew:{key_id}"),
         InlineKeyboardButton(text="🗑 Удалить", callback_data=f"key_delete:{key_id}"),
     )
+    if has_autorenew:
+        if autorenew_active:
+            kb.row(InlineKeyboardButton(text="⏹ Отключить автопродление", callback_data=f"autorenew_toggle:{key_id}"))
+        else:
+            kb.row(InlineKeyboardButton(text="▶️ Включить автопродление", callback_data=f"autorenew_toggle:{key_id}"))
     kb.row(InlineKeyboardButton(text="📋 Инструкция подключения", callback_data="connection_guide"))
     kb.row(InlineKeyboardButton(text="🌐 Как не отключать VPN для РФ-приложений", callback_data="rf_apps_guide"))
     kb.row(

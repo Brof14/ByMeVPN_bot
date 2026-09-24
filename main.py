@@ -206,6 +206,10 @@ async def main() -> None:
     # no public HTTPS endpoint configured yet)
     await start_payment_monitor(bot)
 
+    # Start YooKassa auto-renewal worker (checks expiring subscriptions every 60s)
+    from autorenew import start_autorenew_worker
+    autorenew_task = asyncio.create_task(start_autorenew_worker(bot))
+
     logger.info("Bot is running in polling mode. Press Ctrl+C to stop.")
 
     # Keep the bot running (polling mode)
@@ -215,6 +219,7 @@ async def main() -> None:
         # Graceful shutdown
         scheduler_task.cancel()
         webhook_task.cancel()
+        autorenew_task.cancel()
         await bot.session.close()
         await close_db()
         logger.info("Bot stopped")

@@ -21,23 +21,39 @@ async def send_or_edit(
     text: str,
     reply_markup: InlineKeyboardMarkup | None = None,
 ) -> Message:
-    """Edit existing text message or send a new one."""
+    """Edit existing text message or photo caption, or send a new one."""
     msg = target.message if isinstance(target, CallbackQuery) else target
+    is_photo_msg = bool(getattr(msg, "photo", None))
 
-    try:
-        return await bot.edit_message_text(
-            chat_id=msg.chat.id,
-            message_id=msg.message_id,
-            text=text,
-            parse_mode="HTML",
-            reply_markup=reply_markup,
-        )
-    except TelegramBadRequest as e:
-        if "message is not modified" in str(e):
-            return msg
-        # Can't edit (e.g. photo message) — fall through
-    except Exception:
-        pass
+    if is_photo_msg and len(text) <= CAPTION_LIMIT:
+        try:
+            return await bot.edit_message_caption(
+                chat_id=msg.chat.id,
+                message_id=msg.message_id,
+                caption=text,
+                parse_mode="HTML",
+                reply_markup=reply_markup,
+            )
+        except TelegramBadRequest as e:
+            if "message is not modified" in str(e):
+                return msg
+        except Exception:
+            pass
+    else:
+        try:
+            return await bot.edit_message_text(
+                chat_id=msg.chat.id,
+                message_id=msg.message_id,
+                text=text,
+                parse_mode="HTML",
+                reply_markup=reply_markup,
+            )
+        except TelegramBadRequest as e:
+            if "message is not modified" in str(e):
+                return msg
+            # Can't edit (e.g. photo message) — fall through
+        except Exception:
+            pass
 
     try:
         await bot.delete_message(msg.chat.id, msg.message_id)

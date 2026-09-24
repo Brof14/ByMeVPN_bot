@@ -48,10 +48,13 @@ async def cb_buy_vpn(callback: CallbackQuery, bot: Bot, state: FSMContext):
     devices = validate_device_limit(data.get("devices", DEFAULT_DEVICE_LIMIT))
     await state.update_data(devices=devices)
     
+    dev_info = DEVICE_CONFIG.get(devices, DEVICE_CONFIG[DEFAULT_DEVICE_LIMIT])
     text = (
-        "<b>Выберите количество устройств и срок подписки</b>\n\n"
+        f"<b>Тариф: {dev_info['name']} ({dev_info['badge']})</b>\n"
+        f"<i>{dev_info['description']}</i>\n\n"
         "Чем дольше срок, тем ниже стоимость одного месяца.\n"
-        "Все тарифы поддерживают стабильное и быстрое подключение."
+        "Все тарифы поддерживают стабильное и быстрое подключение.\n\n"
+        "<b>Выберите срок подписки:</b>"
     )
     await send_with_photo(
         bot, callback,
@@ -75,12 +78,23 @@ async def cb_select_devtier(callback: CallbackQuery, bot: Bot, state: FSMContext
     await state.update_data(devices=devices)
 
     dev_info = DEVICE_CONFIG.get(devices, DEVICE_CONFIG[DEFAULT_DEVICE_LIMIT])
-    text = (
-        f"<b>Тариф: {dev_info['name']} ({dev_info['badge']})</b>\n"
-        f"<i>{dev_info['description']}</i>\n\n"
-        "<b>Выберите срок подписки:</b>"
-    )
-    await send_or_edit(
+    renew_key_id = data.get("renew_key_id")
+    if renew_key_id:
+        text = (
+            f"🔄 <b>Продление ключа</b>\n\n"
+            f"<b>Тариф: {dev_info['name']} ({dev_info['badge']})</b>\n"
+            f"<i>{dev_info['description']}</i>\n\n"
+            "<b>Выберите срок подписки:</b>"
+        )
+    else:
+        text = (
+            f"<b>Тариф: {dev_info['name']} ({dev_info['badge']})</b>\n"
+            f"<i>{dev_info['description']}</i>\n\n"
+            "Чем дольше срок, тем ниже стоимость одного месяца.\n"
+            "Все тарифы поддерживают стабильное и быстрое подключение.\n\n"
+            "<b>Выберите срок подписки:</b>"
+        )
+    await send_with_photo(
         bot, callback,
         text,
         tariff_selection_kb(devices=devices, discount_percent=promo_discount),
@@ -224,7 +238,7 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
     user_id = callback.from_user.id
 
     url = await create_yookassa_payment(
-        price_rub, f"ByMeVPN {days} дней ({devices} устр.)", user_id, days, devices, promo_code=promo_code,
+        price_rub, f"ByMeVPN {days} дней ({devices} устр.)", user_id, days, devices, promo_code=promo_code, months=months,
     )
 
     if not url:
@@ -247,6 +261,7 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
         f"Сумма: <b>{price_rub} ₽</b>\n"
         f"Срок: {days} дней\n"
         f"Устройств: до {devices} одновременно\n\n"
+        f"🔄 <b>Автопродление:</b> включено (по истечении срока подписка продлится автоматически, можно отключить в любой момент в меню ключа).\n\n"
         f"После оплаты подписка будет активирована автоматически.",
         kb,
     )
