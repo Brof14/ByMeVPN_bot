@@ -3075,6 +3075,22 @@ async def get_active_giveaways() -> list[dict]:
     ]
 
 
+async def get_giveaway_by_id(giveaway_id: int) -> dict | None:
+    """Get a giveaway by ID."""
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT id, title, description, prize_days, winners_count, end_date, is_active, created_at FROM giveaways WHERE id = ?",
+        (giveaway_id,)
+    )
+    row = await cur.fetchone()
+    if not row:
+        return None
+    return {
+        "id": row[0], "title": row[1], "description": row[2], "prize_days": row[3],
+        "winners_count": row[4], "end_date": row[5], "is_active": row[6], "created_at": row[7],
+    }
+
+
 async def join_giveaway(giveaway_id: int, user_id: int) -> bool:
     """User joins a giveaway. Returns True if successfully registered, False if already joined."""
     db = await get_db()
