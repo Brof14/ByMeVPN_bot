@@ -216,7 +216,8 @@ async def deliver_key_with_generated_name(
     
     days = context.get("days", 30)
     is_paid = context.get("is_paid", False)
-    limit_ip = 5  # All plans (trial and paid) support up to 5 devices
+    from constants import validate_device_limit, DEFAULT_DEVICE_LIMIT
+    limit_ip = validate_device_limit(context.get("devices", context.get("limit_ip", DEFAULT_DEVICE_LIMIT)))
     amount = context.get("amount", 0)
     currency = context.get("currency", "RUB")
     method = context.get("method", "unknown")

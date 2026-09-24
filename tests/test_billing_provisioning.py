@@ -291,11 +291,12 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(used_again, "Cannot reuse single-use promo code")
 
     # ------------------------------------------------------------------------
-    # Test 8: Pricing helper and single source of truth
+    # Test 8: Pricing helper and single source of truth (All 12 combinations)
     # ------------------------------------------------------------------------
     def test_08_pricing_and_device_limits(self):
         """
-        Verify validate_device_limit and get_price_for_months match single source of truth.
+        Verify validate_device_limit, get_monthly_display, and get_price_for_months
+        across all 12 combinations of (devices x months).
         """
         self.assertEqual(validate_device_limit(1), 2)  # legacy 1 maps to base 2
         self.assertEqual(validate_device_limit(2), 2)
@@ -303,18 +304,192 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(validate_device_limit(10), 10)
         self.assertEqual(validate_device_limit(99), 2)  # invalid maps to default 2
 
-        # 2 devices base tier
-        price_1m, days_1m = get_price_for_months(1, 2)
-        self.assertEqual(price_1m, 89)
-        self.assertEqual(days_1m, 30)
+        # Expected table:
+        # monthly_prices:
+        #             1 мес   3 мес   6 мес   12 мес
+        # 2 devices      89      79      69       59
+        # 5 devices     109      99      89       79
+        # 10 devices    129     119     109       99
+        #
+        # total_prices:
+        #             1 мес   3 мес   6 мес   12 мес
+        # 2 devices      89     237     414      708
+        # 5 devices     109     297     534      948
+        # 10 devices    129     357     654     1188
 
-        # 5 devices optimal tier
-        price_5d, days_5d = get_price_for_months(1, 5)
-        self.assertEqual(price_5d, 129)
+        expected_matrix = {
+            2: {
+                1:  {"monthly": 89,  "total": 89,   "days": 30},
+                3:  {"monthly": 79,  "total": 237,  "days": 120},
+                6:  {"monthly": 69,  "total": 414,  "days": 240},
+                12: {"monthly": 59,  "total": 708,  "days": 450},
+            },
+            5: {
+                1:  {"monthly": 109, "total": 109,  "days": 30},
+                3:  {"monthly": 99,  "total": 297,  "days": 120},
+                6:  {"monthly": 89,  "total": 534,  "days": 240},
+                12: {"monthly": 79,  "total": 948,  "days": 450},
+            },
+            10: {
+                1:  {"monthly": 129, "total": 129,  "days": 30},
+                3:  {"monthly": 119, "total": 357,  "days": 120},
+                6:  {"monthly": 109, "total": 654,  "days": 240},
+                12: {"monthly": 99,  "total": 1188, "days": 450},
+            },
+        }
 
-        # 10 devices family tier
-        price_10d, days_10d = get_price_for_months(1, 10)
-        self.assertEqual(price_10d, 179)
+        for dev, months_dict in expected_matrix.items():
+            for months, exp in months_dict.items():
+                monthly = get_monthly_display(months, dev)
+                total, days = get_price_for_months(months, dev)
+
+                self.assertEqual(
+                    monthly, exp["monthly"],
+                    f"Mismatch in monthly display price for dev={dev}, months={months}: expected {exp['monthly']}, got {monthly}"
+                )
+                self.assertEqual(
+                    total, exp["total"],
+                    f"Mismatch in total price for dev={dev}, months={months}: expected {exp['total']}, got {total}"
+                )
+                self.assertEqual(
+                    days, exp["days"],
+                    f"Mismatch in days for dev={dev}, months={months}: expected {exp['days']}, got {days}"
+                )
+
+    # ------------------------------------------------------------------------
+    # Test 9: Global Error Handler & HTML escaping & message splitting
+    # ------------------------------------------------------------------------
+    async def test_09_global_error_handler(self):
+        """
+        Verify global error handler extracts exception details,
+        safely HTML-escapes special characters (<test> & "quotes"),
+        and splits long tracebacks without losing the end cause.
+        """
+        from main import format_error_messages, error_handler
+        from aiogram.types import ErrorEvent
+
+        # 1. Test formatting with special HTML characters
+        test_exc = ValueError("Test <error> & \"quotes\" failure")
+        try:
+            raise test_exc
+        except ValueError as caught_exc:
+            messages = format_error_messages(caught_exc, update=None)
+
+        self.assertGreaterEqual(len(messages), 1)
+        first_msg = messages[0]
+
+        # Verify HTML escaping
+        self.assertIn("&lt;error&gt;", first_msg)
+        self.assertIn("&amp;", first_msg)
+        self.assertIn("&quot;quotes&quot;", first_msg)
+        self.assertIn("ValueError", first_msg)
+        self.assertIn("🚨 <b>Bot Error</b>", first_msg)
+
+        # 2. Test error_handler with mock Bot
+        mock_bot = AsyncMock()
+        mock_event = MagicMock(spec=ErrorEvent)
+        mock_event.exception = test_exc
+        mock_event.update = None
+
+        with patch("main.ADMIN_ID", 123456789):
+            await error_handler(mock_event, mock_bot)
+            mock_bot.send_message.assert_called()
+            call_args = mock_bot.send_message.call_args[0]
+            admin_id = call_args[0]
+            text_sent = call_args[1]
+            self.assertEqual(admin_id, 123456789)
+            self.assertIn("&lt;error&gt;", text_sent)
+            self.assertIn("ValueError", text_sent)
+
+        # 3. Test long traceback message splitting
+        long_exc = RuntimeError("Long traceback test " + "X" * 4500)
+        try:
+            raise long_exc
+        except RuntimeError as caught_long:
+            split_messages = format_error_messages(caught_long, update=None)
+
+        self.assertGreater(len(split_messages), 1, "Deep traceback should be split across multiple messages")
+        # Check that header is in first message
+        self.assertIn("🚨 <b>Bot Error</b>", split_messages[0])
+        # Check that traceback chunks contain the full exception cause and end
+        combined_tb = "".join(split_messages[1:])
+        self.assertIn("RuntimeError", combined_tb)
+        self.assertIn("Long traceback test", combined_tb)
+        self.assertTrue(split_messages[-1].endswith("</code></pre>"))
+        # Check that all messages respect Telegram length limits
+        for msg in split_messages:
+            self.assertLessEqual(len(msg), 4000, f"Message length {len(msg)} exceeds Telegram limit")
+
+    # ------------------------------------------------------------------------
+    # Test 10: Guide navigation and content verification
+    # ------------------------------------------------------------------------
+    def test_10_guide_navigation_and_content(self):
+        """
+        Verify Linux distro selection keyboard, back buttons,
+        and platform guide texts (iOS HAPP + V2Box, Linux v2rayN distros).
+        """
+        from keyboards import (
+            connection_guide_kb, linux_distro_kb,
+            linux_guide_back_kb, guide_back_kb,
+        )
+        from handlers.guide import _GUIDES, _LINUX_GUIDES
+
+        # 1. Connection guide keyboard has Linux button
+        conn_kb = connection_guide_kb()
+        conn_cbs = [btn.callback_data for row in conn_kb.inline_keyboard for btn in row if btn.callback_data]
+        self.assertIn("guide_linux", conn_cbs)
+        self.assertIn("guide_ios", conn_cbs)
+        self.assertIn("back_to_menu", conn_cbs)
+
+        # 2. Linux distro keyboard has 4 distros and back to connection_guide
+        linux_kb = linux_distro_kb()
+        linux_cbs = [btn.callback_data for row in linux_kb.inline_keyboard for btn in row if btn.callback_data]
+        self.assertIn("guide_linux_ubuntu", linux_cbs)
+        self.assertIn("guide_linux_arch", linux_cbs)
+        self.assertIn("guide_linux_fedora", linux_cbs)
+        self.assertIn("guide_linux_other", linux_cbs)
+        self.assertIn("connection_guide", linux_cbs, "Back button from Linux distro menu must go to connection_guide")
+
+        # 3. Linux distro back keyboard must go back to guide_linux
+        distro_back = linux_guide_back_kb()
+        distro_back_cbs = [btn.callback_data for row in distro_back.inline_keyboard for btn in row if btn.callback_data]
+        self.assertIn("guide_linux", distro_back_cbs, "Back button from specific distro must go to guide_linux")
+
+        # 4. Guide back keyboard must go back to connection_guide
+        gen_back = guide_back_kb()
+        gen_back_cbs = [btn.callback_data for row in gen_back.inline_keyboard for btn in row if btn.callback_data]
+        self.assertIn("connection_guide", gen_back_cbs, "Back button from general guide must go to connection_guide")
+
+        # 5. iOS guide content: HAPP first, V2Box second
+        ios_text = _GUIDES["ios"]
+        self.assertIn("Вариант 1: HAPP Proxy", ios_text)
+        self.assertIn("Вариант 2: V2Box", ios_text)
+        self.assertNotIn("Streisand", ios_text, "Streisand must be removed from iOS guide")
+        self.assertIn("https://apps.apple.com/us/app/v2box-v2ray-client/id6446814690", ios_text)
+
+        # 6. Linux Arch guide: nftables + v2rayN
+        arch_text = _LINUX_GUIDES["arch"]
+        self.assertIn("Arch / EndeavourOS / Manjaro", arch_text)
+        self.assertIn("sudo pacman -S nftables", arch_text)
+        self.assertIn("v2rayN-linux-64.zip", arch_text)
+        self.assertIn("v2rayN", arch_text)
+
+        # 7. Linux Ubuntu guide: .deb package
+        ubuntu_text = _LINUX_GUIDES["ubuntu"]
+        self.assertIn("Ubuntu / Debian / Linux Mint", ubuntu_text)
+        self.assertIn("v2rayN-linux-64.deb", ubuntu_text)
+        self.assertIn("sudo apt install", ubuntu_text)
+
+        # 8. Linux Fedora guide: .rpm package
+        fedora_text = _LINUX_GUIDES["fedora"]
+        self.assertIn("Fedora / RHEL", fedora_text)
+        self.assertIn("v2rayN-linux-rhel-64.rpm", fedora_text)
+        self.assertIn("sudo dnf install", fedora_text)
+
+        # 9. Other Linux guide: .zip package
+        other_text = _LINUX_GUIDES["other"]
+        self.assertIn("Другой Linux", other_text)
+        self.assertIn("v2rayN-linux-64.zip", other_text)
 
 
 if __name__ == "__main__":

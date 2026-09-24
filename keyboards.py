@@ -102,24 +102,13 @@ def tariff_selection_kb(devices: int = DEFAULT_DEVICE_LIMIT, discount_percent: i
     ]
 
     for months, bonus in tariff_rows:
-        total_price, days = get_price_for_months(months, devices)
         monthly_price = get_monthly_display(months, devices)
 
         if discount_percent > 0:
-            discounted_total = int(total_price * (100 - discount_percent) / 100)
-            discounted_monthly = int(monthly_price * (100 - discount_percent) / 100)
-            if bonus:
-                text = (
-                    f"{months} мес.{bonus} — "
-                    f"{discounted_monthly} ₽ / мес (-{discount_percent}%)"
-                )
-            else:
-                text = f"1 мес. — {discounted_total} ₽ (-{discount_percent}%)"
+            discounted_monthly = round(monthly_price * (100 - discount_percent) / 100)
+            text = f"{months} мес.{bonus} — {discounted_monthly} ₽ / мес (-{discount_percent}%)"
         else:
-            if bonus:
-                text = f"{months} мес.{bonus} — {monthly_price} ₽ / мес"
-            else:
-                text = f"1 мес. — {total_price} ₽"
+            text = f"{months} мес.{bonus} — {monthly_price} ₽ / мес"
 
         kb.row(InlineKeyboardButton(
             text=text,
@@ -251,7 +240,7 @@ def partner_kb(link: str) -> InlineKeyboardMarkup:
         "Если у тебя не работает YouTube / Telegram — вот решение.\n\n"
         "Сам пользуюсь — реально норм VPN.\n\n"
         "🎁 3 дня бесплатно (без карты)\n"
-        "📱 До 5 устройств\n"
+        "📱 До 10 устройств\n"
         "⚡ Всё открывается без лагов\n\n"
         "💰 От 59 ₽/мес\n\n"
         f"Попробуй:\n{link}"
@@ -289,9 +278,34 @@ def connection_guide_kb() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def linux_distro_kb() -> InlineKeyboardMarkup:
+    """Linux distro selection keyboard."""
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="Ubuntu / Debian / Mint", callback_data="guide_linux_ubuntu"))
+    kb.row(InlineKeyboardButton(text="Arch / EndeavourOS / Manjaro", callback_data="guide_linux_arch"))
+    kb.row(InlineKeyboardButton(text="Fedora / RHEL", callback_data="guide_linux_fedora"))
+    kb.row(InlineKeyboardButton(text="Другой Linux", callback_data="guide_linux_other"))
+    kb.row(
+        InlineKeyboardButton(text="◀️ Назад", callback_data="connection_guide"),
+        InlineKeyboardButton(text="Поддержка", url=_SUPPORT_URL),
+    )
+    return kb.as_markup()
+
+
+def linux_guide_back_kb() -> InlineKeyboardMarkup:
+    """Back button from specific Linux distro guide to Linux distro selection."""
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="◀️ К выбору Linux", callback_data="guide_linux"))
+    kb.row(
+        InlineKeyboardButton(text="В главное меню", callback_data="back_to_menu"),
+        InlineKeyboardButton(text="Поддержка", url=_SUPPORT_URL)
+    )
+    return kb.as_markup()
+
+
 def guide_back_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="Назад к платформам", callback_data="connection_guide"))
+    kb.row(InlineKeyboardButton(text="◀️ Назад к платформам", callback_data="connection_guide"))
     kb.row(
         InlineKeyboardButton(text="В главное меню", callback_data="back_to_menu"),
         InlineKeyboardButton(text="Поддержка", url=_SUPPORT_URL)

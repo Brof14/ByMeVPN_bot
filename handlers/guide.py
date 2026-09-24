@@ -4,7 +4,10 @@ import logging
 from aiogram import Bot, F, Router
 from aiogram.types import CallbackQuery
 
-from keyboards import connection_guide_kb, guide_back_kb
+from keyboards import (
+    connection_guide_kb, guide_back_kb,
+    linux_distro_kb, linux_guide_back_kb,
+)
 from utils import send_with_photo, safe_answer
 
 logger = logging.getLogger(__name__)
@@ -31,69 +34,128 @@ _GUIDES: dict[str, str] = {
         "2. Скопируйте ссылку на подписку из раздела «Мои ключи»\n"
         "3. В HAPP нажмите кнопку <b>«Вставить из буфера»</b> в левом нижнем углу\n"
         "4. Включите переключатель по центру для подключения.\n\n"
-        "<b>Вариант 2: Streisand (Альтернативный)</b>\n"
-        "1. Установите: <a href='https://apps.apple.com/app/streisand/id6450534064'>Streisand в App Store</a>\n"
-        "2. Скопируйте ссылку на подписку\n"
-        "3. В Streisand нажмите <b>«+»</b> вверху справа → <b>«Import from Clipboard»</b>\n"
-        "4. Выберите нужную локацию (Нидерланды / Германия) и нажмите Подключить."
+        "<b>Вариант 2: V2Box</b>\n"
+        "1. Установите <a href='https://apps.apple.com/us/app/v2box-v2ray-client/id6446814690'>V2Box из App Store</a>.\n"
+        "2. В ByMeVPN откройте «Мои ключи» и скопируйте ссылку.\n"
+        "3. Откройте V2Box.\n"
+        "4. Нажмите <b>«+»</b> / импорт из буфера обмена.\n"
+        "5. Вставьте ссылку.\n"
+        "6. Выберите сервер и нажмите <b>Connect</b>."
     ),
     "android": (
         "🤖 <b>Android — Инструкция подключения</b>\n\n"
-        "<b>1. Скачайте приложение HAPP Proxy</b>\n"
-        "Google Play → <a href='https://play.google.com/store/apps/details?id=com.happproxy'>HAPP Proxy</a>\n"
-        "(или альтернативно: <a href='https://play.google.com/store/apps/details?id=com.v2ray.ang'>v2rayNG</a>)\n\n"
-        "<b>2. Скопируйте ссылку на подписку</b>\n"
-        "В боте перейдите в «Мои ключи» и нажмите на ссылку\n\n"
-        "<b>3. Добавьте в приложение</b>\n"
-        "Откройте HAPP и нажмите <b>«Вставить из буфера»</b> (или в v2rayNG: «+» → «Импорт из буфера обмена»)\n\n"
-        "<b>4. Подключитесь</b>\n"
-        "Нажмите большую круглую кнопку подключения в центре экрана. Готово!"
+        "1. Установите <a href='https://play.google.com/store/apps/details?id=com.happproxy'>HAPP Proxy из Google Play</a> "
+        "(или альтернативно: <a href='https://play.google.com/store/apps/details?id=com.v2ray.ang'>v2rayNG</a>).\n"
+        "2. В ByMeVPN откройте «Мои ключи» и скопируйте ссылку на подписку.\n"
+        "3. Откройте приложение и нажмите <b>«Вставить из буфера»</b> (в v2rayNG: <b>«+»</b> → «Импорт из буфера обмена»).\n"
+        "4. Нажмите круглую кнопку подключения в центре экрана. Готово!"
     ),
     "windows": (
         "💻 <b>Windows — Инструкция подключения</b>\n\n"
-        "<b>1. Скачайте Hiddify</b>\n"
-        "<a href='https://github.com/hiddify/hiddify-next/releases/latest'>Hiddify Releases</a>\n"
-        "→ скачайте файл <b>windows-setup-x64.exe</b>\n\n"
-        "<b>2. Установите и запустите</b>\n"
-        "Пройдите стандартную установку программы\n\n"
-        "<b>3. Добавьте подписку</b>\n"
-        "Скопируйте ссылку в боте → в Hiddify нажмите <b>«+ New Profile»</b> → <b>«Add from Clipboard»</b>\n\n"
-        "<b>4. Подключитесь</b>\n"
-        "Нажмите большую кнопку <b>Connect</b> в центре."
+        "1. Скачайте приложение: <a href='https://github.com/hiddify/hiddify-app/releases/latest'>Hiddify для Windows</a> (файл <code>Hiddify-Windows-Setup-x64.exe</code>).\n"
+        "2. Запустите файл и завершите установку программы.\n"
+        "3. В ByMeVPN откройте «Мои ключи» и скопируйте ссылку на подписку.\n"
+        "4. В Hiddify нажмите <b>«+ New Profile»</b> → <b>«Add from Clipboard»</b>.\n"
+        "5. Нажмите большую кнопку <b>Connect</b> по центру для подключения."
     ),
     "macos": (
         "🍎 <b>macOS — Инструкция подключения</b>\n\n"
-        "<b>1. Скачайте приложение</b>\n"
-        "Вариант А: <a href='https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973'>HAPP в Mac App Store</a> (для чипов Apple Silicon M1/M2/M3/M4)\n"
-        "Вариант Б: <a href='https://github.com/hiddify/hiddify-next/releases/latest'>Hiddify Next (.dmg)</a>\n\n"
-        "<b>2. Установите</b>\n"
-        "Перетащите приложение в папку Applications\n\n"
-        "<b>3. Добавьте подписку</b>\n"
-        "Скопируйте ссылку подписки в боте → добавьте через кнопку «+» / «Из буфера»\n\n"
-        "<b>4. Подключитесь</b>\n"
-        "Нажмите Подключить."
+        "1. Скачайте приложение:\n"
+        "• Для Mac с процессорами Apple Silicon (M1/M2/M3/M4): <a href='https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973'>HAPP в Mac App Store</a>\n"
+        "• Универсальная версия: <a href='https://github.com/hiddify/hiddify-app/releases/latest'>Hiddify Next (.dmg)</a>\n"
+        "2. Запустите файл и перетащите приложение в Программы.\n"
+        "3. В ByMeVPN откройте «Мои ключи» и скопируйте ссылку.\n"
+        "4. В приложении нажмите <b>«Вставить из буфера»</b> (или <b>«+»</b>).\n"
+        "5. Нажмите <b>Connect</b> (или включите переключатель) для подключения."
     ),
-    "linux": (
-        "🐧 <b>Linux — Инструкция подключения</b>\n\n"
-        "<b>Вариант 1: Hiddify Next (Графический интерфейс)</b>\n"
-        "• <b>Ubuntu / Debian / Mint:</b>\n"
-        "  Скачайте <code>.deb</code> с <a href='https://github.com/hiddify/hiddify-next/releases/latest'>GitHub Hiddify</a>\n"
-        "  <code>sudo dpkg -i hiddify-linux-x64.deb</code>\n"
-        "• <b>Arch Linux / Manjaro:</b>\n"
-        "  <code>yay -S hiddify-next-bin</code>\n"
-        "• <b>Fedora / RHEL:</b>\n"
-        "  <code>sudo dnf install ./hiddify-linux-x64.rpm</code>\n"
-        "• <b>Универсальный AppImage:</b>\n"
-        "  <code>chmod +x Hiddify-Linux-x64.AppImage && ./Hiddify-Linux-x64.AppImage</code>\n\n"
-        "<b>Вариант 2: Nekoray / sing-box CLI</b>\n"
-        "1. Скопируйте ссылку на подписку из бота\n"
-        "2. Вставьте в программу через «Preferences» → «Subscription Groups»\n"
-        "3. Обновите подписку и включите режим VPN (System Proxy / TUN mode)."
+}
+
+_LINUX_GUIDES: dict[str, str] = {
+    "arch": (
+        "🐧 <b>Arch / EndeavourOS / Manjaro</b>\n\n"
+        "1. Откройте терминал.\n\n"
+        "2. Установите nftables:\n"
+        "<code>sudo pacman -S nftables</code>\n\n"
+        "3. Скачайте последнюю версию v2rayN:\n"
+        "<a href='https://github.com/2dust/v2rayN/releases'>GitHub → Releases</a> → Linux → <code>v2rayN-linux-64.zip</code>\n\n"
+        "4. Перейдите в папку со скачанным архивом:\n"
+        "<code>cd ~/Downloads</code>\n\n"
+        "5. Распакуйте архив:\n"
+        "<code>unzip \"название-файла.zip\"</code>\n\n"
+        "6. Перейдите в распакованную папку:\n"
+        "<code>cd \"папка-v2rayN\"</code>\n\n"
+        "7. Запустите v2rayN:\n"
+        "<code>chmod +x v2rayN\n"
+        "./v2rayN</code>\n\n"
+        "8. Скопируйте ссылку нужного сервера из «Мои ключи».\n\n"
+        "9. Добавьте конфигурацию в v2rayN.\n\n"
+        "10. Внизу включите:\n"
+        "• <b>System Proxy</b>\n"
+        "• <b>Global</b>\n\n"
+        "11. Подключитесь."
+    ),
+    "ubuntu": (
+        "🐧 <b>Ubuntu / Debian / Linux Mint</b>\n\n"
+        "1. Скачайте v2rayN для Linux (.deb) с официального <a href='https://github.com/2dust/v2rayN/releases'>GitHub → Releases</a> (файл <code>v2rayN-linux-64.deb</code>).\n\n"
+        "2. Откройте терминал в папке со скачанным файлом.\n\n"
+        "3. Выполните:\n"
+        "<code>sudo apt install -y ./v2rayN-linux-64.deb</code>\n\n"
+        "4. Откройте v2rayN через меню приложений.\n\n"
+        "5. В ByMeVPN откройте «Мои ключи» и скопируйте ссылку.\n\n"
+        "6. Добавьте её в v2rayN.\n\n"
+        "7. Включите <b>System Proxy</b> и <b>Global</b>.\n\n"
+        "8. Подключитесь."
+    ),
+    "fedora": (
+        "🐧 <b>Fedora / RHEL</b>\n\n"
+        "1. Скачайте v2rayN для Linux (.rpm) с официального <a href='https://github.com/2dust/v2rayN/releases'>GitHub → Releases</a> (файл <code>v2rayN-linux-rhel-64.rpm</code>).\n\n"
+        "2. Откройте терминал в папке со скачанным файлом.\n\n"
+        "3. Выполните:\n"
+        "<code>sudo dnf install -y ./v2rayN-linux-rhel-64.rpm</code>\n\n"
+        "4. Откройте v2rayN.\n\n"
+        "5. Скопируйте ссылку из «Мои ключи».\n\n"
+        "6. Добавьте конфигурацию.\n\n"
+        "7. Включите <b>System Proxy</b> и <b>Global</b>.\n\n"
+        "8. Подключитесь."
+    ),
+    "other": (
+        "🐧 <b>Другой Linux</b>\n\n"
+        "1. Скачайте <a href='https://github.com/2dust/v2rayN/releases'>v2rayN-linux-64.zip</a> с официального GitHub.\n\n"
+        "2. Распакуйте архив.\n\n"
+        "3. Откройте терминал в распакованной папке.\n\n"
+        "4. Выполните:\n"
+        "<code>chmod +x v2rayN\n"
+        "./v2rayN</code>\n\n"
+        "5. Скопируйте ссылку ByMeVPN из «Мои ключи».\n\n"
+        "6. Добавьте конфигурацию.\n\n"
+        "7. Включите <b>System Proxy</b> и <b>Global</b>.\n\n"
+        "8. Подключитесь."
     ),
 }
 
 
-@router.callback_query(F.data.startswith("guide_"))
+@router.callback_query(F.data == "guide_linux")
+async def cb_guide_linux(callback: CallbackQuery, bot: Bot):
+    await safe_answer(callback)
+    text = (
+        "🐧 <b>Linux</b>\n\n"
+        "Выберите вашу систему:"
+    )
+    await send_with_photo(bot, callback, text, linux_distro_kb())
+
+
+@router.callback_query(F.data.startswith("guide_linux_"))
+async def cb_guide_linux_distro(callback: CallbackQuery, bot: Bot):
+    await safe_answer(callback)
+    distro = callback.data.split("guide_linux_", 1)[1]
+    text = _LINUX_GUIDES.get(
+        distro,
+        "Инструкция для данного дистрибутива в разработке.",
+    )
+    await send_with_photo(bot, callback, text, linux_guide_back_kb())
+
+
+@router.callback_query(F.data.in_({"guide_ios", "guide_android", "guide_windows", "guide_macos"}))
 async def cb_platform_guide(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     platform = callback.data.split("_", 1)[1]

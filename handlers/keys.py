@@ -194,14 +194,15 @@ async def cb_key_renew(callback: CallbackQuery, bot: Bot, state: FSMContext):
         await safe_answer(callback, "Ключ не найден.", alert=True)
         return
 
-    await state.update_data(renew_key_id=key_id)
+    key_devices = k.get("limit_ip", 2)
+    await state.update_data(renew_key_id=key_id, devices=key_devices)
     await state.set_state(BuyFlow.choosing_type)
 
     await send_with_photo(
         bot, callback,
         f"🔄 <b>Продление ключа «{k.get('remark') or k['id']}»</b>\n\n"
         "Выберите тариф:",
-        tariff_selection_kb(),
+        tariff_selection_kb(devices=key_devices),
     )
 
 

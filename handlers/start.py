@@ -127,7 +127,7 @@ async def _send_main_menu(
             "Что получите сразу:\n"
             "• Telegram и YouTube работают без ограничений\n"
             "• Instagram, TikTok, сайты — открываются\n"
-            "• До 5 устройств по одной подписке\n"
+            "• До 10 устройств по одной подписке\n"
             "• Быстрое подключение за 30 секунд\n\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
             "💰 Дальше — от 59 ₽/мес\n"
@@ -142,13 +142,13 @@ async def _send_main_menu(
         text = (
             "Здравствуйте, ByMeVPN!\n\n"
             "Этот бот поможет вам получить доступ к быстрому и безопасному VPN, который работает, обходя любые блокировки.\n\n"
-            "Любой из наших тарифов, включая пробный тариф на 3 дня, даёт полный доступ к интернету, для 5 устройств.\n\n"
+            "Любой из наших тарифов, включая пробный тариф на 3 дня, даёт полный доступ ко всем возможностям интернета без ограничений.\n\n"
             "Наши приложения доступны для:\n"
             "<a href='https://apps.apple.com/us/app/happ-proxy-utility/id6504287215'>iOS</a>, "
             "<a href='https://play.google.com/store/apps/details?id=com.happproxy&pcampaignid=web_share'>Android</a>, "
-            "<a href='https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe'>Windows</a>, "
+            "<a href='https://github.com/hiddify/hiddify-app/releases/latest'>Windows</a>, "
             "<a href='https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973'>macOS</a> и "
-            "<a href='https://github.com/Happ-proxy/happ-desktop/releases/latest/download/Happ.linux.x64.deb'>Linux</a>.\n\n"
+            "<a href='https://github.com/2dust/v2rayN/releases'>Linux</a>.\n\n"
             "После оплаты, бот пришлёт вам ключ, который нужно будет вставить в наше приложение."
         )
         kb = main_menu_new_user()
@@ -157,7 +157,7 @@ async def _send_main_menu(
             f"<b>Здравствуйте, {user_name}!</b>\n\n"
             "Ваша подписка закончилась.\n\n"
             "Вы можете продлить VPN и дальше пользоваться сервисом без ограничений.\n\n"
-            "Любой из наших тарифов даёт полный доступ к интернету для 5 устройств.\n\n"
+            "Любой из наших тарифов даёт полный доступ к интернету на всех ваших устройствах.\n\n"
             "Чем дольше срок, тем больше вы экономите!"
         )
         # Check if user has keys to show appropriate menu (use direct DB check, not cache)
@@ -378,13 +378,14 @@ async def cb_claim_trial(callback: CallbackQuery, bot: Bot):
         return
 
     config_name = f"trial_ref_{user_id}"
+    from constants import DEFAULT_DEVICE_LIMIT
     success = await deliver_key(
         bot=bot,
         user_id=user_id,
         chat_id=callback.message.chat.id,
         config_name=config_name,
         days=3,
-        limit_ip=1,
+        limit_ip=DEFAULT_DEVICE_LIMIT,
         is_paid=False,
         amount=0,
         currency="RUB",
@@ -448,13 +449,14 @@ async def cb_trial(callback: CallbackQuery, bot: Bot, state: FSMContext):
         await safe_answer(callback, "Пробный период доступен только новым пользователям.", alert=True)
         return
 
+    from constants import DEFAULT_DEVICE_LIMIT
     await ask_config_name(
         bot, callback, state,
         context={
             "days": TRIAL_DAYS, "prefix": "trial", "is_paid": False,
             "amount": 0, "currency": "RUB", "method": "trial",
             "payload": f"trial_{user_id}", "_trial_user_id": user_id,
-            "limit_ip": 5,  # All subscriptions (trial and paid) support up to 5 devices
+            "limit_ip": DEFAULT_DEVICE_LIMIT,
         },
     )
 
@@ -479,13 +481,14 @@ async def cb_trial_ref(callback: CallbackQuery, bot: Bot, state: FSMContext):
         await _send_main_menu(bot, callback, user_id, name)
         return
 
+    from constants import DEFAULT_DEVICE_LIMIT
     await ask_config_name(
         bot, callback, state,
         context={
             "days": TRIAL_DAYS, "prefix": "trial_ref", "is_paid": False,
             "amount": 0, "currency": "RUB", "method": "trial",
             "payload": f"trial_ref_{user_id}", "_trial_user_id": user_id,
-            "limit_ip": 5,
+            "limit_ip": DEFAULT_DEVICE_LIMIT,
         },
     )
 
@@ -503,7 +506,7 @@ async def cb_about(callback: CallbackQuery, bot: Bot):
         "👨‍💻 Мы используем специальные приложения для всех платформ. Начало работы с нашим сервисом максимально простое и не требует никаких специальных умений, не нужны никакие сложные инструкции.\n\n"
         "🔒 В нашем сервисе весь ваш трафик полностью зашифрован. Мы не храним логи и не видим, на какие сайты вы заходите. И никто не увидит.\n\n"
         "🌎 Наши сервера размещены по всему миру, и на любом из наших тарифов (даже на пробном) вы получаете полный доступ ко всем локациям. На одном сервере мы размещаем не более 10 клиентов – таким образом вы получаете максимальную скорость, до 10 Гбит/сек.\n\n"
-        "👨‍👩‍👧‍👦 Количество устройств на одной подписке 5 штук. Можно делиться вашим ключом от ByMeVPN с близкими.\n\n"
+        "👨‍👩‍👧‍👦 Доступны тарифы на 2, 5 или 10 устройств. Можно делиться вашим ключом от ByMeVPN с близкими.\n\n"
         "🌐 Подробнее о сервисе:\n"
         "https://bymevpn-site.duckdns.org"
     )

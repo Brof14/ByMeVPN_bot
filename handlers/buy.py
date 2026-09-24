@@ -116,7 +116,7 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
         discount_value = promo_info.get("discount_value", 0)
 
         if promo_type == "percent":
-            price_rub = int(price_rub * (100 - discount_value) / 100)
+            price_rub = round(price_rub * (100 - discount_value) / 100)
             promo_text = f" (скидка {discount_value}% применена)"
         elif promo_type == "fixed_rub":
             price_rub = max(0, price_rub - discount_value)
@@ -467,7 +467,7 @@ async def handle_yookassa_config_name(message: Message, bot: Bot, state: FSMCont
 
     # Extract data from pending payment
     days = pending.get("days", 30)
-    devices = pending.get("devices", 5)
+    devices = validate_device_limit(pending.get("devices", DEFAULT_DEVICE_LIMIT))
     amount_rub = pending.get("amount_rub", 0)
 
     # Clear state before delivery
