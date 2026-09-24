@@ -9,6 +9,22 @@ from config import YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY, CRYPTO_BOT_TOKEN
 logger = logging.getLogger(__name__)
 
 
+_yookassa_recurring_supported: Optional[bool] = None
+
+
+def is_yookassa_recurring_supported() -> bool:
+    """Check if YooKassa store supports recurring payments."""
+    global _yookassa_recurring_supported
+    if _yookassa_recurring_supported is None:
+        import os
+        val = os.getenv("YOOKASSA_ENABLE_RECURRING", "").lower()
+        if val in ("0", "false", "no"):
+            _yookassa_recurring_supported = False
+        else:
+            _yookassa_recurring_supported = True
+    return _yookassa_recurring_supported
+
+
 async def create_yookassa_payment(
     amount_rub: int,
     description: str,
@@ -43,13 +59,15 @@ async def create_yookassa_payment(
         "amount": {"value": f"{amount_rub}.00", "currency": "RUB"},
         "confirmation": {"type": "redirect", "return_url": "https://t.me/ByMeVPN_bot"},
         "capture": True,
-        "save_payment_method": True,
         "description": description,
         "metadata": metadata,
     }
 
-    logger.info("create_yookassa_payment: user_id=%d days=%d devices=%d months=%d amount=%d promo=%s",
-                user_id, days, devices, months, amount_rub, promo_code)
+    if is_yookassa_recurring_supported():
+        payload["save_payment_method"] = True
+
+    logger.info("create_yookassa_payment: user_id=%d days=%d devices=%d months=%d amount=%d promo=%s recurring=%s",
+                user_id, days, devices, months, amount_rub, promo_code, payload.get("save_payment_method", False))
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -63,7 +81,30 @@ async def create_yookassa_payment(
             return url
             
     except httpx.HTTPStatusError as e:
-        error_msg = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
+        error_text = e.response.text
+        if e.response.status_code == 403 and "recurring payments" in error_text.lower():
+            logger.warning(
+                "YooKassa shop %s does not have recurring payments enabled in merchant agreement. "
+                "Disabling auto-save and immediately retrying as standard payment.",
+                YOOKASSA_SHOP_ID,
+            )
+            global _yookassa_recurring_supported
+            _yookassa_recurring_supported = False
+            payload.pop("save_payment_method", None)
+            headers["Idempotence-Key"] = f"{user_id}_{int(time.time())}_std"
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    r2 = await client.post("https://api.yookassa.ru/v3/payments", json=payload, headers=headers)
+                    r2.raise_for_status()
+                    data = r2.json()
+                    url = data["confirmation"]["confirmation_url"]
+                    logger.info("YooKassa fallback standard payment created for user %d: %s", user_id, data.get("id"))
+                    return url
+            except Exception as retry_e:
+                logger.error("YooKassa fallback payment error for user %d: %s", user_id, retry_e)
+                return None
+
+        error_msg = f"HTTP {e.response.status_code}: {error_text[:200]}"
         logger.error("YooKassa HTTP error for user %d: %s", user_id, error_msg)
         return None
     except httpx.RequestError as e:

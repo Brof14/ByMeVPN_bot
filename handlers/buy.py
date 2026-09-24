@@ -254,6 +254,11 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
         [InlineKeyboardButton(text="Назад", callback_data=f"devtier_{devices}")]
     ])
     
+    from payments import is_yookassa_recurring_supported
+    ar_note = ""
+    if is_yookassa_recurring_supported():
+        ar_note = "🔄 <b>Автопродление:</b> включено (по истечении срока подписка продлится автоматически, можно отключить в любой момент в меню ключа).\n\n"
+
     await send_with_photo(
         bot, callback,
         f"💳 <b>Оплата через ЮKassa</b>\n\n"
@@ -261,7 +266,7 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
         f"Сумма: <b>{price_rub} ₽</b>\n"
         f"Срок: {days} дней\n"
         f"Устройств: до {devices} одновременно\n\n"
-        f"🔄 <b>Автопродление:</b> включено (по истечении срока подписка продлится автоматически, можно отключить в любой момент в меню ключа).\n\n"
+        f"{ar_note}"
         f"После оплаты подписка будет активирована автоматически.",
         kb,
     )
