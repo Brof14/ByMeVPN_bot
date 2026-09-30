@@ -2546,10 +2546,11 @@ async def set_key_days(key_id: int, days: int) -> bool:
     db = await get_db()
     expiry = int(time.time()) + days * 86400
     
-    # Get UUID before updating
-    cur = await db.execute("SELECT uuid FROM keys WHERE id=?", (key_id,))
+    # Get UUID and user_id before updating
+    cur = await db.execute("SELECT uuid, user_id FROM keys WHERE id=?", (key_id,))
     row = await cur.fetchone()
     client_uuid = row[0] if row else None
+    user_id = row[1] if row else None
     
     # Update database
     cur = await db.execute(
