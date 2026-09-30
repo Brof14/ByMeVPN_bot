@@ -97,14 +97,29 @@ async def _send_urgent_notification(bot: Bot, item: dict) -> None:
     promo_code = await get_or_create_renewal_promo(item["user_id"])
 
     text = (
-        f"⏳ <b>Подписка истекает через {days_left} {get_day_word(days_left)}</b>\n\n"
-        f"📅 Дата окончания: {date_str}\n\n"
-        f"🎁 Промокод на скидку 30%: <code>{promo_code}</code>\n"
-        f"Действует 7 дней."
+        f"🚨 <b>СРОЧНО! Ваша подписка истекает!</b>\n\n"
+        f"📅 Дата окончания: <b>{date_str}</b>\n"
+        f"🔔 Осталось: <b>{days_left} {get_day_word(days_left)}</b>\n\n"
+        f"⚠️ <b>ВНИМАНИЕ:</b> После истечения срока вы потеряете доступ к:\n"
+        f"• YouTube и все видео\n"
+        f"• Telegram и мессенджеры\n"
+        f"• Социальные сети\n"
+        f"• Все заблокированные сайты\n\n"
+        f"🎁 <b>СПЕЦИАЛЬНОЕ ПРЕДЛОЖЕНИЕ:</b>\n"
+        f"Используйте промокод <code>{promo_code}</code> для получения <b>30% СКИДКИ</b> на продление!\n"
+        f"Промокод действителен 7 дней.\n\n"
+        f"💰 <b>Экономия:</b>\n"
+        f"• 1 месяц: сэкономите ~30 ₽\n"
+        f"• 3 месяца: сэкономите ~70 ₽\n"
+        f"• 6 месяцев: сэкономите ~120 ₽\n"
+        f"• 12 месяцев: сэкономите ~210 ₽\n\n"
+        f"⏰ <b>Не откладывайте!</b> Продлите прямо сейчас, чтобы сохранить доступ."
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Продлить", callback_data="buy_vpn")],
+        [InlineKeyboardButton(text="✅ Активировать промокод", callback_data=f"activate_promo:{promo_code}")],
+        [InlineKeyboardButton(text="🔄 Продлить сейчас", callback_data="buy_vpn")],
+        [InlineKeyboardButton(text="🎁 Пригласить друга и получить +15 дней", callback_data="partner")]
     ])
 
     await bot.send_message(item["user_id"], text, parse_mode="HTML", reply_markup=kb)
@@ -118,14 +133,24 @@ async def _send_warning_notification(bot: Bot, item: dict) -> None:
     promo_code = await get_or_create_renewal_promo(item["user_id"])
 
     text = (
-        f"📅 <b>Подписка истекает через {days_left} {get_day_word(days_left)}</b>\n\n"
-        f"Дата окончания: {date_str}\n\n"
-        f"🎁 Промокод на скидку 30%: <code>{promo_code}</code>\n"
-        f"Действует 7 дней."
+        f"⏳ <b>Напоминание о продлении подписки</b>\n\n"
+        f"📅 Дата окончания: <b>{date_str}</b>\n"
+        f"🔔 Осталось: <b>{days_left} {get_day_word(days_left)}</b>\n\n"
+        f"🎁 <b>Ваш эксклюзивный промокод:</b>\n"
+        f"<code>{promo_code}</code> — <b>30% СКИДКА</b> на продление!\n"
+        f"Действителен 7 дней.\n\n"
+        f"💡 <b>Почему стоит продлить сейчас?</b>\n"
+        f"• Гарантированный доступ без перерывов\n"
+        f"• Стабильная скорость работы\n"
+        f"• Поддержка всех устройств\n"
+        f"• Сэкономьте с промокодом!\n\n"
+        f"🤝 <b>Партнёрская программа:</b> Приглашайте друзей и получайте +15 дней за каждого!"
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Продлить", callback_data="buy_vpn")],
+        [InlineKeyboardButton(text="✅ Активировать промокод", callback_data=f"activate_promo:{promo_code}")],
+        [InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="buy_vpn")],
+        [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="partner")]
     ])
 
     await bot.send_message(item["user_id"], text, parse_mode="HTML", reply_markup=kb)
@@ -137,13 +162,21 @@ async def _send_early_notification(bot: Bot, item: dict) -> None:
     days_left = max(1, int((item["expiry"] - int(time.time())) / 86400))
 
     text = (
-        f"📅 <b>Подписка истекает через {days_left} {get_day_word(days_left)}</b>\n\n"
-        f"Дата окончания: {date_str}\n\n"
-        f"💡 Чем дольше срок подписки, тем меньше цена за месяц."
+        f"📢 <b>Информация о вашей подписке</b>\n\n"
+        f"📅 Дата окончания: <b>{date_str}</b>\n"
+        f"🔔 Осталось: <b>{days_left} {get_day_word(days_left)}</b>\n\n"
+        f"✅ <b>Ваша подписка активна!</b>\n"
+        f"Продлите заранее, чтобы избежать перерывов в работе.\n\n"
+        f"💡 <b>Совет:</b> Чем дольше срок подписки, тем меньше цена за месяц!\n"
+        f"• 12 месяцев: всего 59 ₽/мес\n"
+        f"• 6 месяцев: всего 69 ₽/мес\n"
+        f"• 3 месяца: всего 79 ₽/мес\n\n"
+        f"🎁 <b>Скоро:</b> Приближается дата продления — мы пришлём вам промокод на скидку!"
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Продлить", callback_data="buy_vpn")],
+        [InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="buy_vpn")],
+        [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="partner")]
     ])
 
     await bot.send_message(item["user_id"], text, parse_mode="HTML", reply_markup=kb)
@@ -156,12 +189,12 @@ async def _send_expiry_notifications(bot: Bot) -> None:
     current_time = int(_time.time())
     
     # Minimum interval between notifications (in seconds)
-    # Urgent (1-3 days): once per day
-    # Warning (7-14 days): once per 3 days
-    # Early (21-30 days): once per 7 days
-    URGENT_INTERVAL = 86400      # 1 day
-    WARNING_INTERVAL = 3 * 86400  # 3 days
-    EARLY_INTERVAL = 7 * 86400    # 7 days
+    # Urgent (1-3 days): once per 2 days
+    # Warning (7-14 days): once per 10 days
+    # Early (21-30 days): once per 25 days
+    URGENT_INTERVAL = 2 * 86400      # 2 days
+    WARNING_INTERVAL = 10 * 86400    # 10 days
+    EARLY_INTERVAL = 25 * 86400      # 25 days
     
     # Urgent: 1-3 days remaining
     urgent_keys = await get_keys_nearing_expiry(days_min=1, days_max=3)

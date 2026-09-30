@@ -199,17 +199,33 @@ async def cb_autorenew_unbind_prompt(callback: CallbackQuery, bot: Bot):
     parts = callback.data.split(":")
     key_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
     user_id = callback.from_user.id
-    from database import get_auto_renew_subscription
+    from database import get_auto_renew_subscription, get_user_keys
 
     sub = await get_auto_renew_subscription(user_id, key_id if key_id > 0 else None)
     card_title = (sub.get("payment_method_title") if sub else None) or "МИР •••• 4444"
+
+    # Get subscription expiry date
+    expiry_date_str = ""
+    keys = await get_user_keys(user_id)
+    if keys:
+        from datetime import datetime
+        expiry_ts = keys[0].get("expiry", 0)
+        if expiry_ts:
+            expiry_date_str = datetime.fromtimestamp(expiry_ts).strftime("%d.%m.%Y")
+
+    warning_text = (
+        f"⚠️ <b>Внимание:</b> При отвязке карты автопродление будет отключено. "
+        f"Текущая подписка продолжит действовать до конца оплаченного периода"
+    )
+    if expiry_date_str:
+        warning_text += f" (до {expiry_date_str})"
+    warning_text += ", после чего доступ будет приостановлен."
 
     text = (
         "🤖 <b>ByMeVPN® — Подтверждение удаления карты</b>\n\n"
         "Вы действительно хотите отвязать и удалить сохранённый способ оплаты?\n\n"
         f"💳 Способ оплаты: <b>{card_title}</b>\n\n"
-        "⚠️ <b>Внимание:</b> При отмене автопродления и отвязке карты ваша текущая подписка ByMeVPN "
-        "будет <b>сразу отключена</b>, а доступ к VPN прекратится без возврата средств.\n\n"
+        f"{warning_text}\n\n"
         "Подтвердите удаление карты:"
     )
     await send_or_edit(bot, callback, text, autorenew_confirm_unbind_kb(key_id, card_title=card_title))
@@ -230,11 +246,25 @@ async def cb_autorenew_unbind_confirm(callback: CallbackQuery, bot: Bot):
 
     await cancel_autorenew_and_terminate_subscription(user_id, key_id if key_id > 0 else None)
 
+    # Get subscription expiry date
+    from database import get_user_keys
+    from datetime import datetime
+    expiry_date_str = ""
+    keys = await get_user_keys(user_id)
+    if keys:
+        expiry_ts = keys[0].get("expiry", 0)
+        if expiry_ts:
+            expiry_date_str = datetime.fromtimestamp(expiry_ts).strftime("%d.%m.%Y")
+
+    sub_status_text = "Подписка на ByMeVPN отключена."
+    if expiry_date_str:
+        sub_status_text = f"Подписка продолжит действовать до {expiry_date_str}, после чего доступ будет приостановлен."
+
     text = (
         "🤖 <b>ByMeVPN® — Карта удалена</b>\n\n"
         f"✅ Банковская карта <b>{card_title}</b> успешно отвязана и удалена из сервиса ByMeVPN.\n"
         "Автоматические списания отменены, данные карты удалены.\n\n"
-        "Подписка на ByMeVPN отключена.\n\n"
+        f"{sub_status_text}\n\n"
         "Если вы захотите вернуться, вы всегда можете оформить новую подписку в меню бота: /start"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
