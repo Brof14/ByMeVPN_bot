@@ -52,10 +52,10 @@ _GUIDES: dict[str, str] = {
     ),
     "windows": (
         "💻 <b>Windows — Инструкция подключения</b>\n\n"
-        "1. Скачайте приложение: <a href='https://github.com/hiddify/hiddify-app/releases/latest'>Hiddify для Windows</a> (файл <code>Hiddify-Windows-Setup-x64.exe</code>).\n"
+        "1. Скачайте приложение: <a href='https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe'>Happ для Windows</a>.\n"
         "2. Запустите файл и завершите установку программы.\n"
         "3. В ByMeVPN откройте «Мои ключи» и скопируйте ссылку на подписку.\n"
-        "4. В Hiddify нажмите <b>«+ New Profile»</b> → <b>«Add from Clipboard»</b>.\n"
+        "4. В Happ нажмите <b>«Вставить из буфера обмена»</b>.\n"
         "5. Нажмите большую кнопку <b>Connect</b> по центру для подключения."
     ),
     "macos": (

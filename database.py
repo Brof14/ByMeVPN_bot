@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS keys (
     limit_ip INTEGER NOT NULL DEFAULT 1,
     created  INTEGER NOT NULL,
     expiry   INTEGER NOT NULL,
+    last_notification_at INTEGER DEFAULT 0,
     FOREIGN KEY (user_id) REFERENCES users(user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_keys_user   ON keys(user_id);
@@ -373,6 +374,13 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
     try:
         await db.execute("ALTER TABLE keys ADD COLUMN short_id TEXT")
         logger.info("Migration: added short_id column to keys table")
+    except Exception:
+        pass  # Column already exists
+
+    # Migration: add last_notification_at column to keys table
+    try:
+        await db.execute("ALTER TABLE keys ADD COLUMN last_notification_at INTEGER DEFAULT 0")
+        logger.info("Migration: added last_notification_at column to keys table")
     except Exception:
         pass  # Column already exists
 
@@ -2764,7 +2772,7 @@ async def get_keys_nearing_expiry(days_min: int = 1, days_max: int = 3) -> list[
 
     cur = await db.execute(
         """
-        SELECT DISTINCT user_id, expiry
+        SELECT DISTINCT user_id, expiry, last_notification_at
         FROM keys
         WHERE expiry BETWEEN ? AND ?
         AND expiry > ?
@@ -2774,9 +2782,24 @@ async def get_keys_nearing_expiry(days_min: int = 1, days_max: int = 3) -> list[
     )
     rows = await cur.fetchall()
     return [
-        {"user_id": row[0], "expiry": row[1]}
+        {"user_id": row[0], "expiry": row[1], "last_notification_at": row[2]}
         for row in rows
     ]
+
+
+async def update_key_last_notification(user_id: int, expiry: int) -> None:
+    """Update last_notification_at timestamp for a key."""
+    db = await get_db()
+    current_time = int(time.time())
+    await db.execute(
+        """
+        UPDATE keys
+        SET last_notification_at = ?
+        WHERE user_id = ? AND expiry = ?
+        """,
+        (current_time, user_id, expiry)
+    )
+    await db.commit()
 
 
 async def get_all_keys_paginated(limit: int = 20, offset: int = 0) -> list[dict]:

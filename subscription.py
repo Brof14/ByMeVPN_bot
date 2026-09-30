@@ -13,7 +13,12 @@ from aiogram.types import Message, CallbackQuery
 
 from config import ADMIN_ID
 from utils import LOGO_URL, send_with_photo, safe_answer
-from database import add_key, get_referrer, add_payment, set_trial_used, log_key_error
+import database
+from database import (
+    add_key, get_referrer, add_payment, set_trial_used, log_key_error,
+    get_user_keys, extend_key, log_analytics_event, record_payment_idempotent,
+    update_key_uuid, delete_yookassa_pending,
+)
 from xui_client import create_xui_user, get_xui_user, format_traffic
 from keyboards import after_key_kb, cancel_kb
 from states import BuyFlow
@@ -48,8 +53,6 @@ async def ask_config_name(
     
     await state.clear()
     
-    # Check if user has existing keys to extend
-    from database import get_user_keys, extend_key, add_payment, log_analytics_event
     import time
     
     existing_keys = await get_user_keys(user_id)
@@ -158,7 +161,6 @@ async def ask_config_name(
         uuid = xui_client.get("uuid", "")
         new_expiry = (xui_res.get("expiry_time", 0) // 1000) if xui_res else (int(time.time()) + days * 86400)
 
-        from database import add_key
         key_id = await add_key(user_id, sub_url, f"ByMeVPN_{user_id}", uuid, days, limit_ip)
 
         if is_paid and amount > 0:
@@ -237,7 +239,6 @@ async def deliver_key_with_generated_name(
 
     # Clean up YooKassa pending record after successful delivery
     if success and yk_payment_id:
-        from database import delete_yookassa_pending
         try:
             await delete_yookassa_pending(yk_payment_id)
         except Exception as e:
@@ -275,9 +276,6 @@ async def deliver_key(
 
     # Check if user has existing keys to extend (if extend_existing is True)
     if extend_existing:
-        from database import get_user_keys, extend_key, add_payment, log_analytics_event
-        import time
-        
         existing_keys = await get_user_keys(user_id)
         current_time = int(time.time())
         
@@ -308,7 +306,6 @@ async def deliver_key(
                 # Add payment record (idempotent)
                 if is_paid and amount > 0:
                     tariff_name = f"Продление {days} дней ({limit_ip} устр.)"
-                    from database import record_payment_idempotent
                     await record_payment_idempotent(
                         user_id, amount, currency, method, days, payload,
                         status="success", tariff=tariff_name, devices=limit_ip,
@@ -334,7 +331,6 @@ async def deliver_key(
                     subscription_links = await get_user_subscription_links(user_id)
                     if subscription_links:
                         key_to_show = subscription_links[0]
-                        from database import update_key_uuid
                         await update_key_uuid(key_id, key_to_show)
                     else:
                         key_to_show = existing_key
@@ -352,8 +348,6 @@ async def deliver_key(
                     f"Ключ остался прежним — всё работает автоматически!"
                 )
                 
-                from keyboards import after_key_kb
-                from utils import send_with_photo, LOGO_URL
                 await bot.send_photo(
                     chat_id=chat_id, photo=LOGO_URL,
                     caption=text, parse_mode="HTML", reply_markup=after_key_kb(),
@@ -383,12 +377,10 @@ async def deliver_key(
             uuid = xui_client.get("uuid", "")
             new_expiry = (xui_res.get("expiry_time", 0) // 1000) if xui_res else (int(time.time()) + days * 86400)
 
-            from database import add_key, add_payment, log_analytics_event
             key_id = await add_key(user_id, sub_url, config_name or f"ByMeVPN_{user_id}", uuid, days, limit_ip)
 
             if is_paid and amount > 0:
                 tariff_name = f"Подписка {days} дней ({limit_ip} устр.)"
-                from database import record_payment_idempotent
                 await record_payment_idempotent(
                     user_id, amount, currency, method, days, payload,
                     status="success", tariff=tariff_name, devices=limit_ip,
@@ -409,7 +401,6 @@ async def deliver_key(
                 f"<code>{sub_url}</code>\n\n"
                 f"Ваш VPN-ключ сохранён и готов к работе!"
             )
-            from keyboards import after_key_kb
             await bot.send_photo(
                 chat_id=chat_id, photo=LOGO_URL,
                 caption=text, parse_mode="HTML", reply_markup=after_key_kb(),
@@ -455,23 +446,26 @@ async def deliver_key(
         # Логируем ссылку для отладки
         logger.info("Subscription URL for user %d: %s", user_id, subscription_url[:50] + "...")
 
-        # Сохраняем ссылку на подписку в БД
-        key_id = await add_key(user_id, subscription_url, config_name, subscription_url, days, limit_ip)
+        # Сохраняем ссылку на подписку и настоящий UUID клиента в БД
+        client_uuid = user_result.get("uuid") or subscription_url
+        key_id = await add_key(user_id, subscription_url, config_name, client_uuid, days, limit_ip)
 
         # Сохраняем запись о платеже (идемпотентно)
         if is_paid and amount > 0:
             tariff_name = f"{days} дней ({limit_ip} устр.)"
-            from database import record_payment_idempotent
             await record_payment_idempotent(
                 user_id, amount, currency, method, days, payload,
                 status="success", tariff=tariff_name, devices=limit_ip,
                 provider=method, provider_payment_id=payload,
             )
 
+        device_word = "устройство" if limit_ip == 1 else ("устройства" if limit_ip in (2, 3, 4) else "устройств")
         text = (
             f"Ключ активирован! Спасибо, что выбрали нас❤️\n\n"
             f"🔑 <b>Ваша подписка:</b>\n"
             f"<code>{subscription_url}</code>\n\n"
+            f"📱 Доступно устройств: <b>{limit_ip}</b>\n"
+            f"📅 Срок действия: <b>{days} дней</b>\n\n"
             f"📋 <b>Инструкция по подключению:</b>\n"
             f"1. Скопируйте ссылку выше\n"
             f"2. Откройте приложение (v2rayNG / Nekoray / v2rayN)\n"

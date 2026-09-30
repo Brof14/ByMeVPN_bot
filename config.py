@@ -79,8 +79,8 @@ if not XUI_API_URL:
 XUI_USERNAME = os.getenv("XUI_USERNAME", "")
 XUI_PASSWORD = os.getenv("XUI_PASSWORD", "")
 
-# Список инбаундов через запятую: XUI_INBOUND_IDS=2,3,5,6 (VLESS)
-_xui_ids_raw = os.getenv("XUI_INBOUND_IDS", os.getenv("XUI_INBOUND_ID", "2,3,5,6"))
+# Список инбаундов через запятую: XUI_INBOUND_IDS=2,3,7,8,10,11 (VLESS)
+_xui_ids_raw = os.getenv("XUI_INBOUND_IDS", os.getenv("XUI_INBOUND_ID", "2,3,7,8,10,11"))
 XUI_INBOUND_IDS: list[int] = [
     int(x.strip()) for x in _xui_ids_raw.split(",") if x.strip()
 ]

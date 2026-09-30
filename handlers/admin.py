@@ -238,7 +238,7 @@ async def cmd_give_trial_all(message: Message, bot: Bot):
                 chat_id=user_id,
                 config_name=f"Trial-{user_id}",
                 days=days,
-                limit_ip=5,  # All subscriptions (trial and paid) support up to 5 devices
+                limit_ip=2,  # Trial keys are limited to 2 devices
                 is_paid=False,
                 amount=0,
                 currency="RUB",
@@ -937,7 +937,7 @@ async def cb_grant_trial(callback: CallbackQuery, bot: Bot, state: FSMContext):
         chat_id=uid,
         config_name=config_name,
         days=TRIAL_DAYS,
-        limit_ip=5,
+        limit_ip=2,
         is_paid=False,
         amount=0,
         currency="RUB",
@@ -949,7 +949,7 @@ async def cb_grant_trial(callback: CallbackQuery, bot: Bot, state: FSMContext):
     if success:
         await callback.message.answer(
             f"✅ Пробный ключ выдан пользователю <code>{uid}</code> "
-            f"на {TRIAL_DAYS} дней (5 устройств).",
+            f"на {TRIAL_DAYS} дней (2 устройства).",
             parse_mode="HTML",
             reply_markup=_back_kb(),
         )
@@ -2073,7 +2073,7 @@ async def receive_grant_key_days(message: Message, bot: Bot, state: FSMContext):
         chat_id=uid,
         config_name=config_name,
         days=days,
-        limit_ip=5,
+        limit_ip=2,
         is_paid=False,
         amount=0,
         currency="RUB",
@@ -2087,7 +2087,7 @@ async def receive_grant_key_days(message: Message, bot: Bot, state: FSMContext):
             f"✅ <b>Ключ выдан!</b>\n\n"
             f"👤 Пользователь: <code>{uid}</code>\n"
             f"📅 Срок: {days} дней\n"
-            f"📱 Устройств: до 5\n"
+            f"📱 Устройств: до 10\n"
             f"🏷️ Название: <b>{config_name}</b>\n\n"
             f"Ключ отправлен пользователю в личные сообщения!",
             parse_mode="HTML", reply_markup=_back_kb()
@@ -2690,7 +2690,7 @@ async def cb_mass_trial_5d_confirm(callback: CallbackQuery, bot: Bot):
                 chat_id=user_id,
                 config_name=f"Trial5d-{user_id}",
                 days=5,
-                limit_ip=5,
+                limit_ip=2,
                 is_paid=False,
                 amount=0,
                 currency="RUB",
@@ -3096,7 +3096,7 @@ async def msg_mass_trial_days(message: Message, state: FSMContext, bot: Bot):
                 chat_id=user_id,
                 config_name=f"Trial-{user_id}",
                 days=days,
-                limit_ip=5,
+                limit_ip=2,
                 is_paid=False,
                 amount=0,
                 currency="RUB",

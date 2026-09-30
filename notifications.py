@@ -19,7 +19,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.types import BufferedInputFile
 
 from config import ADMIN_ID, DB_FILE
-from database import get_keys_nearing_expiry, create_promo_code, validate_promo_code
+from database import get_keys_nearing_expiry, create_promo_code, validate_promo_code, update_key_last_notification
 
 logger = logging.getLogger(__name__)
 
@@ -97,29 +97,14 @@ async def _send_urgent_notification(bot: Bot, item: dict) -> None:
     promo_code = await get_or_create_renewal_promo(item["user_id"])
 
     text = (
-        f"🚨 <b>СРОЧНО! Ваша подписка истекает!</b>\n\n"
-        f"📅 Дата окончания: <b>{date_str}</b>\n"
-        f"🔔 Осталось: <b>{days_left} {get_day_word(days_left)}</b>\n\n"
-        f"⚠️ <b>ВНИМАНИЕ:</b> После истечения срока вы потеряете доступ к:\n"
-        f"• YouTube и все видео\n"
-        f"• Telegram и мессенджеры\n"
-        f"• Социальные сети\n"
-        f"• Все заблокированные сайты\n\n"
-        f"🎁 <b>СПЕЦИАЛЬНОЕ ПРЕДЛОЖЕНИЕ:</b>\n"
-        f"Используйте промокод <code>{promo_code}</code> для получения <b>30% СКИДКИ</b> на продление!\n"
-        f"Промокод действителен 7 дней.\n\n"
-        f"💰 <b>Экономия:</b>\n"
-        f"• 1 месяц: сэкономите ~30 ₽\n"
-        f"• 3 месяца: сэкономите ~70 ₽\n"
-        f"• 6 месяцев: сэкономите ~120 ₽\n"
-        f"• 12 месяцев: сэкономите ~210 ₽\n\n"
-        f"⏰ <b>Не откладывайте!</b> Продлите прямо сейчас, чтобы сохранить доступ."
+        f"⏳ <b>Подписка истекает через {days_left} {get_day_word(days_left)}</b>\n\n"
+        f"📅 Дата окончания: {date_str}\n\n"
+        f"🎁 Промокод на скидку 30%: <code>{promo_code}</code>\n"
+        f"Действует 7 дней."
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Активировать промокод", callback_data=f"activate_promo:{promo_code}")],
-        [InlineKeyboardButton(text="🔄 Продлить сейчас", callback_data="buy_vpn")],
-        [InlineKeyboardButton(text="🎁 Пригласить друга и получить +15 дней", callback_data="partner")]
+        [InlineKeyboardButton(text="🔄 Продлить", callback_data="buy_vpn")],
     ])
 
     await bot.send_message(item["user_id"], text, parse_mode="HTML", reply_markup=kb)
@@ -133,24 +118,14 @@ async def _send_warning_notification(bot: Bot, item: dict) -> None:
     promo_code = await get_or_create_renewal_promo(item["user_id"])
 
     text = (
-        f"⏳ <b>Напоминание о продлении подписки</b>\n\n"
-        f"📅 Дата окончания: <b>{date_str}</b>\n"
-        f"🔔 Осталось: <b>{days_left} {get_day_word(days_left)}</b>\n\n"
-        f"🎁 <b>Ваш эксклюзивный промокод:</b>\n"
-        f"<code>{promo_code}</code> — <b>30% СКИДКА</b> на продление!\n"
-        f"Действителен 7 дней.\n\n"
-        f"💡 <b>Почему стоит продлить сейчас?</b>\n"
-        f"• Гарантированный доступ без перерывов\n"
-        f"• Стабильная скорость работы\n"
-        f"• Поддержка всех устройств\n"
-        f"• Сэкономьте с промокодом!\n\n"
-        f"🤝 <b>Партнёрская программа:</b> Приглашайте друзей и получайте +15 дней за каждого!"
+        f"📅 <b>Подписка истекает через {days_left} {get_day_word(days_left)}</b>\n\n"
+        f"Дата окончания: {date_str}\n\n"
+        f"🎁 Промокод на скидку 30%: <code>{promo_code}</code>\n"
+        f"Действует 7 дней."
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Активировать промокод", callback_data=f"activate_promo:{promo_code}")],
-        [InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="buy_vpn")],
-        [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="partner")]
+        [InlineKeyboardButton(text="🔄 Продлить", callback_data="buy_vpn")],
     ])
 
     await bot.send_message(item["user_id"], text, parse_mode="HTML", reply_markup=kb)
@@ -162,21 +137,13 @@ async def _send_early_notification(bot: Bot, item: dict) -> None:
     days_left = max(1, int((item["expiry"] - int(time.time())) / 86400))
 
     text = (
-        f"📢 <b>Информация о вашей подписке</b>\n\n"
-        f"📅 Дата окончания: <b>{date_str}</b>\n"
-        f"🔔 Осталось: <b>{days_left} {get_day_word(days_left)}</b>\n\n"
-        f"✅ <b>Ваша подписка активна!</b>\n"
-        f"Продлите заранее, чтобы избежать перерывов в работе.\n\n"
-        f"💡 <b>Совет:</b> Чем дольше срок подписки, тем меньше цена за месяц!\n"
-        f"• 12 месяцев: всего 59 ₽/мес\n"
-        f"• 6 месяцев: всего 69 ₽/мес\n"
-        f"• 3 месяца: всего 79 ₽/мес\n\n"
-        f"🎁 <b>Скоро:</b> Приближается дата продления — мы пришлём вам промокод на скидку!"
+        f"📅 <b>Подписка истекает через {days_left} {get_day_word(days_left)}</b>\n\n"
+        f"Дата окончания: {date_str}\n\n"
+        f"💡 Чем дольше срок подписки, тем меньше цена за месяц."
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="buy_vpn")],
-        [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="partner")]
+        [InlineKeyboardButton(text="🔄 Продлить", callback_data="buy_vpn")],
     ])
 
     await bot.send_message(item["user_id"], text, parse_mode="HTML", reply_markup=kb)
@@ -184,11 +151,29 @@ async def _send_early_notification(bot: Bot, item: dict) -> None:
 
 async def _send_expiry_notifications(bot: Bot) -> None:
     """Send all expiry notifications based on days remaining."""
+    import time as _time
+    
+    current_time = int(_time.time())
+    
+    # Minimum interval between notifications (in seconds)
+    # Urgent (1-3 days): once per day
+    # Warning (7-14 days): once per 3 days
+    # Early (21-30 days): once per 7 days
+    URGENT_INTERVAL = 86400      # 1 day
+    WARNING_INTERVAL = 3 * 86400  # 3 days
+    EARLY_INTERVAL = 7 * 86400    # 7 days
+    
     # Urgent: 1-3 days remaining
     urgent_keys = await get_keys_nearing_expiry(days_min=1, days_max=3)
     for item in urgent_keys:
+        last_notif = item.get("last_notification_at", 0)
+        if last_notif and (current_time - last_notif) < URGENT_INTERVAL:
+            logger.debug("Skipping urgent notification for user %d (last sent %d seconds ago)", 
+                        item["user_id"], current_time - last_notif)
+            continue
         try:
             await _send_urgent_notification(bot, item)
+            await update_key_last_notification(item["user_id"], item["expiry"])
             logger.info("Sent urgent notification to user %d", item["user_id"])
         except Exception as e:
             logger.debug("Urgent notification error for user %d: %s", item["user_id"], e)
@@ -196,8 +181,14 @@ async def _send_expiry_notifications(bot: Bot) -> None:
     # Warning: 7-14 days remaining
     warning_keys = await get_keys_nearing_expiry(days_min=7, days_max=14)
     for item in warning_keys:
+        last_notif = item.get("last_notification_at", 0)
+        if last_notif and (current_time - last_notif) < WARNING_INTERVAL:
+            logger.debug("Skipping warning notification for user %d (last sent %d seconds ago)", 
+                        item["user_id"], current_time - last_notif)
+            continue
         try:
             await _send_warning_notification(bot, item)
+            await update_key_last_notification(item["user_id"], item["expiry"])
             logger.info("Sent warning notification to user %d", item["user_id"])
         except Exception as e:
             logger.debug("Warning notification error for user %d: %s", item["user_id"], e)
@@ -205,8 +196,14 @@ async def _send_expiry_notifications(bot: Bot) -> None:
     # Early: 21-30 days remaining
     early_keys = await get_keys_nearing_expiry(days_min=21, days_max=30)
     for item in early_keys:
+        last_notif = item.get("last_notification_at", 0)
+        if last_notif and (current_time - last_notif) < EARLY_INTERVAL:
+            logger.debug("Skipping early notification for user %d (last sent %d seconds ago)", 
+                        item["user_id"], current_time - last_notif)
+            continue
         try:
             await _send_early_notification(bot, item)
+            await update_key_last_notification(item["user_id"], item["expiry"])
             logger.info("Sent early notification to user %d", item["user_id"])
         except Exception as e:
             logger.debug("Early notification error for user %d: %s", item["user_id"], e)

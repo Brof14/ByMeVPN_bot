@@ -26,33 +26,83 @@ logger = logging.getLogger(__name__)
 # Connection pool for 3x-ui API
 _api_pool: Optional[AsyncApi] = None
 _api_lock = asyncio.Lock()
+_API_LOGIN_ATTEMPTS = 3
+
+
+def _is_authentication_error(exc: Exception) -> bool:
+    """Return True for errors that make the cached panel session unusable."""
+    status = getattr(exc, "status_code", None) or getattr(exc, "status", None)
+    message = str(exc).lower()
+    return (
+        status in (401, 403)
+        or "unauthorized" in message
+        or "unauthenticated" in message
+        or "session expired" in message
+        or "csrf" in message
+    )
+
+
+def _invalidate_api_pool() -> None:
+    """Force the next operation to authenticate with a fresh API instance."""
+    global _api_pool
+    if _api_pool is not None:
+        logger.warning("3x-ui API session invalidated; next call will re-authenticate")
+        _api_pool = None
+
+
+async def _close_failed_api(api: AsyncApi) -> None:
+    """Close a candidate session when authentication fails."""
+    session = getattr(api, "session", None)
+    if session is not None and not getattr(session, "closed", True):
+        try:
+            await session.close()
+        except Exception as close_error:
+            logger.debug("Could not close failed 3x-ui API session: %s", close_error)
 
 
 async def _get_api() -> AsyncApi:
-    """Get or create pooled 3x-ui API connection with retry logic."""
+    """Get or create an authenticated pooled 3x-ui API connection."""
     global _api_pool
-    
+
     async with _api_lock:
         if _api_pool is not None:
             return _api_pool
-        
-        # py3xui требует полный URL с путем к панели
-        # Try using the public URL with the correct path
+
         api_url = XUI_API_URL or XUI_URL
-        
-        _api_pool = AsyncApi(
-            api_url,
-            username=XUI_USERNAME,
-            password=XUI_PASSWORD,
-            use_tls_verify=False,
-            logger=logger,
-        )
-        
-        # Pre-login to keep connection alive
-        await _api_pool.login()
-        logger.info("3x-ui API connection pooled and authenticated")
-        
-        return _api_pool
+        last_error: Optional[Exception] = None
+
+        for attempt in range(_API_LOGIN_ATTEMPTS):
+            candidate = AsyncApi(
+                api_url,
+                username=XUI_USERNAME,
+                password=XUI_PASSWORD,
+                use_tls_verify=False,
+                logger=logger,
+            )
+            try:
+                # Publish the candidate only after authentication succeeds. A failed
+                # login must never poison the global pool for the process lifetime.
+                await candidate.login()
+            except Exception as exc:
+                last_error = exc
+                await _close_failed_api(candidate)
+                if attempt < _API_LOGIN_ATTEMPTS - 1:
+                    delay = 0.5 * (2 ** attempt)
+                    logger.warning(
+                        "3x-ui login failed (attempt %d/%d): %s; retrying in %.1fs",
+                        attempt + 1,
+                        _API_LOGIN_ATTEMPTS,
+                        exc,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                continue
+
+            _api_pool = candidate
+            logger.info("3x-ui API connection pooled and authenticated")
+            return _api_pool
+
+        raise last_error or RuntimeError("3x-ui authentication failed")
 
 
 async def _api_call_with_retry(func, *args, max_retries=3, base_delay=0.5, **kwargs):
@@ -61,12 +111,17 @@ async def _api_call_with_retry(func, *args, max_retries=3, base_delay=0.5, **kwa
         try:
             return await func(*args, **kwargs)
         except Exception as e:
+            if _is_authentication_error(e):
+                _invalidate_api_pool()
+                logger.error("3x-ui API authentication failed: %s", e)
+                raise
+
             if attempt == max_retries - 1:
                 logger.error("API call failed after %d retries: %s", max_retries, e)
                 raise
-            
+
             delay = base_delay * (2 ** attempt)  # Exponential backoff
-            logger.warning("API call failed (attempt %d/%d): %s, retrying in %.1fs", 
+            logger.warning("API call failed (attempt %d/%d): %s, retrying in %.1fs",
                           attempt + 1, max_retries, e, delay)
             await asyncio.sleep(delay)
 
@@ -225,6 +280,8 @@ async def create_xui_user(
     3. Получить конкретную конфигурацию VLESS
     """
     email = str(user_id)
+    # Clamp days to prevent "date value out of range" (max ~10 years)
+    days = max(1, min(days, 3650))
     expiry_ms = int((datetime.now() + timedelta(days=days)).timestamp() * 1000)
     total_gb_limit = data_limit_gb  # 0 = безлимит
     inbound_ids = XUI_INBOUND_IDS  # Use configured inbound IDs
@@ -261,8 +318,10 @@ async def create_xui_user(
         inbound_names = {
             2: "🇳🇱Netherlands",
             3: "🇳🇱Netherlands-2",
-            5: "🇩🇪Germany",
-            6: "🇩🇪Germany-2",
+            7: "🇩🇪Germany",
+            8: "🇩🇪Germany-2",
+            10: "🇫🇮Finland",
+            11: "🇫🇮Finland-2",
         }
 
         success_count = 0
@@ -333,8 +392,8 @@ async def create_xui_user(
                 logger.error("Inbound %d: ❌ FAILED (returned False)", iid)
         logger.info("Total successful: %d/%d", success_count, len(inbound_ids))
         
-        # Remote nodes (5,6) need sync verification - check if client actually exists on remote node
-        remote_inbounds = [iid for iid in inbound_ids if iid in (5, 6)]
+        # Remote nodes (7,8,10,11) need sync verification - check if client actually exists on remote node
+        remote_inbounds = [iid for iid in inbound_ids if iid in (7, 8, 10, 11)]
         if remote_inbounds:
             logger.info("Verifying remote node sync for inbounds %s...", remote_inbounds)
             await asyncio.sleep(2)  # Small initial delay for sync to start
@@ -506,6 +565,8 @@ async def create_xui_user(
             "subscription_url": subscription_url,
             "username": email,
             "vless_links": vless_links,
+            "uuid": client_uuid,
+            "sub_id": sub_id,
         }
 
     except Exception as e:
