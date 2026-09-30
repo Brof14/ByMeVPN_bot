@@ -1,171 +1,294 @@
-# 🚀 ByMeVPN Bot - Telegram VPN Sales Bot
+# ByMeVPN Bot
 
-> **A stable and reliable Telegram bot for selling VPN subscriptions, featuring automated key delivery and a referral system.**
+Modern Telegram bot for selling and managing VPN subscriptions via 3x-ui / Xray panel.
 
-[![Python](https://img.shields.io/badge/python-3.9+-blue.svg)](https://python.org)
-[![License](https://img.shields.io/badge/license-proprietary-red.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-production%20ready-green.svg)](https://github.com)
+The bot automates the customer flow: onboarding, plan selection, subscription generation, payment processing, delivery of VPN config, referral bonuses, reminders, and admin management.
 
-## ✨ Features
+[![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Aiogram](https://img.shields.io/badge/Aiogram-3.25-2CA5E0)](https://docs.aiogram.dev/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 
-- 🎁 **Automated key delivery** after payment
-- 💳 **Multiple payment methods** (Telegram Stars, YooKassa)
-- 🎯 **Referral system** (+3 days per referral, +30 days per purchase)
-- 🛡️ **Robust error handling** with graceful degradation
-- 📊 **Detailed statistics** for users and administrators
-- 🔧 **Asynchronous architecture** for high performance
-- 📱 **Support for all devices** (iOS, Android, Windows, macOS, Linux)
+## Overview
 
-## 🚀 Quick Start
+ByMeVPN Bot is a Telegram sales and support bot for a VPN service. It integrates with a 3x-ui panel to create/configure subscriptions, accepts payments through YooKassa, and provides a full self-service funnel for users.
 
-### 1. Requirements
-- Python 3.9+
-- SQLite 3
-- Access to a 3x-UI panel
-- Telegram Bot Token
+The project is designed to be used as:
 
-### 2. Installation
+- a customer-facing sales bot in Telegram
+- a subscription delivery layer for VPN access
+- an admin dashboard for users, payments, referrals, and renewals
+- a background automation worker for notifications and expiration handling
+
+## Main features
+
+- Telegram-based onboarding and subscription flow
+- Integration with 3x-ui for VPN server / inbound management
+- Automatic subscription creation and delivery to users
+- YooKassa payment processing
+- Referral system with bonus days
+- Auto-renewal checks for expiring subscriptions
+- Notification scheduler for reminders and updates
+- Admin tools for user management and monitoring
+- Webhook support for external payment callbacks
+- Docker and docker-compose support for deployment
+
+## Architecture
+
+The bot is built on top of:
+
+- Python 3.11
+- aiogram 3 for Telegram bot logic
+- SQLite for local persistence
+- FastAPI + Uvicorn for webhook handling
+- 3x-ui API integration through py3xui
+- optional Docker deployment
+
+The project is organized around a set of routers in `handlers/` plus service modules for payments, subscriptions, and automation.
+
+## Repository structure
+
+```text
+ByMeVPN_bot/
+├── main.py                  # Bot entry point and startup
+├── config.py                # .env configuration loading
+├── database.py              # SQLite layer and migrations
+├── constants.py             # Pricing and tariff constants
+├── xui_client.py            # 3x-ui integration client
+├── payments.py              # Payment logic
+├── webhook.py               # Telegram / payment webhook server
+├── subscription.py          # Subscription lifecycle handling
+├── notifications.py         # Reminder and alert scheduler
+├── payment_monitor.py       # Payment monitoring worker
+├── autorenew.py             # Auto-renewal check worker
+├── async_utils.py           # Async helper utilities
+├── cache.py                 # Cache helpers
+├── keyboards.py             # Telegram keyboard builders
+├── states.py                # FSM state definitions
+├── utils.py                 # Shared utilities
+├── requirements.txt         # Python dependencies
+├── .env.example             # Example environment configuration
+├── Dockerfile               # Docker image definition
+├── docker-compose.yml       # Local deployment example
+├── handlers/                # Telegram routers and command handlers
+│   ├── __init__.py
+│   ├── start.py
+│   ├── buy.py
+│   ├── keys.py
+│   ├── partner.py
+│   ├── guide.py
+│   ├── legal.py
+│   ├── admin.py
+│   ├── auth.py
+│   ├── fallback.py
+│   └── ...
+├── tests/                   # Project tests
+├── scripts/                 # Helper scripts
+├── data/                    # Runtime data directory
+├── README.md
+├── CHANGES.md
+├── PRODUCTION_AUDIT.md
+└── ...
+```
+
+## Quick start
+
+### Requirements
+
+- Python 3.11+
+- Telegram Bot token from @BotFather
+- 3x-ui panel with valid credentials
+- YooKassa shop credentials (optional if you are only testing the bot flow)
+- Access to a server or VPS for running the bot
+
+### 1) Clone the repository
+
 ```bash
-# Clone the repository
-git clone <repository-url>
+git clone https://github.com/Brof14/ByMeVPN_bot.git
 cd ByMeVPN_bot
+```
 
-# Install dependencies
-pip install -r requirements.txt
+### 2) Create environment file
 
-# Configuration
+```bash
 cp .env.example .env
-nano .env  # Enter your details
 ```
 
-### 3. User Import (IMPORTANT!)
-If you have a user backup file (e.g., `bymevpn_users_20260402_0506.csv`):
+Then fill in your values in `.env`.
+
+### 3) Install dependencies
 
 ```bash
-# Import users from CSV to the database
-python import_users.py
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-**⚠️ Important:** Run this script ONLY ONCE. ...once before launching the bot for the first time, in order to import all users! ### 4. Launch
+### 4) Run the bot
+
 ```bash
-# Standard launch
 python main.py
-
-# Background mode (Linux)
-nohup python main.py > bot.log 2>&1 &
 ```
 
-## ⚙️ Configuration
+This starts:
 
-### Main parameters (.env)
+- Telegram polling bot
+- database initialization
+- notification scheduler
+- payment monitor
+- webhook server
+- auto-renew worker
+
+## Environment configuration
+
+The project loads variables from `.env` via `python-dotenv`.
+
+A minimal configuration looks like this:
+
 ```env
-# Telegram Bot
-BOT_TOKEN=your_bot_token
-ADMIN_IDS=your_admin_id
+BOT_TOKEN=your_telegram_bot_token
+ADMIN_IDS=123456789
 
-# 3x-UI Panel
-XUI_HOST=https://your-panel.com/path
+DB_FILE=data/vpnbot.db
+
+XUI_URL=https://your-panel.example.com:2096
+XUI_API_URL=http://127.0.0.1:54321
 XUI_USERNAME=admin
-XUI_PASSWORD=password
-INBOUND_ID=5
+XUI_PASSWORD=your_panel_password
+XUI_INBOUND_IDS=2,3,7,8,10,11
+XUI_SUB_PATH=sub
 
-# VLESS / Reality
-REALITY_HOST=your-server.com
-REALITY_PORT=443
-REALITY_SNI=www.microsoft.com
-REALITY_FP=firefox
-REALITY_PBK=your_public_key
-REALITY_SID=your_short_id
-
-# YooKassa (optional)
 YOOKASSA_SHOP_ID=your_shop_id
 YOOKASSA_SECRET_KEY=your_secret_key
+
+WEBHOOK_HOST=0.0.0.0
+WEBHOOK_PORT=8080
+WEBHOOK_URL=https://your-domain.example.com:8080/webhook/telegram
+
+REF_BONUS_DAYS=3
 ```
 
-## 📋 Project Structure
+### Important notes
 
-```
-ByMeVPN_bot/
-├── 📄 main.py                 # Entry point
-├── 📄 config.py               # Configuration
-├── 📄 database.py             # Database
-├── 📄 xui.py                  # 3x-UI API
-├── 📄 subscription.py          # Subscription logic
-├── 📄 payments.py             # Payments
-├── 📄 webhook.py              # Webhook server
-├── 📄 referral_system.py     # Referral system
-├── 📄 notifications.py        # Notifications
-├── 📄 keyboards.py            # Keyboards
-├── 📄 states.py               # FSM states
-├── 📄 utils.py                # Utilities
-├── 📄 requirements.txt         # Dependencies
-│
-├── 📁 handlers/               # Handlers
-│   ├── start.py            # /start, menu
-│   ├── buy.py              # Purchase
-│   ├── keys.py             # Keys
-│   ├── admin.py # Admin panel
-│   ├── referral.py         # Referrals
-│   ├── partner.py          # Partners
-│   ├── guide.py            # Guides/Instructions
-│   ├── legal.py            # Legal info
-│   └── fallback.py         # Fallback
-│
-└── 📁 vpnbot.db              # Database
-```
+- `XUI_API_URL` should point to the address the bot uses to call the 3x-ui API.
+- If the bot and panel are on the same machine, `localhost` or `127.0.0.1` is often the right choice.
+- `XUI_URL` is typically the public address used in subscription links shown to users.
+- `WEBHOOK_URL` is required if you want external payment callbacks to work reliably.
 
-## 🎯 Functionality
+## Docker deployment
 
-### For users
-- 🎁 **Trial period**: 3 days free
-- 💎 **Paid plans**: 1, 2, or 5 devices for 1, 6, 12, or 24 months
-- 💳 **Payment**: Telegram Stars, YooKassa
-- 🎯 **Referrals**: +3 days per referral click, +30 days per payment
-- 🔑 **Keys**: Automatic generation and delivery
-- 📊 **Statistics**: Purchase and referral history
+You can run the bot in Docker with the included files.
 
-### For administrators
-- 📊 **Statistics**: General and detailed
-- 👥 **User management**: Search, view, block
-- 🔑 **Key management**: Create, edit, delete
-- 💰 **Payment management**: History, refunds
-- 🎁 **Referrals**: Monitoring, leaderboard, details
-- 📢 **Broadcasts**: Mass notifications
-- 🧹 **Cleanup**: Removal of expired keys
+### Build and run
 
-## 🔧 Technical features
-
-### 🚀 Performance
-- **Asynchronous architecture**: Non-blocking operations
-- **Connection pooling**: External request optimization
-- **Caching**: In-memory storage for frequently accessed data
-- **Batch operations**: Group processing
-
-### 🛡️ Reliability
-- **Graceful degradation**: Operation during partial failures
-- **Retry mechanisms**: Retries with backoff
-- **Idempotency**: Duplicate protection
-- **Circuit breaker**: Disabling on multiple errors
-
-### 📊 Monitoring
-- **Structured logging**: DEBUG, INFO, ERROR levels
-- **Performance metrics**: Operation times, resource usage
-- **Detailed errors**: Context and stack trace
-- **Action auditing**: All operations are logged
-
-## 🧪 Testing
-
-### Running tests
 ```bash
-# Payment flow test
-python test_payment_flow.py
+docker compose up --build -d
+```
 
-# Asynchronous execution check
-python test_async.py
+The compose setup uses:
 
-# Database performance test
-python -c "
-import asyncio
-from database import check_database_performance
-async def test():
-result = await check_database_perfor
+- `Dockerfile`
+- `.env` file injection
+- mounted `./data` directory for SQLite persistence
+
+## Payment flow
+
+The project supports a payment funnel with YooKassa and/or Telegram-based flows depending on the configuration and deployment. A typical flow is:
+
+1. User opens the bot
+2. Selects a tariff
+3. Bot creates a payment request or checkout session
+4. Payment is processed by YooKassa
+5. Webhook or polling monitor confirms payment
+6. Bot creates or activates the VPN subscription in 3x-ui
+7. User receives config / access details
+8. Renewal and notifications are handled automatically
+
+## Referral system
+
+The bot includes referral mechanics for users and admins, with bonus days granted for:
+
+- referral completion or click-based actions
+- successful payments from invited users
+
+The exact details are controlled by environment values and constants in the project.
+
+## Admin capabilities
+
+The admin side of the bot is expected to cover:
+
+- user monitoring
+- key / subscription management
+- payment checks
+- referral analytics
+- broadcasts and notifications
+- reminder and maintenance tasks
+
+## Security and operational notes
+
+- Keep `.env` out of version control.
+- Do not expose your 3x-ui admin credentials in public repositories.
+- Use HTTPS for public webhook and panel endpoints.
+- Consider running behind a reverse proxy if the bot is deployed to a public server.
+- Review logs when configuring payment or panel connectivity.
+
+## Troubleshooting
+
+### Bot does not start
+
+Check:
+
+- `BOT_TOKEN` is set correctly
+- required Python packages are installed
+- `main.py` is running with the correct environment
+
+### 3x-ui connection fails
+
+Check:
+
+- `XUI_API_URL` is reachable from the bot host
+- the 3x-ui API path is correct
+- credentials in `.env` are valid
+
+### Payment not confirmed
+
+Check:
+
+- YooKassa credentials and shop ID
+- webhook URL / public access
+- payment monitor task is active
+
+## Development
+
+For local development:
+
+```bash
+python main.py
+```
+
+If you want to add or modify bot flow logic, the main places to start are:
+
+- `main.py` — bootstrapping and startup
+- `handlers/` — all bot behavior
+- `database.py` — persistence and data access
+- `payments.py` and `webhook.py` — payment integration
+- `xui_client.py` — 3x-ui automation
+
+## Notes
+
+This repository is a production-style Telegram bot focused on VPN sales automation. It is best suited for users who already understand:
+
+- Telegram bot deployment
+- 3x-ui panel configuration
+- payment gateway setup
+- server-side operations and SSL/webhook hosting
+
+If you are setting it up from scratch, be ready to configure the bot, panel, and payment endpoints together.
+
+## Contact / support
+
+This project is maintained in the repository context of the author. For support, use the relevant contact or issue tracker in the project repository.
+
+---
+
+If you want, I can also make a second version of the README — a more “premium commercial” one with badges, screenshots placeholders, and a cleaner product-style presentation for GitHub.
