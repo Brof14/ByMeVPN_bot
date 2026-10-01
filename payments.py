@@ -33,19 +33,20 @@ async def create_yookassa_payment(
     devices: int = 2,
     promo_code: Optional[str] = None,
     months: int = 1,
+    extra_metadata: Optional[dict] = None,
 ) -> Optional[str]:
     if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
         logger.warning("YooKassa credentials not configured")
         return None
 
     auth = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
-    
+
     headers = {
         "Authorization": f"Basic {auth}",
         "Idempotence-Key": f"{user_id}_{int(time.time())}",
         "Content-Type": "application/json",
     }
-    
+
     metadata = {
         "user_id": str(user_id),
         "days": str(days),
@@ -54,6 +55,8 @@ async def create_yookassa_payment(
     }
     if promo_code:
         metadata["promo_code"] = str(promo_code)
+    if extra_metadata:
+        metadata.update({k: str(v) for k, v in extra_metadata.items()})
 
     payload = {
         "amount": {"value": f"{amount_rub}.00", "currency": "RUB"},
@@ -124,17 +127,25 @@ async def charge_yookassa_recurrent(
     months: int,
     key_id: int,
     payment_method_id: str,
+    idempotence_key: Optional[str] = None,
 ) -> Optional[dict]:
     """
     Charge a saved payment method via YooKassa API for auto-renewal.
     Returns the created payment dictionary from YooKassa if successful, None on error.
+
+    idempotence_key must be a DETERMINISTIC business key (e.g. derived from
+    subscription_id + billing period being renewed + attempt number), NOT a
+    bare timestamp: on worker restart / duplicate run YooKassa returns the
+    same payment for the same key, which prevents double charges.
     """
     if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
         logger.warning("YooKassa credentials not configured")
         return None
 
     auth = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
-    idempotence_key = f"autorenew_{user_id}_{key_id}_{int(time.time())}"
+    if not idempotence_key:
+        # Last-resort fallback only — callers must pass a business key.
+        idempotence_key = f"autorenew_{user_id}_{key_id}_{int(time.time())}"
     headers = {
         "Authorization": f"Basic {auth}",
         "Idempotence-Key": idempotence_key,

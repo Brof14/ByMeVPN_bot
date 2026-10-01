@@ -186,13 +186,32 @@ async def _process_payment(bot: Bot, payment_id: str) -> None:
             payment_id, user_id, days, devices, amount_rub,
         )
 
+        # Intro trial marker: metadata.trial == "1" → 1 ₽ for 3 days,
+        # then 89 ₽/мес recurring. Trial payments must NOT trigger referral
+        # rewards and must save renewal terms (89 ₽ / 30 days), not 1 ₽ / 3 days.
+        is_trial = metadata.get("trial") == "1"
+        if is_trial:
+            from constants import INTRO_TRIAL_PRICE_RUB
+            if amount_rub < INTRO_TRIAL_PRICE_RUB:
+                logger.error(
+                    "Webhook: trial payment %s amount=%s is below intro price — notifying admin",
+                    payment_id, amount_str,
+                )
+                await _notify_admin(
+                    bot,
+                    f"⚠️ Пробный платёж {payment_id}: сумма {amount_str} ₽ (ожидалось ≥{INTRO_TRIAL_PRICE_RUB} ₽), user {user_id}",
+                )
+
         from database import (
             record_payment_idempotent, update_payment_status,
             use_promo_code, delete_yookassa_pending,
         )
 
         # Idempotent DB record
-        tariff_name = f"Подписка {days} дней ({devices} устр.)"
+        if is_trial:
+            tariff_name = "Пробный период 3 дня (2 устр.)"
+        else:
+            tariff_name = f"Подписка {days} дней ({devices} устр.)"
         is_new, pay_db_id = await record_payment_idempotent(
             user_id=user_id,
             amount=amount_rub,
@@ -226,6 +245,7 @@ async def _process_payment(bot: Bot, payment_id: str) -> None:
             method="yookassa",
             payload=payment_id,
             extend_existing=True,
+            skip_referral_bonus=is_trial,
         )
 
         if success:
@@ -236,7 +256,7 @@ async def _process_payment(bot: Bot, payment_id: str) -> None:
             except Exception:
                 pass
             promo_code = metadata.get("promo_code")
-            if promo_code:
+            if promo_code and not is_trial:
                 await use_promo_code(promo_code, user_id)
             logger.info("YooKassa payment %s successfully fulfilled for user %d", payment_id, user_id)
 
@@ -250,7 +270,76 @@ async def _process_payment(bot: Bot, payment_id: str) -> None:
             user_keys = await get_user_keys(user_id)
             key_id = user_keys[0]["id"] if user_keys else None
 
-            if is_autorenew:
+            if is_trial:
+                # Intro trial succeeded: mark trial as used, clean pending link
+                # and store RENEWAL terms (89 ₽ / 30 days), so the autorenew
+                # worker charges the real price after 3 days — not 1 ₽.
+                from database import set_trial_used, delete_yookassa_trial_pending
+                from constants import (
+                    RECURRING_MONTHLY_PRICE, RECURRING_MONTHS, RECURRING_DAYS,
+                    INTRO_TRIAL_DEVICES, INTRO_TRIAL_DAYS,
+                )
+                try:
+                    await set_trial_used(user_id)
+                    await delete_yookassa_trial_pending(user_id)
+                except Exception as e:
+                    logger.warning("Trial bookkeeping failed for user %d: %s", user_id, e)
+
+                pm = payment.get("payment_method") or {}
+                if pm.get("saved") and pm.get("id"):
+                    await save_auto_renew_subscription(
+                        user_id=user_id,
+                        key_id=key_id,
+                        payment_method_id=pm["id"],
+                        payment_method_title=pm.get("title", ""),
+                        payment_method_type=pm.get("type", "bank_card"),
+                        months=RECURRING_MONTHS,
+                        days=RECURRING_DAYS,
+                        devices=INTRO_TRIAL_DEVICES,
+                        amount_rub=RECURRING_MONTHLY_PRICE,
+                    )
+                    logger.info(
+                        "Intro trial completed for user %d: ARS saved (89₽/%dd, pm_id=%s)",
+                        user_id, RECURRING_DAYS, pm["id"],
+                    )
+                    try:
+                        await bot.send_message(
+                            chat_id=user_id,
+                            text=(
+                                f"🎁 <b>Пробный период активирован!</b>\n\n"
+                                f"✅ Сегодня списано <b>1 ₽</b>, доступ — <b>{INTRO_TRIAL_DAYS} дня</b>.\n\n"
+                                f"🔁 <b>Дальше автоматически:</b>\n"
+                                f"Через {INTRO_TRIAL_DAYS} дня спишется <b>{RECURRING_MONTHLY_PRICE} ₽</b> — "
+                                f"и подписка продолжится на 30 дней.\n"
+                                f"Затем каждые 30 дней по {RECURRING_MONTHLY_PRICE} ₽, "
+                                f"пока автопродление не отключено.\n\n"
+                                f"🔓 Отключить автопродление можно в любой момент "
+                                f"в меню ключа — доступ сохранится до конца оплаченного периода."
+                            ),
+                            parse_mode="HTML",
+                        )
+                    except Exception as notify_e:
+                        logger.debug("Failed to send trial recurring notice to user %d: %s", user_id, notify_e)
+                else:
+                    logger.info(
+                        "Intro trial for user %d completed without saved payment method "
+                        "(recurring unavailable) — manual renewal only", user_id,
+                    )
+                    try:
+                        await bot.send_message(
+                            chat_id=user_id,
+                            text=(
+                                f"🎁 <b>Пробный период активирован!</b>\n\n"
+                                f"✅ Сегодня списано <b>1 ₽</b>, доступ — <b>{INTRO_TRIAL_DAYS} дня</b>.\n\n"
+                                f"Автопродление не подключено: банк не вернул сохранённый способ оплаты.\n"
+                                f"Продлить после окончания можно вручную — пришлём напоминание."
+                            ),
+                            parse_mode="HTML",
+                        )
+                    except Exception as notify_e:
+                        logger.debug("Failed to send trial notice to user %d: %s", user_id, notify_e)
+
+            elif is_autorenew:
                 await update_auto_renew_charge_success_by_user_key(user_id, key_id, days, amount_rub)
                 try:
                     await bot.send_message(
@@ -298,26 +387,29 @@ async def _process_payment(bot: Bot, payment_id: str) -> None:
                     except Exception as notify_e:
                         logger.debug("Failed to send autorenew confirmation to user %d: %s", user_id, notify_e)
 
-            # Начисляем бонус рефералу за первую оплату (50₽)
-            try:
-                referrer_id = await get_referrer(user_id)
-                if referrer_id:
-                    bonus_added = await add_referral_earning(referrer_id, user_id, 50, payment_id)
-                    if bonus_added:
-                        logger.info("Referral bonus 50₽ added for referrer %d from user %d YooKassa payment", referrer_id, user_id)
-                        try:
-                            await bot.send_message(
-                                referrer_id,
-                                f"🎉 <b>Поздравляем!</b>\n\n"
-                                f"Ваш приглашённый оформил платную подписку.\n"
-                                f"Начислено: +50 ₽\n"
-                                f"Текущий баланс обновлён в партнёрской программе.",
-                                parse_mode="HTML"
-                            )
-                        except Exception as notify_error:
-                            logger.error("Failed to notify referrer %d: %s", referrer_id, notify_error)
-            except Exception as e:
-                logger.error("Error processing referral bonus for YooKassa user %d: %s", user_id, e)
+            # Начисляем бонус рефералу за первую оплату (50₽).
+            # Интро-trial за 1 ₽ НЕ считается платной конверсией —
+            # реферальный бонус за него не начисляется.
+            if not is_trial:
+                try:
+                    referrer_id = await get_referrer(user_id)
+                    if referrer_id:
+                        bonus_added = await add_referral_earning(referrer_id, user_id, 50, payment_id)
+                        if bonus_added:
+                            logger.info("Referral bonus 50₽ added for referrer %d from user %d YooKassa payment", referrer_id, user_id)
+                            try:
+                                await bot.send_message(
+                                    referrer_id,
+                                    f"🎉 <b>Поздравляем!</b>\n\n"
+                                    f"Ваш приглашённый оформил платную подписку.\n"
+                                    f"Начислено: +50 ₽\n"
+                                    f"Текущий баланс обновлён в партнёрской программе.",
+                                    parse_mode="HTML"
+                                )
+                            except Exception as notify_error:
+                                logger.error("Failed to notify referrer %d: %s", referrer_id, notify_error)
+                except Exception as e:
+                    logger.error("Error processing referral bonus for YooKassa user %d: %s", user_id, e)
         else:
             await update_payment_status(pay_db_id, "failed")
             logger.error("YooKassa payment %s provisioning failed for user %d", payment_id, user_id)

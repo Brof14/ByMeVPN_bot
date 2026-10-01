@@ -89,31 +89,69 @@ async def get_or_create_renewal_promo(user_id: int) -> str:
         return code
 
 
+async def _get_active_autorenew(user_id: int) -> dict | None:
+    """Return the active auto-renew subscription row for a user, if any."""
+    try:
+        from database import get_auto_renew_subscription
+        sub = await get_auto_renew_subscription(user_id)
+        if sub and sub.get("status") == "active" and (sub.get("payment_method_id") or "").strip():
+            return sub
+    except Exception as e:
+        logger.debug("autorenew lookup failed for %s: %s", user_id, e)
+    return None
+
+
+async def _send_autorenew_upcoming(bot: Bot, item: dict, sub: dict) -> None:
+    """Pre-charge notice: auto-renew is ON — nothing to do, no promo spam.
+
+    This also serves as the trial-ending warning: trial keys have an
+    auto-renew row with the real recurring price (89 ₽ / 30 days).
+    """
+    date_str = datetime.fromtimestamp(item["expiry"]).strftime("%d.%m.%Y")
+    days_left = max(1, int((item["expiry"] - int(time.time()) + 86399) / 86400))
+    amount = sub.get("amount_rub") or 89
+    devices = sub.get("devices") or 2
+    pm_title = sub.get("payment_method_title") or "сохранённая карта"
+
+    text = (
+        f"🔁 <b>Подписка продлится автоматически</b>\n\n"
+        f"📅 Дата списания: <b>{date_str}</b> (через {days_left} {get_day_word(days_left)})\n"
+        f"💳 Сумма: <b>{amount} ₽</b> за следующие 30 дней ({devices} устр.)\n"
+        f"Карта: {pm_title}\n\n"
+        f"✅ Ничего делать не нужно — доступ продолжится без перерывов.\n"
+        f"🔓 Не хотите продлевать? Отключите автопродление в меню ключа — "
+        f"доступ сохранится до конца оплаченного периода."
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys")],
+        [InlineKeyboardButton(text="🆘 Поддержка", url="https://t.me/ByMeVPN_support_bot")],
+    ])
+    await bot.send_message(item["user_id"], text, parse_mode="HTML", reply_markup=kb)
+
+
 async def _send_urgent_notification(bot: Bot, item: dict) -> None:
     """Send urgent notification for keys expiring in 1-3 days."""
+    sub = await _get_active_autorenew(item["user_id"])
+    if sub:
+        await _send_autorenew_upcoming(bot, item, sub)
+        return
+
     date_str = datetime.fromtimestamp(item["expiry"]).strftime("%d.%m.%Y")
     days_left = max(1, int((item["expiry"] - int(time.time())) / 86400))
 
     promo_code = await get_or_create_renewal_promo(item["user_id"])
 
     text = (
-        f"🚨 <b>СРОЧНО! Ваша подписка истекает!</b>\n\n"
+        f"🚨 <b>Ваша подписка истекает!</b>\n\n"
         f"📅 Дата окончания: <b>{date_str}</b>\n"
         f"🔔 Осталось: <b>{days_left} {get_day_word(days_left)}</b>\n\n"
-        f"⚠️ <b>ВНИМАНИЕ:</b> После истечения срока вы потеряете доступ к:\n"
-        f"• YouTube и все видео\n"
-        f"• Telegram и мессенджеры\n"
-        f"• Социальные сети\n"
-        f"• Все заблокированные сайты\n\n"
-        f"🎁 <b>СПЕЦИАЛЬНОЕ ПРЕДЛОЖЕНИЕ:</b>\n"
-        f"Используйте промокод <code>{promo_code}</code> для получения <b>30% СКИДКИ</b> на продление!\n"
-        f"Промокод действителен 7 дней.\n\n"
-        f"💰 <b>Экономия:</b>\n"
-        f"• 1 месяц: сэкономите ~30 ₽\n"
-        f"• 3 месяца: сэкономите ~70 ₽\n"
-        f"• 6 месяцев: сэкономите ~120 ₽\n"
-        f"• 12 месяцев: сэкономите ~210 ₽\n\n"
-        f"⏰ <b>Не откладывайте!</b> Продлите прямо сейчас, чтобы сохранить доступ."
+        f"Продлите сейчас, чтобы YouTube, Telegram и сайты продолжали работать без перерывов.\n\n"
+        f"🎁 <b>Промокод на продление:</b> <code>{promo_code}</code> — <b>30% скидки</b>, "
+        f"действителен 7 дней.\n\n"
+        f"💡 <b>Выгоднее сразу надолго:</b>\n"
+        f"• 12 месяцев — 708 ₽ (≈59 ₽/мес)\n"
+        f"• 6 месяцев — 414 ₽ (≈69 ₽/мес)\n"
+        f"• 3 месяца — 237 ₽ (≈79 ₽/мес)"
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -127,6 +165,11 @@ async def _send_urgent_notification(bot: Bot, item: dict) -> None:
 
 async def _send_warning_notification(bot: Bot, item: dict) -> None:
     """Send warning notification for keys expiring in 7-14 days."""
+    sub = await _get_active_autorenew(item["user_id"])
+    if sub:
+        await _send_autorenew_upcoming(bot, item, sub)
+        return
+
     date_str = datetime.fromtimestamp(item["expiry"]).strftime("%d.%m.%Y")
     days_left = max(1, int((item["expiry"] - int(time.time())) / 86400))
 
@@ -136,14 +179,13 @@ async def _send_warning_notification(bot: Bot, item: dict) -> None:
         f"⏳ <b>Напоминание о продлении подписки</b>\n\n"
         f"📅 Дата окончания: <b>{date_str}</b>\n"
         f"🔔 Осталось: <b>{days_left} {get_day_word(days_left)}</b>\n\n"
-        f"🎁 <b>Ваш эксклюзивный промокод:</b>\n"
-        f"<code>{promo_code}</code> — <b>30% СКИДКА</b> на продление!\n"
+        f"🎁 <b>Промокод на продление:</b>\n"
+        f"<code>{promo_code}</code> — <b>30% СКИДКА</b>!\n"
         f"Действителен 7 дней.\n\n"
-        f"💡 <b>Почему стоит продлить сейчас?</b>\n"
-        f"• Гарантированный доступ без перерывов\n"
-        f"• Стабильная скорость работы\n"
-        f"• Поддержка всех устройств\n"
-        f"• Сэкономьте с промокодом!\n\n"
+        f"💡 <b>Выгоднее сразу надолго:</b>\n"
+        f"• 12 месяцев — 708 ₽ (≈59 ₽/мес)\n"
+        f"• 6 месяцев — 414 ₽ (≈69 ₽/мес)\n"
+        f"• 3 месяца — 237 ₽ (≈79 ₽/мес)\n\n"
         f"🤝 <b>Партнёрская программа:</b> Приглашайте друзей и получайте +15 дней за каждого!"
     )
 
@@ -158,6 +200,11 @@ async def _send_warning_notification(bot: Bot, item: dict) -> None:
 
 async def _send_early_notification(bot: Bot, item: dict) -> None:
     """Send early notification for keys expiring in 21-30 days."""
+    sub = await _get_active_autorenew(item["user_id"])
+    if sub:
+        await _send_autorenew_upcoming(bot, item, sub)
+        return
+
     date_str = datetime.fromtimestamp(item["expiry"]).strftime("%d.%m.%Y")
     days_left = max(1, int((item["expiry"] - int(time.time())) / 86400))
 
@@ -167,11 +214,9 @@ async def _send_early_notification(bot: Bot, item: dict) -> None:
         f"🔔 Осталось: <b>{days_left} {get_day_word(days_left)}</b>\n\n"
         f"✅ <b>Ваша подписка активна!</b>\n"
         f"Продлите заранее, чтобы избежать перерывов в работе.\n\n"
-        f"💡 <b>Совет:</b> Чем дольше срок подписки, тем меньше цена за месяц!\n"
-        f"• 12 месяцев: всего 59 ₽/мес\n"
-        f"• 6 месяцев: всего 69 ₽/мес\n"
-        f"• 3 месяца: всего 79 ₽/мес\n\n"
-        f"🎁 <b>Скоро:</b> Приближается дата продления — мы пришлём вам промокод на скидку!"
+        f"💡 <b>Цена за месяц ниже при оплате за длинный срок:</b>\n"
+        f"• 1 месяц — 89 ₽/мес\n"
+        f"• 12 месяцев — 708 ₽ всего (≈59 ₽/мес)"
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[

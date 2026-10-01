@@ -20,19 +20,15 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from config import TRIAL_DAYS
 from database import (
-    ensure_user, get_referrer, set_referrer,
-    has_trial_used, try_claim_trial,
-    has_active_subscription, has_paid_subscription,
-    has_ever_had_key, get_user_keys, add_key,
+    ensure_user, set_referrer,
+    has_trial_used,
+    has_active_subscription,
+    has_ever_had_key, get_user_keys,
 )
-from xui_client import create_xui_user, delete_xui_user
 from keyboards import main_menu_new_user, main_menu_existing, main_menu_with_keys, back_to_menu, cancel_kb
 from utils import send_with_photo, safe_answer, LOGO_URL
-from subscription import ask_config_name, deliver_key
-from states import BuyFlow
-from async_utils import monitor_performance, batch_execute
+from async_utils import monitor_performance
 from cache import cache_subscription_data
 
 logger = logging.getLogger(__name__)
@@ -99,9 +95,9 @@ async def _clean_chat(bot: Bot, chat_id: int, anchor_msg_id: int, count: int = 3
 
 
 def _referral_welcome_kb() -> InlineKeyboardMarkup:
-    """Beautiful welcome keyboard for referral users."""
+    """Welcome keyboard for referral users (intro trial: 1 ₽ → 3 days)."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎁 Получить 3 дня бесплатно", callback_data="trial_ref")],
+        [InlineKeyboardButton(text="🎁 Попробовать за 1 ₽", callback_data="trial_ref")],
     ])
 
 
@@ -123,33 +119,34 @@ async def _send_main_menu(
         # Referral landing - fire bonus text (when someone clicks referral link)
         text = (
             "🔥 Нормальный VPN сейчас найти сложно — либо дорогой, либо не работает.\n\n"
-            "🎁 У вас уже есть доступ — 3 дня бесплатно (без карты)\n\n"
+            "🎁 <b>3 дня ByMeVPN — за 1 ₽</b>\n\n"
             "Что получите сразу:\n"
             "• Telegram и YouTube работают без ограничений\n"
             "• Instagram, TikTok, сайты — открываются\n"
-            "• До 10 устройств по одной подписке\n"
-            "• Быстрое подключение за 30 секунд\n\n"
+            "• Подключение за пару минут, без сложных настроек\n\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
-            "💰 Дальше — от 59 ₽/мес\n"
-            "(в 2–3 раза дешевле большинства VPN)\n"
+            "💳 Сегодня — 1 ₽\n"
+            "🔁 Через 3 дня — 89 ₽/мес, автопродление каждые 30 дней\n"
+            "🔓 Отключить автопродление можно в любой момент\n"
             "━━━━━━━━━━━━━━━━━━━━━\n\n"
-            "⏳ Бесплатный доступ ограничен — лучше проверить сейчас\n\n"
             "👇 Нажмите кнопку и подключитесь"
         )
         kb = _referral_welcome_kb()
     elif state == "new":
         # Main menu - standard welcome text
         text = (
-            "Здравствуйте, ByMeVPN!\n\n"
-            "Этот бот поможет вам получить доступ к быстрому и безопасному VPN, который работает, обходя любые блокировки.\n\n"
-            "Любой из наших тарифов, включая пробный тариф на 3 дня, даёт полный доступ ко всем возможностям интернета без ограничений.\n\n"
+            "<b>ByMeVPN — VPN, который просто работает.</b>\n\n"
+            "Не грузятся YouTube, Telegram, Instagram или сайты? Подключите ByMeVPN — "
+            "это займёт пару минут и не потребует сложных настроек.\n\n"
+            "🎁 <b>3 дня за 1 ₽</b> — попробуйте прежде чем платить полную цену.\n"
+            "💳 Дальше — 89 ₽/мес (или выгоднее при оплате за 3–12 месяцев).\n\n"
             "Наши приложения доступны для:\n"
-            "<a href='https://apps.apple.com/us/app/happ-proxy-utility/id6504287215'>iOS</a>, "
+            "<a href='https://apps.apple.com/ru/app/incy/id6756943388'>iOS</a>, "
             "<a href='https://play.google.com/store/apps/details?id=com.happproxy&pcampaignid=web_share'>Android</a>, "
-            "<a href='https://github.com/hiddify/hiddify-app/releases/latest'>Windows</a>, "
+            "<a href='https://github.com/Happ-proxy/happ-desktop/releases'>Windows</a>, "
             "<a href='https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973'>macOS</a> и "
             "<a href='https://github.com/2dust/v2rayN/releases'>Linux</a>.\n\n"
-            "После оплаты, бот пришлёт вам ключ, который нужно будет вставить в наше приложение."
+            "После оплаты бот пришлёт ключ — просто вставьте его в приложение."
         )
         kb = main_menu_new_user()
     elif state == "expired":
@@ -311,12 +308,12 @@ async def cmd_start(message: Message, bot: Bot) -> None:
                         try:
                             await bot.send_message(
                                 user_id,
-                                "🎁 <b>Поздравляем! Вы перешли по реферальной ссылке</b>\n\n"
-                                "🌟 Для вас подарок — <b>3 дня бесплатно</b>\n"
-                                "🚀 Нажмите кнопку ниже, чтобы забрать свой ключ",
+                                "🎁 <b>Вы перешли по реферальной ссылке</b>\n\n"
+                                "🌟 <b>3 дня ByMeVPN — за 1 ₽</b>\n"
+                                "🚀 Нажмите кнопку ниже, чтобы попробовать",
                                 parse_mode="HTML",
                                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                                    InlineKeyboardButton(text="🎁 Забрать 3 дня бесплатно", callback_data=f"claim_trial:{ref_id}")
+                                    InlineKeyboardButton(text="🎁 Попробовать за 1 ₽", callback_data=f"claim_trial:{ref_id}")
                                 ]])
                             )
                         except Exception as msg_error:
@@ -336,79 +333,128 @@ async def cmd_start(message: Message, bot: Bot) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Claim trial from referral link
+# Intro trial — 1 ₽ → 3 days of access → 89 ₽/мес recurring
 # ---------------------------------------------------------------------------
 
-@router.callback_query(F.data.startswith("claim_trial:"))
-async def cb_claim_trial(callback: CallbackQuery, bot: Bot):
+async def _start_intro_trial(bot: Bot, callback: CallbackQuery, ref_id: int | None = None) -> None:
     """
-    Handle claim trial button from referral link.
+    Common entry for the paid intro trial (1 ₽ / 3 days).
 
-    FIX: this used to import a non-existent `create_key` from database.py
-    (the real function is `add_key`), which raised ImportError on every
-    single click — meaning every user who arrived via a referral link and
-    pressed "Забрать 3 дня бесплатно" got a generic error message and no
-    key. It also duplicated key-creation logic that already exists (and is
-    tested) in subscription.deliver_key, instead of reusing it. This now
-    delegates to deliver_key so there is exactly one code path that creates
-    trial/paid keys.
+    - Eligible: no trial used before and no active key.
+    - Trial flag is NOT burned on click — only after successful payment
+      (webhook sets trial_used), so a failed payment doesn't lose the offer.
+    - A fresh pending checkout link (< 30 min) is reused instead of creating
+      a second payment.
+    - Explicit recurring disclosure BEFORE payment (89 ₽/мес, cancel anytime).
     """
-    await safe_answer(callback)
+    from database import (
+        has_trial_used, get_user_active_keys,
+        get_yookassa_trial_pending, save_yookassa_trial_pending,
+    )
+    from constants import (
+        INTRO_TRIAL_PRICE_RUB, INTRO_TRIAL_DAYS, INTRO_TRIAL_DEVICES,
+        RECURRING_MONTHLY_PRICE,
+    )
+    from keyboards import trial_pay_kb
 
     user_id = callback.from_user.id
-    try:
-        ref_id = int(callback.data.split(":")[1])
-    except (IndexError, ValueError):
-        ref_id = None
 
-    from database import try_claim_trial, get_user_keys
+    trial_used = await has_trial_used(user_id)
+    active_keys = await get_user_active_keys(user_id)
+    if trial_used or active_keys:
+        await safe_answer(callback, "Пробный период за 1 ₽ доступен один раз. Выберите тариф в разделе «Тарифы».", alert=True)
+        return
 
-    # Atomic claim: single UPDATE, returns False if already used or has key
-    claimed = await try_claim_trial(user_id)
-    existing_keys = await get_user_keys(user_id)
+    # Reuse a recent pending checkout to avoid duplicate 1 ₽ invoices
+    pending = await get_yookassa_trial_pending(user_id)
+    if pending and pending.get("confirmation_url") and int(time.time()) - (pending.get("created") or 0) < 1800:
+        text = (
+            "🎁 <b>3 дня ByMeVPN — 1 ₽</b>\n\n"
+            f"Сегодня: <b>1 ₽</b>\n"
+            f"Через {INTRO_TRIAL_DAYS} дня: <b>{RECURRING_MONTHLY_PRICE} ₽/мес</b> — "
+            "далее каждые 30 дней, пока автопродление не отключено.\n\n"
+            "🔓 Отключить автопродление можно в любой момент — "
+            "доступ сохранится до конца оплаченного периода."
+        )
+        await send_with_photo(bot, callback, text, trial_pay_kb(pending["confirmation_url"]))
+        return
 
-    if not claimed or existing_keys:
-        await callback.message.edit_text(
-            "❌ Вы уже используете VPN или уже получали пробный период.\n\n"
-            "Если вам нужен новый ключ, выберите тариф в меню.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu")
-            ]])
+    from payments import create_yookassa_payment
+    confirmation_url = await create_yookassa_payment(
+        amount_rub=INTRO_TRIAL_PRICE_RUB,
+        description=f"ByMeVPN — {INTRO_TRIAL_DAYS} дня за {INTRO_TRIAL_PRICE_RUB} ₽ (далее {RECURRING_MONTHLY_PRICE} ₽/мес)",
+        user_id=user_id,
+        days=INTRO_TRIAL_DAYS,
+        devices=INTRO_TRIAL_DEVICES,
+        months=1,
+        extra_metadata={"trial": "1"},
+    )
+
+    if not confirmation_url:
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        await safe_answer(callback, "Оплата временно недоступна, попробуйте чуть позже.", alert=True)
+        await send_with_photo(
+            bot, callback,
+            "😔 Не удалось создать платёж. Попробуйте ещё раз через минуту "
+            "или выберите обычный тариф.",
+            InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="💳 Тарифы", callback_data="buy_vpn"),
+                InlineKeyboardButton(text="🏠 Меню", callback_data="back_to_menu"),
+            ]]),
         )
         return
 
-    config_name = f"trial_ref_{user_id}"
-    from constants import DEFAULT_DEVICE_LIMIT
-    success = await deliver_key(
-        bot=bot,
-        user_id=user_id,
-        chat_id=callback.message.chat.id,
-        config_name=config_name,
-        days=3,
-        limit_ip=DEFAULT_DEVICE_LIMIT,
-        is_paid=False,
-        amount=0,
-        currency="RUB",
-        method="trial",
-        payload=f"claim_trial_{user_id}",
-        extend_existing=False,  # Always create new key for trials
-    )
-
-    if success and ref_id and ref_id != user_id:
+    # Small click-bonus for the referrer (trial signup) — main reward is
+    # granted only after a real recurring payment.
+    if ref_id and ref_id != user_id:
         try:
             from referral_system_new import claim_referral_bonus
             await claim_referral_bonus(bot, ref_id, user_id, "trial_bonus")
         except Exception as e:
-            logger.error("Failed to claim referral bonus for referrer %d: %s", ref_id, e)
+            logger.error("Failed to claim referral click bonus for referrer %s: %s", ref_id, e)
 
-    if not success:
-        await callback.message.edit_text(
-            "❌ Не удалось создать ключ. Попробуйте позже или напишите в поддержку.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu")
-            ]])
-        )
-    # On success, deliver_key() already sent the subscription message to the user.
+    text = (
+        "🎁 <b>3 дня ByMeVPN — 1 ₽</b>\n\n"
+        f"Сегодня: <b>1 ₽</b>\n"
+        f"Через {INTRO_TRIAL_DAYS} дня: <b>{RECURRING_MONTHLY_PRICE} ₽/мес</b> — "
+        "далее каждые 30 дней, пока автопродление не отключено.\n\n"
+        "🔓 Отключить автопродление можно в любой момент — "
+        "доступ сохранится до конца оплаченного периода.\n\n"
+        "👇 Нажмите «Оплатить 1 ₽» — ключ придёт автоматически."
+    )
+    await send_with_photo(bot, callback, text, trial_pay_kb(confirmation_url))
+
+
+@router.callback_query(F.data == "trial_1r")
+async def cb_trial_1r(callback: CallbackQuery, bot: Bot):
+    """Main menu: «Попробовать за 1 ₽»."""
+    await safe_answer(callback)
+    await _start_intro_trial(bot, callback)
+
+
+@router.callback_query(F.data == "trial")
+async def cb_trial(callback: CallbackQuery, bot: Bot):
+    """Legacy alias: old trial buttons/messages now lead to the 1 ₽ intro trial."""
+    await safe_answer(callback)
+    await _start_intro_trial(bot, callback)
+
+
+@router.callback_query(F.data == "trial_ref")
+async def cb_trial_ref(callback: CallbackQuery, bot: Bot):
+    """Referral welcome button: «Попробовать за 1 ₽»."""
+    await safe_answer(callback)
+    await _start_intro_trial(bot, callback)
+
+
+@router.callback_query(F.data.startswith("claim_trial:"))
+async def cb_claim_trial(callback: CallbackQuery, bot: Bot):
+    """Referral deep-link claim button → same 1 ₽ intro trial flow."""
+    await safe_answer(callback)
+    try:
+        ref_id = int(callback.data.split(":")[1])
+    except (IndexError, ValueError):
+        ref_id = None
+    await _start_intro_trial(bot, callback, ref_id=ref_id)
 
 
 # ---------------------------------------------------------------------------
@@ -432,65 +478,6 @@ async def cb_back_to_menu(callback: CallbackQuery, bot: Bot, state: FSMContext):
     user_id = callback.from_user.id
     name = callback.from_user.first_name or "друг"
     await _send_main_menu(bot, callback, user_id, name)
-
-
-# ---------------------------------------------------------------------------
-# Trial — regular (from main menu)
-# ---------------------------------------------------------------------------
-
-@router.callback_query(F.data == "trial")
-async def cb_trial(callback: CallbackQuery, bot: Bot, state: FSMContext):
-    await safe_answer(callback)
-    user_id = callback.from_user.id
-
-    # Atomic claim: single UPDATE, returns False if already used or has key
-    claimed = await try_claim_trial(user_id)
-    if not claimed:
-        await safe_answer(callback, "Пробный период доступен только новым пользователям.", alert=True)
-        return
-
-    from constants import DEFAULT_DEVICE_LIMIT
-    await ask_config_name(
-        bot, callback, state,
-        context={
-            "days": TRIAL_DAYS, "prefix": "trial", "is_paid": False,
-            "amount": 0, "currency": "RUB", "method": "trial",
-            "payload": f"trial_{user_id}", "_trial_user_id": user_id,
-            "limit_ip": DEFAULT_DEVICE_LIMIT,
-        },
-    )
-
-
-# ---------------------------------------------------------------------------
-# Trial — referral version (from referral welcome screen)
-# ---------------------------------------------------------------------------
-
-@router.callback_query(F.data == "trial_ref")
-async def cb_trial_ref(callback: CallbackQuery, bot: Bot, state: FSMContext):
-    """
-    Referral welcome button: "Забрать 3 дня бесплатно"
-    Same logic as regular trial but activated from referral welcome screen.
-    """
-    await safe_answer(callback)
-    user_id = callback.from_user.id
-
-    claimed = await try_claim_trial(user_id)
-    if not claimed:
-        # Already used — show normal menu
-        name = callback.from_user.first_name or "друг"
-        await _send_main_menu(bot, callback, user_id, name)
-        return
-
-    from constants import DEFAULT_DEVICE_LIMIT
-    await ask_config_name(
-        bot, callback, state,
-        context={
-            "days": TRIAL_DAYS, "prefix": "trial_ref", "is_paid": False,
-            "amount": 0, "currency": "RUB", "method": "trial",
-            "payload": f"trial_ref_{user_id}", "_trial_user_id": user_id,
-            "limit_ip": DEFAULT_DEVICE_LIMIT,
-        },
-    )
 
 
 # ---------------------------------------------------------------------------

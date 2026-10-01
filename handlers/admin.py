@@ -75,8 +75,9 @@ def _main_kb() -> InlineKeyboardMarkup:
         # Row 7: Export & Logs
         [InlineKeyboardButton(text="📥 Экспорт", callback_data="admin_export_csv"),
          InlineKeyboardButton(text="📋 Логи", callback_data="admin_logs:0")],
-        # Row 8: Giveaways
-        [InlineKeyboardButton(text="🎉 Розыгрыши", callback_data="admin_giveaways")],
+        # Row 8: Giveaways & Ad program review
+        [InlineKeyboardButton(text="🎉 Розыгрыши", callback_data="admin_giveaways"),
+         InlineKeyboardButton(text="📣 Реклама (заявки)", callback_data="ad_admin_list")],
     ])
 
 

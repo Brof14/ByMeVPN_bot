@@ -32,7 +32,7 @@ from async_utils import preload_static_data
 
 from handlers import (
     start_router, buy_router, keys_router, partner_router,
-    guide_router, legal_router, admin_router, auth_router, fallback_router
+    guide_router, legal_router, admin_router, auth_router, fallback_router, ad_program_router
 )
 from subscription import router as subscription_router
 from webhook import start_webhook_server
@@ -182,7 +182,7 @@ async def main() -> None:
     routers = [
         start_router, buy_router, subscription_router, keys_router,
         partner_router, guide_router, legal_router,
-        admin_router, auth_router, fallback_router
+        admin_router, auth_router, fallback_router, ad_program_router
     ]
 
     for router in routers:

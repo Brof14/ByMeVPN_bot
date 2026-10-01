@@ -12,7 +12,7 @@ from xui_client import delete_xui_user, get_xui_user, format_traffic
 from keyboards import (
     my_keys_kb, my_keys_list_kb, key_detail_kb, confirm_delete_kb,
     payment_kb, back_to_menu, connection_guide_kb, tariff_selection_kb,
-    autorenew_confirm_unbind_kb, manage_payment_methods_kb,
+    autorenew_cancel_confirm_kb, manage_payment_methods_kb,
 )
 from utils import send_with_photo, send_or_edit, safe_answer
 from constants import format_timestamp as fmt_date, format_days_left as fmt_days_left
@@ -161,17 +161,76 @@ async def cb_key_info(callback: CallbackQuery, bot: Bot):
     await send_or_edit(bot, callback, text, key_detail_kb(key_id, has_autorenew=has_autorenew, autorenew_active=autorenew_active))
 
 
-def _get_payment_methods_text(card_title: str = "МИР •••• 4444", is_checked: bool = True) -> str:
+def _pm_tariff_line(sub: dict | None) -> str:
+    """Real tariff line from the auto-renew subscription row (no hardcoded data)."""
+    if not sub:
+        return ""
+    months = sub.get("months") or 1
+    devices = sub.get("devices") or 2
+    amount = sub.get("amount_rub") or 0
+    return f"└ Тариф: {devices} устр., {months} мес. ({amount} ₽ за период)\n"
+
+
+def _get_payment_methods_text(
+    card_title: str = "",
+    is_checked: bool = True,
+    sub: dict | None = None,
+    expiry_str: str = "",
+) -> str:
+    """Payment-methods screen built ONLY from real data — no fake cards."""
+    if not card_title:
+        return (
+            "💳 <b>Управление автопродлением</b>\n\n"
+            "Сохранённый способ оплаты отсутствует — автопродление не подключено.\n\n"
+            "Продлить подписку можно вручную в разделе «Тарифы»."
+        )
+
     check_icon = "☑️" if is_checked else "⬜️"
-    return (
-        "🤖 <b>ByMeVPN® — Управление способами оплаты</b>\n\n"
-        "Здесь отображаются ваши привязанные банковские карты для автоматического продления подписки ByMeVPN.\n\n"
-        "<b>Сохранённые карты:</b>\n"
-        f"{check_icon} 💳 <b>{card_title}</b> (Основная)\n"
-        "└ Статус: <b>✅ Автопродление активно</b>\n"
-        "└ Тариф: 2 устр., 1 мес. (89 ₽/мес)\n\n"
-        "Для отвязки карты выберите её чек-боксом и нажмите кнопку <b>«🗑 Удалить карту»</b> ниже:"
+    status_line = (
+        "└ Статус: <b>✅ Автопродление активно</b>"
+        if (sub and sub.get("status") == "active")
+        else "└ Статус: <b>⏹ Автопродление отключено</b>"
     )
+    expiry_line = f"\nДоступ сохранится до <b>{expiry_str}</b>." if expiry_str else ""
+    if sub and sub.get("status") == "active":
+        next_line = (
+            f"\nСледующее списание: <b>{sub.get('amount_rub', 0)} ₽</b> "
+            f"в конце оплаченного периода."
+        )
+    else:
+        next_line = "\nНовых списаний не будет."
+
+    return (
+        "💳 <b>Управление автопродлением</b>\n\n"
+        "Здесь отображается ваша сохранённая карта для автоматического продления подписки ByMeVPN.\n\n"
+        "<b>Сохранённый способ оплаты:</b>\n"
+        f"{check_icon} 💳 <b>{card_title}</b>\n"
+        f"{status_line}\n"
+        f"{_pm_tariff_line(sub)}"
+        f"{next_line}"
+        f"{expiry_line}\n\n"
+        "Отключение автопродления <b>не отменяет уже оплаченный доступ</b> — "
+        "VPN продолжит работать до конца оплаченного периода."
+    )
+
+
+async def _load_autorenew_context(user_id: int, key_id: int) -> tuple[dict | None, str, str]:
+    """Load (sub, card_title, expiry_str) for payment-method screens."""
+    from database import get_auto_renew_subscription, get_user_keys
+
+    sub = await get_auto_renew_subscription(user_id, key_id if key_id > 0 else None)
+    card_title = ""
+    if sub:
+        card_title = (sub.get("payment_method_title") or "").strip()
+        if card_title.lower() == "отвязана":
+            card_title = ""  # legacy cancelled rows — treat as no card
+    expiry_str = ""
+    keys = await get_user_keys(user_id)
+    if keys:
+        expiry_ts = max(k.get("expiry", 0) for k in keys)
+        if expiry_ts:
+            expiry_str = fmt_date(expiry_ts)
+    return sub, card_title, expiry_str
 
 
 @router.callback_query(F.data.startswith("card_toggle_check:"))
@@ -184,91 +243,111 @@ async def cb_card_toggle_check(callback: CallbackQuery, bot: Bot):
     new_checked = not was_checked
 
     user_id = callback.from_user.id
-    from database import get_auto_renew_subscription
-    sub = await get_auto_renew_subscription(user_id)
-    card_title = (sub.get("payment_method_title") if sub else None) or "МИР •••• 4444"
+    sub, card_title, expiry_str = await _load_autorenew_context(user_id, key_id)
 
-    text = _get_payment_methods_text(card_title=card_title, is_checked=new_checked)
-    await send_or_edit(bot, callback, text, manage_payment_methods_kb(card_title=card_title, is_checked=new_checked, key_id=key_id))
+    text = _get_payment_methods_text(card_title=card_title, is_checked=new_checked, sub=sub, expiry_str=expiry_str)
+    await send_or_edit(
+        bot, callback, text,
+        manage_payment_methods_kb(
+            card_title=card_title, is_checked=new_checked, key_id=key_id,
+            has_card=bool(card_title), autorenew_active=bool(sub and sub.get("status") == "active"),
+        ),
+    )
 
 
 @router.callback_query(F.data.startswith("autorenew_unbind_prompt:"))
 async def cb_autorenew_unbind_prompt(callback: CallbackQuery, bot: Bot):
-    """Show unbind confirmation and warn that subscription will be terminated."""
+    """Show confirmation for disabling auto-renew (access is NOT revoked)."""
     await safe_answer(callback)
     parts = callback.data.split(":")
     key_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
     user_id = callback.from_user.id
-    from database import get_auto_renew_subscription, get_user_keys
 
-    sub = await get_auto_renew_subscription(user_id, key_id if key_id > 0 else None)
-    card_title = (sub.get("payment_method_title") if sub else None) or "МИР •••• 4444"
+    sub, card_title, expiry_str = await _load_autorenew_context(user_id, key_id)
+    if not card_title:
+        text = (
+            "💳 <b>Управление автопродлением</b>\n\n"
+            "Сохранённый способ оплаты отсутствует — отключать нечего.\n\n"
+            "Продлить подписку можно вручную в разделе «Тарифы»."
+        )
+        await send_or_edit(bot, callback, text, back_to_menu())
+        return
 
-    # Get subscription expiry date
-    expiry_date_str = ""
-    keys = await get_user_keys(user_id)
-    if keys:
-        from datetime import datetime
-        expiry_ts = keys[0].get("expiry", 0)
-        if expiry_ts:
-            expiry_date_str = datetime.fromtimestamp(expiry_ts).strftime("%d.%m.%Y")
-
-    warning_text = (
-        f"⚠️ <b>Внимание:</b> При отвязке карты автопродление будет отключено. "
-        f"Текущая подписка продолжит действовать до конца оплаченного периода"
-    )
-    if expiry_date_str:
-        warning_text += f" (до {expiry_date_str})"
-    warning_text += ", после чего доступ будет приостановлен."
+    warning = "После отключения новых списаний не будет."
+    if expiry_str:
+        warning = f"После отключения новых списаний не будет. Доступ сохранится до <b>{expiry_str}</b>."
 
     text = (
-        "🤖 <b>ByMeVPN® — Подтверждение удаления карты</b>\n\n"
-        "Вы действительно хотите отвязать и удалить сохранённый способ оплаты?\n\n"
+        "🔕 <b>Отключить автопродление?</b>\n\n"
         f"💳 Способ оплаты: <b>{card_title}</b>\n\n"
-        f"{warning_text}\n\n"
-        "Подтвердите удаление карты:"
+        f"{warning}\n\n"
+        "VPN продолжит работать до конца уже оплаченного периода."
     )
-    await send_or_edit(bot, callback, text, autorenew_confirm_unbind_kb(key_id, card_title=card_title))
+    await send_or_edit(bot, callback, text, autorenew_cancel_confirm_kb(key_id))
 
 
 @router.callback_query(F.data.startswith("autorenew_unbind_confirm:"))
 async def cb_autorenew_unbind_confirm(callback: CallbackQuery, bot: Bot):
-    """Confirm card unbinding: cancel recurrent billing and immediately terminate VPN access."""
+    """Disable auto-renew. Paid access is preserved until the period ends."""
     await safe_answer(callback)
     parts = callback.data.split(":")
     key_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
     user_id = callback.from_user.id
-    from database import get_auto_renew_subscription, cancel_autorenew_and_terminate_subscription
+
+    from database import cancel_auto_renew
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-    sub = await get_auto_renew_subscription(user_id, key_id if key_id > 0 else None)
-    card_title = (sub.get("payment_method_title") if sub else None) or "МИР •••• 4444"
+    res = await cancel_auto_renew(user_id, key_id if key_id > 0 else None)
 
-    await cancel_autorenew_and_terminate_subscription(user_id, key_id if key_id > 0 else None)
+    expiry_str = ""
+    if res.get("expires_at"):
+        expiry_str = fmt_date(res["expires_at"])
 
-    # Get subscription expiry date
-    from database import get_user_keys
-    from datetime import datetime
-    expiry_date_str = ""
-    keys = await get_user_keys(user_id)
-    if keys:
-        expiry_ts = keys[0].get("expiry", 0)
-        if expiry_ts:
-            expiry_date_str = datetime.fromtimestamp(expiry_ts).strftime("%d.%m.%Y")
-
-    sub_status_text = "Подписка на ByMeVPN отключена."
-    if expiry_date_str:
-        sub_status_text = f"Подписка продолжит действовать до {expiry_date_str}, после чего доступ будет приостановлен."
+    keep_line = (
+        f"Доступ сохранится до <b>{expiry_str}</b> — всё оплаченное работает."
+        if expiry_str
+        else "Активных оплаченных периодов не осталось."
+    )
 
     text = (
-        "🤖 <b>ByMeVPN® — Карта удалена</b>\n\n"
-        f"✅ Банковская карта <b>{card_title}</b> успешно отвязана и удалена из сервиса ByMeVPN.\n"
-        "Автоматические списания отменены, данные карты удалены.\n\n"
-        f"{sub_status_text}\n\n"
-        "Если вы захотите вернуться, вы всегда можете оформить новую подписку в меню бота: /start"
+        "✅ <b>Автопродление отключено</b>\n\n"
+        "Новых списаний не будет.\n"
+        f"{keep_line}\n\n"
+        "Включить обратно можно в любой момент — карта сохранена в сервисе."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu")]
+        [InlineKeyboardButton(text="🔔 Включить автопродление", callback_data=f"autorenew_enable:{key_id}")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu")],
+    ])
+    await send_or_edit(bot, callback, text, kb)
+
+
+@router.callback_query(F.data.startswith("autorenew_enable:"))
+async def cb_autorenew_enable(callback: CallbackQuery, bot: Bot):
+    """Re-enable auto-renew using the previously saved payment method."""
+    await safe_answer(callback)
+    parts = callback.data.split(":")
+    key_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+    user_id = callback.from_user.id
+
+    from database import resume_auto_renew
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+    reenabled = await resume_auto_renew(user_id, key_id if key_id > 0 else None)
+    if reenabled:
+        text = (
+            "🔔 <b>Автопродление включено</b>\n\n"
+            "В конце оплаченного периода подписка продлится автоматически.\n"
+            "Отключить можно в любой момент — доступ сохранится до конца оплаченного периода."
+        )
+    else:
+        text = (
+            "⚠️ <b>Не удалось включить автопродление</b>\n\n"
+            "Сохранённая карта не найдена. Продлите подписку вручную — "
+            "при оплате картой автопродление подключится автоматически."
+        )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu")],
     ])
     await send_or_edit(bot, callback, text, kb)
 
@@ -281,32 +360,40 @@ async def cb_autorenew_toggle(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith("manage_payment_methods"))
 async def cb_manage_payment_methods(callback: CallbackQuery, bot: Bot):
-    """Manage saved payment methods (YooKassa requirement with checkbox & delete button)."""
+    """Manage saved payment methods (only real data, no fake cards)."""
     await safe_answer(callback)
     user_id = callback.from_user.id
     parts = callback.data.split(":")
     key_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
 
-    from database import get_auto_renew_subscription
-    sub = await get_auto_renew_subscription(user_id, key_id if key_id > 0 else None)
-    card_title = (sub.get("payment_method_title") if sub else None) or "МИР •••• 4444"
+    sub, card_title, expiry_str = await _load_autorenew_context(user_id, key_id)
 
-    text = _get_payment_methods_text(card_title=card_title, is_checked=True)
-    await send_or_edit(bot, callback, text, manage_payment_methods_kb(card_title=card_title, is_checked=True, key_id=key_id))
+    text = _get_payment_methods_text(card_title=card_title, is_checked=True, sub=sub, expiry_str=expiry_str)
+    await send_or_edit(
+        bot, callback, text,
+        manage_payment_methods_kb(
+            card_title=card_title, is_checked=True, key_id=key_id,
+            has_card=bool(card_title), autorenew_active=bool(sub and sub.get("status") == "active"),
+        ),
+    )
 
 
 @router.message(F.text.in_({"/cards", "/unsubscribe", "/cancel_subscription", "/payment_methods"}))
 async def cmd_unsubscribe(message: Message, bot: Bot):
-    """Direct command to unbind card / cancel recurrent subscription."""
+    """Direct command to manage auto-renew / saved card."""
     user_id = message.from_user.id
-    from database import get_auto_renew_subscription
 
-    sub = await get_auto_renew_subscription(user_id)
-    card_title = (sub.get("payment_method_title") if sub else None) or "МИР •••• 4444"
+    sub, card_title, expiry_str = await _load_autorenew_context(user_id, 0)
     key_id = (sub.get("key_id") if sub else 0) or 0
 
-    text = _get_payment_methods_text(card_title=card_title, is_checked=True)
-    await message.answer(text, parse_mode="HTML", reply_markup=manage_payment_methods_kb(card_title=card_title, is_checked=True, key_id=key_id))
+    text = _get_payment_methods_text(card_title=card_title, is_checked=True, sub=sub, expiry_str=expiry_str)
+    await message.answer(
+        text, parse_mode="HTML",
+        reply_markup=manage_payment_methods_kb(
+            card_title=card_title, is_checked=True, key_id=key_id,
+            has_card=bool(card_title), autorenew_active=bool(sub and sub.get("status") == "active"),
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

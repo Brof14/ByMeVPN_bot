@@ -7,6 +7,7 @@ from .legal import router as legal_router
 from .admin import router as admin_router
 from .auth import router as auth_router
 from .fallback import router as fallback_router
+from .ad_program import router as ad_program_router
 
 __all__ = [
     "start_router",
@@ -18,4 +19,5 @@ __all__ = [
     "admin_router",
     "auth_router",
     "fallback_router",
+    "ad_program_router",
 ]

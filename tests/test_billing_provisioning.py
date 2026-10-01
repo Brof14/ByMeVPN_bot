@@ -460,36 +460,33 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
         gen_back_cbs = [btn.callback_data for row in gen_back.inline_keyboard for btn in row if btn.callback_data]
         self.assertIn("connection_guide", gen_back_cbs, "Back button from general guide must go to connection_guide")
 
-        # 5. iOS guide content: HAPP first, V2Box second
+        # 5. iOS guide content: INCY (current client app)
         ios_text = _GUIDES["ios"]
-        self.assertIn("Вариант 1: HAPP Proxy", ios_text)
-        self.assertIn("Вариант 2: V2Box", ios_text)
+        self.assertIn("INCY", ios_text)
+        self.assertIn("https://apps.apple.com/ru/app/incy/id6756943388", ios_text)
         self.assertNotIn("Streisand", ios_text, "Streisand must be removed from iOS guide")
-        self.assertIn("https://apps.apple.com/us/app/v2box-v2ray-client/id6446814690", ios_text)
+        self.assertNotIn("HAPP Proxy", ios_text, "iOS guide must not recommend HAPP (INCY is the current app)")
 
-        # 6. Linux Arch guide: nftables + v2rayN
+        # 6. Linux Arch guide: v2rayN (simplified guide, no nftables deep-dive)
         arch_text = _LINUX_GUIDES["arch"]
         self.assertIn("Arch / EndeavourOS / Manjaro", arch_text)
-        self.assertIn("sudo pacman -S nftables", arch_text)
         self.assertIn("v2rayN-linux-64.zip", arch_text)
         self.assertIn("v2rayN", arch_text)
 
-        # 7. Linux Ubuntu guide: .deb package
+        # 7. Linux Ubuntu guide: v2rayN
         ubuntu_text = _LINUX_GUIDES["ubuntu"]
-        self.assertIn("Ubuntu / Debian / Linux Mint", ubuntu_text)
-        self.assertIn("v2rayN-linux-64.deb", ubuntu_text)
-        self.assertIn("sudo apt install", ubuntu_text)
+        self.assertIn("Ubuntu", ubuntu_text)
+        self.assertIn("v2rayN", ubuntu_text)
 
-        # 8. Linux Fedora guide: .rpm package
+        # 8. Linux Fedora guide: v2rayN
         fedora_text = _LINUX_GUIDES["fedora"]
-        self.assertIn("Fedora / RHEL", fedora_text)
-        self.assertIn("v2rayN-linux-rhel-64.rpm", fedora_text)
-        self.assertIn("sudo dnf install", fedora_text)
+        self.assertIn("Fedora", fedora_text)
+        self.assertIn("v2rayN", fedora_text)
 
-        # 9. Other Linux guide: .zip package
+        # 9. Other Linux guide: v2rayN
         other_text = _LINUX_GUIDES["other"]
         self.assertIn("Другой Linux", other_text)
-        self.assertIn("v2rayN-linux-64.zip", other_text)
+        self.assertIn("v2rayN", other_text)
 
     # ------------------------------------------------------------------------
     # Test 11: Device switching edits caption and preserves photo (no deletion)
@@ -650,20 +647,21 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
         asyncio.run(run_test())
 
     # ------------------------------------------------------------------------
-    # Test 13: Card unbinding, auto-renew cancellation, and immediate VPN shutoff
+    # Test 13: Auto-renew cancellation preserves paid access (spec #8)
     # ------------------------------------------------------------------------
-    def test_13_card_unbinding_and_immediate_subscription_termination(self):
+    def test_13_cancel_autorenew_preserves_paid_access(self):
         """
-        Verify that when user unbinds card / cancels subscription:
-        1. auto_renew_subscriptions is marked cancelled and payment_method_id cleared.
-        2. Active key expiry in DB is immediately expired (now - 1).
-        3. 3x-ui client is updated with enable=False and expiry in the past.
-        4. No more auto-renew debits are scheduled.
+        Verify that cancelling auto-renew (card management screen):
+        1. Marks auto_renew_subscriptions cancelled.
+        2. Does NOT touch the active key expiry — user keeps paid access.
+        3. Does NOT disable the 3x-ui client.
+        4. Subscription is no longer eligible for recurring charges.
+        5. re-enabling restores the active status with the saved card.
         """
         from database import (
             init_db, ensure_user, add_key, get_key_by_id,
             save_auto_renew_subscription, get_auto_renew_subscription,
-            cancel_autorenew_and_terminate_subscription,
+            cancel_auto_renew, resume_auto_renew,
             get_expiring_auto_renew_subscriptions,
         )
         import time
@@ -687,41 +685,237 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
                 amount_rub=89,
             )
 
-            # Pre-conditions
-            sub_before = await get_auto_renew_subscription(user_id, key_id)
-            self.assertEqual(sub_before["status"], "active")
-            key_before = await get_key_by_id(key_id)
-            self.assertGreater(key_before["expiry"], int(time.time()))
+            expiry_before = (await get_key_by_id(key_id))["expiry"]
+            self.assertGreater(expiry_before, int(time.time()))
 
-            # Mock xui_client to verify enable=False is sent to 3x-ui
-            with patch("xui_client.update_xui_user", new_callable=AsyncMock) as mock_xui_update:
-                mock_xui_update.return_value = {"success": True}
+            # Cancel auto-renew — access MUST be preserved
+            res = await cancel_auto_renew(user_id, key_id)
+            self.assertTrue(res["cancelled"])
+            self.assertEqual(res["expires_at"], expiry_before)
 
-                # User initiates unbind / cancellation
-                res = await cancel_autorenew_and_terminate_subscription(user_id, key_id)
+            # Key untouched
+            key_after = await get_key_by_id(key_id)
+            self.assertEqual(key_after["expiry"], expiry_before)
 
-                self.assertTrue(res["unbound"])
-                self.assertEqual(res["terminated_keys"], 1)
-                self.assertEqual(res["pm_title"], "*9999")
-
-                # Verify 3x-ui was instructed to disable client
-                mock_xui_update.assert_called_once()
-                call_kwargs = mock_xui_update.call_args.kwargs
-                self.assertEqual(call_kwargs.get("enable"), False)
-                self.assertLess(call_kwargs.get("new_expiry_ms"), int(time.time() * 1000))
-
-            # Post-condition 1: auto_renew_subscriptions is cancelled and card unbound
+            # Card data preserved (for re-enable), status cancelled
             sub_after = await get_auto_renew_subscription(user_id, key_id)
             self.assertEqual(sub_after["status"], "cancelled")
-            self.assertEqual(sub_after["payment_method_id"], "")
+            self.assertEqual(sub_after["payment_method_id"], "pm_saved_card_999")
 
-            # Post-condition 2: key expiry is set to past in DB (subscription immediately turned off)
-            key_after = await get_key_by_id(key_id)
-            self.assertLessEqual(key_after["expiry"], int(time.time()))
-
-            # Post-condition 3: user is NOT in expiring list
+            # No longer eligible for recurring charges
             expiring = await get_expiring_auto_renew_subscriptions()
             self.assertNotIn(sub_id, [s["sub_id"] for s in expiring])
+
+            # Re-enable restores active status
+            reenabled = await resume_auto_renew(user_id, key_id)
+            self.assertTrue(reenabled)
+            sub_re = await get_auto_renew_subscription(user_id, key_id)
+            self.assertEqual(sub_re["status"], "active")
+            self.assertEqual(sub_re["payment_method_id"], "pm_saved_card_999")
+
+        asyncio.run(run_test())
+
+
+    # ------------------------------------------------------------------------
+    # Test 14: Intro trial (1 ₽) webhook flow → trial_used, ARS 89₽/30d, no referral
+    # ------------------------------------------------------------------------
+    def test_14_intro_trial_webhook_flow(self):
+        """
+        A succeeded 1 ₽ trial payment must:
+        1. Deliver a 3-day key (days from metadata).
+        2. Set users.trial_used and clear the pending trial checkout.
+        3. Save auto-renew renewal terms 89 ₽ / 30 days (NOT 1 ₽ / 3 days).
+        4. NOT trigger referral rewards (trial is not a paid conversion).
+        5. Mark the payment processed and idempotently recorded.
+        """
+        import webhook
+        from database import (
+            init_db, ensure_user, has_trial_used, get_auto_renew_subscription,
+            is_yookassa_processed, get_yookassa_trial_pending,
+        )
+
+        async def run_test():
+            await init_db()
+            user_id = 887001
+            await ensure_user(user_id)
+
+            trial_payment = {
+                "id": "yk_trial_payment_1",
+                "status": "succeeded",
+                "amount": {"value": "1.00", "currency": "RUB"},
+                "payment_method": {"saved": True, "id": "pm_trial_1", "title": "*4242", "type": "bank_card"},
+                "metadata": {"user_id": str(user_id), "days": "3", "devices": "2", "months": "1", "trial": "1"},
+            }
+
+            with patch.object(webhook, "_fetch_yookassa_payment", new_callable=AsyncMock, return_value=trial_payment), \
+                 patch.object(webhook, "deliver_key", new_callable=AsyncMock, return_value=True) as mock_deliver, \
+                 patch.object(webhook, "add_referral_earning", new_callable=AsyncMock, return_value=True) as mock_referral:
+                bot = MagicMock()
+                bot.send_message = AsyncMock()
+                await webhook._process_payment(bot, "yk_trial_payment_1")
+
+                mock_deliver.assert_awaited_once()
+                kwargs = mock_deliver.await_args.kwargs
+                self.assertEqual(kwargs["days"], 3)
+                self.assertEqual(kwargs["amount"], 1)
+                self.assertTrue(kwargs["skip_referral_bonus"])
+
+                # Referral reward must be skipped for the 1 ₽ trial
+                mock_referral.assert_not_awaited()
+
+            self.assertTrue(await has_trial_used(user_id))
+            self.assertIsNone(await get_yookassa_trial_pending(user_id))
+            self.assertTrue(await is_yookassa_processed("yk_trial_payment_1"))
+
+            ars = await get_auto_renew_subscription(user_id)
+            self.assertIsNotNone(ars)
+            self.assertEqual(ars["amount_rub"], constants.RECURRING_MONTHLY_PRICE)  # 89, not 1
+            self.assertEqual(ars["days"], constants.RECURRING_DAYS)                # 30, not 3
+            self.assertEqual(ars["payment_method_id"], "pm_trial_1")
+            self.assertEqual(ars["status"], "active")
+
+        asyncio.run(run_test())
+
+    # ------------------------------------------------------------------------
+    # Test 15: Duplicate webhook for the same payment is a no-op
+    # ------------------------------------------------------------------------
+    def test_15_duplicate_webhook_no_double_delivery(self):
+        import webhook
+        from database import init_db, ensure_user, get_user_keys
+
+        async def run_test():
+            await init_db()
+            user_id = 887002
+            await ensure_user(user_id)
+
+            payment = {
+                "id": "yk_dup_payment_1",
+                "status": "succeeded",
+                "amount": {"value": "89.00", "currency": "RUB"},
+                "payment_method": {"saved": False},
+                "metadata": {"user_id": str(user_id), "days": "30", "devices": "2", "months": "1"},
+            }
+
+            with patch.object(webhook, "_fetch_yookassa_payment", new_callable=AsyncMock, return_value=payment), \
+                 patch.object(webhook, "deliver_key", new_callable=AsyncMock, return_value=True) as mock_deliver:
+                bot = MagicMock()
+                bot.send_message = AsyncMock()
+                await webhook._process_payment(bot, "yk_dup_payment_1")
+                await webhook._process_payment(bot, "yk_dup_payment_1")
+                await webhook._process_payment(bot, "yk_dup_payment_1")
+
+                # Deliver exactly once despite three webhook invocations
+                mock_deliver.assert_awaited_once()
+
+            keys = await get_user_keys(user_id)
+            self.assertEqual(len(keys), 0)  # deliver_key was mocked; nothing extra created
+
+        asyncio.run(run_test())
+
+    # ------------------------------------------------------------------------
+    # Test 16: Referral earning is idempotent and credits balance once
+    # ------------------------------------------------------------------------
+    def test_16_referral_earning_idempotent(self):
+        from database import (
+            init_db, ensure_user, set_referrer, add_referral_earning,
+            get_referral_balance, get_referral_stats_detailed,
+        )
+
+        async def run_test():
+            await init_db()
+            referrer, referred = 887003, 887004
+            await ensure_user(referrer)
+            await ensure_user(referred)
+            await set_referrer(referred, referrer)
+
+            first = await add_referral_earning(referrer, referred, 50, payment_id=1)
+            self.assertTrue(first)
+            second = await add_referral_earning(referrer, referred, 50, payment_id=1)
+            self.assertFalse(second)
+
+            balance = await get_referral_balance(referrer)
+            self.assertEqual(balance["balance"], 50)
+            self.assertEqual(balance["total_earned"], 50)
+
+            # Detailed stats query must not crash (previously: no r.source column)
+            stats = await get_referral_stats_detailed()
+            self.assertEqual(len(stats), 1)
+            self.assertEqual(stats[0]["bonus_amount"], 50)
+
+        asyncio.run(run_test())
+
+    # ------------------------------------------------------------------------
+    # Test 17: Autorenew worker uses a deterministic business idempotence key
+    # ------------------------------------------------------------------------
+    def test_17_autorenew_charge_idempotence_key_is_deterministic(self):
+        """
+        The same billing period must always produce the same YooKassa
+        Idempotence-Key (worker restart must not double-charge).
+        """
+        import autorenew
+        from database import (
+            init_db, ensure_user, add_key, save_auto_renew_subscription,
+            get_expiring_auto_renew_subscriptions,
+        )
+
+        async def run_test():
+            await init_db()
+            user_id = 887005
+            await ensure_user(user_id)
+            # Key already expired (inside 7-day grace window)
+            key_id = await add_key(user_id, "vless://ars", "ARS Key", "uuid-ars", 2, 2)
+            import time as _t
+            past_expiry = int(_t.time()) - 3600
+            db = await database.get_db()
+            await db.execute("UPDATE keys SET expiry = ? WHERE id = ?", (past_expiry, key_id))
+            await db.commit()
+            await save_auto_renew_subscription(
+                user_id=user_id, key_id=key_id,
+                payment_method_id="pm_ars_1", payment_method_title="*1111",
+                payment_method_type="bank_card", months=1, days=30, devices=2, amount_rub=89,
+            )
+
+            expiring = await get_expiring_auto_renew_subscriptions()
+            matching = [s for s in expiring if s["sub_id"]]
+            self.assertTrue(matching)
+            sub = matching[0]
+
+            expected_key = f"autorenew_{sub['sub_id']}_{sub['key_id'] or 0}_{sub['expiry']}_{sub['fail_count']}"
+
+            captured = {}
+
+            class FakeResp:
+                status_code = 200
+                def raise_for_status(self): pass
+                def json(self):
+                    return {"id": "yk_recur_1", "status": "succeeded"}
+
+            class FakeClient:
+                def __init__(self, *a, **k): pass
+                async def __aenter__(self): return self
+                async def __aexit__(self, *a): return False
+                async def post(self, url, json=None, headers=None):
+                    captured["headers"] = headers
+                    return FakeResp()
+
+            with patch("autorenew.charge_yookassa_recurrent", new_callable=AsyncMock) as mock_charge:
+                mock_charge.return_value = {"id": "yk_recur_1", "status": "canceled", "cancellation_details": {"reason": "insufficient_funds"}}
+                bot = MagicMock()
+                bot.send_message = AsyncMock()
+                await autorenew.process_auto_renewals(bot)
+                mock_charge.assert_awaited_once()
+                # The key passed to the charge must match the deterministic formula
+                self.assertEqual(mock_charge.await_args.kwargs.get("idempotence_key"), expected_key)
+
+            # Direct API-level check: same key passed through to HTTP headers
+            from payments import charge_yookassa_recurrent
+            with patch("payments.httpx.AsyncClient", FakeClient):
+                await charge_yookassa_recurrent(
+                    amount_rub=89, description="test", user_id=1, days=30,
+                    devices=2, months=1, key_id=5, payment_method_id="pm_x",
+                    idempotence_key=expected_key,
+                )
+                self.assertEqual(captured["headers"]["Idempotence-Key"], expected_key)
 
         asyncio.run(run_test())
 

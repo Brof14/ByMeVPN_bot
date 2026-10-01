@@ -16,8 +16,10 @@ _SUPPORT_URL = (
 
 def main_menu_new_user() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="Попробовать БЕСПЛАТНО 3 дня", callback_data="trial", style="success"))
-    kb.row(InlineKeyboardButton(text="Купить от 59 ₽ в месяц", callback_data="buy_vpn", style="primary"))
+    kb.row(InlineKeyboardButton(text="🎁 Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
+    kb.row(InlineKeyboardButton(text="💳 Тарифы", callback_data="buy_vpn", style="primary"))
+    kb.row(InlineKeyboardButton(text="📣 VPN за рекламу", callback_data="ad_program", style="primary"))
+    kb.row(InlineKeyboardButton(text="🔌 Как подключить", callback_data="connection_guide"))
     kb.row(InlineKeyboardButton(text="Я уже клиент ByMeVPN", callback_data="auth_existing_client"))
     kb.row(InlineKeyboardButton(text="Партнёрская программа", callback_data="partner"))
     kb.row(
@@ -29,7 +31,10 @@ def main_menu_new_user() -> InlineKeyboardMarkup:
 
 def main_menu_existing() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="Купить от 59 ₽ в месяц", callback_data="buy_vpn", style="primary"))
+    kb.row(InlineKeyboardButton(text="🎁 Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
+    kb.row(InlineKeyboardButton(text="💳 Тарифы", callback_data="buy_vpn", style="primary"))
+    kb.row(InlineKeyboardButton(text="📣 VPN за рекламу", callback_data="ad_program", style="primary"))
+    kb.row(InlineKeyboardButton(text="🔌 Как подключить", callback_data="connection_guide"))
     kb.row(InlineKeyboardButton(text="Я уже клиент ByMeVPN", callback_data="auth_existing_client"))
     kb.row(InlineKeyboardButton(text="Партнёрская программа", callback_data="partner"))
     kb.row(
@@ -41,15 +46,15 @@ def main_menu_existing() -> InlineKeyboardMarkup:
 
 def main_menu_with_keys(trial_used: bool = False) -> InlineKeyboardMarkup:
     """Main menu for users who have at least one key (trial or paid).
-    
+
     Args:
-        trial_used: If True, hide the trial button (user already used trial).
+        trial_used: If True, hide the intro-trial button (user already used it).
     """
     kb = InlineKeyboardBuilder()
-    # Show trial button only if user hasn't used trial yet
+    # Show intro-trial button only if user hasn't used it yet
     if not trial_used:
-        kb.row(InlineKeyboardButton(text="Попробовать БЕСПЛАТНО 3 дня", callback_data="trial", style="success"))
-    kb.row(InlineKeyboardButton(text="Купить от 59 ₽ в месяц", callback_data="buy_vpn", style="primary"))
+        kb.row(InlineKeyboardButton(text="🎁 Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
+    kb.row(InlineKeyboardButton(text="💳 Тарифы", callback_data="buy_vpn", style="primary"))
     kb.row(InlineKeyboardButton(text="Мои ключи", callback_data="my_keys"))
     kb.row(InlineKeyboardButton(text="Войти в другой аккаунт", callback_data="auth_existing_client"))
     kb.row(InlineKeyboardButton(text="Партнёрская программа", callback_data="partner"))
@@ -211,24 +216,47 @@ def key_detail_kb(key_id: int, has_autorenew: bool = False, autorenew_active: bo
     return kb.as_markup()
 
 
-def autorenew_confirm_unbind_kb(key_id: int, card_title: str = "МИР •••• 4444") -> InlineKeyboardMarkup:
+def autorenew_cancel_confirm_kb(key_id: int) -> InlineKeyboardMarkup:
+    """Confirm disabling auto-renew. Cancelling NEVER revokes paid access."""
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="❌ Да, удалить карту и отключить VPN", callback_data=f"autorenew_unbind_confirm:{key_id}"))
-    kb.row(InlineKeyboardButton(text="◀️ Отмена", callback_data=f"manage_payment_methods:{key_id}"))
+    kb.row(InlineKeyboardButton(text="✅ Да, отключить автопродление", callback_data=f"autorenew_unbind_confirm:{key_id}"))
+    kb.row(InlineKeyboardButton(text="◀️ Оставить как есть", callback_data=f"manage_payment_methods:{key_id}"))
     return kb.as_markup()
 
 
-def manage_payment_methods_kb(card_title: str = "МИР •••• 4444", is_checked: bool = True, key_id: int = 0) -> InlineKeyboardMarkup:
+def manage_payment_methods_kb(
+    card_title: str = "",
+    is_checked: bool = True,
+    key_id: int = 0,
+    has_card: bool = False,
+    autorenew_active: bool = False,
+) -> InlineKeyboardMarkup:
+    """Payment-methods screen. Only shows a card when one is really saved."""
     kb = InlineKeyboardBuilder()
-    check_icon = "☑️" if is_checked else "⬜️"
-    kb.row(InlineKeyboardButton(
-        text=f"{check_icon} 💳 {card_title}",
-        callback_data=f"card_toggle_check:{key_id}:{1 if is_checked else 0}"
-    ))
-    kb.row(InlineKeyboardButton(text="🗑 Удалить карту", callback_data=f"autorenew_unbind_prompt:{key_id}"))
+    if has_card:
+        check_icon = "☑️" if is_checked else "⬜️"
+        kb.row(InlineKeyboardButton(
+            text=f"{check_icon} 💳 {card_title}",
+            callback_data=f"card_toggle_check:{key_id}:{1 if is_checked else 0}"
+        ))
+        if autorenew_active:
+            kb.row(InlineKeyboardButton(text="🔕 Отключить автопродление", callback_data=f"autorenew_unbind_prompt:{key_id}"))
+        else:
+            kb.row(InlineKeyboardButton(text="🔔 Включить автопродление", callback_data=f"autorenew_enable:{key_id}"))
     kb.row(
-        InlineKeyboardButton(text="◀️ Назад в меню", callback_data="back_to_menu"),
+        InlineKeyboardButton(text="◀️ Назад", callback_data=f"key_info:{key_id}" if key_id else "my_keys"),
         InlineKeyboardButton(text="Поддержка", url=_SUPPORT_URL),
+    )
+    return kb.as_markup()
+
+
+def trial_pay_kb(confirmation_url: str) -> InlineKeyboardMarkup:
+    """Intro trial checkout: 1 ₽ now → 3 days → 89 ₽/мес recurring."""
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="💳 Оплатить 1 ₽", url=confirmation_url))
+    kb.row(
+        InlineKeyboardButton(text="💳 Тарифы", callback_data="buy_vpn"),
+        InlineKeyboardButton(text="🏠 Меню", callback_data="back_to_menu"),
     )
     return kb.as_markup()
 
@@ -248,9 +276,10 @@ def confirm_delete_kb(key_id: int) -> InlineKeyboardMarkup:
 
 def after_key_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="Инструкция подключения", callback_data="connection_guide"))
+    kb.row(InlineKeyboardButton(text="📋 Инструкция подключения", callback_data="connection_guide"))
+    kb.row(InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys"))
     kb.row(
-        InlineKeyboardButton(text="Назад в меню", callback_data="back_to_menu"),
+        InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu"),
         InlineKeyboardButton(text="Поддержка", url=_SUPPORT_URL)
     )
     return kb.as_markup()
@@ -264,10 +293,10 @@ def partner_kb(link: str) -> InlineKeyboardMarkup:
     share_text = quote_plus(
         "Если у тебя не работает YouTube / Telegram — вот решение.\n\n"
         "Сам пользуюсь — реально норм VPN.\n\n"
-        "🎁 3 дня бесплатно (без карты)\n"
+        "🎁 3 дня за 1 ₽\n"
         "📱 До 10 устройств\n"
         "⚡ Всё открывается без лагов\n\n"
-        "💰 От 59 ₽/мес\n\n"
+        "💳 Дальше — 89 ₽/мес (от 59 ₽/мес при оплате за год)\n\n"
         f"Попробуй:\n{link}"
     )
     kb = InlineKeyboardBuilder()
@@ -348,7 +377,7 @@ def legal_kb() -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="Договор публичной оферты", url="https://telegra.ph/DOGOVOR-PUBLICHNOJ-OFERTY-ByMyVPN-03-12"))
     kb.row(InlineKeyboardButton(text="Политика конфиденциальности", url="https://telegra.ph/POLITIKA-KONFIDENCIALNOSTI-ByMeVPN-03-12"))
     kb.row(InlineKeyboardButton(text="Соглашение о регулярных платежах", url="https://telegra.ph/SOGLASHENIE-O-REGULYARNYH-REKURRENTNYH-PLATEZHAH-ByMeVPN-03-12"))
-    kb.row(InlineKeyboardButton(text="💳 Отвязка карты и отмена подписки", callback_data="manage_payment_methods"))
+    kb.row(InlineKeyboardButton(text="💳 Автопродление и карта", callback_data="manage_payment_methods"))
     kb.row(
         InlineKeyboardButton(text="Назад", callback_data="back_to_menu"),
         InlineKeyboardButton(text="Поддержка", url=_SUPPORT_URL)

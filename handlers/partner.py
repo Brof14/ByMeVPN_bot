@@ -29,10 +29,10 @@ def partner_main_kb(link: str) -> "InlineKeyboardMarkup":
     share_text = quote_plus(
         "Если у тебя не работает YouTube / Telegram — вот решение.\n\n"
         "Сам пользуюсь — реально норм VPN.\n\n"
-        "🎁 3 дня бесплатно (без карты)\n"
+        "🎁 3 дня за 1 ₽\n"
         "📱 До 10 устройств\n"
         "⚡ Всё открывается без лагов\n\n"
-        "💰 От 59 ₽/мес\n\n"
+        "💳 Дальше — 89 ₽/мес (от 59 ₽/мес при оплате за год)\n\n"
         f"Попробуй:\n{link}"
     )
 
@@ -43,6 +43,7 @@ def partner_main_kb(link: str) -> "InlineKeyboardMarkup":
         )],
         [InlineKeyboardButton(text="📋 Список приглашённых", callback_data="partner_referrals_list")],
         [InlineKeyboardButton(text="Вывести средства", callback_data="payout_request")],
+        [InlineKeyboardButton(text="📣 VPN за рекламу", callback_data="ad_program")],
         [InlineKeyboardButton(text="Назад", callback_data="back_to_menu"),
          InlineKeyboardButton(text="Поддержка", url="https://t.me/ByMeVPN_support_bot")]
     ])

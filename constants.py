@@ -56,6 +56,17 @@ TARIFF_DAYS = {
     12: 450,  # 12 мес. + 3 мес. 🎁
 }
 
+# ============================================================================
+# Intro Trial (paid): 1 ₽ → 3 days of access → 89 ₽/мес recurring
+# ============================================================================
+INTRO_TRIAL_PRICE_RUB = 1          # charged today
+INTRO_TRIAL_DAYS = TRIAL_DAYS      # 3 days of access for 1 ₽
+INTRO_TRIAL_DEVICES = DEFAULT_DEVICE_LIMIT  # standard 2-device config
+# What the first recurring charge will be after the trial ends:
+RECURRING_MONTHLY_PRICE = BASE_MONTHLY_PRICES[1]  # 89 ₽ per billing cycle
+RECURRING_MONTHS = 1
+RECURRING_DAYS = TARIFF_DAYS[1]    # 30 days per billing cycle
+
 
 def validate_device_limit(limit: int) -> int:
     """

@@ -121,6 +121,14 @@ CREATE TABLE IF NOT EXISTS yookassa_pending (
 );
 CREATE INDEX IF NOT EXISTS idx_ykp_user ON yookassa_pending(user_id);
 
+-- YooKassa intro trial (1 ₽): pending checkout links, one per user
+CREATE TABLE IF NOT EXISTS yookassa_trial_pending (
+    user_id           INTEGER PRIMARY KEY,
+    payment_id        TEXT NOT NULL,
+    confirmation_url  TEXT,
+    created           INTEGER DEFAULT (strftime('%s','now'))
+);
+
 -- Crypto Bot (@send): idempotency guard — one row per invoice_id, inserted before key delivery
 CREATE TABLE IF NOT EXISTS crypto_processed (
     invoice_id  TEXT PRIMARY KEY,
@@ -163,8 +171,9 @@ CREATE TABLE IF NOT EXISTS referral_earnings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     referrer_id INTEGER NOT NULL,
     referred_id INTEGER NOT NULL,
-    amount INTEGER NOT NULL,  -- 80 рублей за первую оплату
+    amount INTEGER NOT NULL,  -- 50 рублей за первую оплату
     payment_id INTEGER,  -- ID платежа приглашённого
+    payment_status TEXT DEFAULT 'pending',
     created INTEGER DEFAULT (strftime('%s','now')),
     UNIQUE(referrer_id, referred_id)  -- бонус начисляется только один раз
 );
@@ -647,6 +656,114 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
     except Exception as e:
         logger.warning("Migration: analytics_events notice: %s", e)
 
+    # Migration: create ad_campaigns table
+    try:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS ad_campaigns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT,
+                is_active INTEGER DEFAULT 1,
+                start_date INTEGER DEFAULT (strftime('%s','now')),
+                end_date INTEGER,
+                cooldown_days INTEGER DEFAULT 14,
+                max_shows INTEGER DEFAULT 3,
+                target_audience TEXT DEFAULT 'all',
+                created_at INTEGER DEFAULT (strftime('%s','now'))
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_ad_campaigns_active ON ad_campaigns(is_active)")
+        logger.info("Migration: created ad_campaigns table")
+    except Exception as e:
+        logger.warning("Migration: ad_campaigns notice: %s", e)
+
+    # Migration: create ad_applications table
+    try:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS ad_applications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                channel_id INTEGER,
+                channel_username TEXT,
+                subscriber_count INTEGER NOT NULL,
+                bonus_months INTEGER NOT NULL,
+                status TEXT DEFAULT 'draft',
+                post_url TEXT,
+                post_message_id INTEGER,
+                campaign_id INTEGER,
+                created_at INTEGER DEFAULT (strftime('%s','now')),
+                published_at INTEGER,
+                verification_due_at INTEGER,
+                approved_at INTEGER,
+                rejected_at INTEGER,
+                rejection_reason TEXT,
+                UNIQUE(user_id, channel_id)
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_ad_applications_user ON ad_applications(user_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_ad_applications_status ON ad_applications(status)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_ad_applications_channel ON ad_applications(channel_id)")
+        logger.info("Migration: created ad_applications table")
+    except Exception as e:
+        logger.warning("Migration: ad_applications notice: %s", e)
+
+    # Migration: create ad_notifications table
+    try:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS ad_notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                campaign_id TEXT,
+                sent_at INTEGER DEFAULT (strftime('%s','now')),
+                opened_at INTEGER,
+                clicked_at INTEGER,
+                dismissed_at INTEGER
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_ad_notif_user ON ad_notifications(user_id)")
+        logger.info("Migration: created ad_notifications table")
+    except Exception as e:
+        logger.warning("Migration: ad_notifications notice: %s", e)
+
+    # Migration: ad_audit_log (admin actions audit trail)
+    try:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS ad_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                action TEXT NOT NULL,
+                details TEXT,
+                created_at INTEGER DEFAULT (strftime('%s','now'))
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_ad_audit_user ON ad_audit_log(user_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_ad_audit_created ON ad_audit_log(created_at)")
+        logger.info("Migration: created ad_audit_log table")
+    except Exception as e:
+        logger.warning("Migration: ad_audit_log notice: %s", e)
+
+    # Migration: ad_applications.channel_ref — normalized channel identity
+    # (username lowercased / invite reference) so duplicate applications for
+    # the same channel are reliably blocked even when channel_id is NULL.
+    try:
+        await db.execute("ALTER TABLE ad_applications ADD COLUMN channel_ref TEXT")
+        logger.info("Migration: added ad_applications.channel_ref")
+    except Exception as e:
+        if "duplicate column" not in str(e).lower():
+            logger.warning("Migration: ad_applications.channel_ref notice: %s", e)
+    try:
+        await db.execute(
+            "UPDATE ad_applications SET channel_ref = LOWER(channel_username) "
+            "WHERE (channel_ref IS NULL OR channel_ref = '') "
+            "AND channel_username IS NOT NULL AND TRIM(channel_username) != ''"
+        )
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_ad_applications_channel_ref "
+            "ON ad_applications(channel_ref) WHERE channel_ref IS NOT NULL"
+        )
+    except Exception as e:
+        logger.warning("Migration: ad_applications.channel_ref index notice: %s", e)
+
     # Migration: create giveaways tables
     try:
         await db.execute("""
@@ -707,6 +824,25 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         logger.info("Migration: created auto_renew_subscriptions table")
     except Exception as e:
         logger.warning("Migration: auto_renew_subscriptions notice: %s", e)
+
+    # Migration: referral_earnings.payment_status (code writes this column;
+    # older databases created the table without it)
+    try:
+        await db.execute(
+            "ALTER TABLE referral_earnings ADD COLUMN payment_status TEXT DEFAULT 'pending'"
+        )
+        logger.info("Migration: added referral_earnings.payment_status")
+    except Exception as e:
+        if "duplicate column" not in str(e).lower():
+            logger.warning("Migration: referral_earnings.payment_status notice: %s", e)
+
+    # Migration: keys.cleaned (admin cleanup soft-delete marker)
+    try:
+        await db.execute("ALTER TABLE keys ADD COLUMN cleaned INTEGER DEFAULT 0")
+        logger.info("Migration: added keys.cleaned")
+    except Exception as e:
+        if "duplicate column" not in str(e).lower():
+            logger.warning("Migration: keys.cleaned notice: %s", e)
 
 
 async def init_db() -> None:
@@ -1318,6 +1454,39 @@ async def get_yookassa_pending_by_user(user_id: int) -> Optional[dict]:
 
 
 # ---------------------------------------------------------------------------
+# YooKassa Intro Trial (1 ₽) — pending checkout links
+# ---------------------------------------------------------------------------
+
+async def save_yookassa_trial_pending(user_id: int, payment_id: str, confirmation_url: str) -> None:
+    """Store the latest pending intro-trial checkout link for a user (one per user)."""
+    db = await get_db()
+    await db.execute(
+        "INSERT OR REPLACE INTO yookassa_trial_pending(user_id, payment_id, confirmation_url, created) "
+        "VALUES(?,?,?,?)",
+        (user_id, payment_id, confirmation_url, int(time.time())),
+    )
+    await db.commit()
+
+
+async def get_yookassa_trial_pending(user_id: int) -> Optional[dict]:
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT payment_id, confirmation_url, created FROM yookassa_trial_pending WHERE user_id=?",
+        (user_id,),
+    )
+    row = await cur.fetchone()
+    if not row:
+        return None
+    return {"payment_id": row[0], "confirmation_url": row[1], "created": row[2]}
+
+
+async def delete_yookassa_trial_pending(user_id: int) -> None:
+    db = await get_db()
+    await db.execute("DELETE FROM yookassa_trial_pending WHERE user_id=?", (user_id,))
+    await db.commit()
+
+
+# ---------------------------------------------------------------------------
 # YooKassa Auto-Renew Subscriptions
 # ---------------------------------------------------------------------------
 
@@ -1444,68 +1613,113 @@ async def set_auto_renew_status_by_key(user_id: int, key_id: int, status: str) -
     return cur.rowcount > 0
 
 
-async def cancel_autorenew_and_terminate_subscription(user_id: int, key_id: Optional[int] = None) -> dict:
+async def cancel_auto_renew(user_id: int, key_id: Optional[int] = None) -> dict:
     """
-    Cancel recurring subscription, unbind saved payment method, and immediately
-    terminate the active VPN subscription (expire key in DB and disable in 3x-ui).
-    Returns dict with details: {'unbound': bool, 'terminated_keys': int, 'pm_title': str}.
+    Disable future recurring charges for the user.
+
+    This MUST NOT revoke already-paid access: key expiry, VPN access and the
+    3x-ui client all stay untouched. The user keeps the service until the end
+    of the period they have already paid for. Payment history is preserved.
+
+    Returns dict: {'cancelled': bool, 'expires_at': int|None, 'pm_title': str}.
     """
     db = await get_db()
     pm_title = ""
-    sub_id = None
+    sub_found = False
 
-    # 1. Find and update auto-renew subscription
     if key_id:
         cur = await db.execute(
-            "SELECT id, payment_method_title FROM auto_renew_subscriptions WHERE user_id = ? AND key_id = ?",
-            (user_id, key_id)
+            "SELECT id, payment_method_title FROM auto_renew_subscriptions "
+            "WHERE user_id = ? AND (key_id = ? OR key_id IS NULL) ORDER BY (key_id IS NULL), id DESC LIMIT 1",
+            (user_id, key_id),
         )
     else:
         cur = await db.execute(
             "SELECT id, payment_method_title FROM auto_renew_subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1",
-            (user_id,)
+            (user_id,),
         )
     row = await cur.fetchone()
     if row:
-        sub_id = row[0]
-        pm_title = row[1] or "Банковская карта"
+        sub_id, pm_title = row[0], (row[1] or "")
+        sub_found = True
+        # Keep payment_method_* fields: they are needed to offer one-click
+        # re-enabling later and contain no sensitive data (no PAN/CVV).
         await db.execute(
-            """UPDATE auto_renew_subscriptions
-               SET status = 'cancelled',
-                   payment_method_id = '',
-                   payment_method_title = 'Отвязана',
-                   updated_at = strftime('%s','now')
-               WHERE id = ?""",
-            (sub_id,)
+            "UPDATE auto_renew_subscriptions SET status = 'cancelled', "
+            "next_retry_at = NULL, updated_at = strftime('%s','now') WHERE id = ?",
+            (sub_id,),
         )
-
-    # 2. Immediately expire key(s) in SQLite
-    now_ts = int(time.time())
-    if key_id:
-        cur_keys = await db.execute(
-            "UPDATE keys SET expiry = ? WHERE id = ? AND user_id = ?",
-            (now_ts - 1, key_id, user_id)
-        )
-    else:
-        cur_keys = await db.execute(
-            "UPDATE keys SET expiry = ? WHERE user_id = ? AND expiry > ?",
-            (now_ts - 1, user_id, now_ts)
-        )
-    terminated_count = cur_keys.rowcount
     await db.commit()
 
-    # 3. Disable client in 3x-ui immediately so VPN connection is dropped
+    # Access expiry stays as-is — user keeps what they already paid for.
+    expiry = None
+    if key_id:
+        cur = await db.execute("SELECT MAX(expiry) FROM keys WHERE user_id = ? AND id = ?", (user_id, key_id))
+    else:
+        cur = await db.execute("SELECT MAX(expiry) FROM keys WHERE user_id = ? AND expiry > ?", (user_id, int(time.time())))
+    row = await cur.fetchone()
+    if row and row[0]:
+        expiry = row[0]
+
+    logger.info(
+        "Auto-renew cancelled for user %d (sub_found=%s, key_id=%s) — access preserved until %s",
+        user_id, sub_found, key_id, expiry,
+    )
+    return {"cancelled": sub_found, "expires_at": expiry, "pm_title": pm_title}
+
+
+async def resume_auto_renew(user_id: int, key_id: Optional[int] = None) -> bool:
+    """Re-enable previously cancelled auto-renew subscription (keeps saved payment method)."""
+    db = await get_db()
+    if key_id:
+        cur = await db.execute(
+            "UPDATE auto_renew_subscriptions SET status = 'active', fail_count = 0, next_retry_at = NULL, "
+            "updated_at = strftime('%s','now') WHERE user_id = ? AND key_id = ? AND payment_method_id != ''",
+            (user_id, key_id),
+        )
+    else:
+        cur = await db.execute(
+            "UPDATE auto_renew_subscriptions SET status = 'active', fail_count = 0, next_retry_at = NULL, "
+            "updated_at = strftime('%s','now') WHERE user_id = ? AND payment_method_id != ''",
+            (user_id,),
+        )
+    await db.commit()
+    reenabled = cur.rowcount > 0
+    if reenabled:
+        logger.info("Auto-renew re-enabled for user %d (key_id=%s)", user_id, key_id)
+    return reenabled
+
+
+async def terminate_user_access(user_id: int, key_id: Optional[int] = None) -> int:
+    """
+    OPERATIONAL function: immediately revoke VPN access (expire keys in DB and
+    disable the client in 3x-ui). Use ONLY where termination is genuinely
+    required (admin decision, refund/abuse handling) — never as a side effect
+    of simply disabling auto-renew.
+    """
+    db = await get_db()
+    now_ts = int(time.time())
+    if key_id:
+        cur = await db.execute(
+            "UPDATE keys SET expiry = ? WHERE id = ? AND user_id = ?",
+            (now_ts - 1, key_id, user_id),
+        )
+    else:
+        cur = await db.execute(
+            "UPDATE keys SET expiry = ? WHERE user_id = ? AND expiry > ?",
+            (now_ts - 1, user_id, now_ts),
+        )
+    terminated_count = cur.rowcount
+    await db.commit()
+
     try:
         from xui_client import update_xui_user
         await update_xui_user(user_id, enable=False, new_expiry_ms=(now_ts - 10) * 1000)
     except Exception as e:
-        logger.error("Failed to disable 3x-ui client on subscription cancellation for user %d: %s", user_id, e)
+        logger.error("Failed to disable 3x-ui client on access termination for user %d: %s", user_id, e)
 
-    return {
-        "unbound": sub_id is not None,
-        "terminated_keys": terminated_count,
-        "pm_title": pm_title,
-    }
+    logger.warning("User access TERMINATED for user %d (key_id=%s, keys=%d)", user_id, key_id, terminated_count)
+    return terminated_count
 
 
 
@@ -1562,33 +1776,33 @@ async def update_auto_renew_charge_success_by_user_key(user_id: int, key_id: Opt
 async def update_auto_renew_charge_failure(sub_id: int, error_message: str, max_fails: int = 3) -> bool:
     """
     Record failed recurrent charge attempt.
-    Increments fail_count, sets next retry time in 4 hours.
+    Atomically increments fail_count, sets next retry time in 4 hours.
     If fail_count >= max_fails, sets status='failed'.
     Returns True if permanently disabled (status='failed'), False if will retry.
     """
     db = await get_db()
+    await db.execute(
+        """UPDATE auto_renew_subscriptions
+           SET fail_count = fail_count + 1,
+               last_charge_status = ?,
+               next_retry_at = ?,
+               updated_at = strftime('%s','now')
+           WHERE id = ?""",
+        (f"failed: {error_message[:100]}", int(time.time()) + 4 * 3600, sub_id),
+    )
     cur = await db.execute(
         "SELECT fail_count FROM auto_renew_subscriptions WHERE id = ?",
         (sub_id,),
     )
     row = await cur.fetchone()
-    fail_count = (row[0] if row else 0) + 1
+    fail_count = row[0] if row else max_fails
 
-    now = int(time.time())
-    next_retry = now + 4 * 3600  # retry in 4 hours
     is_disabled = fail_count >= max_fails
-    new_status = 'failed' if is_disabled else 'active'
-
-    await db.execute(
-        """UPDATE auto_renew_subscriptions
-           SET fail_count = ?,
-               last_charge_status = ?,
-               next_retry_at = ?,
-               status = ?,
-               updated_at = strftime('%s','now')
-           WHERE id = ?""",
-        (fail_count, f"failed: {error_message[:100]}", next_retry, new_status, sub_id),
-    )
+    if is_disabled:
+        await db.execute(
+            "UPDATE auto_renew_subscriptions SET status = 'failed', updated_at = strftime('%s','now') WHERE id = ?",
+            (sub_id,),
+        )
     await db.commit()
     logger.warning("Auto-renew subscription %d failed (%d/%d): %s (disabled=%s)",
                    sub_id, fail_count, max_fails, error_message, is_disabled)
@@ -1875,31 +2089,9 @@ async def get_user_active_keys(user_id: int) -> list[dict]:
     ]
 
 
-async def get_referral_stats(referrer_id: int) -> dict:
-    """Get referral statistics for a user"""
-    db = await get_db()
-    cur = await db.execute(
-        "SELECT COUNT(*) FROM referrals WHERE referrer_id=?",
-        (referrer_id,)
-    )
-    total = (await cur.fetchone())[0]
-    
-    # Count paying referrals (those with payment_bonus events)
-    cur = await db.execute(
-        """
-        SELECT COUNT(DISTINCT referred_id) FROM referral_events 
-        WHERE referrer_id=? AND event_type='payment_bonus'
-        """,
-        (referrer_id,)
-    )
-    paid = (await cur.fetchone())[0]
-
-    return {
-        "total": total,
-        "paid": paid,
-        "total_referrals": total,  # backward compatibility
-        "bonuses_given": total  # backward compatibility
-    }
+# NOTE: get_referral_stats is defined once, further below (after payout
+# helpers). The previously duplicated earlier definition silently shadowed
+# nothing but confused readers — removed.
 
 
 @cache_user_info
@@ -2033,32 +2225,34 @@ async def get_referral_balance(user_id: int) -> dict:
     return {"balance": row[0], "total_earned": row[1]}
 
 async def add_referral_earning(referrer_id: int, referred_id: int, amount: int = 50, payment_id: int = None) -> bool:
-    """Начислить бонус за первую оплату приглашённого (80₽)"""
+    """Начислить бонус за первую оплату приглашённого (50₽).
+
+    Идемпотентно: UNIQUE(referrer_id, referred_id) гарантирует одно начисление
+    даже при конкурентных вызовах / дубликатах вебхуков.
+    """
     db = await get_db()
     try:
-        # Проверяем что бонус ещё не начислялся
-        cur = await db.execute(
-            "SELECT 1 FROM referral_earnings WHERE referrer_id=? AND referred_id=?",
-            (referrer_id, referred_id)
-        )
-        if await cur.fetchone():
-            return False  # бонус уже начислялся
-        
-        # Начисляем бонус с статусом pending
-        await db.execute(
-            "INSERT INTO referral_earnings(referrer_id, referred_id, amount, payment_id, payment_status) VALUES(?,?,?,?,?)",
-            (referrer_id, referred_id, amount, payment_id, 'pending')
-        )
-        
-        # Обновляем баланс реферала
-        await ensure_referral_balance(referrer_id)
-        await db.execute(
-            "UPDATE referral_balance SET balance = balance + ?, total_earned = total_earned + ? WHERE user_id=?",
-            (amount, amount, referrer_id)
-        )
-        
-        await db.commit()
-        return True
+        async with _db_semaphore:
+            try:
+                await db.execute(
+                    "INSERT INTO referral_earnings(referrer_id, referred_id, amount, payment_id, payment_status) "
+                    "VALUES(?,?,?,?,?)",
+                    (referrer_id, referred_id, amount, payment_id, 'pending')
+                )
+            except Exception as e:
+                if "UNIQUE constraint failed" in str(e):
+                    logger.info("Referral earning already exists for referrer %d / referred %d", referrer_id, referred_id)
+                    return False  # бонус уже начислялся
+                raise
+
+            # Обновляем баланс реферала (в той же транзакции, что и начисление)
+            await ensure_referral_balance(referrer_id)
+            await db.execute(
+                "UPDATE referral_balance SET balance = balance + ?, total_earned = total_earned + ? WHERE user_id=?",
+                (amount, amount, referrer_id)
+            )
+            await db.commit()
+            return True
     except Exception as e:
         logger.error("Error adding referral earning: %s", e)
         await db.rollback()
@@ -2068,35 +2262,26 @@ async def add_referral_earning(referrer_id: int, referred_id: int, amount: int =
 async def get_referral_stats_detailed(referrer_id: int = None) -> list:
     """Получить детальную статистику по рефералам с источниками и оплатами"""
     db = await get_db()
-    
+
+    base_query = """
+        SELECT r.referrer_id, r.referred_id, u.source, r.created,
+               re.amount, re.payment_status, re.created as payment_date,
+               p.amount as payment_amount, p.created as payment_created
+        FROM referrals r
+        LEFT JOIN users u ON u.user_id = r.referred_id
+        LEFT JOIN referral_earnings re ON r.referrer_id = re.referrer_id AND r.referred_id = re.referred_id
+        LEFT JOIN payments p ON re.payment_id = p.id
+        {where}
+        ORDER BY r.created DESC
+    """
+
     if referrer_id:
-        # Статистика для конкретного реферера
-        query = """
-            SELECT r.referrer_id, r.referred_id, r.source, r.created,
-                   re.amount, re.payment_status, re.created as payment_date,
-                   p.amount as payment_amount, p.created as payment_created
-            FROM referrals r
-            LEFT JOIN referral_earnings re ON r.referrer_id = re.referrer_id AND r.referred_id = re.referred_id
-            LEFT JOIN payments p ON re.payment_id = p.id
-            WHERE r.referrer_id = ?
-            ORDER BY r.created DESC
-        """
-        cur = await db.execute(query, (referrer_id,))
+        cur = await db.execute(base_query.format(where="WHERE r.referrer_id = ?"), (referrer_id,))
     else:
-        # Статистика для всех рефереров
-        query = """
-            SELECT r.referrer_id, r.referred_id, r.source, r.created,
-                   re.amount, re.payment_status, re.created as payment_date,
-                   p.amount as payment_amount, p.created as payment_created
-            FROM referrals r
-            LEFT JOIN referral_earnings re ON r.referrer_id = re.referrer_id AND r.referred_id = re.referred_id
-            LEFT JOIN payments p ON re.payment_id = p.id
-            ORDER BY r.created DESC
-        """
-        cur = await db.execute(query)
-    
+        cur = await db.execute(base_query.format(where=""))
+
     rows = await cur.fetchall()
-    
+
     stats = []
     for row in rows:
         stats.append({
@@ -2110,7 +2295,7 @@ async def get_referral_stats_detailed(referrer_id: int = None) -> list:
             "payment_amount": row[7],
             "payment_date": row[8]
         })
-    
+
     return stats
 
 
@@ -2138,21 +2323,28 @@ async def can_claim_payout(user_id: int, amount: int) -> bool:
     return balance_info["balance"] >= amount
 
 async def create_payout_request(user_id: int, amount: int) -> int:
-    """Создать заявку на вывод средств"""
+    """Создать заявку на вывод средств.
+
+    Списание баланса защищено условием balance >= amount — даже при
+    конкурентных заявках баланс не может уйти в минус.
+    """
     if not await can_claim_payout(user_id, amount):
         raise ValueError("Invalid payout amount")
-    
+
     db = await get_db()
-    # Списываем средства с баланса
-    await db.execute(
-        "UPDATE referral_balance SET balance = balance - ? WHERE user_id=?",
-        (amount, user_id)
+    # Атомарно списываем средства с баланса (только если хватает)
+    cur = await db.execute(
+        "UPDATE referral_balance SET balance = balance - ? WHERE user_id=? AND balance >= ?",
+        (amount, user_id, amount),
     )
-    
+    if cur.rowcount == 0:
+        await db.rollback()
+        raise ValueError("Insufficient referral balance")
+
     # Создаем заявку на вывод
     cur = await db.execute(
         "INSERT INTO referral_payouts(user_id, amount, status) VALUES(?,?,?)",
-        (user_id, amount, "pending")
+        (user_id, amount, "pending"),
     )
     await db.commit()
     return cur.lastrowid
@@ -2422,9 +2614,15 @@ async def get_extended_stats() -> dict:
     # Active users by period
     cur = await db.execute("SELECT COUNT(DISTINCT user_id) FROM keys WHERE expiry > ? AND expiry <= ?", (current_time, current_time + 24*86400))
     active_24h = (await cur.fetchone())[0]
-    
+
     cur = await db.execute("SELECT COUNT(DISTINCT user_id) FROM keys WHERE expiry > ?", (current_time,))
     active_7d = (await cur.fetchone())[0]
+
+    cur = await db.execute(
+        "SELECT COUNT(DISTINCT user_id) FROM keys WHERE expiry > ?",
+        (current_time - 30 * 86400,),
+    )
+    active_30d = (await cur.fetchone())[0]
     
     # Device tier distribution (active keys)
     cur = await db.execute("""
@@ -3496,6 +3694,312 @@ async def get_giveaway_by_id(giveaway_id: int) -> dict | None:
     return {
         "id": row[0], "title": row[1], "description": row[2], "prize_days": row[3],
         "winners_count": row[4], "end_date": row[5], "is_active": row[6], "created_at": row[7],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Ad Program Functions
+# ---------------------------------------------------------------------------
+
+async def create_ad_application(
+    user_id: int,
+    channel_id: int | None,
+    channel_username: str,
+    subscriber_count: int,
+    bonus_months: int,
+    campaign_id: int = None,
+    channel_ref: str = None,
+    status: str = "waiting_for_post",
+) -> int:
+    """Create a new ad application. Returns application ID.
+
+    channel_ref is the normalized channel identity (lowercased @username or
+    invite reference) — protected by a UNIQUE partial index, so the same
+    channel cannot be applied twice even when channel_id is NULL (private).
+    """
+    db = await get_db()
+    if not channel_ref and channel_username:
+        channel_ref = channel_username.strip().lower()
+    cur = await db.execute(
+        """INSERT INTO ad_applications
+        (user_id, channel_id, channel_username, subscriber_count, bonus_months, campaign_id, channel_ref, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (user_id, channel_id, channel_username, subscriber_count, bonus_months, campaign_id, channel_ref, status)
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def get_ad_application_by_id(application_id: int) -> dict | None:
+    """Get ad application by ID."""
+    db = await get_db()
+    cur = await db.execute(
+        """SELECT id, user_id, channel_id, channel_username, channel_ref, subscriber_count, bonus_months,
+        status, post_url, post_message_id, campaign_id, created_at, published_at,
+        verification_due_at, approved_at, rejected_at, rejection_reason
+        FROM ad_applications WHERE id = ?""",
+        (application_id,)
+    )
+    row = await cur.fetchone()
+    if not row:
+        return None
+    return {
+        "id": row[0], "user_id": row[1], "channel_id": row[2], "channel_username": row[3],
+        "channel_ref": row[4], "subscriber_count": row[5], "bonus_months": row[6],
+        "status": row[7], "post_url": row[8], "post_message_id": row[9], "campaign_id": row[10],
+        "created_at": row[11], "published_at": row[12], "verification_due_at": row[13],
+        "approved_at": row[14], "rejected_at": row[15], "rejection_reason": row[16],
+    }
+
+
+async def get_user_ad_applications(user_id: int) -> list[dict]:
+    """Get all ad applications for a user."""
+    db = await get_db()
+    cur = await db.execute(
+        """SELECT id, user_id, channel_id, channel_username, channel_ref, subscriber_count, bonus_months,
+        status, post_url, post_message_id, campaign_id, created_at, published_at,
+        verification_due_at, approved_at, rejected_at, rejection_reason
+        FROM ad_applications WHERE user_id = ? ORDER BY created_at DESC""",
+        (user_id,)
+    )
+    rows = await cur.fetchall()
+    return [
+        {
+            "id": r[0], "user_id": r[1], "channel_id": r[2], "channel_username": r[3],
+            "channel_ref": r[4], "subscriber_count": r[5], "bonus_months": r[6],
+            "status": r[7], "post_url": r[8], "post_message_id": r[9], "campaign_id": r[10],
+            "created_at": r[11], "published_at": r[12], "verification_due_at": r[13],
+            "approved_at": r[14], "rejected_at": r[15], "rejection_reason": r[16],
+        }
+        for r in rows
+    ]
+
+
+async def get_ad_applications_by_statuses(statuses: list[str], limit: int = 20) -> list[dict]:
+    """List applications for the admin review queue, oldest first."""
+    db = await get_db()
+    placeholders = ",".join("?" * len(statuses))
+    cur = await db.execute(
+        f"""SELECT id, user_id, channel_id, channel_username, channel_ref, subscriber_count, bonus_months,
+        status, post_url, post_message_id, campaign_id, created_at, published_at,
+        verification_due_at, approved_at, rejected_at, rejection_reason
+        FROM ad_applications WHERE status IN ({placeholders})
+        ORDER BY created_at ASC LIMIT {int(limit)}""",
+        tuple(statuses),
+    )
+    rows = await cur.fetchall()
+    return [
+        {
+            "id": r[0], "user_id": r[1], "channel_id": r[2], "channel_username": r[3],
+            "channel_ref": r[4], "subscriber_count": r[5], "bonus_months": r[6],
+            "status": r[7], "post_url": r[8], "post_message_id": r[9], "campaign_id": r[10],
+            "created_at": r[11], "published_at": r[12], "verification_due_at": r[13],
+            "approved_at": r[14], "rejected_at": r[15], "rejection_reason": r[16],
+        }
+        for r in rows
+    ]
+
+
+async def update_ad_application(
+    application_id: int,
+    status: str = None,
+    post_url: str = None,
+    post_message_id: int = None,
+    rejection_reason: str = None,
+    subscriber_count: int = None,
+) -> bool:
+    """Update ad application."""
+    db = await get_db()
+    updates = []
+    params = []
+
+    if status:
+        updates.append("status = ?")
+        params.append(status)
+        if status == "approved":
+            updates.append("approved_at = ?")
+            params.append(int(time.time()))
+        elif status == "rejected":
+            updates.append("rejected_at = ?")
+            params.append(int(time.time()))
+        elif status == "post_submitted":
+            updates.append("published_at = ?")
+            params.append(int(time.time()))
+            updates.append("verification_due_at = ?")
+            params.append(int(time.time()) + 30 * 86400)  # 30 days retention check
+
+    if post_url:
+        updates.append("post_url = ?")
+        params.append(post_url)
+
+    if post_message_id:
+        updates.append("post_message_id = ?")
+        params.append(post_message_id)
+
+    if rejection_reason is not None:
+        updates.append("rejection_reason = ?")
+        params.append(rejection_reason)
+
+    if subscriber_count is not None:
+        updates.append("subscriber_count = ?")
+        params.append(subscriber_count)
+
+    if not updates:
+        return False
+
+    params.append(application_id)
+    query = f"UPDATE ad_applications SET {', '.join(updates)} WHERE id = ?"
+    await db.execute(query, params)
+    await db.commit()
+    return True
+
+
+async def channel_already_used(channel_id: int | None, channel_ref: str | None = None) -> bool:
+    """Check if channel was already used for an approved/completed ad application."""
+    db = await get_db()
+    if channel_ref:
+        cur = await db.execute(
+            "SELECT 1 FROM ad_applications WHERE channel_ref = ? AND status IN ('approved', 'completed') LIMIT 1",
+            (channel_ref,),
+        )
+        if await cur.fetchone():
+            return True
+    if channel_id is not None:
+        cur = await db.execute(
+            "SELECT 1 FROM ad_applications WHERE channel_id = ? AND status IN ('approved', 'completed') LIMIT 1",
+            (channel_id,),
+        )
+        if await cur.fetchone():
+            return True
+    return False
+
+
+async def log_ad_audit(user_id: int | None, action: str, details: str = "") -> None:
+    """Append an admin/ad action to the audit trail."""
+    db = await get_db()
+    try:
+        await db.execute(
+            "INSERT INTO ad_audit_log(user_id, action, details) VALUES(?,?,?)",
+            (user_id, action, details),
+        )
+        await db.commit()
+    except Exception as e:
+        logger.warning("ad_audit_log write failed: %s", e)
+
+
+async def get_active_ad_campaign() -> dict | None:
+    """Get the active ad campaign."""
+    db = await get_db()
+    now_ts = int(time.time())
+    cur = await db.execute(
+        """SELECT id, name, description, is_active, start_date, end_date,
+        cooldown_days, max_shows, target_audience, created_at
+        FROM ad_campaigns WHERE is_active = 1 AND start_date <= ? AND (end_date IS NULL OR end_date > ?)
+        ORDER BY created_at DESC LIMIT 1""",
+        (now_ts, now_ts)
+    )
+    row = await cur.fetchone()
+    if not row:
+        return None
+    return {
+        "id": row[0], "name": row[1], "description": row[2], "is_active": row[3],
+        "start_date": row[4], "end_date": row[5], "cooldown_days": row[6],
+        "max_shows": row[7], "target_audience": row[8], "created_at": row[9],
+    }
+
+
+async def log_ad_notification(user_id: int, campaign_id=None) -> int:
+    """Log ad notification shown to user. Returns notification ID."""
+    db = await get_db()
+    cur = await db.execute(
+        "INSERT INTO ad_notifications (user_id, campaign_id, sent_at) VALUES (?, ?, ?)",
+        (user_id, campaign_id, int(time.time())),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def get_ad_notification_shows(user_id: int, campaign_id) -> int:
+    """Get number of times ad notification was shown to user."""
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT COUNT(*) FROM ad_notifications WHERE user_id = ? AND campaign_id IS ?",
+        (user_id, campaign_id),
+    )
+    row = await cur.fetchone()
+    return row[0] if row else 0
+
+
+async def mark_ad_notification_opened(user_id: int, campaign_id: int) -> bool:
+    """Mark ad notification as opened by user."""
+    db = await get_db()
+    await db.execute(
+        "UPDATE ad_notifications SET opened_at = ? WHERE user_id = ? AND campaign_id = ? AND opened_at IS NULL",
+        (int(time.time()), user_id, campaign_id)
+    )
+    await db.commit()
+    return True
+
+
+async def calculate_bonus_months(subscriber_count: int) -> int:
+    """Calculate bonus months based on subscriber count."""
+    if subscriber_count >= 350:
+        return 24  # 2 years
+    elif subscriber_count >= 250:
+        return 12  # 1 year
+    elif subscriber_count >= 150:
+        return 8
+    elif subscriber_count >= 100:
+        return 6
+    elif subscriber_count >= 50:
+        return 4
+    else:
+        return 2
+
+
+async def log_ad_analytics_event(user_id: int, event_type: str, details: dict = None) -> None:
+    """Log ad-related analytics event."""
+    db = await get_db()
+    import json
+    details_json = json.dumps(details) if details else None
+    await db.execute(
+        """INSERT INTO analytics_events (user_id, event_type, timestamp, details)
+        VALUES (?, ?, ?, ?)""",
+        (user_id, event_type, int(time.time()), details_json)
+    )
+    await db.commit()
+
+
+async def get_ad_analytics_stats() -> dict:
+    """Get ad program analytics statistics."""
+    db = await get_db()
+    
+    # Count unique users who saw offer
+    cur = await db.execute("SELECT COUNT(DISTINCT user_id) FROM ad_notifications")
+    offer_views = (await cur.fetchone())[0] or 0
+    
+    # Count offer clicks (opened notifications)
+    cur = await db.execute("SELECT COUNT(DISTINCT user_id) FROM ad_notifications WHERE opened_at IS NOT NULL")
+    offer_clicks = (await cur.fetchone())[0] or 0
+    
+    # Count applications submitted
+    cur = await db.execute("SELECT COUNT(*) FROM ad_applications")
+    applications_submitted = (await cur.fetchone())[0] or 0
+    
+    # Count approved applications
+    cur = await db.execute("SELECT COUNT(*) FROM ad_applications WHERE status = 'approved'")
+    applications_approved = (await cur.fetchone())[0] or 0
+    
+    # Count completed applications
+    cur = await db.execute("SELECT COUNT(*) FROM ad_applications WHERE status = 'completed'")
+    applications_completed = (await cur.fetchone())[0] or 0
+    
+    return {
+        "offer_views": offer_views,
+        "offer_clicks": offer_clicks,
+        "applications_submitted": applications_submitted,
+        "applications_approved": applications_approved,
+        "applications_completed": applications_completed,
     }
 
 

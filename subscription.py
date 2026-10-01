@@ -83,10 +83,11 @@ async def ask_config_name(
             if not xui_res:
                 logger.warning("Failed to update 3x-ui user expiry for user %d", user_id)
             
-            # Add payment record
+            # Add payment record (idempotent — duplicate provider payment ids
+            # must never create a second payment row)
             if is_paid and amount > 0:
                 tariff_name = f"Продление {days} дней ({limit_ip} устр.)"
-                await add_payment(
+                await record_payment_idempotent(
                     user_id, amount, currency, method, days, payload,
                     status="success", tariff=tariff_name, devices=limit_ip,
                     provider=method, provider_payment_id=payload,
@@ -127,7 +128,8 @@ async def ask_config_name(
                 f"📅 Новый срок: до <b>{format_timestamp(new_expiry)[:10]}</b>\n\n"
                 f"🔑 <b>Ваша подписка:</b>\n"
                 f"<code>{key_to_show}</code>\n\n"
-                f"Ключ остался прежним — всё работает автоматически!"
+                f"Ключ остался прежним — всё работает автоматически!\n\n"
+                f"Нажмите «Инструкция подключения» если нужна помощь."
             )
             
             from keyboards import after_key_kb
@@ -165,7 +167,7 @@ async def ask_config_name(
 
         if is_paid and amount > 0:
             tariff_name = f"Подписка {days} дней ({limit_ip} устр.)"
-            await add_payment(
+            await record_payment_idempotent(
                 user_id, amount, currency, method, days, payload,
                 status="success", tariff=tariff_name, devices=limit_ip,
                 provider=method, provider_payment_id=payload,
@@ -266,6 +268,7 @@ async def deliver_key(
     method: str = "trial",
     payload: str = "",
     extend_existing: bool = True,
+    skip_referral_bonus: bool = False,
 ) -> bool:
     """
     Создать или обновить клиента в 3x-ui, сохранить в БД, отправить ссылку на подписку пользователю.
@@ -354,7 +357,8 @@ async def deliver_key(
                 )
                 
                 # Process referral bonuses for paid extensions
-                if is_paid and amount > 0:
+                # (skipped for intro-trial payments: 1 ₽ is not a paid conversion)
+                if is_paid and amount > 0 and not skip_referral_bonus:
                     try:
                         from referral_system_new import process_payment_referral_bonus
                         logger.info(f"Processing referral bonus for extension: user {user_id}, amount {amount}")
@@ -364,7 +368,7 @@ async def deliver_key(
                         logger.warning("Referral system module not available, skipping bonus processing")
                     except Exception as e:
                         logger.error("Referral bonus error: %s", e)
-                
+
                 return True
 
         # If user has no DB key, check if they exist in 3x-ui before creating new!
@@ -461,16 +465,16 @@ async def deliver_key(
 
         device_word = "устройство" if limit_ip == 1 else ("устройства" if limit_ip in (2, 3, 4) else "устройств")
         text = (
-            f"Ключ активирован! Спасибо, что выбрали нас❤️\n\n"
+            f"✅ <b>VPN подключён!</b>\n\n"
             f"🔑 <b>Ваша подписка:</b>\n"
             f"<code>{subscription_url}</code>\n\n"
             f"📱 Доступно устройств: <b>{limit_ip}</b>\n"
             f"📅 Срок действия: <b>{days} дней</b>\n\n"
-            f"📋 <b>Инструкция по подключению:</b>\n"
-            f"1. Скопируйте ссылку выше\n"
-            f"2. Откройте приложение (v2rayNG / Nekoray / v2rayN)\n"
-            f"3. Добавьте сервер через подписку\n"
-            f"4. Подключитесь к серверу"
+            f"<b>Что делать дальше:</b>\n"
+            f"1. Нажмите «Инструкция подключения» ниже\n"
+            f"2. Выберите вашу платформу\n"
+            f"3. Установите приложение и импортируйте ссылку\n"
+            f"4. Подключитесь к VPN"
         )
         
         await bot.send_photo(
@@ -478,8 +482,9 @@ async def deliver_key(
             caption=text, parse_mode="HTML", reply_markup=after_key_kb(),
         )
 
-        # Реферальный бонус: начисляем рефералу 30 дней при первой платной покупке
-        if is_paid:
+        # Реферальный бонус: начисляем рефералу 30 дней при первой платной покупке.
+        # Интро-trial за 1 ₽ не считается платной конверсией.
+        if is_paid and not skip_referral_bonus:
             # Импортируем улучшенную реферальную систему
             try:
                 from referral_system_new import process_payment_referral_bonus

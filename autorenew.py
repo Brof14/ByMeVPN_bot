@@ -88,6 +88,12 @@ async def process_auto_renewals(bot: Bot) -> None:
             user_id, sub_id, key_id, days, devices, amount_rub,
         )
 
+        # DETERMINISTIC business idempotence key: subscription + the billing
+        # period being renewed + attempt number. If the worker restarts (or a
+        # duplicate run happens) before the charge result is recorded, YooKassa
+        # returns the SAME payment for the same key — no double charge.
+        idempotence_key = f"autorenew_{sub_id}_{key_id or 0}_{sub['expiry']}_{sub['fail_count']}"
+
         description = f"Автопродление ByMeVPN ({devices} устр., {days} дн.)"
         payment_res = await charge_yookassa_recurrent(
             amount_rub=amount_rub,
@@ -98,6 +104,7 @@ async def process_auto_renewals(bot: Bot) -> None:
             months=months,
             key_id=key_id,
             payment_method_id=payment_method_id,
+            idempotence_key=idempotence_key,
         )
 
         if not payment_res:

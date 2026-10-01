@@ -170,6 +170,37 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
 # Step 3: Choose payment method
 # ---------------------------------------------------------------------------
 
+async def _get_checkout_params(state: FSMContext) -> dict | None:
+    """
+    Read the tariff selected in the buy flow.
+
+    After a bot restart (MemoryStorage) the FSM is empty. Falling back to a
+    1-month price would silently charge the WRONG amount for a tariff the
+    user selected — so instead we return None and re-ask the user to pick a
+    tariff.
+    """
+    data = await state.get_data()
+    if "price_rub" not in data or "days" not in data:
+        return None
+    return {
+        "price_rub": int(data["price_rub"]),
+        "days": int(data["days"]),
+        "months": int(data.get("months", 1)),
+        "devices": validate_device_limit(data.get("devices", DEFAULT_DEVICE_LIMIT)),
+        "promo_code": data.get("promo_code", ""),
+    }
+
+
+async def _ask_tariff_again(bot: Bot, callback: CallbackQuery) -> None:
+    from keyboards import tariff_selection_kb
+    await send_with_photo(
+        bot, callback,
+        "⏳ <b>Сессия устарела</b>\n\nПожалуйста, выберите тариф заново — "
+        "это займёт несколько секунд.",
+        tariff_selection_kb(),
+    )
+
+
 # Legacy handler for old period_* callbacks
 @router.callback_query(F.data.startswith("period_"))
 async def cb_select_period_legacy(callback: CallbackQuery, bot: Bot, state: FSMContext):
@@ -188,12 +219,15 @@ async def cb_select_period_legacy(callback: CallbackQuery, bot: Bot, state: FSMC
 @router.callback_query(F.data == "pay_stars")
 async def cb_pay_stars(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await safe_answer(callback)
-    data = await state.get_data()
-    price_rub: int = data.get("price_rub", PRICE_1_MONTH)
-    days: int = data.get("days", DAYS_1M)
-    months: int = data.get("months", 1)
-    devices: int = validate_device_limit(data.get("devices", DEFAULT_DEVICE_LIMIT))
-    promo_code = data.get("promo_code", "")
+    params = await _get_checkout_params(state)
+    if not params:
+        await _ask_tariff_again(bot, callback)
+        return
+    price_rub: int = params["price_rub"]
+    days: int = params["days"]
+    months: int = params["months"]
+    devices: int = params["devices"]
+    promo_code: str = params["promo_code"]
     user_id = callback.from_user.id
 
     # Stars amount = rubles (1:1)
@@ -229,12 +263,15 @@ async def cb_pay_stars(callback: CallbackQuery, bot: Bot, state: FSMContext):
 @router.callback_query(F.data == "pay_yookassa")
 async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await safe_answer(callback)
-    data = await state.get_data()
-    price_rub: int = data.get("price_rub", PRICE_1_MONTH)
-    days: int = data.get("days", DAYS_1M)
-    months: int = data.get("months", 1)
-    devices: int = validate_device_limit(data.get("devices", DEFAULT_DEVICE_LIMIT))
-    promo_code = data.get("promo_code")
+    params = await _get_checkout_params(state)
+    if not params:
+        await _ask_tariff_again(bot, callback)
+        return
+    price_rub: int = params["price_rub"]
+    days: int = params["days"]
+    months: int = params["months"]
+    devices: int = params["devices"]
+    promo_code: str = params["promo_code"]
     user_id = callback.from_user.id
 
     url = await create_yookassa_payment(
@@ -279,12 +316,15 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
 @router.callback_query(F.data == "pay_crypto")
 async def cb_pay_crypto(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await safe_answer(callback)
-    data = await state.get_data()
-    price_rub: int = data.get("price_rub", PRICE_1_MONTH)
-    days: int = data.get("days", DAYS_1M)
-    months: int = data.get("months", 1)
-    devices: int = validate_device_limit(data.get("devices", DEFAULT_DEVICE_LIMIT))
-    promo_code = data.get("promo_code")
+    params = await _get_checkout_params(state)
+    if not params:
+        await _ask_tariff_again(bot, callback)
+        return
+    price_rub: int = params["price_rub"]
+    days: int = params["days"]
+    months: int = params["months"]
+    devices: int = params["devices"]
+    promo_code: str = params["promo_code"]
     user_id = callback.from_user.id
 
     result = await create_crypto_payment(
