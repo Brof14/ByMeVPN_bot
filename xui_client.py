@@ -155,12 +155,36 @@ async def test_xui_connection() -> tuple[bool, str]:
         return False, f"Ошибка конфигурации: {err}"
     try:
         api = await _get_api()
-        inbounds = await _api_call_with_retry(api.inbound.get_list)
         ids_str = ",".join(map(str, XUI_INBOUND_IDS))
-        return True, (
-            f"Соединение с 3x-ui успешно. "
-            f"Инбаундов в панели: {len(inbounds)}, настроенные: {ids_str}"
-        )
+        try:
+            inbounds = await _api_call_with_retry(api.inbound.get_list)
+            return True, (
+                f"Соединение с 3x-ui успешно. "
+                f"Инбаундов в панели: {len(inbounds)}, настроенные: {ids_str}"
+            )
+        except Exception as list_err:
+            # Some panels contain inbounds with null streamSettings, which breaks
+            # py3xui's strict Inbound.model_validate on get_list() — while the
+            # per-id get_by_id() path used by ALL key operations works fine.
+            # Fall back to checking the configured inbounds individually.
+            working = []
+            for iid in XUI_INBOUND_IDS:
+                try:
+                    inbound = await _api_call_with_retry(api.inbound.get_by_id, iid)
+                    if inbound is not None:
+                        working.append(iid)
+                except Exception:
+                    continue
+            if working:
+                logger.warning(
+                    "test_xui_connection: get_list() failed (%s) but configured inbounds %s respond via get_by_id",
+                    str(list_err)[:120], working,
+                )
+                return True, (
+                    f"Соединение с 3x-ui успешно (get_list недоступен из-за битого инбаунда в панели). "
+                    f"Рабочие настроенные инбаунды: {working}, настроенные: {ids_str}"
+                )
+            raise
     except Exception as e:
         logger.exception("test_xui_connection failed: %s", e)
         return False, f"Ошибка подключения к 3x-ui API: {str(e)}"
