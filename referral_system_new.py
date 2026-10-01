@@ -213,3 +213,71 @@ async def process_payment_referral_bonus(user_id: int, amount: int, bot) -> bool
     except Exception as e:
         logger.error("Error processing payment referral bonus: %s", e)
         return False
+
+
+# ---------------------------------------------------------------------------
+# Canonical referral reward for a qualifying payment (single path)
+# ---------------------------------------------------------------------------
+
+async def award_referral_for_payment(
+    user_id: int,
+    payment_ref: str,
+    amount: int = 50,
+    is_trial: bool = False,
+    bot=None,
+) -> bool:
+    """
+    The ONE place where a payment may award a referral reward.
+
+    Guarantees:
+    - one qualifying payment → at most one reward: referral_earnings has
+      UNIQUE(referrer_id, referred_id) and add_referral_earning is idempotent;
+    - intro-trial payments (1 ₽) are never a paid conversion → no reward;
+    - duplicate webhooks / retries / renewals → no second reward.
+
+    All payment handlers (YooKassa webhook, CryptoBot monitor, Telegram Stars)
+    must call this instead of implementing their own bonus logic.
+    """
+    if is_trial:
+        logger.info(
+            "Referral reward skipped: intro-trial payment for user %d is not a paid conversion",
+            user_id,
+        )
+        return False
+
+    try:
+        from database import get_referrer, add_referral_earning
+
+        referrer_id = await get_referrer(user_id)
+        if not referrer_id:
+            return False
+
+        bonus_added = await add_referral_earning(referrer_id, user_id, amount, payment_ref)
+        if not bonus_added:
+            logger.info(
+                "Referral reward already exists for referrer %d / referred %d (payment %s)",
+                referrer_id, user_id, payment_ref,
+            )
+            return False
+
+        logger.info(
+            "Referral reward +%d₽ awarded: referrer=%d, referred=%d, payment=%s",
+            amount, referrer_id, user_id, payment_ref,
+        )
+
+        if bot is not None:
+            try:
+                await bot.send_message(
+                    referrer_id,
+                    "🎉 <b>Поздравляем!</b>\n\n"
+                    "Ваш приглашённый оформил платную подписку.\n"
+                    f"Начислено: +{amount} ₽\n"
+                    "Текущий баланс обновлён в партнёрской программе.",
+                    parse_mode="HTML",
+                )
+            except Exception as notify_error:
+                logger.error("Failed to notify referrer %d: %s", referrer_id, notify_error)
+        return True
+    except Exception as e:
+        logger.error("Error awarding referral reward for user %d: %s", user_id, e)
+        return False

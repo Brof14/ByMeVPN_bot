@@ -23,7 +23,7 @@ from keyboards import tariff_selection_kb, payment_kb
 from payments import create_yookassa_payment, create_crypto_payment
 from subscription import deliver_key, ask_config_name
 from database import (
-    ensure_user, add_referral_earning, get_referrer,
+    ensure_user,
     record_payment_idempotent, update_payment_status,
     use_promo_code, validate_promo_code, has_user_used_promo,
 )
@@ -461,24 +461,9 @@ async def on_successful_payment(message: Message, bot: Bot, state: FSMContext):
             await use_promo_code(promo_code, user_id)
         await state.clear()
         
-        # Referral bonus
-        try:
-            referrer_id = await get_referrer(user_id)
-            if referrer_id:
-                bonus_added = await add_referral_earning(referrer_id, user_id, 50, charge_id)
-                if bonus_added:
-                    try:
-                        await bot.send_message(
-                            referrer_id,
-                            f"🎉 <b>Поздравляем!</b>\n\n"
-                            f"Ваш приглашённый оформил платную подписку.\n"
-                            f"Начислено: +50 ₽\n"
-                            f"Текущий баланс обновлён в партнёрской программе."
-                        )
-                    except Exception as notify_error:
-                        logger.error("Failed to notify referrer %d: %s", referrer_id, notify_error)
-        except Exception as e:
-            logger.error("Error processing referral bonus for Stars user %d: %s", user_id, e)
+        # Referral reward: single canonical path (idempotent, one per pair)
+        from referral_system_new import award_referral_for_payment
+        await award_referral_for_payment(user_id, charge_id, bot=bot)
     else:
         await update_payment_status(pay_db_id, "failed")
         logger.error("Stars delivery failed for user %d, charge_id %s", user_id, charge_id)

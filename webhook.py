@@ -33,7 +33,7 @@ from config import (
     YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY,
     WEBHOOK_HOST, WEBHOOK_PORT, ADMIN_ID,
 )
-from database import init_db, is_yookassa_processed, mark_yookassa_processed, add_referral_earning, get_referrer
+from database import init_db, is_yookassa_processed, mark_yookassa_processed
 from subscription import deliver_key
 
 logger = logging.getLogger(__name__)
@@ -387,29 +387,13 @@ async def _process_payment(bot: Bot, payment_id: str) -> None:
                     except Exception as notify_e:
                         logger.debug("Failed to send autorenew confirmation to user %d: %s", user_id, notify_e)
 
-            # Начисляем бонус рефералу за первую оплату (50₽).
-            # Интро-trial за 1 ₽ НЕ считается платной конверсией —
-            # реферальный бонус за него не начисляется.
+            # Referral reward: single canonical path — idempotent (UNIQUE in DB)
+            # and trial-safe. One qualifying payment = exactly one reward.
+            # The outer guard is deliberate defense-in-depth: the helper also
+            # refuses trial payments internally.
             if not is_trial:
-                try:
-                    referrer_id = await get_referrer(user_id)
-                    if referrer_id:
-                        bonus_added = await add_referral_earning(referrer_id, user_id, 50, payment_id)
-                        if bonus_added:
-                            logger.info("Referral bonus 50₽ added for referrer %d from user %d YooKassa payment", referrer_id, user_id)
-                            try:
-                                await bot.send_message(
-                                    referrer_id,
-                                    f"🎉 <b>Поздравляем!</b>\n\n"
-                                    f"Ваш приглашённый оформил платную подписку.\n"
-                                    f"Начислено: +50 ₽\n"
-                                    f"Текущий баланс обновлён в партнёрской программе.",
-                                    parse_mode="HTML"
-                                )
-                            except Exception as notify_error:
-                                logger.error("Failed to notify referrer %d: %s", referrer_id, notify_error)
-                except Exception as e:
-                    logger.error("Error processing referral bonus for YooKassa user %d: %s", user_id, e)
+                from referral_system_new import award_referral_for_payment
+                await award_referral_for_payment(user_id, payment_id, is_trial=False, bot=bot)
         else:
             await update_payment_status(pay_db_id, "failed")
             logger.error("YooKassa payment %s provisioning failed for user %d", payment_id, user_id)
@@ -524,26 +508,9 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
                 await use_promo_code(promo_code, user_id)
             logger.info("CryptoBot invoice %s successfully fulfilled for user %d", invoice_id, user_id)
 
-            # Referral bonus (mirrors YooKassa's 50₽ first-payment bonus)
-            try:
-                referrer_id = await get_referrer(user_id)
-                if referrer_id:
-                    bonus_added = await add_referral_earning(referrer_id, user_id, 50, str(invoice_id))
-                    if bonus_added:
-                        logger.info("Referral bonus 50₽ added for referrer %d from user %d Crypto Bot payment", referrer_id, user_id)
-                        try:
-                            await bot.send_message(
-                                referrer_id,
-                                "🎉 <b>Поздравляем!</b>\n\n"
-                                "Ваш приглашённый оформил платную подписку.\n"
-                                "Начислено: +50 ₽\n"
-                                "Текущий баланс обновлён в партнёрской программе.",
-                                parse_mode="HTML",
-                            )
-                        except Exception as notify_error:
-                            logger.error("Failed to notify referrer %d: %s", referrer_id, notify_error)
-            except Exception as e:
-                logger.error("Error processing referral bonus for Crypto Bot user %d: %s", user_id, e)
+            # Referral reward: single canonical path (mirrors YooKassa's rule).
+            from referral_system_new import award_referral_for_payment
+            await award_referral_for_payment(user_id, str(invoice_id), bot=bot)
         else:
             await update_payment_status(pay_db_id, "failed")
             logger.error("CryptoBot invoice %s provisioning failed for user %d", invoice_id, user_id)

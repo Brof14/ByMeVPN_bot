@@ -39,7 +39,11 @@ CREATE TABLE IF NOT EXISTS users (
     email       TEXT UNIQUE,
     is_banned   INTEGER DEFAULT 0,
     ban_reason  TEXT,
-    created     INTEGER DEFAULT (strftime('%s','now'))
+    created     INTEGER DEFAULT (strftime('%s','now')),
+    -- Legacy drift: `username` was added to production out-of-band before this
+    -- schema was consolidated. Declared so fresh installs match prod 1:1.
+    -- No ALTER needed: every existing DB already has the column.
+    username    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS keys (

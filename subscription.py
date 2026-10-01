@@ -139,18 +139,12 @@ async def ask_config_name(
                 caption=text, parse_mode="HTML", reply_markup=after_key_kb(),
             )
             
-            # Process referral bonuses for paid extensions
-            if is_paid and amount > 0:
-                try:
-                    from referral_system_new import process_payment_referral_bonus
-                    logger.info(f"Processing referral bonus for extension: user {user_id}, amount {amount}")
-                    result = await process_payment_referral_bonus(user_id, amount, bot)
-                    logger.info(f"Referral bonus result for extension: {result}")
-                except ImportError:
-                    logger.warning("Referral system module not available, skipping bonus processing")
-                except Exception as e:
-                    logger.error("Referral bonus error: %s", e)
-            
+            # NOTE: referral rewards are intentionally NOT processed here.
+            # One qualifying payment = exactly one reward, awarded in a single
+            # place — the payment-processing level (webhook.py / Stars handler
+            # → referral_system_new.award_referral_for_payment). Awarding here
+            # too caused double rewards (30 days AND 50 ₽ for the same payment).
+
             return
     
     # Check if user already exists in 3x-ui (e.g. created manually or pre-migration)
@@ -356,18 +350,9 @@ async def deliver_key(
                     caption=text, parse_mode="HTML", reply_markup=after_key_kb(),
                 )
                 
-                # Process referral bonuses for paid extensions
-                # (skipped for intro-trial payments: 1 ₽ is not a paid conversion)
-                if is_paid and amount > 0 and not skip_referral_bonus:
-                    try:
-                        from referral_system_new import process_payment_referral_bonus
-                        logger.info(f"Processing referral bonus for extension: user {user_id}, amount {amount}")
-                        result = await process_payment_referral_bonus(user_id, amount, bot)
-                        logger.info(f"Referral bonus result for extension: {result}")
-                    except ImportError:
-                        logger.warning("Referral system module not available, skipping bonus processing")
-                    except Exception as e:
-                        logger.error("Referral bonus error: %s", e)
+                # NOTE: no referral reward here — centralized at the payment
+                # processing level (see award_referral_for_payment). The
+                # skip_referral_bonus flag (intro trial) is honoured there.
 
                 return True
 
@@ -482,21 +467,9 @@ async def deliver_key(
             caption=text, parse_mode="HTML", reply_markup=after_key_kb(),
         )
 
-        # Реферальный бонус: начисляем рефералу 30 дней при первой платной покупке.
-        # Интро-trial за 1 ₽ не считается платной конверсией.
-        if is_paid and not skip_referral_bonus:
-            # Импортируем улучшенную реферальную систему
-            try:
-                from referral_system_new import process_payment_referral_bonus
-                # Автоматически обрабатываем реферальный бонус
-                logger.info(f"Processing payment referral bonus for user {user_id}, amount {amount}")
-                result = await process_payment_referral_bonus(user_id, amount, bot)
-                logger.info(f"Payment referral bonus result: {result}")
-            except ImportError:
-                # Пропускаем реферальный бонус, если модуль недоступен
-                logger.warning("Referral system module not available, skipping bonus processing")
-            except Exception as e:
-                logger.error(f"Error processing payment referral bonus: {e}")
+        # NOTE: no referral reward here — one qualifying payment must produce
+        # exactly one reward, and it is awarded once at the payment-processing
+        # level (webhook.py / Stars handler → award_referral_for_payment).
 
         logger.info("Subscription delivered: user=%d name='%s' days=%d", user_id, config_name, days)
         return True

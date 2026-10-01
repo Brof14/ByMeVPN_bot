@@ -747,9 +747,12 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
                 "metadata": {"user_id": str(user_id), "days": "3", "devices": "2", "months": "1", "trial": "1"},
             }
 
+            # Referral rewards moved to the canonical single path
+            # (referral_system_new.award_referral_for_payment) — patch it there.
+            import referral_system_new
             with patch.object(webhook, "_fetch_yookassa_payment", new_callable=AsyncMock, return_value=trial_payment), \
                  patch.object(webhook, "deliver_key", new_callable=AsyncMock, return_value=True) as mock_deliver, \
-                 patch.object(webhook, "add_referral_earning", new_callable=AsyncMock, return_value=True) as mock_referral:
+                 patch.object(referral_system_new, "award_referral_for_payment", new_callable=AsyncMock, return_value=True) as mock_referral:
                 bot = MagicMock()
                 bot.send_message = AsyncMock()
                 await webhook._process_payment(bot, "yk_trial_payment_1")
