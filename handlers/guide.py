@@ -20,9 +20,41 @@ async def cb_guide_menu(callback: CallbackQuery, bot: Bot):
     text = (
         "<b>Выберите вашу платформу</b>\n\n"
         "Нажмите на вашу операционную систему "
-        "и следуйте простой инструкции."
+        "и следуйте простой инструкции.\n\n"
+        "Если что-то не получится — внизу есть «Не получается?»."
     )
     await send_with_photo(bot, callback, text, connection_guide_kb())
+
+
+# Как понять, что VPN работает + куда идти, если нет (дописывается к каждой инструкции)
+_GUIDE_CHECK = (
+    "\n\n✅ <b>Как понять, что всё работает:</b> нажмите кнопку подключения — "
+    "появится статус «подключено». Откройте любой сайт: если загружается, готово.\n\n"
+    "Не получилось? Нажмите «Не получается?» ниже."
+)
+
+
+@router.callback_query(F.data == "trouble")
+async def cb_trouble(callback: CallbackQuery, bot: Bot):
+    """Self-service troubleshooting: concrete ordered steps, honest, no promises."""
+    await safe_answer(callback)
+    text = (
+        "⚠️ <b>Не получается подключить?</b>\n\n"
+        "Пройдите по порядку — чаще всего помогает первый же шаг:\n\n"
+        "1. Выключите другие VPN и прокси (включая системные) и переподключитесь.\n\n"
+        "2. Обновите подписку: «Мои ключи» → скопируйте ссылку заново → в приложении «Вставить из буфера».\n\n"
+        "3. Проверьте, что в приложении появилась именно подписка ByMeVPN.\n\n"
+        "4. VPN подключён, но сайты не открываются? Переподключитесь или выберите другой сервер в приложении.\n\n"
+        "5. Не помогло — напишите в поддержку, разберёмся."
+    )
+    from aiogram.types import InlineKeyboardBuilder, InlineKeyboardButton
+    from keyboards import _SUPPORT_URL
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="📋 Открыть инструкцию", callback_data="connection_guide"))
+    kb.row(InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys"))
+    kb.row(InlineKeyboardButton(text="Написать в поддержку", url=_SUPPORT_URL))
+    kb.row(InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu"))
+    await send_with_photo(bot, callback, text, kb.as_markup())
 
 
 _GUIDES: dict[str, str] = {
@@ -132,7 +164,7 @@ async def cb_guide_linux_distro(callback: CallbackQuery, bot: Bot):
         distro,
         "Инструкция для данного дистрибутива в разработке.",
     )
-    await send_with_photo(bot, callback, text, linux_guide_back_kb())
+    await send_with_photo(bot, callback, text + _GUIDE_CHECK, linux_guide_back_kb())
 
 
 @router.callback_query(F.data.in_({"guide_ios", "guide_android", "guide_windows", "guide_macos"}))
@@ -143,4 +175,4 @@ async def cb_platform_guide(callback: CallbackQuery, bot: Bot):
         platform,
         "Инструкция для этой платформы будет добавлена в ближайшее время.",
     )
-    await send_with_photo(bot, callback, text, guide_back_kb())
+    await send_with_photo(bot, callback, text + _GUIDE_CHECK, guide_back_kb())

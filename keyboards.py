@@ -279,6 +279,7 @@ def confirm_delete_kb(key_id: int) -> InlineKeyboardMarkup:
 def after_key_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="📋 Инструкция подключения", callback_data="connection_guide"))
+    kb.row(InlineKeyboardButton(text="⚠️ Не получается подключить", callback_data="trouble"))
     kb.row(InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys"))
     kb.row(
         InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu"),
@@ -327,6 +328,7 @@ def connection_guide_kb() -> InlineKeyboardMarkup:
         ("Linux", "guide_linux"),
     ]:
         kb.row(InlineKeyboardButton(text=name, callback_data=cb))
+    kb.row(InlineKeyboardButton(text="Не получается?", callback_data="trouble"))
     kb.row(
         InlineKeyboardButton(text="Назад", callback_data="back_to_menu"),
         InlineKeyboardButton(text="Поддержка", url=_SUPPORT_URL)
@@ -352,6 +354,7 @@ def linux_guide_back_kb() -> InlineKeyboardMarkup:
     """Back button from specific Linux distro guide to Linux distro selection."""
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="◀️ К выбору Linux", callback_data="guide_linux"))
+    kb.row(InlineKeyboardButton(text="Не получается?", callback_data="trouble"))
     kb.row(
         InlineKeyboardButton(text="В главное меню", callback_data="back_to_menu"),
         InlineKeyboardButton(text="Поддержка", url=_SUPPORT_URL)
@@ -362,6 +365,7 @@ def linux_guide_back_kb() -> InlineKeyboardMarkup:
 def guide_back_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="◀️ Назад к платформам", callback_data="connection_guide"))
+    kb.row(InlineKeyboardButton(text="Не получается?", callback_data="trouble"))
     kb.row(
         InlineKeyboardButton(text="В главное меню", callback_data="back_to_menu"),
         InlineKeyboardButton(text="Поддержка", url=_SUPPORT_URL)
