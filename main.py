@@ -182,7 +182,7 @@ async def main() -> None:
     routers = [
         start_router, buy_router, subscription_router, keys_router,
         partner_router, guide_router, legal_router,
-        admin_router, auth_router, fallback_router, ad_program_router
+        admin_router, auth_router, ad_program_router, fallback_router
     ]
 
     for router in routers:

@@ -9,6 +9,7 @@ from typing import Optional
 import aiosqlite
 from cache import cache_user_info, invalidate_user_cache, invalidate_subscription_cache
 from async_utils import _db_semaphore
+from constants import normalize_days
 
 logger = logging.getLogger(__name__)
 
@@ -998,6 +999,10 @@ async def unban_user(user_id: int) -> bool:
 
 async def add_manual_days(user_id: int, days: int, admin_id: int) -> bool:
     """Add manual days to user's latest active key or create new one."""
+    days = normalize_days(days)
+    if days is None:
+        logger.error("add_manual_days: rejected out-of-range days for user %s (admin %s)", user_id, admin_id)
+        return False
     db = await get_db()
     current_time = int(time.time())
 
@@ -2745,6 +2750,10 @@ async def delete_user_and_keys(user_id: int) -> list:
 
 async def set_key_days(key_id: int, days: int) -> bool:
     """Extend key to specified days in both DB and 3x-UI panel"""
+    days = normalize_days(days)
+    if days is None:
+        logger.error("set_key_days: rejected out-of-range days for key %s", key_id)
+        return False
     db = await get_db()
     expiry = int(time.time()) + days * 86400
     
@@ -2879,6 +2888,10 @@ async def get_payment_stats() -> dict:
 
 async def extend_key(key_id: int, additional_days: int, limit_ip: Optional[int] = None) -> bool:
     """Extend key by additional days from max(current_expiry, now) and optionally update device limit atomically."""
+    additional_days = normalize_days(additional_days)
+    if additional_days is None:
+        logger.error("extend_key: rejected out-of-range days for key %s", key_id)
+        return False
     db = await get_db()
     async with _db_semaphore:
         # Atomic update directly in SQL

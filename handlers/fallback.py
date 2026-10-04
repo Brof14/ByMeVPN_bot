@@ -1,6 +1,12 @@
 """
 Fallback handler: handle unknown commands only.
 Must be last registered router.
+
+CRITICAL: both handlers require StateFilter(None) — a fallback must NEVER
+consume a message while ANY FSM flow is active (admin inputs, ad rejection
+reason, email auth, payout amount, giveaway, purchase). An active state with
+no matching handler leaves the message unanswered, which is strictly better
+than the fallback destroying the flow's input.
 """
 import logging
 
@@ -9,14 +15,13 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
-from states import BuyFlow
 from async_utils import monitor_performance
 
 logger = logging.getLogger(__name__)
 router = Router()
 
 
-@router.message(F.command, ~StateFilter(BuyFlow.waiting_for_config_name, BuyFlow.waiting_name))
+@router.message(F.command, StateFilter(None))
 @monitor_performance("fallback_command")
 async def fallback_command(message: Message, bot: Bot, state: FSMContext):
     """Handle unknown commands only."""
@@ -38,7 +43,7 @@ async def fallback_command(message: Message, bot: Bot, state: FSMContext):
     await _send_main_menu(bot, message, user_id, name)
 
 
-@router.message(F.text & ~F.command, ~StateFilter(BuyFlow.waiting_for_config_name, BuyFlow.waiting_name))
+@router.message(F.text & ~F.command, StateFilter(None))
 @monitor_performance("fallback_text")
 async def fallback_text(message: Message, bot: Bot, state: FSMContext):
     """Handle unknown text messages and show main menu."""

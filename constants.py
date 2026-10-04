@@ -22,6 +22,29 @@ CAPTION_LIMIT = 1024    # Telegram caption character limit
 REF_BONUS_DAYS = 15
 
 # ============================================================================
+# Days-grant safety bound (single source of truth)
+# ============================================================================
+# Upper bound for ANY single days-grant: admin grants/edits, promos,
+# giveaways, referral bonuses, autorenewal periods. Prevents the historical
+# "date value out of range" crash from unbounded input (e.g. days=99999999).
+MAX_GRANT_DAYS = 3650  # 10 years — generous, but finite
+
+
+def normalize_days(days) -> int | None:
+    """Return a safe day count (1..MAX_GRANT_DAYS) or None if invalid.
+
+    Every path that turns user/admin/metadata input into a key expiry must
+    pass through this before touching datetime arithmetic.
+    """
+    try:
+        d = int(days)
+    except (TypeError, ValueError):
+        return None
+    if d < 1 or d > MAX_GRANT_DAYS:
+        return None
+    return d
+
+# ============================================================================
 # URLs and Links
 # ============================================================================
 LOGO_URL = "https://i.ibb.co/rG9F5PCS/logo.jpg"

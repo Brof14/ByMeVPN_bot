@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 
 from aiogram import Bot, Router
-from aiogram.exceptions import TelegramForbiddenError
+from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 
@@ -27,6 +27,42 @@ logger = logging.getLogger(__name__)
 
 # Create router for subscription handlers
 router = Router()
+
+
+async def _send_delivery_message(bot: Bot, chat_id: int, text: str) -> bool:
+    """Deliver the key message to the user. NEVER raises.
+
+    Provisioning success must not be downgraded by a notification failure:
+    by the time this runs, the key already exists in DB and 3x-ui, so a
+    'chat not found' / bot-blocked / deleted-account error means
+    notification=FAILED, provisioning=SUCCESS. The user can always fetch
+    the key via «Мои ключи».
+    """
+    try:
+        await bot.send_photo(
+            chat_id=chat_id, photo=LOGO_URL,
+            caption=text, parse_mode="HTML", reply_markup=after_key_kb(),
+        )
+        return True
+    except (TelegramBadRequest, TelegramForbiddenError) as e:
+        logger.error("Delivery message not delivered to %s (provisioning already done): %s", chat_id, e)
+        return False
+    except Exception as e:
+        logger.error("Unexpected delivery-message failure for %s: %s", chat_id, e)
+        return False
+
+
+async def _log_notification_failure(user_id: int, context: dict) -> None:
+    """Record that provisioning succeeded but Telegram delivery failed."""
+    try:
+        await log_key_error(
+            user_id=user_id,
+            error_type="notification_failed",
+            error_message="key provisioned but Telegram message not delivered",
+            context=context,
+        )
+    except Exception as e:
+        logger.error("Failed to log notification failure for %s: %s", user_id, e)
 
 # Referral bonus: 30 days for referrer when referred makes first paid purchase
 REF_BONUS_DAYS = 30
@@ -132,13 +168,12 @@ async def ask_config_name(
                 f"Нажмите «Инструкция подключения» если нужна помощь."
             )
             
-            from keyboards import after_key_kb
-            from utils import send_with_photo, LOGO_URL
-            await bot.send_photo(
-                chat_id=chat_id, photo=LOGO_URL,
-                caption=text, parse_mode="HTML", reply_markup=after_key_kb(),
-            )
-            
+            delivered = await _send_delivery_message(bot, chat_id, text)
+            if not delivered:
+                await _log_notification_failure(
+                    user_id, {"branch": "ask_config_name.extend", "days": days, "limit_ip": limit_ip}
+                )
+
             # NOTE: referral rewards are intentionally NOT processed here.
             # One qualifying payment = exactly one reward, awarded in a single
             # place — the payment-processing level (webhook.py / Stars handler
@@ -181,11 +216,11 @@ async def ask_config_name(
             f"<code>{sub_url}</code>\n\n"
             f"Ваш VPN-ключ сохранён и готов к работе!"
         )
-        from keyboards import after_key_kb
-        await bot.send_photo(
-            chat_id=chat_id, photo=LOGO_URL,
-            caption=text, parse_mode="HTML", reply_markup=after_key_kb(),
-        )
+        delivered = await _send_delivery_message(bot, chat_id, text)
+        if not delivered:
+            await _log_notification_failure(
+                user_id, {"branch": "ask_config_name.import_xui", "days": days, "limit_ip": limit_ip}
+            )
         return
 
     # No existing keys anywhere - create new one
@@ -345,11 +380,12 @@ async def deliver_key(
                     f"Ключ остался прежним — всё работает автоматически!"
                 )
                 
-                await bot.send_photo(
-                    chat_id=chat_id, photo=LOGO_URL,
-                    caption=text, parse_mode="HTML", reply_markup=after_key_kb(),
-                )
-                
+                delivered = await _send_delivery_message(bot, chat_id, text)
+                if not delivered:
+                    await _log_notification_failure(
+                        user_id, {"branch": "deliver_key.extend", "days": days, "limit_ip": limit_ip}
+                    )
+
                 # NOTE: no referral reward here — centralized at the payment
                 # processing level (see award_referral_for_payment). The
                 # skip_referral_bonus flag (intro trial) is honoured there.
@@ -390,10 +426,11 @@ async def deliver_key(
                 f"<code>{sub_url}</code>\n\n"
                 f"Ваш VPN-ключ сохранён и готов к работе!"
             )
-            await bot.send_photo(
-                chat_id=chat_id, photo=LOGO_URL,
-                caption=text, parse_mode="HTML", reply_markup=after_key_kb(),
-            )
+            delivered = await _send_delivery_message(bot, chat_id, text)
+            if not delivered:
+                await _log_notification_failure(
+                    user_id, {"branch": "deliver_key.import_xui", "days": days, "limit_ip": limit_ip}
+                )
             return True
 
     try:
@@ -462,10 +499,11 @@ async def deliver_key(
             f"4. Подключитесь к VPN"
         )
         
-        await bot.send_photo(
-            chat_id=chat_id, photo=LOGO_URL,
-            caption=text, parse_mode="HTML", reply_markup=after_key_kb(),
-        )
+        delivered = await _send_delivery_message(bot, chat_id, text)
+        if not delivered:
+            await _log_notification_failure(
+                user_id, {"branch": "deliver_key.create", "days": days, "limit_ip": limit_ip}
+            )
 
         # NOTE: no referral reward here — one qualifying payment must produce
         # exactly one reward, and it is awarded once at the payment-processing

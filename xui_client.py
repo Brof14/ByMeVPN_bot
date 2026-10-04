@@ -833,16 +833,6 @@ def format_traffic(bytes_used: int) -> str:
         return f"{bytes_used / (1024 * 1024 * 1024):.2f} ГБ"
 
 
-# Совместимость со старым кодом (алиасы)
-create_marzban_user = create_xui_user
-get_marzban_user = get_xui_user
-delete_marzban_user = delete_xui_user
-update_marzban_user_expiry = update_xui_user_expiry
-get_user_subscription_links = get_user_subscription_links
-validate_marzban_config = validate_xui_config
-test_marzban_connection = test_xui_connection
-
-
 def get_api_client():
     """Stub для совместимости с main.py (3x-ui не требует pre-init)"""
     return None

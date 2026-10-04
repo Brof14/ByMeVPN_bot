@@ -39,7 +39,7 @@ from database import (
 )
 from states import AdminFlow
 from utils import safe_answer
-from constants import format_timestamp as fmt_date, format_days_left as fmt_days_left
+from constants import format_timestamp as fmt_date, format_days_left as fmt_days_left, MAX_GRANT_DAYS
 from xui_client import delete_xui_user
 
 logger = logging.getLogger(__name__)
@@ -769,10 +769,10 @@ async def receive_edit_days(message: Message, state: FSMContext):
     await state.clear()
     try:
         days = int(message.text.strip())
-        if days < 1:
+        if days < 1 or days > MAX_GRANT_DAYS:
             raise ValueError
     except ValueError:
-        await message.answer("❌ Введите положительное число дней."); return
+        await message.answer(f"❌ Введите число дней от 1 до {MAX_GRANT_DAYS}."); return
     key_id = data.get("edit_key_id")
     
     # set_key_days now automatically syncs with 3x-ui panel
@@ -1785,11 +1785,11 @@ async def cb_system_status(callback: CallbackQuery, bot: Bot):
         pass
     
     # Connection test to 3x-ui
-    marzban_status = "❌ Не подключен"
+    xui_status = "❌ Не подключен"
     try:
         from xui_client import test_xui_connection
         connected, _ = await test_xui_connection()
-        marzban_status = "✅ Подключен" if connected else "❌ Не подключен"
+        xui_status = "✅ Подключен" if connected else "❌ Не подключен"
     except:
         pass
     
@@ -1805,7 +1805,7 @@ async def cb_system_status(callback: CallbackQuery, bot: Bot):
         f"  Размер: {db_size:.2f} MB\n"
         f"  Пользователей: {total_users}\n\n"
         f"🔌 <b>3x-ui панель:</b>\n"
-        f"  Статус: {marzban_status}\n"
+        f"  Статус: {xui_status}\n"
         f"  Хост: <code>{XUI_URL}</code>\n"
         f"  Логин: <code>{XUI_USERNAME}</code>\n\n"
         f"💾 <b>Кэш:</b>\n"
@@ -2002,8 +2002,7 @@ async def receive_key_name(message: Message, state: FSMContext):
     from database import get_key_by_id
     key = await get_key_by_id(key_id)
     # 3x-ui: skip panel update of client name
-    success_marzban = False
-    
+
     await state.clear()
 
     if success_db:
@@ -2052,11 +2051,11 @@ async def receive_grant_key_days(message: Message, bot: Bot, state: FSMContext):
     
     try:
         days = int(message.text.strip())
-        if days < 1:
+        if days < 1 or days > MAX_GRANT_DAYS:
             raise ValueError
     except ValueError:
-        await message.answer("❌ Введите положительное число дней."); return
-    
+        await message.answer(f"❌ Введите число дней от 1 до {MAX_GRANT_DAYS}."); return
+
     data = await state.get_data()
     await state.clear()
     uid = data.get("grant_key_user_id")
@@ -3330,10 +3329,10 @@ async def handle_gw_prize(message: Message, state: FSMContext):
         return
     try:
         prize_days = int(message.text.strip())
-        if prize_days <= 0:
+        if prize_days <= 0 or prize_days > MAX_GRANT_DAYS:
             raise ValueError
     except ValueError:
-        await message.answer("❌ Введите положительное целое число дней (например: 30):")
+        await message.answer(f"❌ Введите положительное целое число дней от 1 до {MAX_GRANT_DAYS} (например: 30):")
         return
     await state.update_data(gw_prize=prize_days)
     await state.set_state(AdminFlow.giveaway_winners)

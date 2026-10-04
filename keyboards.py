@@ -56,7 +56,9 @@ def main_menu_with_keys(trial_used: bool = False) -> InlineKeyboardMarkup:
         kb.row(InlineKeyboardButton(text="🎁 Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
     kb.row(InlineKeyboardButton(text="💳 Тарифы", callback_data="buy_vpn", style="primary"))
     kb.row(InlineKeyboardButton(text="Мои ключи", callback_data="my_keys"))
-    kb.row(InlineKeyboardButton(text="Войти в другой аккаунт", callback_data="auth_existing_client"))
+    # «Войти в другой аккаунт» скрыт (§24): функционал не готов, callback
+    # auth_existing_client остаётся в handlers/auth.py — вернём, когда будет
+    # рабочий account switching.
     kb.row(InlineKeyboardButton(text="Партнёрская программа", callback_data="partner"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
