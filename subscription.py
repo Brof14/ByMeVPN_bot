@@ -154,6 +154,10 @@ async def ask_config_name(
                     )
                 except Exception:
                     pass
+                if not rollback_ok:
+                    raise RuntimeError(
+                        f"3x-ui extension failed and DB rollback failed for user {user_id}, key {key_id}"
+                    )
                 return
 
             # Add payment record (idempotent — duplicate provider payment ids
@@ -400,6 +404,10 @@ async def deliver_key(
                         )
                     except Exception:
                         pass
+                    if not rollback_ok:
+                        raise RuntimeError(
+                            f"3x-ui extension failed and DB rollback failed for user {user_id}, key {key_id}"
+                        )
                     return False
 
                 # Add payment record (idempotent)
@@ -631,9 +639,8 @@ async def deliver_key(
             await bot.send_message(
                 chat_id,
                 "❌ <b>Ошибка создания VPN подписки</b>\n\n"
-                "Не удалось создать подписку в панели управления.\n"
-                "Если вы оплатили, деньги будут возвращены автоматически.\n"
-                "Пожалуйста, напишите в поддержку — мы поможем!\n\n"
+                "Не удалось подтвердить создание подписки на сервере.\n"
+                "Если вы оплатили, не оплачивайте повторно — поддержка проверит платёж и восстановит доступ.\n\n"
                 "📞 Поддержка: @ByMeVPN_support_bot",
                 parse_mode="HTML",
             )
