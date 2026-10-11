@@ -451,14 +451,8 @@ async def _start_intro_trial(bot: Bot, callback: CallbackQuery, ref_id: int | No
         )
         return
 
-    # Small click-bonus for the referrer (trial signup) — main reward is
-    # granted only after a real recurring payment.
-    if ref_id and ref_id != user_id:
-        try:
-            from referral_system_new import claim_referral_bonus
-            await claim_referral_bonus(bot, ref_id, user_id, "trial_bonus")
-        except Exception as e:
-            logger.error("Failed to claim referral click bonus for referrer %s: %s", ref_id, e)
+    # Referral trial bonuses are granted only after YooKassa confirms the
+    # 1 ₽ payment and the subscription key has been provisioned successfully.
 
     text = (
         "🎁 <b>3 дня ByMeVPN — 1 ₽</b>\n\n"
