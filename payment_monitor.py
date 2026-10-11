@@ -11,7 +11,6 @@ from datetime import datetime, timedelta
 
 from aiogram import Bot
 from config import YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY, CRYPTO_BOT_TOKEN
-from database import is_yookassa_processed, mark_yookassa_processed, is_crypto_processed
 from webhook import _process_payment, _process_crypto_invoice
 from payments import get_paid_crypto_invoices
 
@@ -27,14 +26,12 @@ class PaymentMonitor:
         self.start_time = datetime.utcnow()  # Track when monitor started
         
     async def get_successful_payments(self, minutes_back: int = 5) -> List[Dict]:
-        """Получить успешные платежи за последние N минут, но только после старта монитора"""
+        """Получить успешные платежи за последние N минут, включая период до рестарта."""
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                # Use the later of: 5 minutes ago OR monitor start time
-                cutoff_time = max(
-                    datetime.utcnow() - timedelta(minutes=minutes_back),
-                    self.start_time
-                )
+                # Do not clamp to process start time: payments made during downtime
+                # must be discoverable after a restart.
+                cutoff_time = datetime.utcnow() - timedelta(minutes=minutes_back)
                 created_at_gte = cutoff_time.isoformat() + 'Z'
                 
                 url = f"https://api.yookassa.ru/v3/payments?limit=50&status=succeeded&created_at.gte={created_at_gte}"
@@ -48,10 +45,10 @@ class PaymentMonitor:
             logger.error(f"Error fetching payments: {e}")
             return []
     
-    async def check_and_process_payments(self):
-        """Проверить и обработать необработанные платежи"""
+    async def check_and_process_payments(self, minutes_back: int = 5):
+        """Проверить и обработать необработанные платежи за заданное окно."""
         try:
-            payments = await self.get_successful_payments()
+            payments = await self.get_successful_payments(minutes_back=minutes_back)
             
             if not payments:
                 return
@@ -63,16 +60,9 @@ class PaymentMonitor:
                 if not payment_id:
                     continue
                     
-                # Проверяем, не обработан ли уже платеж
-                if await is_yookassa_processed(payment_id):
-                    continue
-                    
-                logger.info(f"Processing new payment: {payment_id}")
-                
-                # Проверяем, не обработан ли уже перед вызовом _process_payment
-                if await is_yookassa_processed(payment_id):
-                    logger.info(f"Payment {payment_id} already processed, skipping")
-                    continue
+                # Delegate deduplication to the payment ledger. A legacy
+                # processed marker alone must not hide an interrupted delivery.
+                logger.info(f"Checking payment through recovery-safe handler: {payment_id}")
                 
                 # Обрабатываем платеж (функция сама пометит как обработанный)
                 await _process_payment(self.bot, payment_id)
@@ -91,8 +81,8 @@ class PaymentMonitor:
         self.running = True
         logger.info("Payment monitor started")
         
-        # Сначала обрабатываем все необработанные платежи за последний час
-        await self.check_and_process_payments()
+        # On startup scan an hour back so payments during downtime are recovered.
+        await self.check_and_process_payments(minutes_back=60)
         
         while self.running:
             try:
@@ -141,22 +131,10 @@ class CryptoPaymentMonitor:
                 if invoice_id is None:
                     continue
 
-                if await is_crypto_processed(invoice_id):
-                    continue
-
-                # Skip invoices created before monitor start (to avoid notifications after restart)
-                invoice_created_at = invoice.get("created_at")
-                if invoice_created_at:
-                    try:
-                        # Parse timestamp (Crypto Bot returns Unix timestamp in seconds)
-                        created_time = datetime.fromtimestamp(invoice_created_at)
-                        if created_time < self.start_time:
-                            logger.info(f"Crypto monitor: skipping invoice {invoice_id} created before monitor start")
-                            continue
-                    except (ValueError, TypeError) as e:
-                        logger.debug(f"Crypto monitor: could not parse created_at for invoice {invoice_id}: {e}")
-
-                logger.info(f"Crypto monitor: processing new invoice {invoice_id}")
+                # Do not skip old paid invoices solely because the process restarted
+                # or a legacy marker exists. The invoice handler checks the payment
+                # ledger and quarantines ambiguous cases without double-fulfillment.
+                logger.info(f"Checking paid invoice through recovery-safe handler: {invoice_id}")
                 await _process_crypto_invoice(self.bot, invoice)
 
         except Exception as e:

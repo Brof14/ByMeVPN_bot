@@ -912,7 +912,11 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
 
             # Direct API-level check: same key passed through to HTTP headers
             from payments import charge_yookassa_recurrent
-            with patch("payments.httpx.AsyncClient", FakeClient):
+            with (
+                patch("payments.YOOKASSA_SHOP_ID", "test-shop"),
+                patch("payments.YOOKASSA_SECRET_KEY", "test-secret"),
+                patch("payments.httpx.AsyncClient", FakeClient),
+            ):
                 await charge_yookassa_recurrent(
                     amount_rub=89, description="test", user_id=1, days=30,
                     devices=2, months=1, key_id=5, payment_method_id="pm_x",

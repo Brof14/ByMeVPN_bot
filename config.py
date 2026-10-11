@@ -78,6 +78,9 @@ if not XUI_API_URL:
 
 XUI_USERNAME = os.getenv("XUI_USERNAME", "")
 XUI_PASSWORD = os.getenv("XUI_PASSWORD", "")
+# TLS certificate verification is enabled by default. Set XUI_TLS_VERIFY=false
+# only for a deliberately self-signed/private panel certificate.
+XUI_TLS_VERIFY = os.getenv("XUI_TLS_VERIFY", "true").strip().lower() not in {"0", "false", "no", "off"}
 
 # Список инбаундов через запятую: XUI_INBOUND_IDS=2,3,7,8,10,11 (VLESS)
 _xui_ids_raw = os.getenv("XUI_INBOUND_IDS", os.getenv("XUI_INBOUND_ID", "2,3,7,8,10,11"))
