@@ -107,8 +107,17 @@ async def process_auto_renewals(bot: Bot) -> None:
             idempotence_key=idempotence_key,
         )
 
+        if payment_res and payment_res.get("_outcome_unknown"):
+            # Do not increment fail_count and do not generate a new idempotency key.
+            # The same expiry/fail_count pair will be retried and reconciled safely.
+            logger.warning(
+                "Auto-renew outcome is unknown for subscription %d; preserving idempotency key",
+                sub_id,
+            )
+            continue
+
         if not payment_res:
-            disabled = await update_auto_renew_charge_failure(sub_id, "API request failed")
+            disabled = await update_auto_renew_charge_failure(sub_id, "provider rejected request")
             await _notify_autorenew_failed(bot, user_id, amount_rub, pm_title, key_id=key_id, disabled=disabled)
             continue
 
