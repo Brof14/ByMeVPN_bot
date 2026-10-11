@@ -3447,48 +3447,60 @@ async def save_email_auth_code(user_id: int, email: str, code: str, expires_at: 
 
 
 async def verify_email_auth_code(user_id: int, code: str) -> bool:
-    """Verify one-time code, enforce a five-attempt cap and support legacy plaintext rows."""
-    db = await get_db()
-    current_time = int(time.time())
-    cur = await db.execute(
-        """SELECT id, code, expires_at, used, attempts FROM email_auth
-           WHERE user_id=? AND used=0
-           ORDER BY created_at DESC, id DESC LIMIT 1""",
-        (user_id,),
-    )
-    row = await cur.fetchone()
-    if not row:
+    """Verify a one-time code atomically, enforcing expiry and a five-attempt cap."""
+    db = await aiosqlite.connect(DB_FILE)
+    await db.execute("PRAGMA busy_timeout=30000")
+    try:
+        await db.execute("BEGIN IMMEDIATE")
+        cur = await db.execute(
+            """SELECT id, code, expires_at, used, attempts FROM email_auth
+               WHERE user_id=? AND used=0
+               ORDER BY created_at DESC, id DESC LIMIT 1""",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        if not row:
+            await db.rollback()
+            return False
+
+        row_id, stored_code, expires_at, used, attempts = row
+        if used or int(expires_at or 0) <= int(time.time()) or int(attempts or 0) >= 5:
+            await db.execute("UPDATE email_auth SET used=1 WHERE id=?", (row_id,))
+            await db.commit()
+            return False
+
+        # The write lock makes the attempt count and one-time consumption race-safe.
+        cur = await db.execute(
+            "UPDATE email_auth SET attempts=attempts+1 WHERE id=? AND used=0 AND attempts<5",
+            (row_id,),
+        )
+        if cur.rowcount != 1:
+            await db.rollback()
+            return False
+
+        if isinstance(stored_code, str) and stored_code.startswith("sha256:"):
+            candidate = "sha256:" + hashlib.sha256(code.encode("utf-8")).hexdigest()
+            matches = hmac.compare_digest(stored_code, candidate)
+        else:
+            # Compatibility with unexpired codes created before the hash migration.
+            matches = hmac.compare_digest(str(stored_code), str(code))
+
+        if matches:
+            cur = await db.execute(
+                "UPDATE email_auth SET used=1 WHERE id=? AND used=0 AND attempts<=5",
+                (row_id,),
+            )
+            await db.commit()
+            return cur.rowcount == 1
+
+        await db.commit()
         return False
-
-    row_id, stored_code, expires_at, used, attempts = row
-    if used or int(expires_at or 0) <= current_time or int(attempts or 0) >= 5:
+    except Exception:
+        await db.rollback()
+        logger.exception("Email authentication code verification failed")
         return False
-
-    # Increment before comparing so failed guesses consume an attempt.
-    cur = await db.execute(
-        "UPDATE email_auth SET attempts=attempts+1 WHERE id=? AND used=0 AND attempts<5",
-        (row_id,),
-    )
-    await db.commit()
-    if cur.rowcount != 1:
-        return False
-
-    if isinstance(stored_code, str) and stored_code.startswith("sha256:"):
-        candidate = "sha256:" + hashlib.sha256(code.encode("utf-8")).hexdigest()
-        matches = hmac.compare_digest(stored_code, candidate)
-    else:
-        # Compatibility with unexpired codes created before the hash migration.
-        matches = hmac.compare_digest(str(stored_code), str(code))
-
-    if not matches:
-        return False
-
-    cur = await db.execute(
-        "UPDATE email_auth SET used=1 WHERE id=? AND used=0 AND attempts<=5",
-        (row_id,),
-    )
-    await db.commit()
-    return cur.rowcount == 1
+    finally:
+        await db.close()
 
 
 async def link_telegram_to_user(user_id: int, email: str) -> bool:
