@@ -180,6 +180,15 @@ async def _process_payment_locked(bot: Bot, payment_id: str) -> None:
             logger.info("Webhook: payment %s status=%s, skipping", payment_id, payment.get("status"))
             return
 
+        metadata = payment.get("metadata") if isinstance(payment.get("metadata"), dict) else {}
+        from database import is_yookassa_payment_known
+        locally_known = await is_yookassa_payment_known(payment_id)
+        description = payment.get("description")
+        legacy_byme_order = isinstance(description, str) and description.startswith("ByMeVPN")
+        if metadata.get("service") != "bymevpn" and not locally_known and not legacy_byme_order:
+            logger.warning("Ignoring succeeded YooKassa payment not associated with a local ByMeVPN order: %s", payment_id)
+            return
+
         # ── Step 2: Read the legacy processed marker, but do not trust it alone ──
         # Older code paths could write this marker before successful delivery.
         # The payment ledger below is the source of truth for fulfillment status.
@@ -191,14 +200,13 @@ async def _process_payment_locked(bot: Bot, payment_id: str) -> None:
             )
 
         # ── Step 3: Extract metadata ──
-        metadata = payment.get("metadata", {})
         try:
             user_id = int(metadata["user_id"])
             raw_days = int(metadata["days"])
             devices = int(metadata.get("devices", 1))
         except (KeyError, ValueError, TypeError) as e:
-            logger.error("Webhook: bad metadata in payment %s: %s — %s", payment_id, metadata, e)
-            await _notify_admin(bot, f"⚠️ YooKassa payment {payment_id}: bad metadata {metadata}")
+            logger.error("Webhook: bad metadata in payment %s (%s)", payment_id, type(e).__name__)
+            await _notify_admin(bot, f"⚠️ YooKassa payment {payment_id}: bad metadata; manual reconciliation required.")
             return
 
         from constants import normalize_days
