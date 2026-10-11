@@ -545,7 +545,7 @@ async def deliver_key(
             return False
 
         # Логируем ссылку для отладки
-        logger.info("Subscription URL for user %d: %s", user_id, subscription_url[:50] + "...")
+        logger.debug("Subscription URL prepared for user %d", user_id)
 
         # Сохраняем ссылку на подписку и настоящий UUID клиента в БД
         client_uuid = user_result.get("uuid") or subscription_url
