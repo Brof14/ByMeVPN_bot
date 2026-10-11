@@ -17,6 +17,7 @@ from config import (
     XUI_INBOUND_IDS,
     XUI_PASSWORD,
     XUI_SUB_PATH,
+    XUI_TLS_VERIFY,
     XUI_URL,
     XUI_USERNAME,
 )
@@ -76,7 +77,7 @@ async def _get_api() -> AsyncApi:
                 api_url,
                 username=XUI_USERNAME,
                 password=XUI_PASSWORD,
-                use_tls_verify=False,
+                use_tls_verify=XUI_TLS_VERIFY,
                 logger=logger,
             )
             try:
