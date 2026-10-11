@@ -2,8 +2,7 @@
 Webhook server — runs alongside the Telegram bot as an asyncio task.
 
 Handles:
-  1. POST /webhook/telegram - Telegram bot updates
-  2. POST /webhook/yookassa - YooKassa payment notifications
+  1. POST /webhook/yookassa - YooKassa payment notifications
 
 YooKassa Security model:
   1. Receive POST /webhook/yookassa
@@ -26,8 +25,8 @@ from typing import Optional
 
 import httpx
 import uvicorn
-from aiogram import Bot, Dispatcher
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from aiogram import Bot
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from fastapi import FastAPI, Request, Response
 
 from config import (
@@ -41,33 +40,6 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(docs_url=None, redoc_url=None)  # disable docs in production
 
-# Global dispatcher for Telegram webhook handling
-dispatcher: Optional[Dispatcher] = None
-
-
-# ---------------------------------------------------------------------------
-# Telegram Webhook endpoint
-# ---------------------------------------------------------------------------
-
-@app.post("/webhook/telegram")
-async def telegram_webhook(request: Request) -> Response:
-    """
-    Receive Telegram bot updates via webhook.
-    Forwards updates to aiogram dispatcher for processing.
-    """
-    if not dispatcher:
-        logger.error("Telegram webhook: dispatcher not set")
-        return Response(status_code=500)
-
-    try:
-        body = await request.json()
-        update = Update.model_validate(body)
-        bot = app.state.bot  # Get bot from app state
-        await dispatcher.feed_update(bot, update)
-        return Response(status_code=200)
-    except Exception as e:
-        logger.error("Telegram webhook error: %s", e)
-        return Response(status_code=200)  # Always return 200 to avoid retries
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +86,6 @@ async def yookassa_webhook(request: Request) -> Response:
     """
     try:
         body = await request.json()
-        logger.info("Webhook received: %s", str(body)[:500])  # Log incoming webhook
     except Exception as e:
         logger.warning("Webhook: invalid JSON body - %s", str(e))
         return Response(status_code=400)
@@ -166,7 +137,6 @@ async def _process_payment(bot: Bot, payment_id: str) -> None:
 
         # ── Step 3: Extract metadata ──
         metadata = payment.get("metadata", {})
-        logger.info("Webhook: payment_id=%s metadata=%s", payment_id, metadata)
         try:
             user_id = int(metadata["user_id"])
             raw_days = int(metadata["days"])
@@ -682,7 +652,7 @@ async def _notify_admin(bot: Bot, text: str) -> None:
 # Server lifecycle
 # ---------------------------------------------------------------------------
 
-async def start_webhook_server(bot: Bot, dp: Dispatcher) -> None:
+async def start_webhook_server(bot: Bot) -> None:
     """
     Start the uvicorn server as an asyncio task.
 
@@ -695,10 +665,8 @@ async def start_webhook_server(bot: Bot, dp: Dispatcher) -> None:
     unconditionally, which silently broke polling for anyone running the
     bot the way main.py actually starts it.
     """
-    global dispatcher
-    dispatcher = dp
     app.state.bot = bot
-    logger.info("Webhook module ready: dispatcher and bot registered for YooKassa processing")
+    logger.info("Webhook module ready for YooKassa payment processing")
 
     config = uvicorn.Config(
         app,
