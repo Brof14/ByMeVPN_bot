@@ -40,6 +40,23 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(docs_url=None, redoc_url=None)  # disable docs in production
 
+# Keep references to background jobs and serialize same-payment processing inside
+# this process. The database ledger remains the durable source of truth.
+_payment_tasks: set[asyncio.Task] = set()
+_payment_locks: dict[str, asyncio.Lock] = {}
+
+def _track_payment_task(task: asyncio.Task) -> None:
+    _payment_tasks.add(task)
+    def _done(completed: asyncio.Task) -> None:
+        _payment_tasks.discard(completed)
+        try:
+            completed.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("Background payment task crashed")
+    task.add_done_callback(_done)
+
 
 
 # ---------------------------------------------------------------------------
@@ -122,12 +139,12 @@ async def yookassa_webhook(request: Request) -> Response:
         logger.warning("Webhook: succeeded event has invalid payment ID")
         return Response(status_code=400)
 
-    logger.info("Webhook parsed: event='%s', payment_id='%s'", event, payment_id)
+    logger.info("YooKassa webhook accepted for payment %s", payment_id)
 
-    # Schedule async processing — respond immediately to YooKassa
+    # Retain task references so failures are observed and jobs aren't abandoned.
     bot: Bot = app.state.bot
-    logger.info("Webhook: scheduling payment processing for %s", payment_id)
-    asyncio.create_task(_process_payment(bot, payment_id))
+    task = asyncio.create_task(_process_payment(bot, payment_id))
+    _track_payment_task(task)
 
     return Response(status_code=200)
 
@@ -135,8 +152,18 @@ async def yookassa_webhook(request: Request) -> Response:
 async def _process_payment(bot: Bot, payment_id: str) -> None:
     """
     Verify and process a succeeded YooKassa payment.
-    Fully idempotent — safe to call multiple times for the same payment_id.
+    Concurrent duplicate calls in this process are serialized by payment ID.
     """
+    lock = _payment_locks.setdefault(str(payment_id), asyncio.Lock())
+    async with lock:
+        try:
+            await _process_payment_locked(bot, str(payment_id))
+        finally:
+            if not lock.locked() and not getattr(lock, "_waiters", None):
+                _payment_locks.pop(str(payment_id), None)
+
+
+async def _process_payment_locked(bot: Bot, payment_id: str) -> None:
     try:
         # ── Step 1: Re-fetch from YooKassa to verify (never trust webhook body) ──
         payment = await _fetch_yookassa_payment(payment_id)
