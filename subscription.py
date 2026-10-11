@@ -11,7 +11,7 @@ from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 
-from config import ADMIN_ID
+from config import ADMIN_ID, ADMIN_IDS
 from utils import LOGO_URL, send_with_photo, safe_answer
 import database
 from database import (
@@ -64,8 +64,8 @@ async def _log_notification_failure(user_id: int, context: dict) -> None:
     except Exception as e:
         logger.error("Failed to log notification failure for %s: %s", user_id, e)
 
-# Referral bonus: 30 days for referrer when referred makes first paid purchase
-REF_BONUS_DAYS = 30
+# Referral reward value is defined once in constants.py.
+from constants import REF_BONUS_DAYS
 
 
 async def ask_config_name(
@@ -229,9 +229,42 @@ async def ask_config_name(
     if xui_client:
         logger.info("User %d has no DB key, but exists in 3x-ui - importing and extending safely", user_id)
         xui_res = await update_xui_user(user_id, days=days, limit_ip=limit_ip)
-        sub_url = (xui_res.get("subscription_url") if xui_res else None) or xui_client.get("subscription_url", "")
-        uuid = xui_client.get("uuid", "")
-        new_expiry = (xui_res.get("expiry_time", 0) // 1000) if xui_res else (int(time.time()) + days * 86400)
+        if not xui_res:
+            await log_key_error(
+                user_id=user_id,
+                error_type="subscription_extension_failed",
+                error_message="3x-ui did not confirm imported-client extension",
+                context={"branch": "ask_config_name.import_xui", "days": days, "limit_ip": limit_ip},
+            )
+            try:
+                await bot.send_message(
+                    ADMIN_ID,
+                    f"⚠️ Платёж {payload}: клиент {user_id} найден в 3x-ui без записи keys, "
+                    "но продление не подтверждено. Запись об активации не создавалась; нужна сверка.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                logger.exception("Could not alert admin about unconfirmed imported-client extension")
+            try:
+                await bot.send_message(
+                    chat_id,
+                    "⚠️ Платёж получен, но сервер пока не подтвердил продление. Не оплачивайте повторно — операция будет проверена.",
+                )
+            except Exception:
+                pass
+            return
+
+        sub_url = xui_res.get("subscription_url") or xui_client.get("subscription_url", "")
+        uuid = xui_res.get("uuid") or xui_client.get("uuid", "")
+        new_expiry = int(xui_res.get("expiry_time", 0)) // 1000
+        if not sub_url or new_expiry <= 0:
+            await log_key_error(
+                user_id=user_id,
+                error_type="subscription_extension_invalid_response",
+                error_message="3x-ui returned incomplete extension result",
+                context={"branch": "ask_config_name.import_xui"},
+            )
+            return
 
         key_id = await add_key(user_id, sub_url, f"ByMeVPN_{user_id}", uuid, days, limit_ip)
 
