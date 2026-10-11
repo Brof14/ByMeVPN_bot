@@ -30,7 +30,7 @@ from database import (
     record_payment_idempotent, update_payment_status,
     use_promo_code, validate_promo_code, has_user_used_promo,
 )
-from utils import send_with_photo, send_or_edit, safe_answer
+from utils import send_with_photo, send_or_edit, safe_answer, notify_admins
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -482,9 +482,7 @@ async def _process_successful_stars_payment(
         )
         try:
             from config import ADMIN_ID
-            await bot.send_message(
-                ADMIN_ID,
-                f"⚠️ Оплата Stars требует ручной сверки: user <code>{user_id}</code>, "
+            await notify_admins(bot, f"⚠️ Оплата Stars требует ручной сверки: user <code>{user_id}</code>, "
                 f"charge <code>{charge_id}</code>, payload некорректен.",
                 parse_mode="HTML",
             )
@@ -535,9 +533,7 @@ async def _process_successful_stars_payment(
             )
             try:
                 from config import ADMIN_ID
-                await bot.send_message(
-                    ADMIN_ID,
-                    f"⚠️ Платёж Stars <code>{charge_id}</code> пользователя <code>{user_id}</code> "
+                await notify_admins(bot, f"⚠️ Платёж Stars <code>{charge_id}</code> пользователя <code>{user_id}</code> "
                     f"имеет неоднозначный статус {existing_status!r}. Нужна ручная сверка.",
                     parse_mode="HTML",
                 )
@@ -579,9 +575,7 @@ async def _process_successful_stars_payment(
         logger.error("Stars delivery failed for user %d, charge_id %s", user_id, charge_id)
         try:
             from config import ADMIN_ID
-            await bot.send_message(
-                ADMIN_ID,
-                f"⚠️ Не удалось выдать подписку по Stars: user <code>{user_id}</code>, "
+            await notify_admins(bot, f"⚠️ Не удалось выдать подписку по Stars: user <code>{user_id}</code>, "
                 f"charge <code>{charge_id}</code>. Платёж можно безопасно повторить через обработчик failed.",
                 parse_mode="HTML",
             )
