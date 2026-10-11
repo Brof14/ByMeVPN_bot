@@ -12,7 +12,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 
 from config import ADMIN_ID, ADMIN_IDS
-from utils import LOGO_URL, send_with_photo, safe_answer
+from utils import LOGO_URL, send_with_photo, safe_answer, notify_admins
 import database
 from database import (
     add_key, get_referrer, add_payment, set_trial_used, log_key_error,
@@ -136,9 +136,7 @@ async def ask_config_name(
                     user_id, "succeeded" if rollback_ok else "FAILED",
                 )
                 try:
-                    await bot.send_message(
-                        ADMIN_ID,
-                        f"⚠️ Не удалось подтвердить продление в 3x-ui. Пользователь: <code>{user_id}</code>; "
+                    await notify_admins(bot, f"⚠️ Не удалось подтвердить продление в 3x-ui. Пользователь: <code>{user_id}</code>; "
                         f"платёж: <code>{payload}</code>; откат БД: {'OK' if rollback_ok else 'ОШИБКА'}. "
                         "Требуется сверка; не выдавать дни повторно вслепую.",
                         parse_mode="HTML",
@@ -236,9 +234,7 @@ async def ask_config_name(
                 context={"branch": "ask_config_name.import_xui", "days": days, "limit_ip": limit_ip},
             )
             try:
-                await bot.send_message(
-                    ADMIN_ID,
-                    f"⚠️ Платёж {payload}: клиент {user_id} найден в 3x-ui без записи keys, "
+                await notify_admins(bot, f"⚠️ Платёж {payload}: клиент {user_id} найден в 3x-ui без записи keys, "
                     "но продление не подтверждено. Запись об активации не создавалась; нужна сверка.",
                     parse_mode="HTML",
                 )
@@ -427,9 +423,7 @@ async def deliver_key(
                         user_id, "succeeded" if rollback_ok else "FAILED",
                     )
                     try:
-                        await bot.send_message(
-                            ADMIN_ID,
-                            f"⚠️ Не удалось подтвердить продление в 3x-ui. Пользователь: <code>{user_id}</code>; "
+                        await notify_admins(bot, f"⚠️ Не удалось подтвердить продление в 3x-ui. Пользователь: <code>{user_id}</code>; "
                             f"платёж: <code>{payload}</code>; откат БД: {'OK' if rollback_ok else 'ОШИБКА'}. "
                             "Требуется сверка; не выдавать дни повторно вслепую.",
                             parse_mode="HTML",
@@ -651,9 +645,7 @@ async def deliver_key(
         # Для платных платежей уведомляем админа об ошибке
         if is_paid:
             try:
-                await bot.send_message(
-                    ADMIN_ID,
-                    f"🚨 <b>Ошибка создания подписки после оплаты!</b>\n\n"
+                await notify_admins(bot, f"🚨 <b>Ошибка создания подписки после оплаты!</b>\n\n"
                     f"👤 User: <code>{user_id}</code>\n"
                     f"📝 Имя: {config_name}\n"
                     f"⏳ Дней: {days}\n"
