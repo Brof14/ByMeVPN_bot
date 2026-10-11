@@ -1904,35 +1904,54 @@ async def cb_cleanup_do(callback: CallbackQuery, bot: Bot):
         )
         return
     
-    # Clean up keys from 3x-ui
+    # A user may have several DB key records backed by one shared 3x-ui
+    # client. Never remove that client while any other key for this user is active.
     cleaned_count = 0
+    preserved_count = 0
     failed_count = 0
     cleaned_key_ids = []
+    now = int(time.time())
+    from database import get_user_keys
 
+    server_result_by_user = {}
     for key in expired_keys:
+        user_id = key["user_id"]
         try:
-            success = await delete_xui_user(key["user_id"])
+            all_user_keys = await get_user_keys(user_id)
+            has_active_other_key = any(
+                item.get("id") != key["id"] and int(item.get("expiry") or 0) > now
+                for item in all_user_keys
+            )
+            if has_active_other_key:
+                cleaned_key_ids.append(key["id"])
+                preserved_count += 1
+                continue
+
+            if user_id not in server_result_by_user:
+                server_result_by_user[user_id] = await delete_xui_user(user_id)
+            success = server_result_by_user[user_id]
             if success:
                 cleaned_count += 1
                 cleaned_key_ids.append(key["id"])
             else:
                 failed_count += 1
-                logger.warning("Failed to delete expired user %d from 3x-ui", key["user_id"])
+                logger.warning("Failed to delete expired user %d from 3x-ui", user_id)
         except Exception as e:
             failed_count += 1
-            logger.error("Error deleting expired user %d: %s", key["user_id"], e)
-    
-    # Mark cleaned keys in database
+            logger.error("Error cleaning expired key %s for user %d: %s", key.get("id"), user_id, e)
+
+    # Mark only records that were safely handled.
     if cleaned_key_ids:
         db_marked = await mark_keys_cleaned(cleaned_key_ids)
-        logger.info("Marked %d keys as cleaned in database", db_marked)
+        logger.info("Marked %d expired key records as cleaned", db_marked)
     
     # Send results
     text = (
         f"🧹 <b>Очистка завершена</b>\n\n"
         f"📊 <b>Результаты:</b>\n"
         f"• Найдено истёкших ключей: {len(expired_keys)}\n"
-        f"• Успешно удалено из 3x-ui: {cleaned_count}\n"
+        f"• Удалено из 3x-ui: {cleaned_count}\n"
+        f"• Сохранено из-за активных ключей: {preserved_count}\n"
         f"• Ошибок при удалении: {failed_count}\n"
         f"• Помечено в БД: {len(cleaned_key_ids)}\n\n"
     )
