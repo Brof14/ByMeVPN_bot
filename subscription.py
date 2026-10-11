@@ -557,6 +557,12 @@ async def deliver_key(
                 # skip_referral_bonus flag (intro trial) is honoured there.
 
                 return True
+            else:
+                # The DB key disappeared between lookup and extension. Do not
+                # fall through and create another record for the same panel client.
+                raise ProvisioningOutcomeUnknown(
+                    f"Database key {key_id} disappeared before extension for user {user_id}"
+                )
 
         # If user has no DB key, check if they exist in 3x-ui before creating new!
         from xui_client import get_xui_client_details, update_xui_user
