@@ -530,21 +530,21 @@ async def cb_key_delete_confirm(callback: CallbackQuery, bot: Bot):
     if not keys:
         await send_with_photo(
             bot, callback,
-            f"✅ Ключ «{remark}» удалён.\\n\\nVPN-клиент удалён с сервера.",
+            f"✅ Ключ «{remark}» удалён.\n\nVPN-клиент удалён с сервера.",
             back_to_menu(),
         )
     else:
         now = int(time.time())
-        lines = [f"✅ Запись ключа «{remark}» удалена.\\n\\n🔑 <b>Оставшиеся ключи:</b>\\n"]
+        lines = [f"✅ Запись ключа «{remark}» удалена.\n\n🔑 <b>Оставшиеся ключи:</b>\n"]
         if other_keys:
-            lines.append("Другие ключи сохранены; VPN-доступ через них не затронут.\\n")
+            lines.append("Другие ключи сохранены; VPN-доступ через них не затронут.\n")
         for k2 in keys:
             status = "✅ активен" if k2["expiry"] > now else "❌ истёк"
             lines.append(
                 f"<b>{k2.get('remark') or 'Ключ #' + str(k2['id'])}</b> — "
                 f"{status}, до {fmt_date(k2['expiry'])}"
             )
-        await send_with_photo(bot, callback, "\\n".join(lines), my_keys_list_kb(keys))
+        await send_with_photo(bot, callback, "\n".join(lines), my_keys_list_kb(keys))
 
 # ---------------------------------------------------------------------------
 # RF apps bypass guide
