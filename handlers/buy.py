@@ -448,8 +448,13 @@ async def on_successful_payment(message: Message, bot: Bot, state: FSMContext):
     payment = message.successful_payment
     charge_id = payment.telegram_payment_charge_id or payment.invoice_payload
     lock = _stars_payment_locks.setdefault(charge_id, asyncio.Lock())
-    async with lock:
-        await _process_successful_stars_payment(message, bot, state, payment, charge_id)
+    try:
+        async with lock:
+            await _process_successful_stars_payment(message, bot, state, payment, charge_id)
+    finally:
+        # Avoid an unbounded lock dictionary while preserving locks for waiters.
+        if not lock.locked() and not getattr(lock, "_waiters", None):
+            _stars_payment_locks.pop(charge_id, None)
 
 
 async def _process_successful_stars_payment(
