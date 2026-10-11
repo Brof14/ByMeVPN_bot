@@ -858,16 +858,14 @@ async def cb_admin_del_key(callback: CallbackQuery, bot: Bot):
     if not other_keys and k.get("uuid"):
         deleted_from_panel = await delete_xui_user(user_id)
         if not deleted_from_panel:
-            await safe_answer(
-                callback,
-                "Не удалось удалить клиента с 3x-ui. Запись в БД сохранена; повторите позже.",
-                alert=True,
+            await callback.message.answer(
+                "⚠️ Не удалось удалить клиента с 3x-ui. Запись в БД сохранена; повторите позже."
             )
             return
 
     deleted_from_db = await delete_key_by_id(key_id)
     if not deleted_from_db:
-        await safe_answer(callback, "Не удалось удалить запись ключа из БД.", alert=True)
+        await callback.message.answer("⚠️ Не удалось удалить запись ключа из БД.")
         return
 
     status_msg = f"✅ Запись ключа #{key_id} удалена"
