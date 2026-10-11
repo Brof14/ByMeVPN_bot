@@ -24,6 +24,7 @@ MAX_GRANT_DAYS = 3650  # 10 years — generous, but finite
 
 # Referral rewards are deliberately separated by trigger: click bonus vs paid conversion.
 REFERRAL_CLICK_BONUS_DAYS = 15
+REFERRAL_TRIAL_BONUS_DAYS = 5
 REFERRAL_CASH_REWARD_RUB = 50
 
 
