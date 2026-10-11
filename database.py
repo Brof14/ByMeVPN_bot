@@ -1855,6 +1855,27 @@ async def update_auto_renew_charge_success_by_user_key(user_id: int, key_id: Opt
     await db.commit()
 
 
+async def claim_auto_renew_attempt(
+    sub_id: int,
+    now: Optional[int] = None,
+    lease_seconds: int = 300,
+) -> bool:
+    """Atomically lease one due renewal so overlapping workers cannot charge twice."""
+    if now is None:
+        now = int(time.time())
+    db = await get_db()
+    cur = await db.execute(
+        """UPDATE auto_renew_subscriptions
+           SET next_retry_at=?, last_charge_status='processing',
+               updated_at=strftime('%s','now')
+           WHERE id=? AND status='active'
+             AND (next_retry_at IS NULL OR next_retry_at<=?)""",
+        (now + max(30, lease_seconds), sub_id, now),
+    )
+    await db.commit()
+    return cur.rowcount == 1
+
+
 async def update_auto_renew_charge_failure(sub_id: int, error_message: str, max_fails: int = 3) -> bool:
     """
     Record failed recurrent charge attempt.
