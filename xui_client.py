@@ -670,9 +670,8 @@ async def update_xui_user(
 
         is_enabled = enable if enable is not None else True
 
-        # py3xui's update endpoint uses Client.inbound_id in its request body.
-        # Updating the client once only changes the inbound returned by get_by_email,
-        # so explicitly update every configured inbound using the same UUID/sub_id.
+        # Preflight every configured inbound before making any mutation. This
+        # avoids updating only a subset when an existing identity is inconsistent.
         for inbound_id in XUI_INBOUND_IDS:
             inbound = await _api_call_with_retry(api.inbound.get_by_id, inbound_id)
             stats = getattr(inbound, "client_stats", None) if inbound else None
@@ -694,6 +693,10 @@ async def update_xui_user(
                 )
                 return None
 
+        # py3xui's update endpoint uses Client.inbound_id in its request body;
+        # issue an explicit update per inbound. If an HTTP response is lost, the
+        # read-back verification below decides whether the desired state was applied.
+        for inbound_id in XUI_INBOUND_IDS:
             updated = Client(
                 email=email,
                 id=client_uuid,
@@ -705,13 +708,18 @@ async def update_xui_user(
                 sub_id=sub_id,
                 inbound_id=inbound_id,
             )
-            update_result = await _api_call_with_retry(api.client.update, client_uuid, updated)
-            if update_result is False:
-                logger.error(
-                    "update_xui_user: panel explicitly rejected update for user %d in inbound %d",
-                    user_id, inbound_id,
+            try:
+                update_result = await _api_call_with_retry(api.client.update, client_uuid, updated)
+                if update_result is False:
+                    logger.warning(
+                        "update_xui_user: panel rejected update for user %d in inbound %d",
+                        user_id, inbound_id,
+                    )
+            except Exception as update_error:
+                logger.warning(
+                    "update_xui_user: update response uncertain for user %d in inbound %d (%s)",
+                    user_id, inbound_id, type(update_error).__name__,
                 )
-                return None
 
         # Verify the write against the panel and every configured inbound before
         # reporting success. This prevents paid renewals from being acknowledged
