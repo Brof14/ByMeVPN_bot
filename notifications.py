@@ -19,6 +19,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.types import BufferedInputFile
 
 from config import ADMIN_ID, DB_FILE
+from utils import notify_admins
 from database import get_keys_nearing_expiry, create_promo_code, validate_promo_code, update_key_last_notification
 
 logger = logging.getLogger(__name__)
@@ -331,9 +332,7 @@ async def _backup_database(bot: Bot) -> None:
     except Exception as e:
         logger.error("Database backup failed: %s", e)
         try:
-            await bot.send_message(
-                ADMIN_ID,
-                f"⚠️ <b>Database Backup Failed</b>\n\nError: {str(e)}",
+            await notify_admins(bot, f"⚠️ <b>Database Backup Failed</b>\n\nError: {str(e)}",
                 parse_mode="HTML"
             )
         except Exception as notify_error:
