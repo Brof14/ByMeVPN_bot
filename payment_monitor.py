@@ -11,7 +11,6 @@ from datetime import datetime, timedelta
 
 from aiogram import Bot
 from config import YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY, CRYPTO_BOT_TOKEN
-from database import mark_yookassa_processed
 from webhook import _process_payment, _process_crypto_invoice
 from payments import get_paid_crypto_invoices
 
