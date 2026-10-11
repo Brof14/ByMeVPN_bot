@@ -169,7 +169,15 @@ async def main() -> None:
     if xui_connected:
         logger.info("3x-ui connection: %s", xui_message)
     else:
-        logger.error("3x-ui connection failed: %s", xui_message)
+        # Fail closed: never expose checkout while key provisioning is unavailable.
+        # This is safer than accepting money and leaving users without access.
+        logger.critical(
+            "Startup aborted because 3x-ui is unavailable: %s. "
+            "Restore panel connectivity, then restart the bot.",
+            xui_message,
+        )
+        await close_db()
+        raise SystemExit(1)
 
     # Create bot instance with HTML parse mode
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
@@ -199,7 +207,7 @@ async def main() -> None:
     # webhook.dispatcher stayed None forever — meaning even the FSM state
     # set after a payment (see webhook.py) had nothing to attach to.
     # We intentionally do NOT await this — it runs the uvicorn server forever.
-    webhook_task = asyncio.create_task(start_webhook_server(bot, dp))
+    webhook_task = asyncio.create_task(start_webhook_server(bot))
 
     # Start automatic payment monitoring (polls YooKassa every 30s as a
     # belt-and-suspenders fallback in case the webhook is unreachable, e.g.
