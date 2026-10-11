@@ -92,7 +92,7 @@ class TestPaymentMonitorRecovery(unittest.IsolatedAsyncioTestCase):
         monitor = PaymentMonitor(MagicMock())
         with (
             patch.object(monitor, "get_successful_payments", new=AsyncMock(return_value=[{"id": "legacy-marked-payment", "description": "ByMeVPN subscription"}])),
-            patch.object(monitor, "_get_failed_ledger_payment_ids", new=AsyncMock(return_value=[])),
+            patch.object(monitor, "_get_incomplete_ledger_payment_ids", new=AsyncMock(return_value=[])),
             patch("payment_monitor._process_payment", new=AsyncMock()) as process_payment,
         ):
             await monitor.check_and_process_payments()
@@ -104,7 +104,7 @@ class TestPaymentMonitorRecovery(unittest.IsolatedAsyncioTestCase):
         monitor = PaymentMonitor(MagicMock())
         with (
             patch.object(monitor, "get_successful_payments", new=AsyncMock(return_value=[])),
-            patch.object(monitor, "_get_failed_ledger_payment_ids", new=AsyncMock(return_value=["old-failed-payment"])),
+            patch.object(monitor, "_get_incomplete_ledger_payment_ids", new=AsyncMock(return_value=["old-failed-payment"])),
             patch("payment_monitor._process_payment", new=AsyncMock()) as process_payment,
         ):
             await monitor.check_and_process_payments(minutes_back=5)
@@ -115,7 +115,7 @@ class TestPaymentMonitorRecovery(unittest.IsolatedAsyncioTestCase):
         monitor = PaymentMonitor(MagicMock())
         with (
             patch.object(monitor, "get_successful_payments", new=AsyncMock(return_value=[{"id": "failed-payment"}])),
-            patch.object(monitor, "_get_failed_ledger_payment_ids", new=AsyncMock(return_value=["failed-payment"])),
+            patch.object(monitor, "_get_incomplete_ledger_payment_ids", new=AsyncMock(return_value=["failed-payment"])),
             patch("payment_monitor._process_payment", new=AsyncMock()) as process_payment,
         ):
             await monitor.check_and_process_payments(minutes_back=5)
