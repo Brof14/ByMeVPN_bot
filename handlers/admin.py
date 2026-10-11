@@ -5,6 +5,7 @@ Features: stats, extended stats, broadcast, user list, user search,
           payment history, export CSV.
 """
 import asyncio
+from html import escape
 import io
 import logging
 from datetime import datetime
@@ -24,7 +25,7 @@ from database import (
     get_all_user_ids, get_all_users, get_users_count, get_all_users_paginated,
     find_user_by_id, delete_user_and_keys,
     get_user_keys, set_key_days, update_key_remark,
-    set_trial_used, reset_trial_for_user, get_user_payments,
+    set_trial_used, reset_trial_for_user, get_user_payments, get_payment_by_id,
     get_all_users_csv, extend_key,
     add_refund, get_user_refunds, get_all_refunds, get_refund_stats,
     get_payment_stats,
@@ -656,11 +657,17 @@ async def cb_search(callback: CallbackQuery, state: FSMContext):
 async def receive_search(message: Message, state: FSMContext):
     if not _is_admin(message.from_user.id):
         return
+    flow_data = await state.get_data()
     await state.clear()
     try:
         uid = int(message.text.strip())
-    except ValueError:
-        await message.answer("❌ Введите числовой ID."); return
+    except (ValueError, AttributeError):
+        await message.answer("❌ Введите числовой ID.")
+        return
+    if flow_data.get("refund_mode"):
+        text, keyboard = await _build_refund_user_view(uid)
+        await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+        return
     await _show_user(message, uid)
 
 
@@ -1119,58 +1126,57 @@ async def cb_refund_search(callback: CallbackQuery, state: FSMContext):
     )
 
 
-@router.callback_query(F.data.startswith("admin_refund_user:"))
-async def cb_refund_user(callback: CallbackQuery, state: FSMContext):
-    if not _is_admin(callback.from_user.id):
-        await safe_answer(callback, "Нет доступа.", alert=True); return
-    await safe_answer(callback)
-    
-    uid = int(callback.data.split(":")[1])
+async def _build_refund_user_view(uid: int):
     user = await find_user_by_id(uid)
     if not user:
-        await callback.message.edit_text(
+        return (
             f"❌ Пользователь <code>{uid}</code> не найден.",
-            reply_markup=_back_kb()
+            _back_kb(),
         )
-        return
-    
+
     payments = await get_user_payments(uid)
-    if not payments:
-        await callback.message.edit_text(
-            f"У пользователя <code>{uid}</code> нет платежей для возврата.",
-            reply_markup=_back_kb()
+    refundable = [p for p in payments if p.get("status") == "success" and int(p.get("amount") or 0) > 0]
+    if not refundable:
+        return (
+            f"У пользователя <code>{uid}</code> нет подтверждённых платежей для оформления возврата.\n\n"
+            "Платежи в статусах processing/failed/recovery_required сначала нужно сверить.",
+            _back_kb(),
         )
-        return
-    
-    # Show recent payments for context
+
     text = (
         f"💰 <b>Возврат пользователю {uid}</b>\n\n"
         f"💳 Всего оплачено: {user['total_paid']} ₽\n\n"
-        f"<b>Последние платежи:</b>\n"
+        "<b>Последние подтверждённые платежи:</b>\n"
     )
-    
-    for p in payments[:5]:  # Show last 5 payments
-        dt = fmt_date(p["created"])
-        text += f"• {dt} — {p['amount']} {p['currency']} ({p['method']})\n"
-    
-    text += f"\nВыберите платеж для возврата или введите сумму:"
-    
-    # Create buttons for recent payments
     rows = []
-    for p in payments[:3]:  # Quick refund buttons for last 3 payments
-        rows.append([
-            InlineKeyboardButton(
-                text=f"Вернуть {p['amount']} {p['currency']} ({p['method']})",
-                callback_data=f"admin_refund_do:{uid}:{p['amount']}:{p['currency']}:{p['method']}:{p['payload'] or ''}"
-            )
-        ])
-    
-    rows.append([
-        InlineKeyboardButton(text="📝 Другая сумма", callback_data=f"admin_refund_custom:{uid}")
-    ])
+    for payment in refundable[:5]:
+        text += (
+            f"• {fmt_date(payment['created'])} — {payment['amount']} "
+            f"{escape(str(payment['currency']))} ({escape(str(payment['method']))})\n"
+        )
+    for payment in refundable[:3]:
+        rows.append([InlineKeyboardButton(
+            text=f"Оформить возврат {payment['amount']} {payment['currency']}",
+            callback_data=f"admin_refund_do:{payment['id']}",
+        )])
+    rows.append([InlineKeyboardButton(text="📝 Другая сумма (Stars)", callback_data=f"admin_refund_custom:{uid}")])
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_refunds")])
-    
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.callback_query(F.data.startswith("admin_refund_user:"))
+async def cb_refund_user(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    try:
+        uid = int(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await safe_answer(callback, "Некорректный ID пользователя.", alert=True)
+        return
+    text, keyboard = await _build_refund_user_view(uid)
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
 
 
 @router.callback_query(F.data.startswith("admin_refund_custom:"))
@@ -1184,8 +1190,9 @@ async def cb_refund_custom(callback: CallbackQuery, state: FSMContext):
     await state.update_data(refund_user_id=uid)
     
     await callback.message.edit_text(
-        f"💰 <b>Возврат пользователю {uid}</b>\n\n"
-        "Введите сумму для возврата (в звёздах/рублях):",
+        f"💰 <b>Ручной возврат Stars пользователю {uid}</b>\n\n"
+        "Введите сумму в Telegram Stars (XTR).\n"
+        "Важно: бот не переводит деньги автоматически. После ручного возврата в Telegram нужно подтвердить операцию.",
         reply_markup=_back_kb()
     )
 
@@ -1221,93 +1228,177 @@ async def receive_refund_amount(message: Message, state: FSMContext):
 async def receive_refund_reason(message: Message, bot: Bot, state: FSMContext):
     if not _is_admin(message.from_user.id):
         return
-    
-    reason = message.text.strip() or "Возврат по запросу"
+
+    reason = (message.text or "").strip() or "Возврат по запросу"
     data = await state.get_data()
-    await state.clear()
-    
     uid = data.get("refund_user_id")
     amount = data.get("refund_amount")
-    
     if not uid or not amount:
-        await message.answer("❌ Ошибка сессии. Начните заново."); return
-    
-    # Record refund in database
-    await add_refund(
-        user_id=uid,
-        amount=amount,
-        currency="XTR",  # Telegram Stars
-        method="stars",
-        reason=reason,
-        refunded_by=message.from_user.id
+        await state.clear()
+        await message.answer("❌ Ошибка сессии. Начните заново.")
+        return
+
+    await state.update_data(refund_reason=reason)
+    await state.set_state(AdminFlow.refund_confirm)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Я уже вернул Stars в Telegram", callback_data="admin_refund_custom_confirm")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_refund_custom_cancel")],
+    ])
+    await message.answer(
+        f"⚠️ <b>Подтверждение ручного возврата</b>\n\n"
+        f"Пользователь: <code>{uid}</code>\n"
+        f"Сумма: <b>{amount} Stars</b>\n"
+        f"Причина: {escape(reason)}\n\n"
+        "Этот бот не выполняет перевод. Сначала верните Stars через инструменты Telegram, "
+        "затем нажмите подтверждение. До подтверждения запись о выполненном возврате не создаётся.",
+        parse_mode="HTML",
+        reply_markup=keyboard,
     )
-    
-    # Try to refund actual Stars (this would require Telegram Stars API)
-    # For now, we just record it and notify admin
-    
+
+
+@router.callback_query(F.data == "admin_refund_custom_confirm")
+async def cb_refund_custom_confirm(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    data = await state.get_data()
+    uid = data.get("refund_user_id")
+    amount = data.get("refund_amount")
+    reason = data.get("refund_reason")
+    if not uid or not amount or not reason or await state.get_state() != AdminFlow.refund_confirm.state:
+        await safe_answer(callback, "Сессия возврата истекла. Начните заново.", alert=True)
+        await state.clear()
+        return
+
+    await add_refund(
+        user_id=uid, amount=int(amount), currency="XTR", method="stars",
+        reason=reason, refunded_by=callback.from_user.id,
+    )
+    await state.clear()
     try:
-        # Notify user about refund
         await bot.send_message(
             uid,
-            f"💰 <b>Возврат средств</b>\n\n"
-            f"Вам возвращено <b>{amount} звёзд</b>.\n"
-            f"Причина: {reason}\n\n"
-            f"Если звёзды не поступили в течение 5 минут, напишите в поддержку.",
-            parse_mode="HTML"
+            f"💰 <b>Возврат Stars подтверждён</b>\n\n"
+            f"Администратор подтвердил возврат <b>{int(amount)} Stars</b>.\n"
+            f"Причина: {escape(str(reason))}",
+            parse_mode="HTML",
         )
     except Exception as e:
-        logger.error("Could not notify user %d about refund: %s", uid, e)
-    
-    await message.answer(
-        f"✅ <b>Возврат оформлен</b>\n\n"
-        f"👤 Пользователь: <code>{uid}</code>\n"
-        f"💰 Сумма: {amount} звёзд\n"
-        f"📝 Причина: {reason}\n\n"
-        f"ℹ️ Запись добавлена в базу данных.",
-        reply_markup=_back_kb()
+        logger.warning("Refund recorded, but user %s could not be notified: %s", uid, e)
+    await safe_answer(callback, "Возврат зафиксирован.")
+    await callback.message.edit_text(
+        f"✅ <b>Возврат подтверждён администратором</b>\n\n"
+        f"Пользователь: <code>{uid}</code>\nСумма: <b>{int(amount)} Stars</b>\n"
+        "Запись создана после подтверждения ручной операции.",
+        parse_mode="HTML",
+        reply_markup=_back_kb(),
     )
+
+
+@router.callback_query(F.data == "admin_refund_custom_cancel")
+async def cb_refund_custom_cancel(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await state.clear()
+    await safe_answer(callback, "Операция отменена.")
+    await callback.message.edit_text("Возврат отменён. Денежная операция не зафиксирована.", reply_markup=_back_kb())
 
 
 @router.callback_query(F.data.startswith("admin_refund_do:"))
-async def cb_refund_do(callback: CallbackQuery, state: FSMContext):
+async def cb_refund_do(callback: CallbackQuery):
     if not _is_admin(callback.from_user.id):
-        await safe_answer(callback, "Нет доступа.", alert=True); return
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
     await safe_answer(callback)
-    
-    parts = callback.data.split(":")
-    uid = int(parts[1])
-    amount = int(parts[2])
-    currency = parts[3]
-    method = parts[4]
-    payload = ":".join(parts[5:]) if len(parts) > 5 else ""
-    
-    # Quick refund with default reason
-    await add_refund(
-        user_id=uid,
-        amount=amount,
-        currency=currency,
-        method=method,
-        reason=f"Возврат платежа ({method})",
-        original_payload=payload,
-        refunded_by=callback.from_user.id
-    )
-    
     try:
-        await callback.bot.send_message(
-            uid,
-            f"💰 <b>Возврат средств</b>\n\n"
-            f"Вам возвращено <b>{amount} {currency}</b>.\n"
-            f"Причина: Возврат платежа\n\n"
-            f"Если средства не поступили в течение 5 минут, напишите в поддержку.",
-            parse_mode="HTML"
+        payment_id = int(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await safe_answer(callback, "Некорректный ID платежа.", alert=True)
+        return
+
+    payment = await get_payment_by_id(payment_id)
+    if not payment or payment.get("status") != "success":
+        await callback.message.edit_text(
+            "⚠️ Платёж не найден или не имеет подтверждённого статуса success. "
+            "Возврат не оформлен; сначала выполните сверку.",
+            reply_markup=_back_kb(),
+        )
+        return
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Я уже вернул средства у провайдера", callback_data=f"admin_refund_confirm:{payment_id}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_refund_cancel")],
+    ])
+    await callback.message.edit_text(
+        f"⚠️ <b>Ручной возврат — подтверждение</b>\n\n"
+        f"Пользователь: <code>{payment['user_id']}</code>\n"
+        f"Платёж: <code>{payment_id}</code>\n"
+        f"Сумма: <b>{payment['amount']} {escape(str(payment['currency']))}</b>\n"
+        f"Провайдер: <b>{escape(str(payment['method']))}</b>\n\n"
+        "Бот не отправляет деньги автоматически. Сначала выполните возврат в кабинете провайдера, "
+        "затем подтвердите его здесь.",
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+
+
+@router.callback_query(F.data.startswith("admin_refund_confirm:"))
+async def cb_refund_confirm(callback: CallbackQuery, bot: Bot):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    try:
+        payment_id = int(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await safe_answer(callback, "Некорректный ID платежа.", alert=True)
+        return
+
+    payment = await get_payment_by_id(payment_id)
+    if not payment or payment.get("status") != "success":
+        await callback.message.edit_text(
+            "⚠️ Платёж не найден или уже требует сверки. Возврат не зафиксирован.",
+            reply_markup=_back_kb(),
+        )
+        return
+
+    await add_refund(
+        user_id=payment["user_id"],
+        amount=payment["amount"],
+        currency=payment["currency"],
+        method=payment["method"],
+        reason=f"Возврат платежа #{payment_id}, подтверждён администратором",
+        original_payload=payment.get("provider_payment_id") or payment.get("payload"),
+        refunded_by=callback.from_user.id,
+    )
+    try:
+        await bot.send_message(
+            payment["user_id"],
+            f"💰 <b>Возврат подтверждён администратором</b>\n\n"
+            f"Сумма: <b>{payment['amount']} {escape(str(payment['currency']))}</b>\n"
+            "Администратор подтвердил, что возврат выполнен через платёжный сервис.",
+            parse_mode="HTML",
         )
     except Exception as e:
-        logger.error("Could not notify user %d about refund: %s", uid, e)
-    
-    await callback.answer(f"✅ Возврат {amount} {currency} пользователю {uid} оформлен!", show_alert=True)
-    
-    # Refresh refunds list
-    await cb_refunds_main(callback)
+        logger.warning("Refund recorded, but user %s could not be notified: %s", payment["user_id"], e)
+
+    await callback.message.edit_text(
+        f"✅ <b>Возврат зафиксирован</b>\n\nПользователь: <code>{payment['user_id']}</code>\n"
+        f"Сумма: <b>{payment['amount']} {escape(str(payment['currency']))}</b>\n"
+        "Зафиксировано только после подтверждения администратора.",
+        parse_mode="HTML",
+        reply_markup=_back_kb(),
+    )
+
+
+@router.callback_query(F.data == "admin_refund_cancel")
+async def cb_refund_cancel(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback, "Операция отменена.")
+    await callback.message.edit_text("Возврат отменён. Денежная операция не зафиксирована.", reply_markup=_back_kb())
 
 
 @router.callback_query(F.data == "admin_refunds_list")
