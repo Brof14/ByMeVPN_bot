@@ -13,6 +13,7 @@ from database import (
     get_expiring_auto_renew_subscriptions,
     update_auto_renew_charge_success,
     update_auto_renew_charge_failure,
+    claim_auto_renew_attempt,
 )
 from payments import charge_yookassa_recurrent
 
@@ -82,6 +83,12 @@ async def process_auto_renewals(bot: Bot) -> None:
         amount_rub = sub["amount_rub"]
         payment_method_id = sub["payment_method_id"]
         pm_title = sub.get("payment_method_title") or "Банковская карта"
+
+        # Multiple loops/processes can discover the same expired subscription.
+        # Atomically claim it before issuing any charge request.
+        if not await claim_auto_renew_attempt(sub_id):
+            logger.debug("Auto-renew subscription %d was claimed by another worker", sub_id)
+            continue
 
         logger.info(
             "Executing auto-renewal for user %d (sub_id=%d, key_id=%d, days=%d, devices=%d, amount=%d)",
