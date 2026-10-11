@@ -202,13 +202,47 @@ async def main() -> None:
 
     logger.info("All routers registered")
 
+    # Monitor critical background tasks. A task that dies silently can leave
+    # payment callbacks or expiry notifications unavailable while polling keeps
+    # the bot process alive.
+    shutting_down = False
+
+    def report_critical_task_exit(task: asyncio.Task) -> None:
+        if shutting_down or task.cancelled():
+            return
+        try:
+            exc = task.exception()
+        except asyncio.CancelledError:
+            return
+        task_name = task.get_name()
+        if exc is None:
+            reason = "returned unexpectedly"
+            logger.critical("Critical background task %s %s", task_name, reason)
+        else:
+            reason = f"raised {type(exc).__name__}"
+            logger.critical("Critical background task %s %s", task_name, reason, exc_info=exc)
+        async def send_alert() -> None:
+            try:
+                from utils import notify_admins
+                await notify_admins(
+                    bot,
+                    f"🚨 Критическая фоновая задача <code>{html.escape(task_name)}</code> остановилась ({html.escape(reason)}). "
+                    "Проверьте журналы сервиса; платежи и уведомления могут быть затронуты.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                logger.exception("Could not send background-task failure alert")
+        asyncio.create_task(send_alert(), name=f"alert-{task_name}-exit")
+
     # Start background tasks
     scheduler_task = asyncio.create_task(start_notification_scheduler(bot), name="notification-scheduler")
+    scheduler_task.add_done_callback(report_critical_task_exit)
 
     # Start the YooKassa callback server in the background.
     # Telegram updates are handled exclusively by aiogram long polling.
     # Uvicorn runs until cancellation during graceful shutdown.
     webhook_task = asyncio.create_task(start_webhook_server(bot), name="yookassa-webhook-server")
+    webhook_task.add_done_callback(report_critical_task_exit)
 
     # Start automatic payment monitoring (polls YooKassa every 30s as a
     # belt-and-suspenders fallback in case the webhook is unreachable, e.g.
@@ -218,6 +252,7 @@ async def main() -> None:
     # Start YooKassa auto-renewal worker (checks expiring subscriptions every 60s)
     from autorenew import start_autorenew_worker
     autorenew_task = asyncio.create_task(start_autorenew_worker(bot), name="autorenew-worker")
+    autorenew_task.add_done_callback(report_critical_task_exit)
 
     logger.info("Bot is running in polling mode. Press Ctrl+C to stop.")
 
@@ -225,6 +260,8 @@ async def main() -> None:
     try:
         await dp.start_polling(bot, handle_signals=False)
     finally:
+        # Suppress failure alerts for intentional shutdown cancellation.
+        shutting_down = True
         # Graceful shutdown
         tasks = [scheduler_task, webhook_task, autorenew_task]
         for task in tasks:
