@@ -24,7 +24,6 @@ Environment Variables (.env file):
     SMTP_PASSWORD: SMTP password
     WEBHOOK_HOST: Webhook server host (default: 0.0.0.0)
     WEBHOOK_PORT: Webhook server port (default: 8080)
-    REF_BONUS_DAYS: Referral bonus days (default: 3)
 """
 
 import os
@@ -116,11 +115,10 @@ WEBHOOK_HOST = os.getenv("WEBHOOK_HOST") or "127.0.0.1"
 WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT") or "8080")
 
 # ============================================================================
-# Trial and Referral Configuration
+# Trial Configuration
 # ============================================================================
 TRIAL_DAYS = 3
 TRIAL_PRICE = 0
-REF_BONUS_DAYS = int(os.getenv("REF_BONUS_DAYS", "3"))
 
 # ============================================================================
 # Pricing Configuration
