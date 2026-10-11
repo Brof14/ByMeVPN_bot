@@ -328,7 +328,7 @@ async def create_xui_user(
 
     logger.info(
         "create_xui_user: email=%s days=%d limit_ip=%d inbounds=%s",
-        email, days, limit_ip, inbound_ids,
+        email, days, limit_ip, len(inbound_ids),
     )
 
     try:
@@ -831,7 +831,7 @@ async def get_user_subscription_links(user_id: int) -> Optional[List[str]]:
             return []
 
         url = _build_sub_url(sub_id)
-        logger.info("get_user_subscription_links: returning URL for %s: %s", email, url)
+        logger.debug("get_user_subscription_links: returning subscription URL for user %s (URL redacted)", email)
         return [url]
 
     except Exception as e:
