@@ -112,7 +112,7 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 # ============================================================================
 # Webhook Server Configuration
 # ============================================================================
-WEBHOOK_HOST = os.getenv("WEBHOOK_HOST") or "0.0.0.0"
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST") or "127.0.0.1"
 WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT") or "8080")
 
 # ============================================================================
