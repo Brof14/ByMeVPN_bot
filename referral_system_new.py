@@ -24,15 +24,17 @@ async def process_referral_click(referrer_id: int, referred_id: int, user_agent:
         # Log the click
         click_id = await log_referral_click(referrer_id, user_agent, ip_address)
         
-        # Add referral event for the click with 15 days bonus
+        # Clicks are analytics only. The monetary reward is issued after a
+        # referred user completes their first paid subscription.
         await add_referral_event(
             referrer_id=referrer_id,
             referred_id=referred_id,
-            event_type="trial_pending",
-            days_awarded=15
+            event_type="referral_click",
+            days_awarded=0,
+            description="Click tracked; no reward issued",
         )
         
-        logger.info(f"Referral click processed: referrer={referrer_id}, referred={referred_id}, days_awarded=15")
+        logger.info("Referral click tracked: referrer=%d, referred=%d", referrer_id, referred_id)
         return True
     except Exception as e:
         logger.error(f"Error processing referral click: {e}")
@@ -138,81 +140,6 @@ async def get_referral_link(user_id: int, bot_username: str) -> str:
     Generate a referral link for the user.
     """
     return f"https://t.me/{bot_username}?start={user_id}"
-
-
-async def process_payment_referral_bonus(user_id: int, amount: int, bot) -> bool:
-    """
-    Process referral bonus when a referred user makes a payment.
-    Awards 30 days to the referrer for the first payment.
-    """
-    try:
-        from database import get_referrer, get_referral_events, get_user_keys, extend_key
-        import time
-        
-        # Get referrer for this user
-        referrer_id = await get_referrer(user_id)
-        if not referrer_id:
-            logger.info(f"No referrer found for user {user_id}")
-            return False
-        
-        # Check if this is the first payment bonus for this referral
-        events = await get_referral_events(referrer_id, limit=100)
-        for event in events:
-            if event["referred_id"] == user_id and event["event_type"] == "payment_bonus":
-                logger.info(f"Payment bonus already claimed for referrer {referrer_id}, referred {user_id}")
-                return False
-        
-        # Award 30 days to referrer's key
-        bonus_days = 30
-        referrer_keys = await get_user_keys(referrer_id)
-        current_time = int(time.time())
-        
-        if referrer_keys:
-            # Extend the first active or recently expired key
-            extendable_keys = [k for k in referrer_keys if k.get("expiry", 0) > current_time - 7*86400]
-            if extendable_keys:
-                extendable_keys.sort(key=lambda k: k.get("expiry", 0), reverse=True)
-                key_to_extend = extendable_keys[0]
-                key_id = key_to_extend["id"]
-                
-                success = await extend_key(key_id, bonus_days)
-                if success:
-                    logger.info(f"Extended referrer {referrer_id} key {key_id} by {bonus_days} days")
-                else:
-                    logger.warning(f"Failed to extend referrer {referrer_id} key {key_id}")
-            else:
-                # No extendable keys - create new one or notify
-                logger.info(f"Referrer {referrer_id} has no extendable keys")
-        else:
-            # Referrer has no keys at all
-            logger.info(f"Referrer {referrer_id} has no keys")
-        
-        # Log the payment bonus event
-        await add_referral_event(
-            referrer_id=referrer_id,
-            referred_id=user_id,
-            event_type="payment_bonus",
-            days_awarded=bonus_days
-        )
-        
-        # Notify referrer
-        try:
-            await bot.send_message(
-                referrer_id,
-                f"💰 <b>Бонус за оплату реферала!</b>\n\n"
-                f"Ваш реферал оплатил подписку\n"
-                f"� Ваш ключ продлён на {bonus_days} дней\n"
-                f"💚 Продолжайте приглашать друзей!",
-                parse_mode="HTML"
-            )
-        except Exception as notify_error:
-            logger.error("Failed to notify referrer about payment bonus: %s", notify_error)
-        
-        logger.info(f"Payment bonus awarded: referrer={referrer_id}, referred={user_id}, days={bonus_days}")
-        return True
-    except Exception as e:
-        logger.error("Error processing payment referral bonus: %s", e)
-        return False
 
 
 # ---------------------------------------------------------------------------
