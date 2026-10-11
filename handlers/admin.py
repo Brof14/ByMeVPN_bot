@@ -1959,8 +1959,8 @@ async def cb_cleanup_do(callback: CallbackQuery, bot: Bot):
     if failed_count > 0:
         text += "⚠️ Некоторые ключи не удалось удалить. Проверьте логи.\n\n"
     
-    text += "Истёкшие клиенты удалены из панели 3x-ui.\n"
-    text += "Ключи в базе данных сохранены для истории."
+    text += "Истёкшие записи обработаны; клиенты с активными ключами сохранены в 3x-ui.\n"
+    text += "История ключей сохранена в базе данных."
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
