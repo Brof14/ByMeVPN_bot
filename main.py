@@ -201,12 +201,9 @@ async def main() -> None:
     # Start background tasks
     scheduler_task = asyncio.create_task(start_notification_scheduler(bot))
 
-    # Start the YooKassa webhook HTTP server in the background.
-    # FIX: this used to be imported but never called, so YooKassa's
-    # /webhook/yookassa endpoint never actually listened on any port, and
-    # webhook.dispatcher stayed None forever — meaning even the FSM state
-    # set after a payment (see webhook.py) had nothing to attach to.
-    # We intentionally do NOT await this — it runs the uvicorn server forever.
+    # Start the YooKassa callback server in the background.
+    # Telegram updates are handled exclusively by aiogram long polling.
+    # Uvicorn runs until cancellation during graceful shutdown.
     webhook_task = asyncio.create_task(start_webhook_server(bot))
 
     # Start automatic payment monitoring (polls YooKassa every 30s as a
