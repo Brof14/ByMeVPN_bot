@@ -13,6 +13,8 @@ from database import (
     log_referral_click, get_referral_clicks_count
 )
 
+from constants import REFERRAL_CLICK_BONUS_DAYS, REFERRAL_CASH_REWARD_RUB
+
 logger = logging.getLogger(__name__)
 
 
@@ -24,17 +26,19 @@ async def process_referral_click(referrer_id: int, referred_id: int, user_agent:
         # Log the click
         click_id = await log_referral_click(referrer_id, user_agent, ip_address)
         
-        # Clicks are analytics only. The monetary reward is issued after a
-        # referred user completes their first paid subscription.
+        # The click reward is separate from the cash reward for first paid conversion.
         await add_referral_event(
             referrer_id=referrer_id,
             referred_id=referred_id,
-            event_type="referral_click",
-            days_awarded=0,
-            description="Click tracked; no reward issued",
+            event_type="trial_pending",
+            days_awarded=REFERRAL_CLICK_BONUS_DAYS,
+            description="Referral link click bonus",
         )
         
-        logger.info("Referral click tracked: referrer=%d, referred=%d", referrer_id, referred_id)
+        logger.info(
+            "Referral click tracked: referrer=%d, referred=%d, days=%d",
+            referrer_id, referred_id, REFERRAL_CLICK_BONUS_DAYS,
+        )
         return True
     except Exception as e:
         logger.error(f"Error processing referral click: {e}")
@@ -149,7 +153,7 @@ async def get_referral_link(user_id: int, bot_username: str) -> str:
 async def award_referral_for_payment(
     user_id: int,
     payment_ref: str,
-    amount: int = 50,
+    amount: int = REFERRAL_CASH_REWARD_RUB,
     is_trial: bool = False,
     bot=None,
 ) -> bool:
