@@ -646,6 +646,7 @@ async def cb_search(callback: CallbackQuery, state: FSMContext):
     if not _is_admin(callback.from_user.id):
         await safe_answer(callback, "Нет доступа.", alert=True); return
     await safe_answer(callback)
+    await state.clear()
     await state.set_state(AdminFlow.search_user)
     await callback.message.edit_text(
         "🔍 Введите Telegram ID пользователя:",
@@ -1142,6 +1143,7 @@ async def cb_refund_search(callback: CallbackQuery, state: FSMContext):
     if not _is_admin(callback.from_user.id):
         await safe_answer(callback, "Нет доступа.", alert=True); return
     await safe_answer(callback)
+    await state.clear()
     await state.set_state(AdminFlow.search_user)
     await state.update_data(refund_mode=True)
     await callback.message.edit_text(
@@ -1184,7 +1186,8 @@ async def _build_refund_user_view(uid: int):
             text=f"Оформить возврат {payment['amount']} {payment['currency']}",
             callback_data=f"admin_refund_do:{payment['id']}",
         )])
-    rows.append([InlineKeyboardButton(text="📝 Другая сумма (Stars)", callback_data=f"admin_refund_custom:{uid}")])
+    if any(str(p.get("currency", "")).upper() == "XTR" or p.get("method") == "stars" for p in refundable):
+        rows.append([InlineKeyboardButton(text="📝 Другая сумма (Stars)", callback_data=f"admin_refund_custom:{uid}")])
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_refunds")])
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -1530,7 +1533,7 @@ async def cb_payment_recovery(callback: CallbackQuery):
     cur = await db.execute(
         "SELECT id, user_id, amount, currency, method, days, created, status, provider_payment_id "
         "FROM payments WHERE status IN ('processing', 'failed', 'recovery_required') "
-        "ORDER BY created ASC LIMIT 25"
+        "ORDER BY created ASC LIMIT 12"
     )
     rows = await cur.fetchall()
     if not rows:
@@ -1564,8 +1567,8 @@ async def cb_payment_recovery(callback: CallbackQuery):
             text=f"👤 Клиент {user_id}",
             callback_data=f"admin_user:{user_id}",
         )])
-    if len(rows) == 25:
-        lines.append("\nПоказаны первые 25 записей. Очередь отсортирована от старых к новым.")
+    if len(rows) == 12:
+        lines.append("\nПоказаны первые 12 записей. Очередь отсортирована от старых к новым.")
     buttons.extend([
         [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_payment_recovery")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_payments")],
@@ -1929,9 +1932,10 @@ async def cb_cleanup_do(callback: CallbackQuery, bot: Bot):
 
             if user_id not in server_result_by_user:
                 server_result_by_user[user_id] = await delete_xui_user(user_id)
+                if server_result_by_user[user_id]:
+                    cleaned_count += 1
             success = server_result_by_user[user_id]
             if success:
-                cleaned_count += 1
                 cleaned_key_ids.append(key["id"])
             else:
                 failed_count += 1
