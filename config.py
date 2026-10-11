@@ -146,8 +146,6 @@ DAYS_12M = TARIFF_DAYS[12]  # 450
 # Logging
 # ============================================================================
 _logging.getLogger(__name__).info(
-    "3x-ui config → api_url=%s username=%s inbounds=%s",
-    XUI_API_URL,
-    XUI_USERNAME,
-    XUI_INBOUND_IDS,
+    "3x-ui configuration loaded (API URL and credentials redacted; %d inbound ID(s) configured)",
+    len(XUI_INBOUND_IDS),
 )
