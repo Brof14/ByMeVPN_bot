@@ -3024,11 +3024,35 @@ async def get_refund_stats() -> dict:
     cur = await db.execute("SELECT COALESCE(SUM(amount), 0) FROM refunds WHERE created >= ?", (thirty_days_ago,))
     sum_30d = (await cur.fetchone())[0]
     
+    # Refund amounts may be in different currencies (e.g. RUB and Telegram Stars/XTR).
+    # Keep legacy aggregate fields for compatibility, but expose currency-separated totals
+    # so the admin UI never presents a mixed-currency sum as rubles.
+    cur = await db.execute(
+        "SELECT currency, COUNT(*), COALESCE(SUM(amount), 0) FROM refunds GROUP BY currency"
+    )
+    by_currency_total = {
+        row[0]: {"count": row[1], "sum": row[2]}
+        for row in await cur.fetchall()
+    }
+    cur = await db.execute(
+        "SELECT currency, COUNT(*), COALESCE(SUM(amount), 0) FROM refunds WHERE created >= ? GROUP BY currency",
+        (thirty_days_ago,),
+    )
+    by_currency_30d = {
+        row[0]: {"count": row[1], "sum": row[2]}
+        for row in await cur.fetchall()
+    }
+
     return {
         "count_total": total_refunds,
         "sum_total": total_refunded,
         "count_30d": count_30d,
-        "sum_30d": sum_30d
+        "sum_30d": sum_30d,
+        "by_currency_total": by_currency_total,
+        "by_currency_30d": by_currency_30d,
+        # Compatibility aliases used by older admin screens.
+        "total_refunds": total_refunded,
+        "refund_count": total_refunds,
     }
 
 
