@@ -243,7 +243,11 @@ async def ask_config_name(
     xui_client = await get_xui_client_details(user_id)
     if xui_client:
         logger.info("User %d has no DB key, but exists in 3x-ui - importing and extending safely", user_id)
-        xui_res = await update_xui_user(user_id, days=days, limit_ip=limit_ip)
+        panel_expiry = int(xui_client.get("expiry_time") or 0) // 1000
+        target_expiry = max(panel_expiry, int(time.time())) + days * 86400
+        xui_res = await update_xui_user(
+            user_id, new_expiry_ms=target_expiry * 1000, limit_ip=limit_ip
+        )
         if not xui_res:
             await log_key_error(
                 user_id=user_id,
@@ -265,10 +269,12 @@ async def ask_config_name(
                 )
             except Exception:
                 pass
-            return
+            raise ProvisioningOutcomeUnknown(
+                f"Panel-only client expiry update outcome unknown for user {user_id}"
+            )
 
-        sub_url = xui_res.get("subscription_url") or xui_client.get("subscription_url", "")
-        uuid = xui_res.get("uuid") or xui_client.get("uuid", "")
+        sub_url = xui_res.get("subscription_url")
+        uuid = xui_res.get("uuid")
         new_expiry = int(xui_res.get("expiry_time", 0)) // 1000
         if not sub_url or new_expiry <= 0:
             await log_key_error(
@@ -279,7 +285,7 @@ async def ask_config_name(
             )
             return
 
-        key_id = await add_key(user_id, sub_url, f"ByMeVPN_{user_id}", uuid, days, limit_ip)
+        key_id = await add_key(user_id, sub_url, f"ByMeVPN_{user_id}", uuid, days, limit_ip, expiry=new_expiry)
 
         if is_paid and amount > 0:
             tariff_name = f"Подписка {days} дней ({limit_ip} устр.)"
