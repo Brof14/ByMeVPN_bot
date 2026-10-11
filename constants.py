@@ -22,6 +22,10 @@ CAPTION_LIMIT = 1024    # Telegram caption character limit
 # "date value out of range" crash from unbounded input (e.g. days=99999999).
 MAX_GRANT_DAYS = 3650  # 10 years — generous, but finite
 
+# Referral rewards are deliberately separated by trigger: click bonus vs paid conversion.
+REFERRAL_CLICK_BONUS_DAYS = 15
+REFERRAL_CASH_REWARD_RUB = 50
+
 
 def normalize_days(days) -> int | None:
     """Return a safe day count (1..MAX_GRANT_DAYS) or None if invalid.
