@@ -1363,13 +1363,22 @@ async def cb_refund_confirm(callback: CallbackQuery, bot: Bot):
         )
         return
 
+    refund_reference = payment.get("provider_payment_id") or payment.get("payload")
+    previous_refunds = await get_user_refunds(payment["user_id"])
+    if any(r.get("original_payload") == refund_reference for r in previous_refunds):
+        await callback.message.edit_text(
+            "⚠️ Возврат для этого платёжного идентификатора уже записан. Повторная запись заблокирована.",
+            reply_markup=_back_kb(),
+        )
+        return
+
     await add_refund(
         user_id=payment["user_id"],
         amount=payment["amount"],
         currency=payment["currency"],
         method=payment["method"],
         reason=f"Возврат платежа #{payment_id}, подтверждён администратором",
-        original_payload=payment.get("provider_payment_id") or payment.get("payload"),
+        original_payload=refund_reference,
         refunded_by=callback.from_user.id,
     )
     try:
@@ -1478,10 +1487,69 @@ async def cb_payments_main(callback: CallbackQuery):
             InlineKeyboardButton(text="💳 YooKassa", callback_data="admin_payments_list:yookassa"),
             InlineKeyboardButton(text="🔍 Поиск", callback_data="admin_payments_search")
         ],
+        [InlineKeyboardButton(text="⚠️ Проблемные платежи", callback_data="admin_payment_recovery")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")]
     ])
     
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+
+
+@router.callback_query(F.data == "admin_payment_recovery")
+async def cb_payment_recovery(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT id, user_id, amount, currency, method, days, created, status, provider_payment_id "
+        "FROM payments WHERE status IN ('processing', 'failed', 'recovery_required') "
+        "ORDER BY created ASC LIMIT 25"
+    )
+    rows = await cur.fetchall()
+    if not rows:
+        await callback.message.edit_text(
+            "✅ <b>Проблемных платежей нет</b>\n\n"
+            "В этой очереди показываются только processing, failed и recovery_required.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_payment_recovery")],
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_payments")],
+            ]),
+        )
+        return
+
+    labels = {
+        "processing": "⏳ обрабатывается",
+        "failed": "❌ выдача не удалась",
+        "recovery_required": "🛑 нужна сверка",
+    }
+    lines = ["⚠️ <b>Проблемные платежи</b>\n"]
+    buttons = []
+    for row in rows:
+        payment_id, user_id, amount, currency, method, days, created, status, provider_id = row
+        lines.append(
+            f"#{payment_id} · <code>{user_id}</code> · {amount} {escape(str(currency))}\n"
+            f"  {escape(str(method))}, {days} дн. · {fmt_date(created)}\n"
+            f"  Статус: <b>{labels.get(status, escape(str(status)))}</b>\n"
+            f"  ID провайдера: <code>{escape(str(provider_id or '—'))[:70]}</code>\n"
+        )
+        buttons.append([InlineKeyboardButton(
+            text=f"👤 Клиент {user_id}",
+            callback_data=f"admin_user:{user_id}",
+        )])
+    if len(rows) == 25:
+        lines.append("\nПоказаны первые 25 записей. Очередь отсортирована от старых к новым.")
+    buttons.extend([
+        [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_payment_recovery")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_payments")],
+    ])
+    await callback.message.edit_text(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
 
 
 @router.callback_query(F.data.startswith("admin_payments_list"))
@@ -1517,9 +1585,15 @@ async def cb_payments_list(callback: CallbackQuery):
         
         for p in payments[:15]:  # Show last 15 to avoid message length issues
             dt = fmt_date(p["created"])
-            status_emoji = "✅" if p["status"] == "success" else "❌"
+            status_labels = {
+                "success": "✅ успешно",
+                "processing": "⏳ обрабатывается",
+                "failed": "❌ выдача не удалась",
+                "recovery_required": "🛑 нужна сверка",
+            }
+            status_label = status_labels.get(p["status"], f"⚪ {p['status']}")
             text += (
-                f"{status_emoji} {dt} — {p['amount']} {p['currency']}\n"
+                f"{status_label} · {dt} — {p['amount']} {p['currency']}\n"
                 f"  Юзер: {p['user_id']}\n"
                 f"  Метод: {p['method']}, тариф: {p['tariff'] or 'Не указан'}\n"
                 f"  Устройств: {p['devices']}, дней: {p['days']}\n\n"
