@@ -16,7 +16,7 @@ from aiogram.types import Message, CallbackQuery
 
 from config import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SUPPORT_USERNAME
 from database import (
-    ensure_user, get_user_by_email, save_email_auth_code,
+    ensure_user, get_user_by_email, save_email_auth_code, allow_email_auth_request,
     verify_email_auth_code, link_telegram_to_user, has_active_subscription
 )
 from keyboards import authorized_user_menu, back_to_menu
@@ -99,11 +99,11 @@ async def send_auth_email(to_email: str, code: str) -> bool:
         # Telegram update processing while DNS/TLS/authentication is in progress.
         await asyncio.to_thread(_send_smtp_message, to_email, msg.as_string())
 
-        logger.info("Auth email sent to %s", to_email)
+        logger.info("Auth email sent")
         return True
 
     except Exception as e:
-        logger.error("Failed to send auth email to %s: %s", to_email, e)
+        logger.error("Failed to send auth email (%s)", type(e).__name__)
         return False
 
 
@@ -161,51 +161,42 @@ async def process_email(message: Message, state: FSMContext):
         )
         return
 
-    # Ensure user exists in database
-    await ensure_user(message.from_user.id)
+    if not await allow_email_auth_request(message.from_user.id, email):
+        await message.answer(
+            "Слишком много запросов кода. Подождите минуту перед повторной попыткой.",
+            reply_markup=back_to_menu(),
+        )
+        return
 
-    # Check if email exists in database
+    await ensure_user(message.from_user.id)
     existing_user = await get_user_by_email(email)
+    generic_response = (
+        "Если этот email зарегистрирован, мы отправили код для входа. "
+        "Проверьте почту и папку «Спам». Если письма нет, попробуйте позже."
+    )
 
     if not existing_user:
-        await message.answer(
-            f"Пользователь с таким email не найден. Проверьте правильность ввода или обратитесь в поддержку {SUPPORT_USERNAME}",
-            reply_markup=back_to_menu()
-        )
+        await message.answer(generic_response, reply_markup=back_to_menu())
         await state.clear()
         return
 
-    # Generate and send code
     code = generate_auth_code()
-    expires_at = int(time.time()) + 300  # 5 minutes
-
-    # Save code to database
+    expires_at = int(time.time()) + 300
     await save_email_auth_code(existing_user["user_id"], email, code, expires_at)
-
-    # Send email
     email_sent = await send_auth_email(email, code)
 
     if not email_sent:
-        await message.answer(
-            "Ошибка при отправке письма. Пожалуйста, попробуйте позже или обратитесь в поддержку.",
-            reply_markup=back_to_menu()
-        )
         await state.clear()
+        await message.answer(generic_response, reply_markup=back_to_menu())
         return
 
-    # Store email and user_id in state for verification
     await state.update_data(
         auth_email=email,
-        auth_user_id=existing_user["user_id"]
+        auth_user_id=existing_user["user_id"],
+        auth_attempts=0,
     )
-
-    # Move to code verification state
     await state.set_state(EmailAuth.waiting_code)
-
-    # Send confirmation message with exact text as specified
-    await message.answer(
-        f"🔑 На почту {email} был отправлен одноразовый код для входа, пожалуйста напишите его, для отмены напишите /cancel"
-    )
+    await message.answer(generic_response)
 
 
 # ---------------------------------------------------------------------------
@@ -244,10 +235,18 @@ async def process_code(message: Message, state: FSMContext):
     is_valid = await verify_email_auth_code(existing_user_id, code_input)
 
     if not is_valid:
-        await message.answer(
-            "Неверный или просроченный код. Попробуйте снова или запросите новый код, написав /cancel и начав заново.\n\n"
-            "Для отмены напишите /cancel"
-        )
+        attempts = int(data.get("auth_attempts", 0)) + 1
+        if attempts >= 5:
+            await state.clear()
+            await message.answer(
+                "Лимит попыток исчерпан. Начните авторизацию заново позже.",
+                reply_markup=back_to_menu(),
+            )
+        else:
+            await state.update_data(auth_attempts=attempts)
+            await message.answer(
+                f"Неверный или просроченный код. Осталось попыток: {5 - attempts}. Для отмены напишите /cancel."
+            )
         return
 
     # Code is valid - link this Telegram account to the user
@@ -256,12 +255,16 @@ async def process_code(message: Message, state: FSMContext):
     # Update the existing user's record with new telegram ID
     # Or if it's the same user, just confirm
     if existing_user_id != current_telegram_id:
-        # Link the telegram ID to the existing account
-        await link_telegram_to_user(current_telegram_id, email)
-        logger.info(
-            "User %d linked to account %d via email %s",
-            current_telegram_id, existing_user_id, email
-        )
+        linked = await link_telegram_to_user(current_telegram_id, email)
+        if not linked:
+            await state.clear()
+            await message.answer(
+                "Не удалось безопасно связать аккаунт. Напишите в поддержку, чтобы перенести доступ без потери подписки.",
+                reply_markup=back_to_menu(),
+            )
+            logger.error("Account linking failed after email verification (target user %d)", current_telegram_id)
+            return
+        logger.info("Telegram account linked after email verification (target user %d)", current_telegram_id)
 
     # Clear state
     await state.clear()
