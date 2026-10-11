@@ -291,9 +291,6 @@ This project is maintained in the repository context of the author. For support,
 
 ---
 
-If you want, I can also make a second version of the README — a more “premium commercial” one with badges, screenshots placeholders, and a cleaner product-style presentation for GitHub.
-
-
 ### Webhook security note
 
 Telegram updates are received only through aiogram long polling. The HTTP server exposes the YooKassa callback at `/webhook/yookassa`; do not configure or publish a `/webhook/telegram` endpoint. The callback verifies payment status against the YooKassa API before fulfillment. Restrict the webhook port at the firewall or expose it through a correctly configured HTTPS reverse proxy.
