@@ -351,7 +351,7 @@ async def create_xui_user(
                     return True
                 except Exception as e:
                     err_str = str(e)
-                    logger.error("❌ Inbound %d failed: %s", iid, err_str)
+                    logger.error("Inbound %d failed (%s)", iid, type(e).__name__)
                     if "Duplicate" in err_str or "duplicate" in err_str.lower() or "already exists" in err_str.lower():
                         # Клиент уже существует - пробуем получить реальные данные из client_stats
                         logger.info("Client %s already exists in inbound %d, searching in client_stats", email, iid)
@@ -367,9 +367,9 @@ async def create_xui_user(
                                         logger.debug("Found existing client identity in inbound %d client_stats", iid)
                                         return True
                         except Exception as get_err:
-                            logger.warning("Failed to search client_stats: %s", get_err)
+                            logger.warning("Failed to search client_stats (%s)", type(get_err).__name__)
                     else:
-                        logger.error("Failed to add client %s to inbound %d: %s", email, iid, e)
+                        logger.error("Failed to add client %s to inbound %d (%s)", email, iid, type(e).__name__)
                 return False
             
             create_tasks.append(create_in_inbound(inbound_id))
@@ -381,7 +381,7 @@ async def create_xui_user(
         logger.info("=== Creation results for %s ===", email)
         for idx, (iid, result) in enumerate(zip(inbound_ids, results)):
             if isinstance(result, Exception):
-                logger.error("Inbound %d: Exception - %s", iid, str(result))
+                logger.error("Inbound %d: exception (%s)", iid, type(result).__name__)
             elif result is True:
                 logger.info("Inbound %d: ✅ SUCCESS", iid)
             else:
@@ -425,7 +425,7 @@ async def create_xui_user(
                             logger.warning("Remote inbound %d: no client_stats (attempt %d)", iid, attempt + 1)
                             all_remote_ok = False
                     except Exception as e:
-                        logger.warning("Remote inbound %d: check failed (attempt %d): %s", iid, attempt + 1, e)
+                        logger.warning("Remote inbound %d: check failed (attempt %d, %s)", iid, attempt + 1, type(e).__name__)
                         all_remote_ok = False
                 
                 if state_changed:
@@ -448,7 +448,7 @@ async def create_xui_user(
                             else:
                                 final_ok = False
                         except Exception as e:
-                            logger.warning("Final check failed for inbound %d: %s", iid, e)
+                            logger.warning("Final check failed for inbound %d (%s)", iid, type(e).__name__)
                             final_ok = False
                     
                     if final_ok:
