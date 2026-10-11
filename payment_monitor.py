@@ -30,16 +30,46 @@ class PaymentMonitor:
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 # Do not clamp to process start time: payments made during downtime
-                # must be discoverable after a restart.
+                # must be discoverable after a restart. Follow the provider cursor so
+                # a burst of >50 payments cannot silently truncate recovery.
                 cutoff_time = datetime.utcnow() - timedelta(minutes=minutes_back)
-                created_at_gte = cutoff_time.isoformat() + 'Z'
-                
-                url = f"https://api.yookassa.ru/v3/payments?limit=50&status=succeeded&created_at.gte={created_at_gte}"
-                resp = await client.get(url, headers=self.headers)
-                resp.raise_for_status()
-                
-                data = resp.json()
-                return data.get('items', [])
+                created_at_gte = cutoff_time.isoformat() + "Z"
+                url = "https://api.yookassa.ru/v3/payments"
+                params = {
+                    "limit": 100,
+                    "status": "succeeded",
+                    "created_at.gte": created_at_gte,
+                }
+                items: list[Dict] = []
+                seen_cursors: set[str] = set()
+                max_pages = 100
+
+                for _page in range(max_pages):
+                    resp = await client.get(url, headers=self.headers, params=params)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    items.extend(data.get("items", []))
+
+                    cursor = data.get("next_cursor")
+                    if not cursor:
+                        return items
+                    cursor = str(cursor)
+                    if cursor in seen_cursors:
+                        logger.error("YooKassa pagination cursor repeated; stopping recovery scan safely")
+                        break
+                    seen_cursors.add(cursor)
+                    params = {
+                        "limit": 100,
+                        "status": "succeeded",
+                        "created_at.gte": created_at_gte,
+                        "cursor": cursor,
+                    }
+
+                logger.error(
+                    "YooKassa recovery scan reached its pagination safety limit; "
+                    "some payments may remain for the next scan"
+                )
+                return items
                 
         except Exception as e:
             logger.error(f"Error fetching payments: {e}")
