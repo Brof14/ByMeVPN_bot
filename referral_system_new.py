@@ -48,35 +48,145 @@ async def process_referral_click(referrer_id: int, referred_id: int, user_agent:
 
 
 async def claim_referral_bonus(bot, referrer_id: int, referred_id: int, bonus_type: str) -> bool:
-    """
-    Claim a referral bonus for the referrer.
-    """
+    """Grant the trial-signup day bonus only after confirmed payment and XUI expiry sync."""
+    from constants import REFERRAL_TRIAL_BONUS_DAYS
+    from database import (
+        get_referrer, get_user_keys, extend_key, set_key_expiry,
+        add_referral_event, reserve_referral_bonus, finalize_referral_bonus,
+    )
+    from xui_client import update_xui_user
+    from utils import notify_admins
+
+    if bonus_type != "trial_bonus" or referrer_id <= 0 or referred_id <= 0 or referrer_id == referred_id:
+        return False
+
+    # Do not trust a callback/deep-link parameter alone: the database relationship
+    # is authoritative for who referred this user.
+    if await get_referrer(referred_id) != referrer_id:
+        logger.warning("Referral trial bonus rejected: relationship mismatch for user %d", referred_id)
+        return False
+
+    if not await reserve_referral_bonus(referrer_id, referred_id, bonus_type):
+        logger.info("Referral trial bonus already claimed or reserved for %d -> %d", referrer_id, referred_id)
+        return False
+
+    key_id = None
+    old_expiry = None
+    old_limit = 2
+    db_extended = False
     try:
-        # Check if the bonus has already been claimed
-        events = await get_referral_events(referrer_id, limit=50)
-        for event in events:
-            if event["referred_id"] == referred_id and event["event_type"] == bonus_type:
-                if event["days_awarded"] > 0:
-                    logger.info(f"Bonus already claimed: referrer={referrer_id}, referred={referred_id}")
-                    return False
-        
-        # Award the bonus
-        days_to_award = 5 if bonus_type == "trial_bonus" else 0
-        
-        await add_referral_event(
-            referrer_id=referrer_id,
-            referred_id=referred_id,
-            event_type=bonus_type,
-            days_awarded=days_to_award
+        keys = await get_user_keys(referrer_id)
+        now = int(__import__("time").time())
+        active_key = next(
+            (key for key in keys if int(key.get("expiry") or 0) > now),
+            None,
         )
-        
-        # Ensure referrer has balance
-        await ensure_referral_balance(referrer_id)
-        
-        logger.info(f"Referral bonus claimed: referrer={referrer_id}, referred={referred_id}, type={bonus_type}")
+        if not active_key:
+            # No active key means there is nowhere to apply the days. Release the
+            # reservation; no bonus is falsely recorded as granted.
+            await finalize_referral_bonus(referrer_id, referred_id, success=False)
+            try:
+                await bot.send_message(
+                    referrer_id,
+                    "Друг активировал пробный период, но у вас нет активного ключа, "
+                    "поэтому бонусные дни пока не начислены. Обратитесь в поддержку после продления подписки.",
+                )
+            except Exception:
+                pass
+            return False
+
+        key_id = int(active_key["id"])
+        old_expiry = int(active_key.get("expiry") or 0)
+        old_limit = int(active_key.get("limit_ip") or 2)
+        db_extended = await extend_key(key_id, REFERRAL_TRIAL_BONUS_DAYS)
+        if not db_extended:
+            await finalize_referral_bonus(referrer_id, referred_id, success=False)
+            return False
+
+        updated_key = next(
+            (key for key in await get_user_keys(referrer_id) if int(key.get("id") or 0) == key_id),
+            None,
+        )
+        if not updated_key:
+            rollback_ok = await set_key_expiry(key_id, old_expiry, old_limit)
+            if rollback_ok:
+                await finalize_referral_bonus(referrer_id, referred_id, success=False)
+            await notify_admins(
+                bot,
+                f"⚠️ Не удалось проверить ключ для реферального бонуса. "
+                f"Пригласивший <code>{referrer_id}</code>, приглашённый <code>{referred_id}</code>; "
+                f"откат БД: {'OK' if rollback_ok else 'НЕ ПОДТВЕРЖДЁН'}.",
+                parse_mode="HTML",
+            )
+            return False
+
+        xui_result = await update_xui_user(
+            referrer_id,
+            new_expiry_ms=int(updated_key["expiry"]) * 1000,
+            limit_ip=old_limit,
+        )
+        if not xui_result:
+            rollback_ok = await set_key_expiry(key_id, old_expiry, old_limit)
+            if rollback_ok:
+                await finalize_referral_bonus(referrer_id, referred_id, success=False)
+            await notify_admins(
+                bot,
+                f"⚠️ Не удалось подтвердить реферальное продление в 3x-ui. "
+                f"Пригласивший <code>{referrer_id}</code>, приглашённый <code>{referred_id}</code>; "
+                f"откат БД: {'OK' if rollback_ok else 'НЕ ПОДТВЕРЖДЁН'}.",
+                parse_mode="HTML",
+            )
+            return False
+
+        # Mark the reservation complete before writing the informational event.
+        # If the process crashes now, a retry still cannot extend the key twice.
+        await finalize_referral_bonus(referrer_id, referred_id, success=True)
+        try:
+            await add_referral_event(
+                referrer_id=referrer_id,
+                referred_id=referred_id,
+                event_type=bonus_type,
+                days_awarded=REFERRAL_TRIAL_BONUS_DAYS,
+                description="Trial payment succeeded; active referrer key expiry confirmed in 3x-ui",
+            )
+        except Exception:
+            logger.exception("Referral bonus granted but event ledger write failed")
+            await notify_admins(
+                bot,
+                f"⚠️ Реферальный бонус применён, но не записан в журнал. "
+                f"Пригласивший <code>{referrer_id}</code>, приглашённый <code>{referred_id}</code>.",
+                parse_mode="HTML",
+            )
+
+        try:
+            await bot.send_message(
+                referrer_id,
+                f"🎁 Друг активировал пробный период — ваш активный ключ продлён на "
+                f"{REFERRAL_TRIAL_BONUS_DAYS} дней.",
+            )
+        except Exception as notify_error:
+            logger.warning("Referral trial bonus granted but notification failed (%s)", type(notify_error).__name__)
+
+        logger.info(
+            "Referral trial bonus granted: referrer=%d referred=%d days=%d",
+            referrer_id, referred_id, REFERRAL_TRIAL_BONUS_DAYS,
+        )
         return True
-    except Exception as e:
-        logger.error(f"Error claiming referral bonus: {e}")
+    except Exception as exc:
+        logger.error("Referral trial bonus failed (%s)", type(exc).__name__)
+        rollback_ok = True
+        if db_extended and key_id is not None and old_expiry is not None:
+            rollback_ok = await set_key_expiry(key_id, old_expiry, old_limit)
+        if rollback_ok:
+            await finalize_referral_bonus(referrer_id, referred_id, success=False)
+        else:
+            await notify_admins(
+                bot,
+                f"⚠️ Ошибка реферального бонуса и откат БД не подтверждён. "
+                f"Пригласивший <code>{referrer_id}</code>, приглашённый <code>{referred_id}</code>. "
+                "Требуется ручная сверка; повторный бонус заблокирован.",
+                parse_mode="HTML",
+            )
         return False
 
 
