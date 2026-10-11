@@ -14,6 +14,9 @@ class TestWebhookSecurity(unittest.TestCase):
         self.assertNotIn('@app.post("/webhook/telegram")', source)
         self.assertNotIn("Update.model_validate", source)
         self.assertIn('@app.post("/webhook/yookassa")', source)
+        self.assertIn('if not isinstance(body, dict):', source)
+        self.assertIn('if not isinstance(obj, dict):', source)
+        self.assertIn('content-length', source)
 
     def test_startup_fails_closed_when_xui_is_unavailable(self):
         path = os.path.join(PROJECT_ROOT, "main.py")
