@@ -154,11 +154,15 @@ async def _process_payment(bot: Bot, payment_id: str) -> None:
             logger.info("Webhook: payment %s status=%s, skipping", payment_id, payment.get("status"))
             return
 
-        # ── Step 2: Idempotency check ──
-        already_processed = await is_yookassa_processed(payment_id)
-        if already_processed:
-            logger.info("Webhook: payment %s already processed, skipping", payment_id)
-            return
+        # ── Step 2: Read the legacy processed marker, but do not trust it alone ──
+        # Older code paths could write this marker before successful delivery.
+        # The payment ledger below is the source of truth for fulfillment status.
+        already_marked_processed = await is_yookassa_processed(payment_id)
+        if already_marked_processed:
+            logger.warning(
+                "Webhook: payment %s has a processed marker; verifying ledger state",
+                payment_id,
+            )
 
         # ── Step 3: Extract metadata ──
         metadata = payment.get("metadata", {})
@@ -272,6 +276,20 @@ async def _process_payment(bot: Bot, payment_id: str) -> None:
             provider="yookassa",
             provider_payment_id=payment_id,
         )
+
+        if is_new and already_marked_processed:
+            # A legacy marker exists but there is no ledger row to prove whether
+            # access was delivered. Never re-deliver blindly: this is ambiguous.
+            await update_payment_status(pay_db_id, "recovery_required")
+            logger.error(
+                "Webhook: payment %s has a legacy processed marker but no ledger row; manual reconciliation required",
+                payment_id,
+            )
+            await _notify_admin(
+                bot,
+                f"⚠️ Платёж YooKassa {payment_id}: есть старый processed-маркер, но нет записи в журнале платежей. Автоматическую выдачу остановил — нужна ручная сверка.",
+            )
+            return
 
         if not is_new:
             # A unique payment row may exist from an earlier attempt that
@@ -506,8 +524,30 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
         if invoice.get("status") != "paid":
             return
 
-        if await is_crypto_processed(invoice_id):
-            logger.info("Crypto monitor: invoice %s already processed, skipping", invoice_id)
+        already_marked_processed = await is_crypto_processed(invoice_id)
+
+        # Look up the ledger before trusting a legacy marker. Successful ledger
+        # records are authoritative; ambiguous/missing records must not be
+        # blindly fulfilled because that could extend access twice.
+        from database import get_db
+        db = await get_db()
+        cur = await db.execute(
+            "SELECT id, status FROM payments WHERE provider = ? AND provider_payment_id = ?",
+            ("cryptobot", str(invoice_id)),
+        )
+        ledger_row = await cur.fetchone()
+        if already_marked_processed and ledger_row and ledger_row[1] == "success":
+            logger.info("Crypto monitor: invoice %s already fulfilled in ledger", invoice_id)
+            return
+        if already_marked_processed and not ledger_row:
+            logger.error("Crypto monitor: invoice %s has processed marker but no payment ledger row", invoice_id)
+            await _notify_admin(
+                bot,
+                f"⚠️ Crypto Bot инвойс {invoice_id}: есть старый processed-маркер, но нет записи в журнале платежей. Нужна ручная сверка.",
+            )
+            return
+        if already_marked_processed and ledger_row and ledger_row[1] == "recovery_required":
+            logger.warning("Crypto monitor: invoice %s awaits manual reconciliation", invoice_id)
             return
 
         # Look up what we recorded when the invoice was created
@@ -550,6 +590,18 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
             provider="cryptobot",
             provider_payment_id=str(invoice_id),
         )
+
+        if is_new and already_marked_processed:
+            await update_payment_status(pay_db_id, "recovery_required")
+            logger.error(
+                "Crypto monitor: invoice %s has a legacy processed marker but no ledger row; manual reconciliation required",
+                invoice_id,
+            )
+            await _notify_admin(
+                bot,
+                f"⚠️ Crypto Bot инвойс {invoice_id}: старый processed-маркер без записи в журнале платежей. Автоматическую выдачу остановил — нужна ручная сверка.",
+            )
+            return
 
         if not is_new:
             from database import get_db
