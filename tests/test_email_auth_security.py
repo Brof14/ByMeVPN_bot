@@ -121,5 +121,25 @@ class TestEmailAuthSecurity(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await cur.fetchall(), [(1002, "target-key")])
 
 
+    async def test_referral_reward_and_balance_are_idempotent(self):
+        await database.ensure_user(1201)
+        await database.ensure_user(1202)
+
+        self.assertTrue(await database.add_referral_earning(1201, 1202, 50, 987654))
+        self.assertFalse(await database.add_referral_earning(1201, 1202, 50, 987654))
+
+        db = await database.get_db()
+        cur = await db.execute(
+            "SELECT balance,total_earned FROM referral_balance WHERE user_id=?",
+            (1201,),
+        )
+        self.assertEqual(await cur.fetchone(), (50, 50))
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM referral_earnings WHERE referrer_id=? AND referred_id=?",
+            (1201, 1202),
+        )
+        self.assertEqual((await cur.fetchone())[0], 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
