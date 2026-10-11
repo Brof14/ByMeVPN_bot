@@ -376,6 +376,7 @@ async def deliver_key(
     from constants import validate_device_limit as const_validate_device_limit, format_timestamp
     limit_ip = const_validate_device_limit(limit_ip)
     external_mutation_confirmed = False
+    external_mutation_possible = False
 
     # Check if user has existing keys to extend (if extend_existing is True)
     if extend_existing:
@@ -436,6 +437,7 @@ async def deliver_key(
 
                 new_expiry = int(updated_key["expiry"])
                 from xui_client import update_xui_user
+                external_mutation_possible = True
                 xui_res = await update_xui_user(
                     user_id,
                     new_expiry_ms=new_expiry * 1000,
@@ -540,6 +542,7 @@ async def deliver_key(
             logger.info("User %d exists in 3x-ui but not in DB keys - updating safely", user_id)
             panel_expiry = int(xui_client.get("expiry_time") or 0) // 1000
             target_expiry = max(panel_expiry, int(time.time())) + days * 86400
+            external_mutation_possible = True
             xui_res = await update_xui_user(
                 user_id,
                 new_expiry_ms=target_expiry * 1000,
@@ -618,6 +621,7 @@ async def deliver_key(
 
         # The panel confirmed provisioning. Any subsequent DB failure must
         # quarantine the payment rather than re-create/extend this client.
+        external_mutation_possible = True
         external_mutation_confirmed = True
 
         # Получаем ссылку на подписку из ответа 3x-ui
@@ -701,7 +705,7 @@ async def deliver_key(
             return True
         return False
     except Exception as e:
-        if is_paid and external_mutation_confirmed:
+        if is_paid and (external_mutation_confirmed or external_mutation_possible):
             raise ProvisioningOutcomeUnknown(
                 f"Panel provisioning confirmed but post-provisioning step failed for user {user_id}"
             ) from e
