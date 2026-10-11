@@ -124,7 +124,7 @@ async def _api_call_with_retry(func, *args, max_retries=3, base_delay=0.5, **kwa
 
             delay = base_delay * (2 ** attempt)  # Exponential backoff
             logger.warning("API call failed (attempt %d/%d, %s), retrying in %.1fs",
-                          attempt + 1, max_retries, e, delay)
+                          attempt + 1, max_retries, type(e).__name__, delay)
             await asyncio.sleep(delay)
 
 
