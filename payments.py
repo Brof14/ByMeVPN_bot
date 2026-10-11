@@ -270,56 +270,78 @@ async def create_crypto_payment(
                 invoice_id = invoice_data.get("invoice_id")
                 logger.info("Crypto Bot payment created for user %d: invoice_id=%s", user_id, invoice_id)
                 if not pay_url or invoice_id is None:
-                    logger.error("Crypto Bot response missing pay_url/invoice_id: %s", data)
+                    logger.error("Crypto Pay response missing required invoice fields for user %d", user_id)
                     return None
                 return pay_url, str(invoice_id)
             else:
-                logger.error("Crypto Bot error: %s", data.get("error", "Unknown error"))
+                logger.error("Crypto Pay declined invoice creation for user %d", user_id)
                 return None
             
     except httpx.HTTPStatusError as e:
         error_msg = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
-        logger.error("Crypto Bot HTTP error for user %d: %s", user_id, error_msg)
+        logger.error("Crypto Pay HTTP error for user %d (status=%d)", user_id, e.response.status_code)
         return None
     except httpx.RequestError as e:
-        logger.error("Crypto Bot request error for user %d: %s", user_id, str(e))
+        logger.warning("Crypto Pay request outcome unavailable for user %d (%s)", user_id, type(e).__name__)
         return None
     except Exception as e:
-        logger.error("Crypto Bot error for user %d: %s", user_id, str(e))
+        logger.error("Crypto Pay invoice creation failed for user %d (%s)", user_id, type(e).__name__)
         logger.debug("Crypto Bot request failed while creating an invoice for user %d", user_id)
         return None
 
 
 async def get_paid_crypto_invoices(limit: int = 50) -> list[dict]:
-    """Fetch recently paid Crypto Pay invoices (status=paid) for the monitor to process."""
+    """Fetch paid Crypto Pay invoices across pages; callers must filter to local orders."""
     if not CRYPTO_BOT_TOKEN:
         return []
 
     headers = {"Crypto-Pay-API-Token": CRYPTO_BOT_TOKEN}
+    page_size = min(max(int(limit), 1), 100)
+    invoices: list[dict] = []
+    seen_ids: set[str] = set()
+    max_pages = 20
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.get(
-                "https://pay.crypt.bot/api/getInvoices",
-                params={"status": "paid", "count": limit},
-                headers=headers,
-            )
-            r.raise_for_status()
-            data = r.json()
-            if data.get("ok"):
-                return data.get("result", {}).get("items", [])
-            logger.error("Crypto Bot getInvoices error: %s", data.get("error"))
-            return []
+            for page in range(max_pages):
+                offset = page * page_size
+                r = await client.get(
+                    "https://pay.crypt.bot/api/getInvoices",
+                    params={"status": "paid", "count": page_size, "offset": offset},
+                    headers=headers,
+                )
+                r.raise_for_status()
+                data = r.json()
+                if not data.get("ok"):
+                    logger.error("Crypto Pay getInvoices returned an unsuccessful response")
+                    return invoices
+                items = data.get("result", {}).get("items", [])
+                if not isinstance(items, list):
+                    logger.error("Crypto Pay getInvoices returned an invalid items field")
+                    return invoices
+
+                for invoice in items:
+                    if not isinstance(invoice, dict) or invoice.get("invoice_id") is None:
+                        continue
+                    invoice_id = str(invoice["invoice_id"])
+                    if invoice_id not in seen_ids:
+                        seen_ids.add(invoice_id)
+                        invoices.append(invoice)
+
+                if len(items) < page_size:
+                    return invoices
+
+            logger.warning("Crypto Pay pagination safety limit reached; remaining invoices will be checked next cycle")
+            return invoices
     except httpx.HTTPStatusError as e:
-        # Crypto Bot often returns 500/520 errors - log as warning instead of error
         if e.response.status_code in (500, 520):
-            logger.warning("Crypto Bot server error %d (expected, will retry): %s", e.response.status_code, str(e)[:100])
+            logger.warning("Crypto Pay server returned HTTP %d; will retry on next poll", e.response.status_code)
         else:
-            logger.error("Crypto Bot HTTP error %d: %s", e.response.status_code, str(e)[:200])
-        return []
+            logger.error("Crypto Pay getInvoices failed with HTTP %d", e.response.status_code)
+        return invoices
     except httpx.RequestError as e:
-        logger.warning("Crypto Bot request error (network issue): %s", str(e)[:100])
-        return []
+        logger.warning("Crypto Pay getInvoices network error (%s)", type(e).__name__)
+        return invoices
     except Exception as e:
-        logger.error("Crypto Bot getInvoices unexpected error: %s", str(e))
-        return []
+        logger.error("Crypto Pay getInvoices failed (%s)", type(e).__name__)
+        return invoices
