@@ -24,7 +24,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import ErrorEvent
 
-from config import BOT_TOKEN, ADMIN_ID
+from config import BOT_TOKEN, ADMIN_ID, ADMIN_IDS
 from database import init_db, close_db
 from notifications import start_notification_scheduler
 from xui_client import get_api_client  # stub for 3x-ui (no pre-init needed)
@@ -117,17 +117,21 @@ async def error_handler(event: ErrorEvent, bot: Bot) -> None:
     logger.error("Bot error [%s]: %s", type(exc).__name__, exc, exc_info=exc)
 
     try:
-        if not ADMIN_ID:
-            logger.warning("ADMIN_ID not configured, skipping admin error alert")
+        admin_ids = [uid for uid in ADMIN_IDS if uid > 0]
+        if not admin_ids:
+            logger.critical("ADMIN_IDS not configured; runtime error alert cannot be delivered")
             return
 
         messages = format_error_messages(exc, getattr(event, "update", None))
-        for msg in messages:
-            await bot.send_message(
-                ADMIN_ID,
-                msg,
-                parse_mode="HTML"
-            )
+        for admin_id in admin_ids:
+            for msg in messages:
+                try:
+                    await bot.send_message(admin_id, msg, parse_mode="HTML")
+                except Exception as send_error:
+                    logger.error(
+                        "Runtime error alert failed for administrator %d (%s)",
+                        admin_id, type(send_error).__name__,
+                    )
     except Exception as e:
         logger.error("Failed to notify admin about error: %s", e)
 
