@@ -397,6 +397,20 @@ async def _process_payment_locked(bot: Bot, payment_id: str) -> None:
             key_id = user_keys[0]["id"] if user_keys else None
 
             if is_trial:
+                # A referral trial bonus is earned only after the 1 ₽ payment has
+                # succeeded and the referred user's key was provisioned above.
+                try:
+                    from database import get_referrer
+                    from referral_system_new import claim_referral_bonus
+                    referrer_id = await get_referrer(user_id)
+                    if referrer_id and referrer_id != user_id:
+                        await claim_referral_bonus(bot, referrer_id, user_id, "trial_bonus")
+                except Exception as referral_error:
+                    logger.error(
+                        "Could not process trial referral reward for user %d (%s)",
+                        user_id, type(referral_error).__name__,
+                    )
+
                 # Intro trial succeeded: mark trial as used, clean pending link
                 # and store RENEWAL terms (89 ₽ / 30 days), so the autorenew
                 # worker charges the real price after 3 days — not 1 ₽.
