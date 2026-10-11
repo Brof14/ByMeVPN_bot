@@ -102,5 +102,24 @@ class TestEmailAuthSecurity(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await cur.fetchone())
 
 
+    async def test_account_link_refuses_to_merge_into_an_account_with_its_own_key(self):
+        await database.ensure_user(1001)
+        await database.ensure_user(1002)
+        db = await database.get_db()
+        await db.execute("UPDATE users SET email=? WHERE user_id=?", ("legacy@example.com", 1001))
+        await db.execute(
+            "INSERT INTO keys(user_id,key,remark,uuid,short_id,days,limit_ip,created,expiry) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (1002, "target-key", "target", "target-uuid", "target-sub", 30, 2, 1000, 2000),
+        )
+        await db.commit()
+
+        self.assertFalse(await database.link_telegram_to_user(1002, "legacy@example.com"))
+        cur = await db.execute("SELECT user_id,email FROM users WHERE user_id=1001")
+        self.assertEqual(await cur.fetchone(), (1001, "legacy@example.com"))
+        cur = await db.execute("SELECT user_id,key FROM keys ORDER BY id")
+        self.assertEqual(await cur.fetchall(), [(1002, "target-key")])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
