@@ -385,8 +385,8 @@ async def _process_payment(bot: Bot, payment_id: str) -> None:
                         amount_rub=RECURRING_MONTHLY_PRICE,
                     )
                     logger.info(
-                        "Intro trial completed for user %d: ARS saved (89₽/%dd, pm_id=%s)",
-                        user_id, RECURRING_DAYS, pm["id"],
+                        "Intro trial completed for user %d: recurring terms saved (89₽/%dd)",
+                        user_id, RECURRING_DAYS,
                     )
                     try:
                         await bot.send_message(
@@ -458,7 +458,7 @@ async def _process_payment(bot: Bot, payment_id: str) -> None:
                         devices=devices,
                         amount_rub=amount_rub,
                     )
-                    logger.info("Saved auto-renew subscription for user %d (key=%s, pm_id=%s)", user_id, key_id, pm_id)
+                    logger.info("Saved auto-renew subscription for user %d (key=%s)", user_id, key_id)
                     try:
                         await bot.send_message(
                             chat_id=user_id,
