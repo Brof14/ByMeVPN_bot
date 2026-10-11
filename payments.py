@@ -1,5 +1,6 @@
 import base64
 import time
+import uuid
 import logging
 from typing import Optional
 import httpx
@@ -43,7 +44,7 @@ async def create_yookassa_payment(
 
     headers = {
         "Authorization": f"Basic {auth}",
-        "Idempotence-Key": f"{user_id}_{int(time.time())}",
+        "Idempotence-Key": f"checkout_{user_id}_{uuid.uuid4().hex}",
         "Content-Type": "application/json",
     }
 
@@ -94,7 +95,7 @@ async def create_yookassa_payment(
             global _yookassa_recurring_supported
             _yookassa_recurring_supported = False
             payload.pop("save_payment_method", None)
-            headers["Idempotence-Key"] = f"{user_id}_{int(time.time())}_std"
+            headers["Idempotence-Key"] = f"checkout_{user_id}_{uuid.uuid4().hex}_std"
             try:
                 async with httpx.AsyncClient(timeout=15.0) as client:
                     r2 = await client.post("https://api.yookassa.ru/v3/payments", json=payload, headers=headers)
