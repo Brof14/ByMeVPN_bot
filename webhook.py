@@ -19,6 +19,7 @@ Config:   WEBHOOK_HOST, WEBHOOK_PORT in .env
 import asyncio
 import base64
 import logging
+import json
 import traceback
 from decimal import Decimal, InvalidOperation
 from typing import Optional
@@ -114,10 +115,17 @@ async def yookassa_webhook(request: Request) -> Response:
         except ValueError:
             return Response(status_code=400)
 
+    # Content-Length is optional and can be omitted by chunked clients, so enforce
+    # the same cap while streaming the actual request body.
+    raw_body = bytearray()
     try:
-        body = await request.json()
+        async for chunk in request.stream():
+            raw_body.extend(chunk)
+            if len(raw_body) > 65536:
+                return Response(status_code=413)
+        body = json.loads(raw_body)
     except Exception:
-        logger.warning("Webhook: invalid JSON body")
+        logger.warning("Webhook: invalid or incomplete JSON body")
         return Response(status_code=400)
 
     if not isinstance(body, dict):
