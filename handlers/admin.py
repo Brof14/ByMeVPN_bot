@@ -3286,7 +3286,7 @@ async def cb_admin_settings(callback: CallbackQuery, bot: Bot):
 
     await safe_answer(callback)
 
-    from constants import PRICE_CONFIG, TRIAL_DAYS, REF_BONUS_DAYS
+    from constants import PRICE_CONFIG, TRIAL_DAYS, REFERRAL_CLICK_BONUS_DAYS, REFERRAL_TRIAL_BONUS_DAYS, REFERRAL_CASH_REWARD_RUB
     from config import SUPPORT_USERNAME, ADMIN_IDS
 
     text = (
@@ -3298,7 +3298,9 @@ async def cb_admin_settings(callback: CallbackQuery, bot: Bot):
         f"   12 месяцев: {PRICE_CONFIG[12][0]} ₽ ({PRICE_CONFIG[12][1]} дней)\n\n"
         f"🎁 <b>Бонусы:</b>\n"
         f"   Пробный период: {TRIAL_DAYS} дней\n"
-        f"   Реферальный бонус: {REF_BONUS_DAYS} дней\n\n"
+        f"   За переход: {REFERRAL_CLICK_BONUS_DAYS} дней при активном ключе\n"
+        f"   За успешную оплату пробного периода: {REFERRAL_TRIAL_BONUS_DAYS} дней при активном ключе\n"
+        f"   За первую обычную оплату друга: {REFERRAL_CASH_REWARD_RUB} ₽\n\n"
         f"👨‍💼 <b>Админы:</b> {', '.join(map(str, ADMIN_IDS))}\n"
         f"📞 <b>Поддержка:</b> {SUPPORT_USERNAME}\n\n"
         f"<i>Для изменения настроек отредактируйте файлы constants.py и config.py на сервере.</i>"
