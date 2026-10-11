@@ -911,24 +911,41 @@ async def get_referrer(user_id: int) -> Optional[int]:
     return row[0] if row else None
 
 
-async def set_referrer(user_id: int, referrer_id: int) -> None:
-    """Set referrer only if not already set and not self-referral."""
-    if user_id == referrer_id:
-        return
+async def set_referrer(user_id: int, referrer_id: int) -> bool:
+    """Set a user's referrer once; return True only for the first successful assignment.
+
+    The return value is the idempotency gate for referral rewards. Repeated /start
+    deep links must never grant another bonus for the same referred account.
+    """
+    if user_id <= 0 or referrer_id <= 0 or user_id == referrer_id:
+        return False
+
     db = await get_db()
-    await db.execute(
-        "INSERT OR IGNORE INTO users(user_id) VALUES(?)", (user_id,)
-    )
-    await db.execute(
-        "UPDATE users SET referrer_id=? WHERE user_id=? AND referrer_id IS NULL",
-        (referrer_id, user_id),
-    )
-    # Track referral
-    await db.execute(
-        "INSERT OR IGNORE INTO referrals(referrer_id, referred_id) VALUES(?,?)",
-        (referrer_id, user_id),
-    )
-    await db.commit()
+    async with _db_semaphore:
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            await db.execute(
+                "INSERT OR IGNORE INTO users(user_id) VALUES(?)", (user_id,)
+            )
+            cur = await db.execute(
+                "UPDATE users SET referrer_id=? WHERE user_id=? AND referrer_id IS NULL",
+                (referrer_id, user_id),
+            )
+            if cur.rowcount != 1:
+                await db.rollback()
+                return False
+
+            await db.execute(
+                "INSERT OR IGNORE INTO referrals(referrer_id, referred_id) VALUES(?,?)",
+                (referrer_id, user_id),
+            )
+            await db.commit()
+            invalidate_user_cache(user_id)
+            return True
+        except Exception:
+            await db.rollback()
+            logger.exception("Could not assign referral for user %d", user_id)
+            return False
 
 
 @cache_user_info
