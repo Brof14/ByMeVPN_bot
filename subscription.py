@@ -22,6 +22,7 @@ from database import (
 from xui_client import create_xui_user, get_xui_user, format_traffic
 from keyboards import after_key_kb, cancel_kb
 from states import BuyFlow
+from provisioning import ProvisioningOutcomeUnknown
 
 logger = logging.getLogger(__name__)
 
@@ -374,6 +375,7 @@ async def deliver_key(
     """
     from constants import validate_device_limit as const_validate_device_limit, format_timestamp
     limit_ip = const_validate_device_limit(limit_ip)
+    external_mutation_confirmed = False
 
     # Check if user has existing keys to extend (if extend_existing is True)
     if extend_existing:
@@ -395,15 +397,55 @@ async def deliver_key(
 
             # Extend the key in database with device limit update
             success = await extend_key(key_id, days, limit_ip=limit_ip)
-            
+
             if success:
-                # Update expiry and limit_ip in 3x-ui
+                # Read the actual committed DB expiry and set that exact timestamp
+                # in 3x-ui. Repeating the same target after a lost response is safe.
+                try:
+                    updated_key = next(
+                        (key for key in await get_user_keys(user_id) if int(key.get("id") or 0) == int(key_id)),
+                        None,
+                    )
+                except Exception as read_error:
+                    rollback_ok = await set_key_expiry(key_id, int(old_expiry or 0), old_limit)
+                    try:
+                        await notify_admins(
+                            bot,
+                            f"⚠️ Не удалось прочитать срок ключа после изменения БД. Пользователь <code>{user_id}</code>; "
+                            f"откат БД: {'OK' if rollback_ok else 'НЕ ПОДТВЕРЖДЁН'}. Платёж требует ручной сверки.",
+                            parse_mode="HTML",
+                        )
+                    except Exception:
+                        pass
+                    raise ProvisioningOutcomeUnknown(
+                        f"Could not read target expiry for user {user_id}"
+                    ) from read_error
+
+                if not updated_key:
+                    rollback_ok = await set_key_expiry(key_id, int(old_expiry or 0), old_limit)
+                    try:
+                        await notify_admins(
+                            bot,
+                            f"⚠️ Ключ <code>{key_id}</code> пропал из БД после попытки продления пользователя "
+                            f"<code>{user_id}</code>; откат: {'OK' if rollback_ok else 'НЕ ПОДТВЕРЖДЁН'}.",
+                            parse_mode="HTML",
+                        )
+                    except Exception:
+                        pass
+                    raise ProvisioningOutcomeUnknown(f"Key {key_id} disappeared during extension")
+
+                new_expiry = int(updated_key["expiry"])
                 from xui_client import update_xui_user
-                xui_res = await update_xui_user(user_id, days=days, limit_ip=limit_ip)
+                xui_res = await update_xui_user(
+                    user_id,
+                    new_expiry_ms=new_expiry * 1000,
+                    limit_ip=limit_ip,
+                )
 
                 if not xui_res:
-                    # Compensate the DB extension. This keeps a failed provisioning
-                    # attempt retryable without blindly charging days twice.
+                    # A timeout can mean the panel applied the absolute target but
+                    # the response was lost. Roll back local state and quarantine
+                    # the payment; do NOT auto-retry this ambiguous operation.
                     rollback_ok = await set_key_expiry(key_id, int(old_expiry or 0), old_limit)
                     error_context = {
                         "branch": "deliver_key.extend",
@@ -414,27 +456,25 @@ async def deliver_key(
                     }
                     await log_key_error(
                         user_id=user_id,
-                        error_type="subscription_extension_failed",
-                        error_message="3x-ui did not confirm subscription extension",
+                        error_type="subscription_extension_outcome_unknown",
+                        error_message="3x-ui did not confirm the absolute expiry update",
                         context=error_context,
                     )
-                    logger.error(
-                        "3x-ui extension failed for user %d; DB rollback %s",
-                        user_id, "succeeded" if rollback_ok else "FAILED",
-                    )
                     try:
-                        await notify_admins(bot, f"⚠️ Не удалось подтвердить продление в 3x-ui. Пользователь: <code>{user_id}</code>; "
+                        await notify_admins(
+                            bot,
+                            f"⚠️ Не удалось подтвердить продление в 3x-ui. Пользователь: <code>{user_id}</code>; "
                             f"платёж: <code>{payload}</code>; откат БД: {'OK' if rollback_ok else 'ОШИБКА'}. "
-                            "Требуется сверка; не выдавать дни повторно вслепую.",
+                            "Платёж помещён в ручную сверку; не повторять выдачу вслепую.",
                             parse_mode="HTML",
                         )
                     except Exception:
                         pass
-                    if not rollback_ok:
-                        raise RuntimeError(
-                            f"3x-ui extension failed and DB rollback failed for user {user_id}, key {key_id}"
-                        )
-                    return False
+                    raise ProvisioningOutcomeUnknown(
+                        f"3x-ui extension outcome unknown for user {user_id}, key {key_id}"
+                    )
+
+                external_mutation_confirmed = True
 
                 # Add payment record (idempotent)
                 if is_paid and amount > 0:
@@ -498,12 +538,38 @@ async def deliver_key(
         xui_client = await get_xui_client_details(user_id)
         if xui_client:
             logger.info("User %d exists in 3x-ui but not in DB keys - updating safely", user_id)
-            xui_res = await update_xui_user(user_id, days=days, limit_ip=limit_ip)
-            sub_url = (xui_res.get("subscription_url") if xui_res else None) or xui_client.get("subscription_url", "")
-            uuid = xui_client.get("uuid", "")
-            new_expiry = (xui_res.get("expiry_time", 0) // 1000) if xui_res else (int(time.time()) + days * 86400)
+            panel_expiry = int(xui_client.get("expiry_time") or 0) // 1000
+            target_expiry = max(panel_expiry, int(time.time())) + days * 86400
+            xui_res = await update_xui_user(
+                user_id,
+                new_expiry_ms=target_expiry * 1000,
+                limit_ip=limit_ip,
+            )
+            if not xui_res:
+                await notify_admins(
+                    bot,
+                    f"⚠️ Найден клиент 3x-ui без записи в БД, но изменение срока не подтверждено. "
+                    f"Пользователь <code>{user_id}</code>, платёж <code>{payload}</code>. "
+                    "Операция помещена в ручную сверку; повторно не продлевать вслепую.",
+                    parse_mode="HTML",
+                )
+                raise ProvisioningOutcomeUnknown(
+                    f"Panel-only client expiry update outcome unknown for user {user_id}"
+                )
 
-            key_id = await add_key(user_id, sub_url, config_name or f"ByMeVPN_{user_id}", uuid, days, limit_ip)
+            external_mutation_confirmed = True
+            sub_url = xui_res["subscription_url"]
+            uuid = xui_res["uuid"]
+            new_expiry = int(xui_res["expiry_time"]) // 1000
+            try:
+                key_id = await add_key(
+                    user_id, sub_url, config_name or f"ByMeVPN_{user_id}",
+                    uuid, days, limit_ip, expiry=new_expiry,
+                )
+            except Exception as db_error:
+                raise ProvisioningOutcomeUnknown(
+                    f"Panel updated but DB key import failed for user {user_id}"
+                ) from db_error
 
             if is_paid and amount > 0:
                 tariff_name = f"Подписка {days} дней ({limit_ip} устр.)"
@@ -550,6 +616,10 @@ async def deliver_key(
             )
             return False
 
+        # The panel confirmed provisioning. Any subsequent DB failure must
+        # quarantine the payment rather than re-create/extend this client.
+        external_mutation_confirmed = True
+
         # Получаем ссылку на подписку из ответа 3x-ui
         subscription_url = user_result.get("subscription_url", "")
         vless_links = user_result.get("vless_links", [])
@@ -560,22 +630,25 @@ async def deliver_key(
 
         if not subscription_url:
             logger.error("No subscription URL in 3x-ui response for user %d", user_id)
-            await bot.send_message(
-                chat_id,
-                "❌ <b>Ошибка создания ключа</b>\n\n"
-                "Не удалось получить ссылку на подписку.\n"
-                "Пожалуйста, напишите в поддержку.\n\n"
-                "📞 Поддержка: @ByMeVPN_support_bot",
-                parse_mode="HTML",
+            raise ProvisioningOutcomeUnknown(
+                f"Panel created user {user_id} but returned no subscription URL"
             )
-            return False
 
         # Логируем ссылку для отладки
         logger.debug("Subscription URL prepared for user %d", user_id)
 
         # Сохраняем ссылку на подписку и настоящий UUID клиента в БД
         client_uuid = user_result.get("uuid") or subscription_url
-        key_id = await add_key(user_id, subscription_url, config_name, client_uuid, days, limit_ip)
+        try:
+            panel_expiry = int(user_result.get("expiry_time") or 0) // 1000
+            key_id = await add_key(
+                user_id, subscription_url, config_name, client_uuid, days, limit_ip,
+                expiry=panel_expiry if panel_expiry > 0 else None,
+            )
+        except Exception as db_error:
+            raise ProvisioningOutcomeUnknown(
+                f"Panel created user {user_id} but database key creation failed"
+            ) from db_error
 
         # Сохраняем запись о платеже (идемпотентно)
         if is_paid and amount > 0:
@@ -615,12 +688,23 @@ async def deliver_key(
         logger.info("Subscription delivered: user=%d name='%s' days=%d", user_id, config_name, days)
         return True
 
+    except ProvisioningOutcomeUnknown:
+        raise
     except TelegramForbiddenError as e:
         logger.warning("User %d blocked the bot, cannot deliver subscription: %s", user_id, e)
-        # Пользователь заблокировал бота - это не критическая ошибка
-        # Ключ создан в 3x-ui, но не может быть доставлен
+        # Once the panel mutation is confirmed, a blocked bot is only a delivery
+        # problem; do not mark a paid order failed and extend it again on retry.
+        if is_paid and external_mutation_confirmed:
+            await _log_notification_failure(
+                user_id, {"branch": "deliver_key.telegram_forbidden", "days": days, "limit_ip": limit_ip}
+            )
+            return True
         return False
     except Exception as e:
+        if is_paid and external_mutation_confirmed:
+            raise ProvisioningOutcomeUnknown(
+                f"Panel provisioning confirmed but post-provisioning step failed for user {user_id}"
+            ) from e
         logger.exception("deliver_key FAILED for user=%d name='%s': %s", user_id, config_name, e)
 
         # Логируем ошибку в БД для отслеживания в админ-панели
