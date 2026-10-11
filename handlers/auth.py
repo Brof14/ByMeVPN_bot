@@ -3,7 +3,7 @@ Email authentication handler for existing ByMeVPN clients.
 """
 import asyncio
 import logging
-import random
+import secrets
 import re
 import smtplib
 import time
@@ -32,7 +32,7 @@ EMAIL_REGEX = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
 
 def generate_auth_code() -> str:
     """Generate 6-digit random code."""
-    return ''.join([str(random.randint(0, 9)) for _ in range(6)])
+    return f"{secrets.randbelow(1_000_000):06d}"
 
 
 def is_valid_email(email: str) -> bool:
@@ -95,11 +95,9 @@ async def send_auth_email(to_email: str, code: str) -> bool:
         msg.attach(part1)
         msg.attach(part2)
 
-        # Use SSL connection (port 465)
-        server = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=10)
-        server.login(SMTP_USER, SMTP_PASSWORD)
-        server.sendmail(SMTP_USER, to_email, msg.as_string())
-        server.quit()
+        # SMTP is blocking; run it in a worker thread so it cannot stall
+        # Telegram update processing while DNS/TLS/authentication is in progress.
+        await asyncio.to_thread(_send_smtp_message, to_email, msg.as_string())
 
         logger.info("Auth email sent to %s", to_email)
         return True
@@ -107,6 +105,13 @@ async def send_auth_email(to_email: str, code: str) -> bool:
     except Exception as e:
         logger.error("Failed to send auth email to %s: %s", to_email, e)
         return False
+
+
+def _send_smtp_message(to_email: str, message: str) -> None:
+    """Blocking SMTP transport, intentionally called via asyncio.to_thread."""
+    with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+        server.login(SMTP_USER, SMTP_PASSWORD)
+        server.sendmail(SMTP_USER, to_email, message)
 
 
 # ---------------------------------------------------------------------------
