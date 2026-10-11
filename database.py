@@ -3479,7 +3479,8 @@ async def verify_email_auth_code(user_id: int, code: str) -> bool:
 async def link_telegram_to_user(user_id: int, email: str) -> bool:
     """Safely move an existing email account and its linked records to a new Telegram ID."""
     normalized_email = email.lower().strip()
-    db = await get_db()
+    db = await aiosqlite.connect(DB_FILE)
+    await db.execute("PRAGMA busy_timeout=30000")
 
     async with _db_semaphore:
         try:
@@ -3622,6 +3623,8 @@ async def link_telegram_to_user(user_id: int, email: str) -> bool:
             await db.rollback()
             logger.error("Account linking transaction failed (%s)", type(e).__name__)
             return False
+        finally:
+            await db.close()
 
 
 async def update_user_email(user_id: int, email: str) -> bool:
