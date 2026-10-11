@@ -30,7 +30,7 @@ The project is designed to be used as:
 - Auto-renewal checks for expiring subscriptions
 - Notification scheduler for reminders and updates
 - Admin tools for user management and monitoring
-- Webhook support for external payment callbacks
+- YooKassa payment callback endpoint; Telegram updates are received through long polling
 - Docker and docker-compose support for deployment
 
 ## Architecture
@@ -40,7 +40,7 @@ The bot is built on top of:
 - Python 3.11
 - aiogram 3 for Telegram bot logic
 - SQLite for local persistence
-- FastAPI + Uvicorn for webhook handling
+- FastAPI + Uvicorn for YooKassa payment callbacks (not Telegram updates)
 - 3x-ui API integration through py3xui
 - optional Docker deployment
 
@@ -56,7 +56,7 @@ ByMeVPN_bot/
 ├── constants.py             # Pricing and tariff constants
 ├── xui_client.py            # 3x-ui integration client
 ├── payments.py              # Payment logic
-├── webhook.py               # Telegram / payment webhook server
+├── webhook.py               # YooKassa payment callback server
 ├── subscription.py          # Subscription lifecycle handling
 ├── notifications.py         # Reminder and alert scheduler
 ├── payment_monitor.py       # Payment monitoring worker
@@ -292,3 +292,8 @@ This project is maintained in the repository context of the author. For support,
 ---
 
 If you want, I can also make a second version of the README — a more “premium commercial” one with badges, screenshots placeholders, and a cleaner product-style presentation for GitHub.
+
+
+### Webhook security note
+
+Telegram updates are received only through aiogram long polling. The HTTP server exposes the YooKassa callback at `/webhook/yookassa`; do not configure or publish a `/webhook/telegram` endpoint. The callback verifies payment status against the YooKassa API before fulfillment. Restrict the webhook port at the firewall or expose it through a correctly configured HTTPS reverse proxy.
