@@ -77,21 +77,23 @@ class PaymentMonitor:
             logger.error(f"Error fetching payments: {e}")
             return []
     
-    async def _get_failed_ledger_payment_ids(self) -> list[str]:
-        """Return older failed payments too; recovery must not depend on a short time window."""
+    async def _get_incomplete_ledger_payment_ids(self) -> list[str]:
+        """Discover stale failed/interrupted orders outside the recent provider window."""
         try:
             from database import get_db
             db = await get_db()
+            stale_before = int(datetime.utcnow().timestamp()) - 600
             cur = await db.execute(
                 "SELECT provider_payment_id FROM payments "
-                "WHERE provider='yookassa' AND status='failed' "
-                "AND provider_payment_id IS NOT NULL "
-                "ORDER BY created ASC LIMIT 500"
+                "WHERE provider='yookassa' AND status IN ('failed','processing') "
+                "AND created<=? AND provider_payment_id IS NOT NULL "
+                "ORDER BY created ASC LIMIT 500",
+                (stale_before,),
             )
             rows = await cur.fetchall()
             return [str(row[0]) for row in rows if row and row[0]]
         except Exception as exc:
-            logger.error("Could not read failed YooKassa payments from ledger: %s", exc)
+            logger.error("Could not read incomplete YooKassa payments from ledger: %s", exc)
             return []
 
     async def check_and_process_payments(self, minutes_back: int = 5):
@@ -116,7 +118,7 @@ class PaymentMonitor:
 
             # The provider time window is a discovery mechanism, not the source of
             # truth for retries. Failed ledger rows may be much older than the window.
-            for payment_id in await self._get_failed_ledger_payment_ids():
+            for payment_id in await self._get_incomplete_ledger_payment_ids():
                 payment_ids.setdefault(payment_id, None)
 
             if not payment_ids:
