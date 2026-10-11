@@ -1155,7 +1155,7 @@ async def update_key_uuid(key_id: int, new_uuid: str) -> bool:
         await db.commit()
         return True
     except Exception as e:
-        logger.error("Failed to update key uuid: %s", e)
+        logger.error("Failed to update key UUID (%s)", type(e).__name__)
         return False
 
 
