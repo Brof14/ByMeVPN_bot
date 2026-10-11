@@ -715,16 +715,16 @@ async def update_xui_user(
                     actual_expiry = getattr(inbound_client, "expiry_time", None)
                     actual_limit = getattr(inbound_client, "limit_ip", None)
                     actual_sub_id = getattr(inbound_client, "sub_id", None)
-                    if actual_uuid and actual_uuid != client_uuid:
+                    if actual_uuid is not None and actual_uuid != client_uuid:
                         inbounds_ok = False
                         break
-                    if actual_expiry and int(actual_expiry) != int(final_expiry_ms):
+                    if actual_expiry is not None and int(actual_expiry) != int(final_expiry_ms):
                         inbounds_ok = False
                         break
-                    if actual_limit and int(actual_limit) != int(final_limit_ip):
+                    if actual_limit is not None and int(actual_limit) != int(final_limit_ip):
                         inbounds_ok = False
                         break
-                    if actual_sub_id and actual_sub_id != sub_id:
+                    if actual_sub_id is not None and actual_sub_id != sub_id:
                         inbounds_ok = False
                         break
 
