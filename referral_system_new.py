@@ -74,6 +74,7 @@ async def claim_referral_bonus(bot, referrer_id: int, referred_id: int, bonus_ty
     old_expiry = None
     old_limit = 2
     db_extended = False
+    panel_update_started = False
     try:
         keys = await get_user_keys(referrer_id)
         now = int(__import__("time").time())
@@ -120,20 +121,22 @@ async def claim_referral_bonus(bot, referrer_id: int, referred_id: int, bonus_ty
             )
             return False
 
+        panel_update_started = True
         xui_result = await update_xui_user(
             referrer_id,
             new_expiry_ms=int(updated_key["expiry"]) * 1000,
             limit_ip=old_limit,
         )
         if not xui_result:
+            # The panel may have applied the absolute expiry before its response
+            # was lost. Keep the reservation blocked until an admin reconciles it.
             rollback_ok = await set_key_expiry(key_id, old_expiry, old_limit)
-            if rollback_ok:
-                await finalize_referral_bonus(referrer_id, referred_id, success=False)
             await notify_admins(
                 bot,
                 f"⚠️ Не удалось подтвердить реферальное продление в 3x-ui. "
                 f"Пригласивший <code>{referrer_id}</code>, приглашённый <code>{referred_id}</code>; "
-                f"откат БД: {'OK' if rollback_ok else 'НЕ ПОДТВЕРЖДЁН'}.",
+                f"откат БД: {'OK' if rollback_ok else 'НЕ ПОДТВЕРЖДЁН'}. "
+                "Резерв бонуса оставлен заблокированным до ручной сверки.",
                 parse_mode="HTML",
             )
             return False
@@ -177,7 +180,18 @@ async def claim_referral_bonus(bot, referrer_id: int, referred_id: int, bonus_ty
         rollback_ok = True
         if db_extended and key_id is not None and old_expiry is not None:
             rollback_ok = await set_key_expiry(key_id, old_expiry, old_limit)
-        if rollback_ok:
+        if panel_update_started:
+            # Even if the DB rollback succeeded, the panel may already have
+            # applied the target. Do not release the claim for an automatic retry.
+            await notify_admins(
+                bot,
+                f"⚠️ Неоднозначный результат реферального продления. "
+                f"Пригласивший <code>{referrer_id}</code>, приглашённый <code>{referred_id}</code>; "
+                f"откат БД: {'OK' if rollback_ok else 'НЕ ПОДТВЕРЖДЁН'}. "
+                "Резерв бонуса заблокирован до ручной сверки.",
+                parse_mode="HTML",
+            )
+        elif rollback_ok:
             await finalize_referral_bonus(referrer_id, referred_id, success=False)
         else:
             await notify_admins(
