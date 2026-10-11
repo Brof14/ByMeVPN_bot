@@ -58,6 +58,35 @@ class TestXuiClientPool(unittest.IsolatedAsyncioTestCase):
         xui_client._api_pool = None
 
 
+
+    def test_config_rejects_missing_public_subscription_url(self):
+        with (
+            patch.object(xui_client, "XUI_API_URL", "http://127.0.0.1:54321"),
+            patch.object(xui_client, "XUI_URL", ""),
+            patch.object(xui_client, "XUI_USERNAME", "admin"),
+            patch.object(xui_client, "XUI_PASSWORD", "secret"),
+            patch.object(xui_client, "XUI_INBOUND_IDS", [2, 5]),
+            patch.object(xui_client, "XUI_SUB_PATH", "sub"),
+        ):
+            valid, message = xui_client.validate_xui_config()
+
+        self.assertFalse(valid)
+        self.assertIn("XUI_URL", message)
+
+    def test_config_rejects_duplicate_inbound_ids(self):
+        with (
+            patch.object(xui_client, "XUI_API_URL", "http://127.0.0.1:54321"),
+            patch.object(xui_client, "XUI_URL", "https://vpn.example.com"),
+            patch.object(xui_client, "XUI_USERNAME", "admin"),
+            patch.object(xui_client, "XUI_PASSWORD", "secret"),
+            patch.object(xui_client, "XUI_INBOUND_IDS", [2, 5, 2]),
+            patch.object(xui_client, "XUI_SUB_PATH", "sub"),
+        ):
+            valid, message = xui_client.validate_xui_config()
+
+        self.assertFalse(valid)
+        self.assertIn("повторяющиеся", message)
+
     async def test_startup_rejects_missing_configured_inbound(self):
         panel = _FakePanelWithInbounds(missing={5})
 
