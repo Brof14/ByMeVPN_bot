@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 
 from aiogram import Bot
 from config import YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY, CRYPTO_BOT_TOKEN
-from database import is_yookassa_processed, mark_yookassa_processed, is_crypto_processed
+from database import mark_yookassa_processed
 from webhook import _process_payment, _process_crypto_invoice
 from payments import get_paid_crypto_invoices
 
@@ -61,11 +61,9 @@ class PaymentMonitor:
                 if not payment_id:
                     continue
                     
-                # Проверяем, не обработан ли уже платеж
-                if await is_yookassa_processed(payment_id):
-                    continue
-                    
-                logger.info(f"Processing new payment: {payment_id}")
+                # Delegate deduplication to the payment ledger. A legacy
+                # processed marker alone must not hide an interrupted delivery.
+                logger.info(f"Checking payment through recovery-safe handler: {payment_id}")
                 
                 # Обрабатываем платеж (функция сама пометит как обработанный)
                 await _process_payment(self.bot, payment_id)
@@ -134,22 +132,10 @@ class CryptoPaymentMonitor:
                 if invoice_id is None:
                     continue
 
-                if await is_crypto_processed(invoice_id):
-                    continue
-
-                # Skip invoices created before monitor start (to avoid notifications after restart)
-                invoice_created_at = invoice.get("created_at")
-                if invoice_created_at:
-                    try:
-                        # Parse timestamp (Crypto Bot returns Unix timestamp in seconds)
-                        created_time = datetime.fromtimestamp(invoice_created_at)
-                        if created_time < self.start_time:
-                            logger.info(f"Crypto monitor: skipping invoice {invoice_id} created before monitor start")
-                            continue
-                    except (ValueError, TypeError) as e:
-                        logger.debug(f"Crypto monitor: could not parse created_at for invoice {invoice_id}: {e}")
-
-                logger.info(f"Crypto monitor: processing new invoice {invoice_id}")
+                # Do not skip old paid invoices solely because the process restarted
+                # or a legacy marker exists. The invoice handler checks the payment
+                # ledger and quarantines ambiguous cases without double-fulfillment.
+                logger.info(f"Checking paid invoice through recovery-safe handler: {invoice_id}")
                 await _process_crypto_invoice(self.bot, invoice)
 
         except Exception as e:
