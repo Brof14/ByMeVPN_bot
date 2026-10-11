@@ -5,6 +5,8 @@ Uses aiosqlite with WAL mode for better concurrency and connection pooling.
 import os
 import time
 import logging
+import hashlib
+import hmac
 from typing import Optional
 import aiosqlite
 from cache import cache_user_info, invalidate_user_cache, invalidate_subscription_cache
@@ -193,10 +195,18 @@ CREATE TABLE IF NOT EXISTS email_auth (
     created_at INTEGER DEFAULT (strftime('%s','now')),
     expires_at INTEGER NOT NULL,
     used BOOLEAN DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (user_id) REFERENCES users(user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_email_auth_user ON email_auth(user_id);
 CREATE INDEX IF NOT EXISTS idx_email_auth_email ON email_auth(email);
+
+CREATE TABLE IF NOT EXISTS email_auth_limits (
+    scope_key TEXT PRIMARY KEY,
+    window_start INTEGER NOT NULL,
+    request_count INTEGER NOT NULL DEFAULT 0,
+    last_sent INTEGER NOT NULL DEFAULT 0
+);
 
 -- Promo codes system
 CREATE TABLE IF NOT EXISTS promo_codes (
@@ -303,6 +313,20 @@ async def get_db() -> aiosqlite.Connection:
 
 async def _run_migrations(db: aiosqlite.Connection) -> None:
     """Run database migrations."""
+    # Email-code abuse controls and hashed one-time codes.
+    try:
+        await db.execute("ALTER TABLE email_auth ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+    except Exception as e:
+        if "duplicate column" not in str(e).lower():
+            logger.warning("Migration email_auth.attempts notice: %s", e)
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS email_auth_limits (
+            scope_key TEXT PRIMARY KEY,
+            window_start INTEGER NOT NULL,
+            request_count INTEGER NOT NULL DEFAULT 0,
+            last_sent INTEGER NOT NULL DEFAULT 0
+        )
+    """)
     # Migration: add limit_ip column for existing databases
     try:
         await db.execute("ALTER TABLE keys ADD COLUMN limit_ip INTEGER NOT NULL DEFAULT 1")
@@ -3217,39 +3241,120 @@ async def get_user_by_email(email: str) -> Optional[dict]:
     }
 
 
-async def save_email_auth_code(user_id: int, email: str, code: str, expires_at: int) -> int:
-    """Save email authentication code."""
+async def allow_email_auth_request(requester_id: int, email: str, now: Optional[int] = None) -> bool:
+    """Persistent anti-abuse limits: one request/minute and at most five/hour per user/email."""
+    if now is None:
+        now = int(time.time())
+    normalized = email.lower().strip()
+    email_digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    scopes = [
+        (f"user:{int(requester_id)}", 60, 5),
+        (f"email:{email_digest}", 60, 5),
+    ]
     db = await get_db()
-    cur = await db.execute(
-        "INSERT INTO email_auth(user_id, email, code, expires_at) VALUES(?,?,?,?)",
-        (user_id, email.lower().strip(), code, expires_at)
-    )
-    await db.commit()
-    return cur.lastrowid
+    async with _db_semaphore:
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            rows = {}
+            for scope_key, cooldown, max_hourly in scopes:
+                cur = await db.execute(
+                    "SELECT window_start, request_count, last_sent FROM email_auth_limits WHERE scope_key=?",
+                    (scope_key,),
+                )
+                rows[scope_key] = await cur.fetchone()
+                row = rows[scope_key]
+                if row:
+                    window_start, count, last_sent = row
+                    if now - int(last_sent or 0) < cooldown:
+                        await db.rollback()
+                        return False
+                    if now - int(window_start or 0) < 3600 and int(count or 0) >= max_hourly:
+                        await db.rollback()
+                        return False
+
+            for scope_key, _cooldown, _max_hourly in scopes:
+                row = rows[scope_key]
+                if not row or now - int(row[0] or 0) >= 3600:
+                    await db.execute(
+                        "INSERT INTO email_auth_limits(scope_key, window_start, request_count, last_sent) "
+                        "VALUES(?,?,1,?) ON CONFLICT(scope_key) DO UPDATE SET "
+                        "window_start=excluded.window_start, request_count=1, last_sent=excluded.last_sent",
+                        (scope_key, now, now),
+                    )
+                else:
+                    await db.execute(
+                        "UPDATE email_auth_limits SET request_count=request_count+1, last_sent=? WHERE scope_key=?",
+                        (now, scope_key),
+                    )
+            await db.commit()
+            return True
+        except Exception:
+            await db.rollback()
+            logger.exception("Email authentication rate-limit check failed closed")
+            return False
+
+
+async def save_email_auth_code(user_id: int, email: str, code: str, expires_at: int) -> int:
+    """Save a hashed, one-time email authentication code and invalidate older unused codes."""
+    db = await get_db()
+    normalized_email = email.lower().strip()
+    code_hash = "sha256:" + hashlib.sha256(code.encode("utf-8")).hexdigest()
+    async with _db_semaphore:
+        await db.execute(
+            "UPDATE email_auth SET used=1 WHERE user_id=? AND used=0",
+            (user_id,),
+        )
+        cur = await db.execute(
+            "INSERT INTO email_auth(user_id, email, code, expires_at, attempts) VALUES(?,?,?,?,0)",
+            (user_id, normalized_email, code_hash, expires_at),
+        )
+        await db.commit()
+        return cur.lastrowid
 
 
 async def verify_email_auth_code(user_id: int, code: str) -> bool:
-    """Verify email authentication code."""
+    """Verify one-time code, enforce a five-attempt cap and support legacy plaintext rows."""
     db = await get_db()
     current_time = int(time.time())
-    
     cur = await db.execute(
-        """SELECT id FROM email_auth 
-           WHERE user_id=? AND code=? AND expires_at > ? AND used=0
-           ORDER BY created_at DESC LIMIT 1""",
-        (user_id, code, current_time)
+        """SELECT id, code, expires_at, used, attempts FROM email_auth
+           WHERE user_id=? AND used=0
+           ORDER BY created_at DESC, id DESC LIMIT 1""",
+        (user_id,),
     )
     row = await cur.fetchone()
-    
-    if row:
-        # Mark code as used
-        await db.execute(
-            "UPDATE email_auth SET used=1 WHERE id=?",
-            (row[0],)
-        )
-        await db.commit()
-        return True
-    return False
+    if not row:
+        return False
+
+    row_id, stored_code, expires_at, used, attempts = row
+    if used or int(expires_at or 0) <= current_time or int(attempts or 0) >= 5:
+        return False
+
+    # Increment before comparing so failed guesses consume an attempt.
+    cur = await db.execute(
+        "UPDATE email_auth SET attempts=attempts+1 WHERE id=? AND used=0 AND attempts<5",
+        (row_id,),
+    )
+    await db.commit()
+    if cur.rowcount != 1:
+        return False
+
+    if isinstance(stored_code, str) and stored_code.startswith("sha256:"):
+        candidate = "sha256:" + hashlib.sha256(code.encode("utf-8")).hexdigest()
+        matches = hmac.compare_digest(stored_code, candidate)
+    else:
+        # Compatibility with unexpired codes created before the hash migration.
+        matches = hmac.compare_digest(str(stored_code), str(code))
+
+    if not matches:
+        return False
+
+    cur = await db.execute(
+        "UPDATE email_auth SET used=1 WHERE id=? AND used=0 AND attempts<=5",
+        (row_id,),
+    )
+    await db.commit()
+    return cur.rowcount == 1
 
 
 async def link_telegram_to_user(user_id: int, email: str) -> bool:
