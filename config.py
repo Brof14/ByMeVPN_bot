@@ -114,9 +114,6 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 # ============================================================================
 WEBHOOK_HOST = os.getenv("WEBHOOK_HOST") or "0.0.0.0"
 WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT") or "8080")
-WEBHOOK_URL = (
-    os.getenv("WEBHOOK_URL") or "https://bymevpn.duckdns.org:8443/webhook/telegram"
-)
 
 # ============================================================================
 # Trial and Referral Configuration
