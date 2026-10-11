@@ -5,6 +5,7 @@
 
 import logging
 import uuid as uuid_lib
+import secrets
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -207,102 +208,66 @@ async def test_xui_connection() -> tuple[bool, str]:
 
 
 async def _find_client_uuid(api: AsyncApi, email: str) -> Optional[str]:
-    """
-    Ищет UUID клиента по email через все возможные методы (parallel).
-    Возвращает UUID или None.
-    """
-    inbound_id = XUI_INBOUND_IDS[0] if XUI_INBOUND_IDS else 0  # configured primary inbound
-    
-    # Run both methods in parallel for speed
-    tasks = []
-    
-    # Метод 1: get_by_email
-    async def method1():
-        try:
-            client = await _api_call_with_retry(api.client.get_by_email, email)
-            if client and client.uuid:
-                logger.debug("Found client %s via get_by_email", email)
-                return client.uuid
-        except Exception as e:
-            logger.debug("get_by_email failed for %s: %s", email, e)
-        return None
-    
-    # Метод 2: Поиск в client_stats инбаунда 2
-    async def method2():
+    """Find a client UUID via the panel-wide API or any configured inbound."""
+    try:
+        client = await _api_call_with_retry(api.client.get_by_email, email)
+        if client and client.uuid:
+            return client.uuid
+    except Exception as e:
+        logger.debug("Panel-wide client lookup failed for %s (%s)", email, type(e).__name__)
+
+    async def search_inbound(inbound_id: int) -> Optional[str]:
         try:
             inbound = await _api_call_with_retry(api.inbound.get_by_id, inbound_id)
-            if inbound and inbound.client_stats:
-                for c in inbound.client_stats:
-                    if c.email == email and c.uuid:
-                        logger.debug("Found client %s in inbound %d client_stats", email, inbound_id)
-                        return c.uuid
+            for client in getattr(inbound, "client_stats", None) or []:
+                if client.email == email and client.uuid:
+                    return client.uuid
         except Exception as e:
-            logger.debug("Failed to search inbound %d for %s: %s", inbound_id, email, e)
+            logger.debug("Client lookup in inbound %d failed (%s)", inbound_id, type(e).__name__)
         return None
-    
-    tasks = [method1(), method2()]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    
-    # Return first non-None result
+
+    results = await asyncio.gather(
+        *(search_inbound(inbound_id) for inbound_id in XUI_INBOUND_IDS),
+        return_exceptions=True,
+    )
     for result in results:
         if isinstance(result, str) and result:
             return result
-    
-    logger.warning("Client %s not found anywhere", email)
+    logger.warning("Client %s not found in configured inbounds", email)
     return None
 
 
 async def _find_client_sub_id(api: AsyncApi, email: str) -> Optional[str]:
-    """
-    Ищет sub_id клиента по email через все возможные методы (parallel).
-    Возвращает sub_id или None.
-    """
-    inbound_id = XUI_INBOUND_IDS[0] if XUI_INBOUND_IDS else 0  # configured primary inbound
-    
-    # Run methods in parallel for speed
-    async def method1():
-        try:
-            client = await _api_call_with_retry(api.client.get_by_email, email)
-            if client and client.sub_id:
-                logger.debug("Found client %s sub_id via get_by_email", email)
-                return client.sub_id
-        except Exception as e:
-            logger.debug("get_by_email failed for %s: %s", email, e)
-        return None
-    
-    async def method2():
+    """Find an existing subscription ID without changing legacy client identities."""
+    try:
+        client = await _api_call_with_retry(api.client.get_by_email, email)
+        if client and client.sub_id:
+            return client.sub_id
+    except Exception as e:
+        logger.debug("Panel-wide sub_id lookup failed for %s (%s)", email, type(e).__name__)
+
+    async def search_inbound(inbound_id: int) -> Optional[str]:
         try:
             inbound = await _api_call_with_retry(api.inbound.get_by_id, inbound_id)
-            if inbound and inbound.client_stats:
-                for c in inbound.client_stats:
-                    if c.email == email and c.sub_id:
-                        logger.debug("Found client %s sub_id in inbound %d client_stats", email, inbound_id)
-                        return c.sub_id
+            for client in getattr(inbound, "client_stats", None) or []:
+                if client.email == email and client.sub_id:
+                    return client.sub_id
         except Exception as e:
-            logger.debug("Failed to search inbound %d for %s: %s", inbound_id, email, e)
+            logger.debug("sub_id lookup in inbound %d failed (%s)", inbound_id, type(e).__name__)
         return None
-    
-    tasks = [method1(), method2()]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    
-    # Return first non-None result
+
+    results = await asyncio.gather(
+        *(search_inbound(inbound_id) for inbound_id in XUI_INBOUND_IDS),
+        return_exceptions=True,
+    )
     for result in results:
         if isinstance(result, str) and result:
             return result
-    
-    # Метод 3: Если не нашли sub_id, но есть uuid, используем его для генерации sub_id
-    try:
-        client_uuid = await _find_client_uuid(api, email)
-        if client_uuid:
-            # Генерируем sub_id из uuid (убираем дефисы и берем первые 16 символов)
-            generated_sub_id = client_uuid.replace("-", "")[:16]
-            logger.debug("Generated fallback sub_id for %s from its UUID", email)
-            return generated_sub_id
-    except Exception as e:
-        logger.debug("Failed to generate sub_id from uuid for %s: %s", email, e)
-    
-    logger.warning("Client %s sub_id not found anywhere", email)
-    return None
+
+    # Legacy clients without a panel sub_id may already use this historical URL.
+    # Preserve that identity; all newly-created clients get an independent random ID.
+    client_uuid = await _find_client_uuid(api, email)
+    return client_uuid.replace("-", "")[:16] if client_uuid else None
 
 
 async def create_xui_user(
