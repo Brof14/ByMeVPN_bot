@@ -10,7 +10,7 @@ from datetime import datetime
 # ============================================================================
 # Time Constants
 # ============================================================================
-TRIAL_DAYS = 3          # Number of free trial days
+TRIAL_DAYS = 3          # Duration of the introductory trial (payment terms are defined below)
 SECONDS_PER_DAY = 86400  # Seconds in a day
 CAPTION_LIMIT = 1024    # Telegram caption character limit
 
