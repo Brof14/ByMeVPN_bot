@@ -1,6 +1,6 @@
 import base64
 import time
-import uuid
+import hashlib
 import logging
 from typing import Optional
 import httpx
@@ -42,9 +42,15 @@ async def create_yookassa_payment(
 
     auth = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
 
+    # Stable order fingerprint collapses rapid duplicate callbacks into one provider
+    # order. The five-minute bucket avoids reusing a key indefinitely for later purchases.
+    order_fingerprint = hashlib.sha256(
+        f"{user_id}:{amount_rub}:{days}:{devices}:{months}:{(promo_code or '').strip().lower()}".encode()
+    ).hexdigest()[:16]
+    idempotence_key = f"byme_checkout_{user_id}_{order_fingerprint}_{int(time.time() // 300)}"
     headers = {
         "Authorization": f"Basic {auth}",
-        "Idempotence-Key": f"checkout_{user_id}_{uuid.uuid4().hex}",
+        "Idempotence-Key": idempotence_key,
         "Content-Type": "application/json",
     }
 
@@ -59,9 +65,15 @@ async def create_yookassa_payment(
         metadata["promo_code"] = str(promo_code)
     if extra_metadata:
         metadata.update({k: str(v) for k, v in extra_metadata.items()})
-    # This must reflect the amount actually sent to YooKassa, even if optional
-    # metadata contains an overlapping key.
-    metadata["amount_rub"] = str(amount_rub)
+    # Critical order fields are controlled by this function, never by optional metadata.
+    metadata.update({
+        "service": "bymevpn",
+        "user_id": str(user_id),
+        "days": str(days),
+        "devices": str(devices),
+        "months": str(months),
+        "amount_rub": str(amount_rub),
+    })
 
     payload = {
         "amount": {"value": f"{amount_rub}.00", "currency": "RUB"},
@@ -99,7 +111,7 @@ async def create_yookassa_payment(
             global _yookassa_recurring_supported
             _yookassa_recurring_supported = False
             payload.pop("save_payment_method", None)
-            headers["Idempotence-Key"] = f"checkout_{user_id}_{uuid.uuid4().hex}_std"
+            headers["Idempotence-Key"] = f"{idempotence_key}_std"
             try:
                 async with httpx.AsyncClient(timeout=15.0) as client:
                     r2 = await client.post("https://api.yookassa.ru/v3/payments", json=payload, headers=headers)
@@ -165,6 +177,7 @@ async def charge_yookassa_recurrent(
         "key_id": str(key_id),
         "amount_rub": str(amount_rub),
         "auto_renew": "1",
+        "service": "bymevpn",
     }
 
     payload = {
