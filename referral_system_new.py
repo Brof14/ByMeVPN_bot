@@ -26,18 +26,20 @@ async def process_referral_click(referrer_id: int, referred_id: int, user_agent:
         # Log the click
         click_id = await log_referral_click(referrer_id, user_agent, ip_address)
         
-        # The click reward is separate from the cash reward for first paid conversion.
+        # Track the referral event without claiming a reward was granted.
+        # The caller records click_bonus_granted only after 3x-ui confirms the
+        # exact expiry update, preventing statistics from overstating rewards.
         await add_referral_event(
             referrer_id=referrer_id,
             referred_id=referred_id,
-            event_type="trial_pending",
-            days_awarded=REFERRAL_CLICK_BONUS_DAYS,
-            description="Referral link click bonus",
+            event_type="referral_click",
+            days_awarded=0,
+            description="Referral click tracked; no reward recorded yet",
         )
-        
+
         logger.info(
-            "Referral click tracked: referrer=%d, referred=%d, days=%d",
-            referrer_id, referred_id, REFERRAL_CLICK_BONUS_DAYS,
+            "Referral click tracked: referrer=%d, referred=%d",
+            referrer_id, referred_id,
         )
         return True
     except Exception as e:
