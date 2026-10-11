@@ -21,6 +21,7 @@ from constants import (
     get_price_for_months, get_monthly_display, validate_device_limit,
 )
 from config import PRICE_1_MONTH, DAYS_1M, BOT_TOKEN
+from provisioning import ProvisioningOutcomeUnknown
 from states import BuyFlow
 from keyboards import tariff_selection_kb, payment_kb
 from payments import create_yookassa_payment, create_crypto_payment
@@ -551,20 +552,39 @@ async def _process_successful_stars_payment(
                 pass
             return
 
-    success = await deliver_key(
-        bot=bot,
-        user_id=user_id,
-        chat_id=message.chat.id,
-        config_name=f"ByMeVPN_{user_id}",
-        days=days,
-        limit_ip=devices,
-        is_paid=True,
-        amount=stars,
-        currency=currency,
-        method="stars",
-        payload=charge_id,
-        extend_existing=True,
-    )
+    try:
+        success = await deliver_key(
+            bot=bot,
+            user_id=user_id,
+            chat_id=message.chat.id,
+            config_name=f"ByMeVPN_{user_id}",
+            days=days,
+            limit_ip=devices,
+            is_paid=True,
+            amount=stars,
+            currency=currency,
+            method="stars",
+            payload=charge_id,
+            extend_existing=True,
+        )
+    except ProvisioningOutcomeUnknown as provisioning_error:
+        await update_payment_status(pay_db_id, "recovery_required")
+        await notify_admins(
+            bot,
+            f"⚠️ Платёж Stars <code>{charge_id}</code> пользователя <code>{user_id}</code> оплачен, "
+            "но результат выдачи в 3x-ui неоднозначен. Автоматический повтор остановлен; нужна ручная сверка.",
+            parse_mode="HTML",
+        )
+        try:
+            await bot.send_message(
+                user_id,
+                "⚠️ Оплата получена, но результат выдачи требует проверки. "
+                "Не оплачивайте повторно — поддержка проверит операцию.",
+            )
+        except Exception:
+            pass
+        logger.error("Stars payment %s quarantined after ambiguous provisioning (%s)", charge_id, type(provisioning_error).__name__)
+        return
 
     if success:
         await update_payment_status(pay_db_id, "success")
