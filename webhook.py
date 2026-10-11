@@ -36,6 +36,7 @@ from config import (
 )
 from database import init_db, is_yookassa_processed, mark_yookassa_processed
 from subscription import deliver_key
+from provisioning import ProvisioningOutcomeUnknown
 
 logger = logging.getLogger(__name__)
 
@@ -365,22 +366,37 @@ async def _process_payment_locked(bot: Bot, payment_id: str) -> None:
                 )
                 return
 
-        # Deliver or extend key immediately without blocking on user input
-        success = await deliver_key(
-            bot=bot,
-            user_id=user_id,
-            chat_id=user_id,
-            config_name=f"ByMeVPN_{user_id}",
-            days=days,
-            limit_ip=devices,
-            is_paid=True,
-            amount=amount_rub,
-            currency="RUB",
-            method="yookassa",
-            payload=payment_id,
-            extend_existing=True,
-            skip_referral_bonus=is_trial,
-        )
+        # Deliver or extend key immediately without blocking on user input.
+        # An ambiguous panel outcome is quarantined instead of being retried as
+        # a failed payment, because the external expiry may already have changed.
+        try:
+            success = await deliver_key(
+                bot=bot,
+                user_id=user_id,
+                chat_id=user_id,
+                config_name=f"ByMeVPN_{user_id}",
+                days=days,
+                limit_ip=devices,
+                is_paid=True,
+                amount=amount_rub,
+                currency="RUB",
+                method="yookassa",
+                payload=payment_id,
+                extend_existing=True,
+                skip_referral_bonus=is_trial,
+            )
+        except ProvisioningOutcomeUnknown as provisioning_error:
+            await update_payment_status(pay_db_id, "recovery_required")
+            await _notify_admin(
+                bot,
+                f"⚠️ Платёж YooKassa <code>{payment_id}</code> подтверждён, но результат выдачи в 3x-ui неоднозначен. "
+                f"Пользователь <code>{user_id}</code>. Автоматический повтор остановлен; нужна ручная сверка.",
+            )
+            logger.error(
+                "Payment %s quarantined after ambiguous provisioning (%s)",
+                payment_id, type(provisioning_error).__name__,
+            )
+            return
 
         if success:
             await update_payment_status(pay_db_id, "success")
@@ -683,20 +699,33 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
                 )
                 return
 
-        success = await deliver_key(
-            bot=bot,
-            user_id=user_id,
-            chat_id=user_id,
-            config_name=f"ByMeVPN_{user_id}",
-            days=days,
-            limit_ip=devices,
-            is_paid=True,
-            amount=amount_rub,
-            currency="RUB",
-            method="cryptobot",
-            payload=str(invoice_id),
-            extend_existing=True,
-        )
+        try:
+            success = await deliver_key(
+                bot=bot,
+                user_id=user_id,
+                chat_id=user_id,
+                config_name=f"ByMeVPN_{user_id}",
+                days=days,
+                limit_ip=devices,
+                is_paid=True,
+                amount=amount_rub,
+                currency="RUB",
+                method="cryptobot",
+                payload=str(invoice_id),
+                extend_existing=True,
+            )
+        except ProvisioningOutcomeUnknown as provisioning_error:
+            await update_payment_status(pay_db_id, "recovery_required")
+            await _notify_admin(
+                bot,
+                f"⚠️ Crypto Bot инвойс <code>{invoice_id}</code> оплачен, но результат выдачи в 3x-ui неоднозначен. "
+                f"Пользователь <code>{user_id}</code>. Автоматический повтор остановлен; нужна ручная сверка.",
+            )
+            logger.error(
+                "Crypto invoice %s quarantined after ambiguous provisioning (%s)",
+                invoice_id, type(provisioning_error).__name__,
+            )
+            return
 
         if success:
             await update_payment_status(pay_db_id, "success")
