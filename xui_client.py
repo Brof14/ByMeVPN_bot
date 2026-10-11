@@ -245,7 +245,7 @@ async def _find_client_sub_id(api: AsyncApi, email: str) -> Optional[str]:
     Ищет sub_id клиента по email через все возможные методы (parallel).
     Возвращает sub_id или None.
     """
-    inbound_id = 2  # Только VLESS
+    inbound_id = XUI_INBOUND_IDS[0] if XUI_INBOUND_IDS else 0  # configured primary inbound
     
     # Run methods in parallel for speed
     async def method1():
