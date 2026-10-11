@@ -312,7 +312,7 @@ async def create_xui_user(
         else:
             logger.info("No existing client found for %s, creating new", email)
             client_uuid = str(uuid_lib.uuid4())
-            sub_id = client_uuid.replace("-", "")[:16]
+            sub_id = secrets.token_hex(8)
 
         # Шаг 2: Создаем клиента в инбаундах (parallel)
         logger.info("Adding client %s in inbounds %s", email, inbound_ids)
