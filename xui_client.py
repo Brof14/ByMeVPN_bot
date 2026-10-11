@@ -151,41 +151,44 @@ def validate_xui_config() -> tuple[bool, str]:
 
 
 async def test_xui_connection() -> tuple[bool, str]:
+    """Verify panel authentication and every configured inbound, not just the panel root."""
     is_valid, err = validate_xui_config()
     if not is_valid:
         return False, f"Ошибка конфигурации: {err}"
+
     try:
         api = await _get_api()
-        ids_str = ",".join(map(str, XUI_INBOUND_IDS))
-        try:
-            inbounds = await _api_call_with_retry(api.inbound.get_list)
-            return True, (
-                f"Соединение с 3x-ui успешно. "
-                f"Инбаундов в панели: {len(inbounds)}, настроенные: {ids_str}"
+        working: list[int] = []
+        missing: list[int] = []
+
+        # A reachable panel is not enough: if an inbound ID is stale or inaccessible,
+        # accepting payments could produce subscriptions missing one or more servers.
+        for inbound_id in XUI_INBOUND_IDS:
+            try:
+                inbound = await _api_call_with_retry(api.inbound.get_by_id, inbound_id)
+                if inbound is not None:
+                    working.append(inbound_id)
+                else:
+                    missing.append(inbound_id)
+            except Exception as inbound_error:
+                logger.error(
+                    "Configured 3x-ui inbound %d is not reachable: %s",
+                    inbound_id,
+                    str(inbound_error)[:160],
+                )
+                missing.append(inbound_id)
+
+        if missing:
+            return False, (
+                "Не все настроенные инбаунды доступны. "
+                f"Работают: {working or 'нет'}; недоступны: {missing}. "
+                "Проверьте XUI_INBOUND_IDS и доступность панели."
             )
-        except Exception as list_err:
-            # Some panels contain inbounds with null streamSettings, which breaks
-            # py3xui's strict Inbound.model_validate on get_list() — while the
-            # per-id get_by_id() path used by ALL key operations works fine.
-            # Fall back to checking the configured inbounds individually.
-            working = []
-            for iid in XUI_INBOUND_IDS:
-                try:
-                    inbound = await _api_call_with_retry(api.inbound.get_by_id, iid)
-                    if inbound is not None:
-                        working.append(iid)
-                except Exception:
-                    continue
-            if working:
-                logger.warning(
-                    "test_xui_connection: get_list() failed (%s) but configured inbounds %s respond via get_by_id",
-                    str(list_err)[:120], working,
-                )
-                return True, (
-                    f"Соединение с 3x-ui успешно (get_list недоступен из-за битого инбаунда в панели). "
-                    f"Рабочие настроенные инбаунды: {working}, настроенные: {ids_str}"
-                )
-            raise
+
+        return True, (
+            "Соединение с 3x-ui успешно. "
+            f"Проверены все настроенные инбаунды: {working}"
+        )
     except Exception as e:
         logger.exception("test_xui_connection failed: %s", e)
         return False, f"Ошибка подключения к 3x-ui API: {str(e)}"
@@ -196,7 +199,7 @@ async def _find_client_uuid(api: AsyncApi, email: str) -> Optional[str]:
     Ищет UUID клиента по email через все возможные методы (parallel).
     Возвращает UUID или None.
     """
-    inbound_id = 2  # Только VLESS
+    inbound_id = XUI_INBOUND_IDS[0] if XUI_INBOUND_IDS else 0  # configured primary inbound
     
     # Run both methods in parallel for speed
     tasks = []
