@@ -501,28 +501,42 @@ async def cb_key_delete_confirm(callback: CallbackQuery, bot: Bot):
     remark = k.get("remark") or f"Ключ #{key_id}"
     user_id = callback.from_user.id
 
-    # Delete from 3x-ui panel
-    ok = await delete_xui_user(user_id)
-    if not ok:
-        logger.warning(
-            "Could not delete user %d from 3x-ui (key_id=%d)", user_id, key_id
-        )
+    # The bot currently uses one 3x-ui client per Telegram user. Removing
+    # one saved key must not delete that shared server client while other key
+    # records remain.
+    existing_keys = await get_user_keys(user_id)
+    other_keys = [item for item in existing_keys if item.get("id") != key_id]
 
-    # Delete from DB
-    await delete_key_by_id(key_id)
-    logger.info("Key %d deleted by user %d", key_id, callback.from_user.id)
+    if not other_keys:
+        ok = await delete_xui_user(user_id)
+        if not ok:
+            logger.error("Could not delete user %d from 3x-ui (key_id=%d); DB row retained", user_id, key_id)
+            await callback.message.answer(
+                "⚠️ Не удалось подтвердить удаление на VPN-сервере. Запись сохранена; "
+                "попробуйте позже или обратитесь в поддержку."
+            )
+            return
 
-    # Refresh list
-    keys = await get_user_keys(callback.from_user.id)
+    deleted = await delete_key_by_id(key_id)
+    if not deleted:
+        logger.error("Could not delete key row %d for user %d", key_id, user_id)
+        await callback.message.answer("⚠️ Не удалось удалить запись. Попробуйте позже.")
+        return
+
+    logger.info("Key %d deleted by user %d (other_keys=%d)", key_id, user_id, len(other_keys))
+
+    keys = await get_user_keys(user_id)
     if not keys:
         await send_with_photo(
             bot, callback,
-            f"✅ Ключ «{remark}» удалён.\n\nУ вас больше нет активных ключей.",
+            f"✅ Ключ «{remark}» удалён.\n\nVPN-клиент удалён с сервера.",
             back_to_menu(),
         )
     else:
         now = int(time.time())
-        lines = [f"✅ Ключ «{remark}» удалён.\n\n🔑 <b>Оставшиеся ключи:</b>\n"]
+        lines = [f"✅ Запись ключа «{remark}» удалена.\n\n🔑 <b>Оставшиеся ключи:</b>\n"]
+        if other_keys:
+            lines.append("Другие ключи сохранены; VPN-доступ через них не затронут.\n")
         for k2 in keys:
             status = "✅ активен" if k2["expiry"] > now else "❌ истёк"
             lines.append(
@@ -530,7 +544,6 @@ async def cb_key_delete_confirm(callback: CallbackQuery, bot: Bot):
                 f"{status}, до {fmt_date(k2['expiry'])}"
             )
         await send_with_photo(bot, callback, "\n".join(lines), my_keys_list_kb(keys))
-
 
 # ---------------------------------------------------------------------------
 # RF apps bypass guide

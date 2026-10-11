@@ -6,7 +6,7 @@ on:
   push:
     branches:
       - main
-      - fix/production-hardening-2026-10
+      - "fix/**"
 
 jobs:
   tests:

@@ -17,7 +17,7 @@ import database
 from database import (
     add_key, get_referrer, add_payment, set_trial_used, log_key_error,
     get_user_keys, extend_key, log_analytics_event, record_payment_idempotent,
-    update_key_uuid, delete_yookassa_pending,
+    update_key_uuid, delete_yookassa_pending, set_key_expiry,
 )
 from xui_client import create_xui_user, get_xui_user, format_traffic
 from keyboards import after_key_kb, cancel_kb
@@ -115,10 +115,51 @@ async def ask_config_name(
             # Update expiry and limit_ip in 3x-ui
             from xui_client import update_xui_user
             xui_res = await update_xui_user(user_id, days=days, limit_ip=limit_ip)
-            
+
             if not xui_res:
-                logger.warning("Failed to update 3x-ui user expiry for user %d", user_id)
-            
+                # The DB was extended first. Compensate it before reporting failure,
+                # otherwise a retry after a transient 3x-ui outage would add days twice.
+                rollback_ok = await set_key_expiry(key_id, int(old_expiry or 0), old_limit)
+                error_context = {
+                    "branch": "ask_config_name.extend",
+                    "days": days,
+                    "limit_ip": limit_ip,
+                    "rollback_ok": rollback_ok,
+                }
+                await log_key_error(
+                    user_id=user_id,
+                    error_type="subscription_extension_failed",
+                    error_message="3x-ui did not confirm subscription extension",
+                    context=error_context,
+                )
+                logger.error(
+                    "3x-ui extension failed for user %d; DB rollback %s",
+                    user_id, "succeeded" if rollback_ok else "FAILED",
+                )
+                try:
+                    await bot.send_message(
+                        ADMIN_ID,
+                        f"⚠️ Не удалось подтвердить продление в 3x-ui. Пользователь: <code>{user_id}</code>; "
+                        f"платёж: <code>{payload}</code>; откат БД: {'OK' if rollback_ok else 'ОШИБКА'}. "
+                        "Требуется сверка; не выдавать дни повторно вслепую.",
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+                try:
+                    await bot.send_message(
+                        chat_id,
+                        "⚠️ Платёж получен, но сервер не подтвердил продление подписки. "
+                        "Не оплачивайте повторно — мы проверим операцию и восстановим доступ.",
+                    )
+                except Exception:
+                    pass
+                if not rollback_ok:
+                    raise RuntimeError(
+                        f"3x-ui extension failed and DB rollback failed for user {user_id}, key {key_id}"
+                    )
+                return
+
             # Add payment record (idempotent — duplicate provider payment ids
             # must never create a second payment row)
             if is_paid and amount > 0:
@@ -331,10 +372,44 @@ async def deliver_key(
                 # Update expiry and limit_ip in 3x-ui
                 from xui_client import update_xui_user
                 xui_res = await update_xui_user(user_id, days=days, limit_ip=limit_ip)
-                
+
                 if not xui_res:
-                    logger.warning("Failed to update 3x-ui user expiry for user %d", user_id)
-                
+                    # Compensate the DB extension. This keeps a failed provisioning
+                    # attempt retryable without blindly charging days twice.
+                    rollback_ok = await set_key_expiry(key_id, int(old_expiry or 0), old_limit)
+                    error_context = {
+                        "branch": "deliver_key.extend",
+                        "days": days,
+                        "limit_ip": limit_ip,
+                        "rollback_ok": rollback_ok,
+                        "payment_id": payload,
+                    }
+                    await log_key_error(
+                        user_id=user_id,
+                        error_type="subscription_extension_failed",
+                        error_message="3x-ui did not confirm subscription extension",
+                        context=error_context,
+                    )
+                    logger.error(
+                        "3x-ui extension failed for user %d; DB rollback %s",
+                        user_id, "succeeded" if rollback_ok else "FAILED",
+                    )
+                    try:
+                        await bot.send_message(
+                            ADMIN_ID,
+                            f"⚠️ Не удалось подтвердить продление в 3x-ui. Пользователь: <code>{user_id}</code>; "
+                            f"платёж: <code>{payload}</code>; откат БД: {'OK' if rollback_ok else 'ОШИБКА'}. "
+                            "Требуется сверка; не выдавать дни повторно вслепую.",
+                            parse_mode="HTML",
+                        )
+                    except Exception:
+                        pass
+                    if not rollback_ok:
+                        raise RuntimeError(
+                            f"3x-ui extension failed and DB rollback failed for user {user_id}, key {key_id}"
+                        )
+                    return False
+
                 # Add payment record (idempotent)
                 if is_paid and amount > 0:
                     tariff_name = f"Продление {days} дней ({limit_ip} устр.)"
@@ -564,9 +639,8 @@ async def deliver_key(
             await bot.send_message(
                 chat_id,
                 "❌ <b>Ошибка создания VPN подписки</b>\n\n"
-                "Не удалось создать подписку в панели управления.\n"
-                "Если вы оплатили, деньги будут возвращены автоматически.\n"
-                "Пожалуйста, напишите в поддержку — мы поможем!\n\n"
+                "Не удалось подтвердить создание подписки на сервере.\n"
+                "Если вы оплатили, не оплачивайте повторно — поддержка проверит платёж и восстановит доступ.\n\n"
                 "📞 Поддержка: @ByMeVPN_support_bot",
                 parse_mode="HTML",
             )

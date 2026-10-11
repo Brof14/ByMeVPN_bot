@@ -1154,8 +1154,9 @@ async def delete_key_by_uuid(uuid: str) -> bool:
 
 async def get_expired_keys() -> list[dict]:
     db = await get_db()
+    # Only process records that have not already been handled by the admin cleanup.
     cur = await db.execute(
-        "SELECT id, user_id, uuid FROM keys WHERE expiry < ?",
+        "SELECT id, user_id, uuid FROM keys WHERE expiry < ? AND COALESCE(cleaned, 0) = 0",
         (int(time.time()),),
     )
     rows = await cur.fetchall()
@@ -1284,6 +1285,25 @@ async def update_payment_status(payment_id: int, status: str) -> bool:
         cur = await db.execute("UPDATE payments SET status = ? WHERE id = ?", (status, payment_id))
         await db.commit()
         return cur.rowcount > 0
+
+
+async def get_payment_by_id(payment_id: int) -> Optional[dict]:
+    """Fetch one payment ledger row by its internal ID."""
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT id, user_id, amount, currency, method, days, created, payload, status, tariff, devices, provider, provider_payment_id "
+        "FROM payments WHERE id=?",
+        (payment_id,),
+    )
+    row = await cur.fetchone()
+    if not row:
+        return None
+    return {
+        "id": row[0], "user_id": row[1], "amount": row[2], "currency": row[3],
+        "method": row[4], "days": row[5], "created": row[6], "payload": row[7],
+        "status": row[8], "tariff": row[9], "devices": row[10],
+        "provider": row[11], "provider_payment_id": row[12],
+    }
 
 
 async def get_user_payments(user_id: int) -> list[dict]:
@@ -2886,6 +2906,48 @@ async def get_payment_stats() -> dict:
     }
 
 
+async def set_key_expiry(key_id: int, expiry: int, limit_ip: Optional[int] = None) -> bool:
+    """Set a key's absolute expiry/device limit; used for safe compensation after provisioning failures."""
+    try:
+        expiry = int(expiry)
+    except (TypeError, ValueError):
+        return False
+    if expiry < 0:
+        return False
+
+    db = await get_db()
+    async with _db_semaphore:
+        try:
+            cur = await db.execute("SELECT user_id FROM keys WHERE id=?", (key_id,))
+            row = await cur.fetchone()
+            if not row:
+                return False
+            user_id = row[0]
+            cur = await db.execute(
+                """
+                UPDATE keys
+                SET expiry = ?,
+                    limit_ip = CASE WHEN ? IS NOT NULL AND ? > 0 THEN ? ELSE limit_ip END
+                WHERE id = ?
+                """,
+                (expiry, limit_ip, limit_ip, limit_ip, key_id),
+            )
+            await db.commit()
+            if cur.rowcount == 0:
+                return False
+            try:
+                from cache import invalidate_user_cache, invalidate_subscription_cache
+                invalidate_user_cache(user_id)
+                invalidate_subscription_cache(user_id)
+            except Exception:
+                pass
+            return True
+        except Exception as e:
+            await db.rollback()
+            logger.exception("set_key_expiry failed for key %s: %s", key_id, e)
+            return False
+
+
 async def extend_key(key_id: int, additional_days: int, limit_ip: Optional[int] = None) -> bool:
     """Extend key by additional days from max(current_expiry, now) and optionally update device limit atomically."""
     additional_days = normalize_days(additional_days)
@@ -2962,11 +3024,35 @@ async def get_refund_stats() -> dict:
     cur = await db.execute("SELECT COALESCE(SUM(amount), 0) FROM refunds WHERE created >= ?", (thirty_days_ago,))
     sum_30d = (await cur.fetchone())[0]
     
+    # Refund amounts may be in different currencies (e.g. RUB and Telegram Stars/XTR).
+    # Keep legacy aggregate fields for compatibility, but expose currency-separated totals
+    # so the admin UI never presents a mixed-currency sum as rubles.
+    cur = await db.execute(
+        "SELECT currency, COUNT(*), COALESCE(SUM(amount), 0) FROM refunds GROUP BY currency"
+    )
+    by_currency_total = {
+        row[0]: {"count": row[1], "sum": row[2]}
+        for row in await cur.fetchall()
+    }
+    cur = await db.execute(
+        "SELECT currency, COUNT(*), COALESCE(SUM(amount), 0) FROM refunds WHERE created >= ? GROUP BY currency",
+        (thirty_days_ago,),
+    )
+    by_currency_30d = {
+        row[0]: {"count": row[1], "sum": row[2]}
+        for row in await cur.fetchall()
+    }
+
     return {
         "count_total": total_refunds,
         "sum_total": total_refunded,
         "count_30d": count_30d,
-        "sum_30d": sum_30d
+        "sum_30d": sum_30d,
+        "by_currency_total": by_currency_total,
+        "by_currency_30d": by_currency_30d,
+        # Backward-compatible aliases; new UI uses the currency-separated fields.
+        "total_refunds": total_refunded,
+        "refund_count": total_refunds,
     }
 
 

@@ -2,6 +2,7 @@
 VPN purchase flow:
   buy_vpn → select type → select period → payment method → invoice/link
 """
+import asyncio
 import time
 import logging
 
@@ -31,6 +32,9 @@ from utils import send_with_photo, send_or_edit, safe_answer
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+# Serialize duplicate Telegram Stars updates for the same charge within this process.
+_stars_payment_locks: dict[str, asyncio.Lock] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -380,46 +384,67 @@ async def on_successful_payment(message: Message, bot: Bot, state: FSMContext):
     await ensure_user(user_id)
 
     payment = message.successful_payment
+    charge_id = payment.telegram_payment_charge_id or payment.invoice_payload
+    lock = _stars_payment_locks.setdefault(charge_id, asyncio.Lock())
+    async with lock:
+        await _process_successful_stars_payment(message, bot, state, payment, charge_id)
+
+
+async def _process_successful_stars_payment(
+    message: Message, bot: Bot, state: FSMContext, payment, charge_id: str
+) -> None:
+    user_id = message.from_user.id
     payload = payment.invoice_payload
     stars = payment.total_amount
     currency = payment.currency  # XTR
-    charge_id = payment.telegram_payment_charge_id or payload
 
-    # Parse payload
+    # The invoice payload is the immutable order snapshot. Never use mutable FSM
+    # state to decide what was paid for.
     parts = payload.split("_")
-    days = DAYS_1M
-    devices = DEFAULT_DEVICE_LIMIT
-    promo_from_payload = None
-
-    if len(parts) >= 7:
+    try:
+        if len(parts) < 7 or parts[0] != "stars" or int(parts[1]) != user_id:
+            raise ValueError("invalid invoice payload shape or owner")
+        days = int(parts[2])
+        raw_devices = int(parts[3])
+        if raw_devices not in VALID_DEVICE_LIMITS:
+            raise ValueError("invalid device limit in invoice payload")
+        devices = validate_device_limit(raw_devices)
+        months = int(parts[4])
+        if days <= 0 or months not in (1, 3, 6, 12) or not parts[-1].isdigit():
+            raise ValueError("invalid subscription period or invoice timestamp")
+        if currency != "XTR" or stars <= 0:
+            raise ValueError("invalid Stars currency or amount")
+        promo_code = "_".join(parts[5:-1]) or None
+    except (ValueError, TypeError, IndexError) as e:
+        logger.error("Invalid Stars invoice payload for user %d, charge %s: %s", user_id, charge_id, e)
+        await record_payment_idempotent(
+            user_id=user_id, amount=stars, currency=currency, method="stars",
+            days=0, payload=payload, status="recovery_required",
+            tariff="Stars payment — manual review", devices=DEFAULT_DEVICE_LIMIT,
+            provider="stars", provider_payment_id=charge_id,
+        )
         try:
-            days = int(parts[2])
-            devices = validate_device_limit(int(parts[3]))
-            promo_from_payload = parts[5] if parts[5] else None
+            from config import ADMIN_ID
+            await bot.send_message(
+                ADMIN_ID,
+                f"⚠️ Оплата Stars требует ручной сверки: user <code>{user_id}</code>, "
+                f"charge <code>{charge_id}</code>, payload некорректен.",
+                parse_mode="HTML",
+            )
+            await bot.send_message(
+                user_id,
+                "⚠️ Telegram подтвердил оплату, но данные заказа не удалось проверить. "
+                "Не оплачивайте повторно — поддержка проверит платёж.",
+            )
         except Exception:
             pass
-    elif len(parts) >= 5:
-        try:
-            days = int(parts[2])
-        except Exception:
-            pass
-    elif len(parts) >= 3:
-        try:
-            days = int(parts[2])
-        except Exception:
-            pass
-
-    data = await state.get_data()
-    if "devices" in data:
-        devices = validate_device_limit(data["devices"])
-    promo_code = data.get("promo_code") or promo_from_payload
+        return
 
     try:
         await message.delete()
     except Exception:
         pass
 
-    # Idempotent payment recording with provider='stars', provider_payment_id=charge_id
     tariff_name = f"Stars {days} дней ({devices} устр.)"
     is_new, pay_db_id = await record_payment_idempotent(
         user_id=user_id,
@@ -427,7 +452,7 @@ async def on_successful_payment(message: Message, bot: Bot, state: FSMContext):
         currency=currency,
         method="stars",
         days=days,
-        payload=payload,
+        payload=charge_id,
         status="processing",
         tariff=tariff_name,
         devices=devices,
@@ -436,10 +461,38 @@ async def on_successful_payment(message: Message, bot: Bot, state: FSMContext):
     )
 
     if not is_new:
-        logger.info("Stars duplicate payment for charge_id=%s, user=%d - skipping", charge_id, user_id)
-        return
+        from database import get_payment_by_id
+        existing_payment = await get_payment_by_id(pay_db_id) if pay_db_id else None
+        existing_status = existing_payment.get("status") if existing_payment else None
+        if existing_status == "success":
+            logger.info("Stars duplicate payment already fulfilled: charge_id=%s user=%d", charge_id, user_id)
+            return
+        if existing_status == "failed":
+            logger.warning("Retrying failed Stars provisioning: charge_id=%s user=%d", charge_id, user_id)
+            await update_payment_status(pay_db_id, "processing")
+        else:
+            await update_payment_status(pay_db_id, "recovery_required")
+            logger.error(
+                "Stars payment %s has ambiguous status %r; manual reconciliation required",
+                charge_id, existing_status,
+            )
+            try:
+                from config import ADMIN_ID
+                await bot.send_message(
+                    ADMIN_ID,
+                    f"⚠️ Платёж Stars <code>{charge_id}</code> пользователя <code>{user_id}</code> "
+                    f"имеет неоднозначный статус {existing_status!r}. Нужна ручная сверка.",
+                    parse_mode="HTML",
+                )
+                await bot.send_message(
+                    user_id,
+                    "⚠️ Оплата найдена, но статус выдачи требует проверки. "
+                    "Не оплачивайте повторно — поддержка проверит платёж.",
+                )
+            except Exception:
+                pass
+            return
 
-    # Deliver key immediately
     success = await deliver_key(
         bot=bot,
         user_id=user_id,
@@ -451,7 +504,7 @@ async def on_successful_payment(message: Message, bot: Bot, state: FSMContext):
         amount=stars,
         currency=currency,
         method="stars",
-        payload=payload,
+        payload=charge_id,
         extend_existing=True,
     )
 
@@ -460,13 +513,23 @@ async def on_successful_payment(message: Message, bot: Bot, state: FSMContext):
         if promo_code:
             await use_promo_code(promo_code, user_id)
         await state.clear()
-        
-        # Referral reward: single canonical path (idempotent, one per pair)
+
+        # Referral reward: single canonical path (idempotent, one per pair).
         from referral_system_new import award_referral_for_payment
         await award_referral_for_payment(user_id, charge_id, bot=bot)
     else:
         await update_payment_status(pay_db_id, "failed")
         logger.error("Stars delivery failed for user %d, charge_id %s", user_id, charge_id)
+        try:
+            from config import ADMIN_ID
+            await bot.send_message(
+                ADMIN_ID,
+                f"⚠️ Не удалось выдать подписку по Stars: user <code>{user_id}</code>, "
+                f"charge <code>{charge_id}</code>. Платёж можно безопасно повторить через обработчик failed.",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
