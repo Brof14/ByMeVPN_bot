@@ -360,12 +360,21 @@ async def create_xui_user(
                             if inbound and inbound.client_stats:
                                 for c in inbound.client_stats:
                                     if c.email == email:
-                                        if c.sub_id:
-                                            sub_id = c.sub_id
-                                        if c.uuid:
-                                            client_uuid = c.uuid
-                                        logger.debug("Found existing client identity in inbound %d client_stats", iid)
-                                        return True
+                                        # Never mutate the shared identity from inside
+                                        # concurrent inbound tasks. A duplicate is
+                                        # accepted only if it matches this provisioning
+                                        # attempt; a conflicting identity requires
+                                        # manual reconciliation rather than mixed links.
+                                        uuid_matches = not c.uuid or c.uuid == client_uuid
+                                        sub_id_matches = not c.sub_id or c.sub_id == sub_id
+                                        if uuid_matches and sub_id_matches:
+                                            logger.debug("Existing matching client identity found in inbound %d", iid)
+                                            return True
+                                        logger.error(
+                                            "Inbound %d already has a conflicting identity for user %s; refusing mixed provisioning",
+                                            iid, email,
+                                        )
+                                        return False
                         except Exception as get_err:
                             logger.warning("Failed to search client_stats (%s)", type(get_err).__name__)
                     else:
