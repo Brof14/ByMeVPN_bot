@@ -27,7 +27,7 @@ from database import (
     has_ever_had_key, get_user_keys,
 )
 from keyboards import main_menu_new_user, main_menu_existing, main_menu_with_keys, back_to_menu, cancel_kb
-from utils import send_with_photo, safe_answer, LOGO_URL
+from utils import send_with_photo, safe_answer, notify_admins, LOGO_URL
 from async_utils import monitor_performance
 from cache import cache_subscription_data
 from constants import REFERRAL_CLICK_BONUS_DAYS
@@ -252,56 +252,106 @@ async def cmd_start(message: Message, bot: Bot) -> None:
             # Process referral (set referrer + give bonus)
             if ref_id != user_id:
                 try:
-                    from database import set_referrer, get_user_keys, extend_key
+                    from database import (
+                        set_referrer, get_user_keys, extend_key, set_key_expiry,
+                        add_referral_event,
+                    )
                     from referral_system_new import process_referral_click
-                    
+                    from xui_client import update_xui_user
+
                     existing_keys = await get_user_keys(user_id)
                     if not existing_keys:
-                        # New referral - show welcome screen
+                        # Keep the welcome screen, but award referral benefits only
+                        # when the database atomically confirms the first assignment.
                         is_new_referral = True
                         referral_processed = True
-                        
-                        # Set referrer
-                        await set_referrer(user_id, ref_id)
-                        
-                        # Process referral click using referral_system_new
-                        await process_referral_click(ref_id, user_id)
-                        
-                        # Extend referrer's key by 15 days
-                        referrer_keys = await get_user_keys(ref_id)
-                        if referrer_keys:
-                            # Extend the first active key
-                            for key in referrer_keys:
-                                if key['expiry'] > int(time.time()):
-                                    await extend_key(key['id'], REFERRAL_CLICK_BONUS_DAYS)
-                                    # Notify referrer with beautiful text
+                        referral_created = await set_referrer(user_id, ref_id)
+
+                        if referral_created:
+                            await process_referral_click(ref_id, user_id)
+                            referrer_keys = await get_user_keys(ref_id)
+                            active_key = next(
+                                (key for key in referrer_keys if int(key.get("expiry") or 0) > int(time.time())),
+                                None,
+                            )
+
+                            if active_key:
+                                old_expiry = int(active_key.get("expiry") or 0)
+                                old_limit = int(active_key.get("limit_ip") or 2)
+                                key_id = int(active_key["id"])
+                                db_extended = await extend_key(key_id, REFERRAL_CLICK_BONUS_DAYS)
+                                updated_key = next(
+                                    (key for key in await get_user_keys(ref_id) if int(key.get("id") or 0) == key_id),
+                                    None,
+                                ) if db_extended else None
+                                xui_result = None
+                                if updated_key:
+                                    xui_result = await update_xui_user(
+                                        ref_id,
+                                        new_expiry_ms=int(updated_key["expiry"]) * 1000,
+                                        limit_ip=old_limit,
+                                    )
+
+                                if xui_result:
+                                    try:
+                                        await add_referral_event(
+                                            referrer_id=ref_id,
+                                            referred_id=user_id,
+                                            event_type="click_bonus_granted",
+                                            days_awarded=REFERRAL_CLICK_BONUS_DAYS,
+                                            description="Active key extended and confirmed in 3x-ui",
+                                        )
+                                    except Exception:
+                                        logger.exception("Could not record referral bonus ledger for user %d", user_id)
+                                        await notify_admins(
+                                            bot,
+                                            f"⚠️ Реферальный бонус применён, но не записан в журнал. "
+                                            f"Пригласивший: <code>{ref_id}</code>, новый пользователь: <code>{user_id}</code>.",
+                                            parse_mode="HTML",
+                                        )
                                     try:
                                         await bot.send_message(
                                             ref_id,
                                             "🎊 <b>Привлекли нового реферала!</b>\n\n"
                                             "✨ По вашей ссылке перешёл новый пользователь\n"
-                                            f"🔑 Ваш ключ продлён на {REFERRAL_CLICK_BONUS_DAYS} дней\n"
+                                            f"🔑 Ваш активный ключ продлён на {REFERRAL_CLICK_BONUS_DAYS} дней\n"
                                             "💚 Продолжайте приглашать друзей!",
-                                            parse_mode="HTML"
+                                            parse_mode="HTML",
                                         )
                                     except Exception as notify_error:
-                                        logger.error("Failed to notify referrer: %s", notify_error)
-                                    break
+                                        logger.warning("Referral bonus granted but notification failed (%s)", type(notify_error).__name__)
+                                else:
+                                    rollback_ok = await set_key_expiry(key_id, old_expiry, old_limit) if db_extended else False
+                                    await notify_admins(
+                                        bot,
+                                        f"⚠️ Не удалось подтвердить реферальное продление в 3x-ui. "
+                                        f"Пригласивший: <code>{ref_id}</code>, новый пользователь: <code>{user_id}</code>; "
+                                        f"откат БД: {'OK' if rollback_ok else 'НЕ ПОДТВЕРЖДЁН'}.",
+                                        parse_mode="HTML",
+                                    )
+                                    try:
+                                        await bot.send_message(
+                                            ref_id,
+                                            "⚠️ Реферал зарегистрирован, но бонусное продление пока не подтверждено. "
+                                            "Мы проверим операцию вручную.",
+                                        )
+                                    except Exception:
+                                        pass
+                            else:
+                                try:
+                                    await bot.send_message(
+                                        ref_id,
+                                        "🎊 <b>По вашей ссылке зарегистрировался новый пользователь.</b>\n\n"
+                                        "Сейчас у вас нет активного ключа, поэтому дни не начислены. "
+                                        "После обращения в поддержку можно проверить возможность применения бонуса.",
+                                        parse_mode="HTML",
+                                    )
+                                except Exception as notify_error:
+                                    logger.warning("Referral notification failed (%s)", type(notify_error).__name__)
                         else:
-                            # Referrer has no active key - notify them anyway
-                            try:
-                                await bot.send_message(
-                                    ref_id,
-                                    "🎊 <b>Привлекли нового реферала!</b>\n\n"
-                                    "✨ По вашей ссылке перешёл новый пользователь\n"
-                                    "💡 У вас нет активного ключа для продления\n"
-                                    f"💚 Оформите подписку и получите +{REFERRAL_CLICK_BONUS_DAYS} дней бонуса!",
-                                    parse_mode="HTML"
-                                )
-                            except Exception as notify_error:
-                                logger.error("Failed to notify referrer: %s", notify_error)
-                        
-                        # Send beautiful message to new user with button
+                            logger.info("Referral bonus skipped: user %d already has a referrer", user_id)
+
+                        # Send welcome message to the new user with button
                         try:
                             await bot.send_message(
                                 user_id,
