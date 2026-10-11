@@ -24,6 +24,8 @@ class PaymentMonitor:
         self.check_interval = 30  # 30 секунд
         self.running = False
         self.start_time = datetime.utcnow()  # Track when monitor started
+        self.retry_cooldown_seconds = 300
+        self._last_attempt: dict[str, float] = {}
         
     async def get_successful_payments(self, minutes_back: int = 5) -> List[Dict]:
         """Получить успешные платежи за последние N минут, включая период до рестарта."""
@@ -75,33 +77,62 @@ class PaymentMonitor:
             logger.error(f"Error fetching payments: {e}")
             return []
     
-    async def check_and_process_payments(self, minutes_back: int = 5):
-        """Проверить и обработать необработанные платежи за заданное окно."""
+    async def _get_failed_ledger_payment_ids(self) -> list[str]:
+        """Return older failed payments too; recovery must not depend on a short time window."""
         try:
-            payments = await self.get_successful_payments(minutes_back=minutes_back)
-            
-            if not payments:
+            from database import get_db
+            db = await get_db()
+            cur = await db.execute(
+                "SELECT provider_payment_id FROM payments "
+                "WHERE provider='yookassa' AND status='failed' "
+                "AND provider_payment_id IS NOT NULL "
+                "ORDER BY created ASC LIMIT 500"
+            )
+            rows = await cur.fetchall()
+            return [str(row[0]) for row in rows if row and row[0]]
+        except Exception as exc:
+            logger.error("Could not read failed YooKassa payments from ledger: %s", exc)
+            return []
+
+    async def check_and_process_payments(self, minutes_back: int = 5):
+        """Reconcile recent provider payments and retry failed ledger rows safely."""
+        try:
+            recent_payments = await self.get_successful_payments(minutes_back=minutes_back)
+            payment_ids: dict[str, None] = {}
+            for payment in recent_payments:
+                payment_id = payment.get("id")
+                if payment_id:
+                    payment_ids[str(payment_id)] = None
+
+            # The provider time window is a discovery mechanism, not the source of
+            # truth for retries. Failed ledger rows may be much older than the window.
+            for payment_id in await self._get_failed_ledger_payment_ids():
+                payment_ids.setdefault(payment_id, None)
+
+            if not payment_ids:
                 return
-                
-            logger.info(f"Found {len(payments)} successful payments to check")
-            
-            for payment in payments:
-                payment_id = payment.get('id')
-                if not payment_id:
+
+            now = asyncio.get_running_loop().time()
+            # Bound memory use and prevent a broken provider/panel from causing
+            # the same failed order to be retried on every 30-second poll.
+            self._last_attempt = {
+                payment_id: attempted_at
+                for payment_id, attempted_at in self._last_attempt.items()
+                if now - attempted_at < self.retry_cooldown_seconds * 2
+            }
+
+            logger.info("Found %d YooKassa payments to reconcile", len(payment_ids))
+            for payment_id in payment_ids:
+                last_attempt = self._last_attempt.get(payment_id)
+                if last_attempt is not None and now - last_attempt < self.retry_cooldown_seconds:
                     continue
-                    
-                # Delegate deduplication to the payment ledger. A legacy
-                # processed marker alone must not hide an interrupted delivery.
-                logger.info(f"Checking payment through recovery-safe handler: {payment_id}")
-                
-                # Обрабатываем платеж (функция сама пометит как обработанный)
+                self._last_attempt[payment_id] = now
+                logger.info("Reconciling YooKassa payment %s through recovery-safe handler", payment_id)
                 await _process_payment(self.bot, payment_id)
-                
-                logger.info(f"Payment {payment_id} processed successfully")
-                
+
         except Exception as e:
-            logger.error(f"Error in payment check: {e}")
-    
+            logger.error("Error in payment reconciliation: %s", e)
+
     async def start_monitoring(self):
         """Запустить мониторинг платежей"""
         if self.running:
