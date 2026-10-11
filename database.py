@@ -1416,12 +1416,17 @@ async def add_referral_event(
     return cur.lastrowid
 
 
-async def get_referral_events(referrer_id: int) -> list[dict]:
+async def get_referral_events(referrer_id: int, limit: int = 100) -> list[dict]:
+    """Return recent referral events with a bounded, parameterized result limit."""
+    try:
+        safe_limit = max(1, min(int(limit), 1000))
+    except (TypeError, ValueError):
+        safe_limit = 100
     db = await get_db()
     cur = await db.execute(
         "SELECT referred_id, event_type, days_awarded, description, created "
-        "FROM referral_events WHERE referrer_id=? ORDER BY created DESC",
-        (referrer_id,),
+        "FROM referral_events WHERE referrer_id=? ORDER BY created DESC, id DESC LIMIT ?",
+        (referrer_id, safe_limit),
     )
     rows = await cur.fetchall()
     return [
@@ -1434,6 +1439,53 @@ async def get_referral_events(referrer_id: int) -> list[dict]:
         }
         for row in rows
     ]
+
+
+async def reserve_referral_bonus(referrer_id: int, referred_id: int, bonus_type: str) -> bool:
+    """Atomically reserve one referral bonus; a crash leaves a blocked/manual-review slot."""
+    db = await get_db()
+    async with _db_semaphore:
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            cur = await db.execute(
+                "SELECT 1 FROM referral_events WHERE referrer_id=? AND referred_id=? "
+                "AND event_type=? AND days_awarded>0 LIMIT 1",
+                (referrer_id, referred_id, bonus_type),
+            )
+            if await cur.fetchone():
+                await db.execute(
+                    "INSERT INTO ref_bonus_claims(referrer_id,referred_id,claimed) VALUES(?,?,1) "
+                    "ON CONFLICT(referrer_id,referred_id) DO UPDATE SET claimed=1",
+                    (referrer_id, referred_id),
+                )
+                await db.commit()
+                return False
+
+            await db.execute(
+                "INSERT OR IGNORE INTO ref_bonus_claims(referrer_id,referred_id,claimed) VALUES(?,?,0)",
+                (referrer_id, referred_id),
+            )
+            cur = await db.execute(
+                "UPDATE ref_bonus_claims SET claimed=2 WHERE referrer_id=? AND referred_id=? AND claimed=0",
+                (referrer_id, referred_id),
+            )
+            await db.commit()
+            return cur.rowcount == 1
+        except Exception:
+            await db.rollback()
+            logger.exception("Could not reserve referral bonus for referrer %d", referrer_id)
+            return False
+
+
+async def finalize_referral_bonus(referrer_id: int, referred_id: int, *, success: bool) -> None:
+    """Complete a reserved bonus or release it after a confirmed failure."""
+    db = await get_db()
+    async with _db_semaphore:
+        await db.execute(
+            "UPDATE ref_bonus_claims SET claimed=? WHERE referrer_id=? AND referred_id=? AND claimed=2",
+            (1 if success else 0, referrer_id, referred_id),
+        )
+        await db.commit()
 
 
 # ---------------------------------------------------------------------------
