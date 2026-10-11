@@ -152,20 +152,19 @@ ADMIN_IDS=123456789
 DB_FILE=data/vpnbot.db
 
 XUI_URL=https://your-panel.example.com:2096
-XUI_API_URL=http://127.0.0.1:54321
+XUI_API_URL=http://127.0.0.1:54321/your-secret-path
 XUI_USERNAME=admin
 XUI_PASSWORD=your_panel_password
-XUI_INBOUND_IDS=2,3,7,8,10,11
+XUI_TLS_VERIFY=true
+XUI_INBOUND_IDS=2,3  # replace with every actual inbound ID in your panel
 XUI_SUB_PATH=sub
 
 YOOKASSA_SHOP_ID=your_shop_id
 YOOKASSA_SECRET_KEY=your_secret_key
 
-WEBHOOK_HOST=0.0.0.0
+WEBHOOK_HOST=127.0.0.1
 WEBHOOK_PORT=8080
-WEBHOOK_URL=https://your-domain.example.com:8080/webhook/telegram
-
-REF_BONUS_DAYS=3
+# Publish /webhook/yookassa through an HTTPS reverse proxy; do not expose port 8080 directly.
 ```
 
 ### Important notes
@@ -173,7 +172,7 @@ REF_BONUS_DAYS=3
 - `XUI_API_URL` should point to the address the bot uses to call the 3x-ui API.
 - If the bot and panel are on the same machine, `localhost` or `127.0.0.1` is often the right choice.
 - `XUI_URL` is typically the public address used in subscription links shown to users.
-- `WEBHOOK_URL` is required if you want external payment callbacks to work reliably.
+- YooKassa callbacks use `/webhook/yookassa`; expose that route through HTTPS and keep the application port bound to loopback. Telegram updates use polling, not a Telegram webhook.
 
 ## Docker deployment
 
@@ -228,8 +227,9 @@ The admin side of the bot is expected to cover:
 
 - Keep `.env` out of version control.
 - Do not expose your 3x-ui admin credentials in public repositories.
-- Use HTTPS for public webhook and panel endpoints.
-- Consider running behind a reverse proxy if the bot is deployed to a public server.
+- Keep `WEBHOOK_HOST=127.0.0.1` and expose `/webhook/yookassa` only through an HTTPS reverse proxy.
+- Do not publish TCP/8080 directly or configure `/webhook/telegram`; Telegram updates use polling.
+- Set `XUI_INBOUND_IDS` to the exact IDs present in the panel; every listed inbound must contain the client before a payment is considered fulfilled.
 - Review logs when configuring payment or panel connectivity.
 
 ## Troubleshooting
