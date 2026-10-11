@@ -2405,39 +2405,48 @@ async def get_referral_balance(user_id: int) -> dict:
     return {"balance": row[0], "total_earned": row[1]}
 
 async def add_referral_earning(referrer_id: int, referred_id: int, amount: int = 50, payment_id: int = None) -> bool:
-    """Начислить бонус за первую оплату приглашённого (50₽).
-
-    Идемпотентно: UNIQUE(referrer_id, referred_id) гарантирует одно начисление
-    даже при конкурентных вызовах / дубликатах вебхуков.
-    """
-    db = await get_db()
+    """Atomically award the first paid-conversion reward for a referral pair."""
+    if int(referrer_id) <= 0 or int(referred_id) <= 0 or int(referrer_id) == int(referred_id):
+        return False
     try:
-        async with _db_semaphore:
-            try:
-                await db.execute(
-                    "INSERT INTO referral_earnings(referrer_id, referred_id, amount, payment_id, payment_status) "
-                    "VALUES(?,?,?,?,?)",
-                    (referrer_id, referred_id, amount, payment_id, 'pending')
-                )
-            except Exception as e:
-                if "UNIQUE constraint failed" in str(e):
-                    logger.info("Referral earning already exists for referrer %d / referred %d", referrer_id, referred_id)
-                    return False  # бонус уже начислялся
-                raise
+        safe_amount = int(amount)
+    except (TypeError, ValueError):
+        return False
+    if safe_amount <= 0:
+        return False
 
-            # Обновляем баланс реферала (в той же транзакции, что и начисление)
-            await ensure_referral_balance(referrer_id)
+    db = await get_db()
+    async with _db_semaphore:
+        try:
+            await db.execute("BEGIN IMMEDIATE")
             await db.execute(
-                "UPDATE referral_balance SET balance = balance + ?, total_earned = total_earned + ? WHERE user_id=?",
-                (amount, amount, referrer_id)
+                "INSERT INTO referral_earnings(referrer_id, referred_id, amount, payment_id, payment_status) "
+                "VALUES(?,?,?,?,?)",
+                (int(referrer_id), int(referred_id), safe_amount, payment_id, "pending"),
+            )
+            # Keep the earning ledger and balance update in the SAME transaction.
+            # Calling ensure_referral_balance() here would commit the ledger row
+            # early and could permanently lose the balance credit after a later error.
+            await db.execute(
+                "INSERT OR IGNORE INTO referral_balance(user_id, balance, total_earned) VALUES(?,0,0)",
+                (int(referrer_id),),
+            )
+            await db.execute(
+                "UPDATE referral_balance SET balance=balance+?, total_earned=total_earned+? WHERE user_id=?",
+                (safe_amount, safe_amount, int(referrer_id)),
             )
             await db.commit()
             return True
-    except Exception as e:
-        logger.error("Error adding referral earning: %s", e)
-        await db.rollback()
-        return False
-
+        except Exception as exc:
+            await db.rollback()
+            if "UNIQUE constraint failed" in str(exc):
+                logger.info(
+                    "Referral earning already exists for referrer %d / referred %d",
+                    referrer_id, referred_id,
+                )
+                return False
+            logger.error("Error adding referral earning (%s)", type(exc).__name__)
+            return False
 
 async def get_referral_stats_detailed(referrer_id: int = None) -> list:
     """Получить детальную статистику по рефералам с источниками и оплатами"""
