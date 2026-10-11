@@ -3050,6 +3050,9 @@ async def get_refund_stats() -> dict:
         "sum_30d": sum_30d,
         "by_currency_total": by_currency_total,
         "by_currency_30d": by_currency_30d,
+        # Backward-compatible aliases; new UI uses the currency-separated fields.
+        "total_refunds": total_refunded,
+        "refund_count": total_refunds,
     }
 
 
