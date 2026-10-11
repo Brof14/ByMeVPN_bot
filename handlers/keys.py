@@ -511,17 +511,16 @@ async def cb_key_delete_confirm(callback: CallbackQuery, bot: Bot):
         ok = await delete_xui_user(user_id)
         if not ok:
             logger.error("Could not delete user %d from 3x-ui (key_id=%d); DB row retained", user_id, key_id)
-            await safe_answer(
-                callback,
-                "Не удалось подтвердить удаление на VPN-сервере. Запись сохранена; попробуйте позже или обратитесь в поддержку.",
-                alert=True,
+            await callback.message.answer(
+                "⚠️ Не удалось подтвердить удаление на VPN-сервере. Запись сохранена; "
+                "попробуйте позже или обратитесь в поддержку."
             )
             return
 
     deleted = await delete_key_by_id(key_id)
     if not deleted:
         logger.error("Could not delete key row %d for user %d", key_id, user_id)
-        await safe_answer(callback, "Не удалось удалить запись. Попробуйте позже.", alert=True)
+        await callback.message.answer("⚠️ Не удалось удалить запись. Попробуйте позже.")
         return
 
     logger.info("Key %d deleted by user %d (other_keys=%d)", key_id, user_id, len(other_keys))
