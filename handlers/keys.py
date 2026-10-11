@@ -584,40 +584,9 @@ async def cb_rf_apps_guide(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith("ref_bonus_activate:"))
 async def cb_ref_bonus_activate(callback: CallbackQuery, bot: Bot, state: FSMContext):
-    await safe_answer(callback)
-    REF_BONUS_DAYS = 15  # days per paid referral
-    referrer_id = callback.from_user.id
-
-    # Parse the referred_id this bonus is tied to
-    try:
-        referred_id = int(callback.data.split(":")[1])
-    except (ValueError, IndexError):
-        await safe_answer(callback, "Неверный формат бонуса.", alert=True)
-        return
-
-    # Atomic claim: only the referrer who earned this specific bonus can redeem it once
-    from database import try_claim_ref_bonus
-    claimed = await try_claim_ref_bonus(referrer_id, referred_id)
-    if not claimed:
-        await safe_answer(callback, "Этот бонус уже был активирован.", alert=True)
-        return
-
-    await state.clear()
-    await state.set_state(BuyFlow.waiting_name)
-    await state.update_data(
-        days=REF_BONUS_DAYS,
-        prefix="ref_bonus",
-        is_paid=False,
-        amount=0,
-        currency="RUB",
-        method="ref_bonus",
-        payload=f"ref_bonus_{referrer_id}_{referred_id}",
-        limit_ip=1,  # Referral bonus always 1 device
-    )
-    from keyboards import cancel_kb
-    await send_with_photo(
-        bot, callback,
-        f"🎁 <b>Бонус +{REF_BONUS_DAYS} дней!</b>\n\n"
-        "Введите название конфига для бонусного ключа:",
-        cancel_kb(),
+    """Explain the retired reward model to users with old inline buttons."""
+    await safe_answer(
+        callback,
+        "Реферальная программа обновлена: 50 ₽ за первую оплаченную подписку друга начисляются на партнёрский баланс.",
+        alert=True,
     )
