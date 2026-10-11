@@ -2502,6 +2502,9 @@ async def cb_promo_edit_uses(callback: CallbackQuery, state: FSMContext):
 @router.message(AdminFlow.promo_edit_uses)
 async def msg_promo_edit_uses(message: Message, state: FSMContext):
     """Handle promo code max uses edit."""
+    if not _is_admin(message.from_user.id):
+        return
+
     try:
         new_max = int(message.text.strip())
         if new_max < 1:
@@ -2577,6 +2580,9 @@ async def cb_promo_create(callback: CallbackQuery, state: FSMContext):
 @router.message(AdminFlow.promo_code)
 async def receive_promo_code(message: Message, state: FSMContext):
     """Receive promo code string."""
+    if not _is_admin(message.from_user.id):
+        return
+
     code = message.text.strip().upper() if message.text else ""
     if len(code) < 4:
         await message.answer("❌ Код должен быть минимум 4 символа.")
@@ -2607,6 +2613,10 @@ async def receive_promo_code(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("promo_type_"))
 async def cb_promo_type(callback: CallbackQuery, state: FSMContext):
     """Handle promo type selection."""
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+
     promo_type = callback.data.split("_")[2]
     await state.update_data(promo_type=promo_type)
     await state.set_state(AdminFlow.promo_value)
@@ -2624,6 +2634,9 @@ async def cb_promo_type(callback: CallbackQuery, state: FSMContext):
 @router.message(AdminFlow.promo_value)
 async def receive_promo_value(message: Message, state: FSMContext):
     """Receive discount value."""
+    if not _is_admin(message.from_user.id):
+        return
+
     try:
         value = float(message.text.strip())
         data = await state.get_data()
@@ -2652,6 +2665,9 @@ async def receive_promo_value(message: Message, state: FSMContext):
 @router.message(AdminFlow.promo_uses)
 async def receive_promo_uses(message: Message, state: FSMContext):
     """Receive max uses count."""
+    if not _is_admin(message.from_user.id):
+        return
+
     try:
         max_uses = int(message.text.strip())
         if max_uses < 1:
@@ -2671,6 +2687,9 @@ async def receive_promo_uses(message: Message, state: FSMContext):
 @router.message(AdminFlow.promo_days)
 async def receive_promo_days(message: Message, state: FSMContext):
     """Receive validity period and create promo code."""
+    if not _is_admin(message.from_user.id):
+        return
+
     try:
         days = int(message.text.strip())
         if days < 1 or days > 3650:
@@ -2959,6 +2978,10 @@ async def cb_mass_trial_5d_confirm(callback: CallbackQuery, bot: Bot):
 @router.callback_query(F.data.startswith("admin_key_errors:"))
 async def cb_admin_key_errors(callback: CallbackQuery, bot: Bot):
     """Show key issuance errors with pagination."""
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+
     await safe_answer(callback)
     offset = int(callback.data.split(":")[1])
 
@@ -3012,6 +3035,10 @@ async def cb_admin_key_errors(callback: CallbackQuery, bot: Bot):
 @router.callback_query(F.data.startswith("admin_logs:"))
 async def cb_admin_logs(callback: CallbackQuery, bot: Bot):
     """Show admin action logs."""
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+
     await safe_answer(callback)
     offset = int(callback.data.split(":")[1])
 
@@ -3061,6 +3088,10 @@ async def cb_admin_logs(callback: CallbackQuery, bot: Bot):
 @router.callback_query(F.data.startswith("admin_ban_user:"))
 async def cb_admin_ban_user(callback: CallbackQuery, state: FSMContext):
     """Start user ban flow."""
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+
     await safe_answer(callback)
     user_id = int(callback.data.split(":")[1])
     await state.update_data(ban_target_user_id=user_id)
@@ -3076,6 +3107,9 @@ async def cb_admin_ban_user(callback: CallbackQuery, state: FSMContext):
 @router.message(AdminFlow.ban_reason)
 async def msg_ban_reason(message: Message, state: FSMContext):
     """Handle ban reason input."""
+    if not _is_admin(message.from_user.id):
+        return
+
     reason = message.text.strip() if not message.text.startswith("/skip") else None
     data = await state.get_data()
     user_id = data["ban_target_user_id"]
@@ -3102,6 +3136,10 @@ async def msg_ban_reason(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("admin_unban_user:"))
 async def cb_admin_unban_user(callback: CallbackQuery):
     """Unban user."""
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+
     await safe_answer(callback)
     user_id = int(callback.data.split(":")[1])
 
@@ -3129,6 +3167,10 @@ async def cb_admin_unban_user(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("admin_add_days:"))
 async def cb_admin_add_days(callback: CallbackQuery, state: FSMContext):
     """Start manual days addition flow."""
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+
     await safe_answer(callback)
     user_id = int(callback.data.split(":")[1])
     await state.update_data(add_days_target_user_id=user_id)
@@ -3144,6 +3186,9 @@ async def cb_admin_add_days(callback: CallbackQuery, state: FSMContext):
 @router.message(AdminFlow.add_days_value)
 async def msg_add_days_value(message: Message, state: FSMContext):
     """Handle days value input."""
+    if not _is_admin(message.from_user.id):
+        return
+
     try:
         days = int(message.text.strip())
         if days < 1 or days > 3650:
@@ -3184,6 +3229,10 @@ async def msg_add_days_value(message: Message, state: FSMContext):
 @router.callback_query(F.data == "admin_finance")
 async def cb_admin_finance(callback: CallbackQuery, bot: Bot):
     """Show detailed finance statistics."""
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+
     await safe_answer(callback)
 
     stats = await get_admin_stats()
@@ -3216,6 +3265,10 @@ async def cb_admin_finance(callback: CallbackQuery, bot: Bot):
 @router.callback_query(F.data == "admin_settings")
 async def cb_admin_settings(callback: CallbackQuery, bot: Bot):
     """Show system settings."""
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+
     await safe_answer(callback)
 
     from constants import PRICE_CONFIG, TRIAL_DAYS, REF_BONUS_DAYS
@@ -3250,6 +3303,10 @@ async def cb_admin_settings(callback: CallbackQuery, bot: Bot):
 @router.callback_query(F.data == "admin_mass_trial")
 async def cb_admin_mass_trial(callback: CallbackQuery, state: FSMContext):
     """Start mass trial distribution flow."""
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+
     await safe_answer(callback)
     await state.set_state(AdminFlow.mass_trial_days)
     
@@ -3263,6 +3320,9 @@ async def cb_admin_mass_trial(callback: CallbackQuery, state: FSMContext):
 @router.message(AdminFlow.mass_trial_days)
 async def msg_mass_trial_days(message: Message, state: FSMContext, bot: Bot):
     """Handle mass trial days input."""
+    if not _is_admin(message.from_user.id):
+        return
+
     try:
         days = int(message.text.strip())
         if days < 1 or days > 365:
@@ -3365,6 +3425,10 @@ async def msg_mass_trial_days(message: Message, state: FSMContext, bot: Bot):
 @router.callback_query(F.data == "admin_mass_days")
 async def cb_admin_mass_days(callback: CallbackQuery, state: FSMContext):
     """Start mass days extension flow."""
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+
     await safe_answer(callback)
     await state.set_state(AdminFlow.mass_extend_days)
     
@@ -3378,6 +3442,9 @@ async def cb_admin_mass_days(callback: CallbackQuery, state: FSMContext):
 @router.message(AdminFlow.mass_extend_days)
 async def msg_mass_extend_days(message: Message, state: FSMContext, bot: Bot):
     """Handle mass extend days input."""
+    if not _is_admin(message.from_user.id):
+        return
+
     try:
         days = int(message.text.strip())
         if days < 1 or days > 365:
