@@ -36,7 +36,7 @@ from handlers import (
 )
 from subscription import router as subscription_router
 from webhook import start_webhook_server
-from payment_monitor import start_payment_monitor
+from payment_monitor import start_payment_monitor, stop_payment_monitor
 
 # Configure logging
 logging.basicConfig(
@@ -199,12 +199,12 @@ async def main() -> None:
     logger.info("All routers registered")
 
     # Start background tasks
-    scheduler_task = asyncio.create_task(start_notification_scheduler(bot))
+    scheduler_task = asyncio.create_task(start_notification_scheduler(bot), name="notification-scheduler")
 
     # Start the YooKassa callback server in the background.
     # Telegram updates are handled exclusively by aiogram long polling.
     # Uvicorn runs until cancellation during graceful shutdown.
-    webhook_task = asyncio.create_task(start_webhook_server(bot))
+    webhook_task = asyncio.create_task(start_webhook_server(bot), name="yookassa-webhook-server")
 
     # Start automatic payment monitoring (polls YooKassa every 30s as a
     # belt-and-suspenders fallback in case the webhook is unreachable, e.g.
@@ -213,7 +213,7 @@ async def main() -> None:
 
     # Start YooKassa auto-renewal worker (checks expiring subscriptions every 60s)
     from autorenew import start_autorenew_worker
-    autorenew_task = asyncio.create_task(start_autorenew_worker(bot))
+    autorenew_task = asyncio.create_task(start_autorenew_worker(bot), name="autorenew-worker")
 
     logger.info("Bot is running in polling mode. Press Ctrl+C to stop.")
 
@@ -222,9 +222,12 @@ async def main() -> None:
         await dp.start_polling(bot, handle_signals=False)
     finally:
         # Graceful shutdown
-        scheduler_task.cancel()
-        webhook_task.cancel()
-        autorenew_task.cancel()
+        tasks = [scheduler_task, webhook_task, autorenew_task]
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await stop_payment_monitor()
+        await asyncio.gather(*tasks, return_exceptions=True)
         await bot.session.close()
         await close_db()
         logger.info("Bot stopped")
