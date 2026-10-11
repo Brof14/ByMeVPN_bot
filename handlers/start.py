@@ -34,10 +34,6 @@ from cache import cache_subscription_data
 logger = logging.getLogger(__name__)
 router = Router()
 
-# Bonus days referrer gets when referral makes first paid purchase
-REF_BONUS_DAYS = 15
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
