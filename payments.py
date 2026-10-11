@@ -187,12 +187,25 @@ async def charge_yookassa_recurrent(
                         user_id, data.get("id"), data.get("status"))
             return data
     except httpx.HTTPStatusError as e:
-        error_msg = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
-        logger.error("YooKassa recurrent HTTP error for user %d: %s", user_id, error_msg)
+        if e.response.status_code >= 500:
+            # The provider may have created the payment before returning a server error.
+            # Keep the business idempotency key unchanged and reconcile before retrying.
+            logger.error("YooKassa recurrent request returned HTTP %d for user %d; outcome is unknown",
+                         e.response.status_code, user_id)
+            return {"status": "unknown", "_outcome_unknown": True}
+        logger.error("YooKassa recurrent request rejected with HTTP %d for user %d",
+                     e.response.status_code, user_id)
         return None
+    except httpx.RequestError as e:
+        # Timeouts/disconnects do not prove that the charge failed.
+        logger.warning("YooKassa recurrent network outcome unknown for user %d (%s)",
+                       user_id, type(e).__name__)
+        return {"status": "unknown", "_outcome_unknown": True}
     except Exception as e:
-        logger.error("YooKassa recurrent payment error for user %d: %s", user_id, e)
-        return None
+        # A malformed/unreadable response after a successful HTTP exchange is ambiguous.
+        logger.error("YooKassa recurrent response could not be interpreted for user %d (%s)",
+                     user_id, type(e).__name__)
+        return {"status": "unknown", "_outcome_unknown": True}
 
 
 async def create_crypto_payment(
