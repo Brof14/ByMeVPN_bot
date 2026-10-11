@@ -10,6 +10,7 @@ from database import get_referral_stats, get_referral_balance, create_payout_req
 from keyboards import back_to_menu
 from utils import send_with_photo, safe_answer
 from urllib.parse import quote_plus
+from constants import REFERRAL_CASH_REWARD_RUB, REFERRAL_CLICK_BONUS_DAYS
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -18,7 +19,7 @@ class PayoutFlow(StatesGroup):
     choosing_amount = State()
 
 # Константы партнёрской программы
-REFERRAL_BONUS = 50  # рублей за первую оплаченную подписку
+REFERRAL_BONUS = REFERRAL_CASH_REWARD_RUB
 MIN_PAYOUT = 200  # минимальная сумма вывода
 
 
@@ -73,11 +74,12 @@ async def cb_partner(callback: CallbackQuery, bot: Bot):
         f"👤 Зарегистрировалось: {stats['total_registrations']}\n"
         f"✅ Активных клиентов: {stats['active_clients']}\n"
         f"💳 Оплативших: {stats['paid_clients']}\n"
+        f"🎁 Бонусных дней за переходы: {stats['total_bonus_days']}\n"
         f"💰 Заработано (₽): {stats['total_earned_rub']}\n"
         f"💵 Текущий баланс: {stats['balance_rub']} ₽\n\n"
         f"<b>Ваша реферальная ссылка:</b>\n"
         f"<code>{link}</code>\n\n"
-        "Вознаграждение начисляется один раз за первую оплаченную подписку приглашённого друга."
+        "Бонус за переход начисляется отдельно; денежное вознаграждение выдаётся один раз за первую оплаченную подписку."
     )
 
     await send_with_photo(bot, callback, text, partner_main_kb(link))
