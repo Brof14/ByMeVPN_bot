@@ -54,6 +54,17 @@ class TestEmailAuthSecurity(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await database.allow_email_auth_request(333, "rate@example.com", now=1061))
         self.assertFalse(await database.allow_email_auth_request(444, "rate@example.com", now=1062))
 
+    async def test_referrer_assignment_is_one_time(self):
+        await database.ensure_user(777)
+        self.assertTrue(await database.set_referrer(777, 888))
+        self.assertFalse(await database.set_referrer(777, 888))
+        self.assertFalse(await database.set_referrer(777, 999))
+        db = await database.get_db()
+        cur = await db.execute("SELECT referrer_id FROM users WHERE user_id=?", (777,))
+        self.assertEqual((await cur.fetchone())[0], 888)
+        cur = await db.execute("SELECT COUNT(*) FROM referrals WHERE referred_id=?", (777,))
+        self.assertEqual((await cur.fetchone())[0], 1)
+
     async def test_account_link_moves_keys_and_referral_balance(self):
         await database.ensure_user(555)
         await database.ensure_user(666)
