@@ -1286,6 +1286,25 @@ async def update_payment_status(payment_id: int, status: str) -> bool:
         return cur.rowcount > 0
 
 
+async def get_payment_by_id(payment_id: int) -> Optional[dict]:
+    """Fetch one payment ledger row by its internal ID."""
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT id, user_id, amount, currency, method, days, created, payload, status, tariff, devices, provider, provider_payment_id "
+        "FROM payments WHERE id=?",
+        (payment_id,),
+    )
+    row = await cur.fetchone()
+    if not row:
+        return None
+    return {
+        "id": row[0], "user_id": row[1], "amount": row[2], "currency": row[3],
+        "method": row[4], "days": row[5], "created": row[6], "payload": row[7],
+        "status": row[8], "tariff": row[9], "devices": row[10],
+        "provider": row[11], "provider_payment_id": row[12],
+    }
+
+
 async def get_user_payments(user_id: int) -> list[dict]:
     db = await get_db()
     cur = await db.execute(
@@ -2884,6 +2903,48 @@ async def get_payment_stats() -> dict:
         },
         "by_method": by_method
     }
+
+
+async def set_key_expiry(key_id: int, expiry: int, limit_ip: Optional[int] = None) -> bool:
+    """Set a key's absolute expiry/device limit; used for safe compensation after provisioning failures."""
+    try:
+        expiry = int(expiry)
+    except (TypeError, ValueError):
+        return False
+    if expiry < 0:
+        return False
+
+    db = await get_db()
+    async with _db_semaphore:
+        try:
+            cur = await db.execute("SELECT user_id FROM keys WHERE id=?", (key_id,))
+            row = await cur.fetchone()
+            if not row:
+                return False
+            user_id = row[0]
+            cur = await db.execute(
+                """
+                UPDATE keys
+                SET expiry = ?,
+                    limit_ip = CASE WHEN ? IS NOT NULL AND ? > 0 THEN ? ELSE limit_ip END
+                WHERE id = ?
+                """,
+                (expiry, limit_ip, limit_ip, limit_ip, key_id),
+            )
+            await db.commit()
+            if cur.rowcount == 0:
+                return False
+            try:
+                from cache import invalidate_user_cache, invalidate_subscription_cache
+                invalidate_user_cache(user_id)
+                invalidate_subscription_cache(user_id)
+            except Exception:
+                pass
+            return True
+        except Exception as e:
+            await db.rollback()
+            logger.exception("set_key_expiry failed for key %s: %s", key_id, e)
+            return False
 
 
 async def extend_key(key_id: int, additional_days: int, limit_ip: Optional[int] = None) -> bool:
