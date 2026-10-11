@@ -3408,20 +3408,151 @@ async def verify_email_auth_code(user_id: int, code: str) -> bool:
 
 
 async def link_telegram_to_user(user_id: int, email: str) -> bool:
-    """Link Telegram user_id to existing user account by email."""
+    """Safely move an existing email account and its linked records to a new Telegram ID."""
+    normalized_email = email.lower().strip()
     db = await get_db()
-    try:
-        # Update user's email
-        await db.execute(
-            "UPDATE users SET email=? WHERE user_id=?",
-            (email.lower().strip(), user_id)
-        )
-        await db.commit()
-        invalidate_user_cache(user_id)
-        return True
-    except Exception as e:
-        logger.error("Error linking telegram to user: %s", e)
-        return False
+
+    async with _db_semaphore:
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            cur = await db.execute(
+                "SELECT user_id, referrer_id, trial_used, total_paid, username FROM users WHERE email=?",
+                (normalized_email,),
+            )
+            old = await cur.fetchone()
+            if not old:
+                await db.rollback()
+                return False
+
+            old_id, old_referrer, old_trial_used, old_total_paid, old_username = old
+            if int(old_id) == int(user_id):
+                await db.commit()
+                return True
+
+            cur = await db.execute(
+                "SELECT user_id, email, referrer_id, trial_used, total_paid, username FROM users WHERE user_id=?",
+                (user_id,),
+            )
+            current = await cur.fetchone()
+            if current and current[1] and current[1].lower() != normalized_email:
+                await db.rollback()
+                logger.warning("Account link refused: target Telegram account already has another email")
+                return False
+
+            # Never merge two accounts that already have independent paid/key state.
+            for table in ("keys", "payments", "auto_renew_subscriptions"):
+                cur = await db.execute(f"SELECT 1 FROM {table} WHERE user_id=? LIMIT 1", (user_id,))
+                if await cur.fetchone():
+                    await db.rollback()
+                    logger.warning("Account link refused: target Telegram account already has records in %s", table)
+                    return False
+
+            if not current:
+                await db.execute("INSERT OR IGNORE INTO users(user_id) VALUES(?)", (user_id,))
+                current = (user_id, None, None, 0, 0, None)
+
+            current_referrer = current[2]
+            merged_referrer = current_referrer if current_referrer and current_referrer != old_id else old_referrer
+            if merged_referrer == user_id:
+                merged_referrer = None
+
+            # Release the UNIQUE email before assigning it to the new Telegram account.
+            await db.execute("UPDATE users SET email=NULL WHERE user_id=?", (old_id,))
+
+            # Move user-owned rows. Payment/key primary IDs remain unchanged.
+            for table in (
+                "keys", "payments", "yookassa_pending", "crypto_pending",
+                "referral_payouts", "email_auth", "key_errors", "auto_renew_subscriptions",
+            ):
+                await db.execute(f"UPDATE {table} SET user_id=? WHERE user_id=?", (user_id, old_id))
+
+            # A promo code may already be recorded for the target account.
+            await db.execute(
+                "DELETE FROM promo_code_uses WHERE user_id=? AND code IN "
+                "(SELECT code FROM promo_code_uses WHERE user_id=?)",
+                (old_id, user_id),
+            )
+            await db.execute("UPDATE promo_code_uses SET user_id=? WHERE user_id=?", (user_id, old_id))
+
+            # Keep the older account's pending trial if both accounts have one.
+            cur = await db.execute("SELECT 1 FROM yookassa_trial_pending WHERE user_id=?", (old_id,))
+            old_trial_pending = await cur.fetchone()
+            if old_trial_pending:
+                await db.execute("DELETE FROM yookassa_trial_pending WHERE user_id=?", (user_id,))
+                await db.execute("UPDATE yookassa_trial_pending SET user_id=? WHERE user_id=?", (user_id, old_id))
+
+            # Merge monetary referral balance without dropping either balance.
+            cur = await db.execute("SELECT balance, total_earned FROM referral_balance WHERE user_id=?", (old_id,))
+            old_balance = await cur.fetchone()
+            if old_balance:
+                cur = await db.execute("SELECT balance, total_earned FROM referral_balance WHERE user_id=?", (user_id,))
+                current_balance = await cur.fetchone()
+                if current_balance:
+                    await db.execute(
+                        "UPDATE referral_balance SET balance=?, total_earned=? WHERE user_id=?",
+                        (int(old_balance[0] or 0) + int(current_balance[0] or 0),
+                         int(old_balance[1] or 0) + int(current_balance[1] or 0), user_id),
+                    )
+                    await db.execute("DELETE FROM referral_balance WHERE user_id=?", (old_id,))
+                else:
+                    await db.execute("UPDATE referral_balance SET user_id=? WHERE user_id=?", (user_id, old_id))
+
+            # Relationship tables have unique pairs; merge with INSERT OR IGNORE first.
+            for table, columns, unique_columns in (
+                ("referrals", "referrer_id, referred_id, bonus_given, created", ("referrer_id", "referred_id")),
+                ("ref_bonus_claims", "referrer_id, referred_id, claimed", ("referrer_id", "referred_id")),
+                ("referral_earnings", "referrer_id, referred_id, amount, payment_id, payment_status, created", ("referrer_id", "referred_id")),
+            ):
+                cur = await db.execute(f"PRAGMA table_info({table})")
+                column_names = {row[1] for row in await cur.fetchall()}
+                select_cols = [col.strip() for col in columns.split(",") if col.strip() in column_names]
+                if not select_cols:
+                    continue
+                select_sql = ", ".join(
+                    f"CASE WHEN {col}=? THEN ? ELSE {col} END" if col in unique_columns else col
+                    for col in select_cols
+                )
+                params = []
+                for col in select_cols:
+                    if col in unique_columns:
+                        params.extend((old_id, user_id))
+                params.extend((old_id, old_id))
+                await db.execute(
+                    f"INSERT OR IGNORE INTO {table} ({', '.join(select_cols)}) "
+                    f"SELECT {select_sql} FROM {table} WHERE referrer_id=? OR referred_id=?",
+                    tuple(params),
+                )
+                await db.execute(f"DELETE FROM {table} WHERE referrer_id=? OR referred_id=?", (old_id, old_id))
+
+            await db.execute(
+                "UPDATE referral_events SET referrer_id=? WHERE referrer_id=?", (user_id, old_id)
+            )
+            await db.execute(
+                "UPDATE referral_events SET referred_id=? WHERE referred_id=?", (user_id, old_id)
+            )
+            await db.execute("UPDATE referral_clicks SET referrer_id=? WHERE referrer_id=?", (user_id, old_id))
+            await db.execute("UPDATE admin_logs SET target_user_id=? WHERE target_user_id=?", (user_id, old_id))
+
+            await db.execute(
+                """UPDATE users SET
+                    email=?, referrer_id=?, trial_used=MAX(COALESCE(trial_used,0),?),
+                    total_paid=COALESCE(total_paid,0)+?, username=COALESCE(username,?)
+                   WHERE user_id=?""",
+                (normalized_email, merged_referrer, int(old_trial_used or 0),
+                 int(old_total_paid or 0), old_username, user_id),
+            )
+            await db.execute("UPDATE users SET referrer_id=? WHERE referrer_id=? AND user_id<>?", (user_id, old_id, user_id))
+            await db.execute("DELETE FROM users WHERE user_id=?", (old_id,))
+            await db.commit()
+            invalidate_user_cache(user_id)
+            invalidate_user_cache(old_id)
+            invalidate_subscription_cache(user_id)
+            invalidate_subscription_cache(old_id)
+            return True
+        except Exception as e:
+            await db.rollback()
+            logger.error("Account linking transaction failed (%s)", type(e).__name__)
+            return False
 
 
 async def update_user_email(user_id: int, email: str) -> bool:
