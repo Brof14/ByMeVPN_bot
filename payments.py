@@ -260,7 +260,7 @@ async def create_crypto_payment(
         return None
     except Exception as e:
         logger.error("Crypto Bot error for user %d: %s", user_id, str(e))
-        logger.error("Payload: %s", str(payload)[:200])
+        logger.debug("Crypto Bot request failed while creating an invoice for user %d", user_id)
         return None
 
 
