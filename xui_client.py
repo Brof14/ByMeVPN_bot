@@ -206,7 +206,7 @@ async def _find_client_uuid(api: AsyncApi, email: str) -> Optional[str]:
         try:
             client = await _api_call_with_retry(api.client.get_by_email, email)
             if client and client.uuid:
-                logger.info("Found client %s via get_by_email: uuid=%s", email, client.uuid)
+                logger.debug("Found client %s via get_by_email", email)
                 return client.uuid
         except Exception as e:
             logger.debug("get_by_email failed for %s: %s", email, e)
@@ -219,7 +219,7 @@ async def _find_client_uuid(api: AsyncApi, email: str) -> Optional[str]:
             if inbound and inbound.client_stats:
                 for c in inbound.client_stats:
                     if c.email == email and c.uuid:
-                        logger.info("Found client %s in inbound %d client_stats: uuid=%s", email, inbound_id, c.uuid)
+                        logger.debug("Found client %s in inbound %d client_stats", email, inbound_id)
                         return c.uuid
         except Exception as e:
             logger.debug("Failed to search inbound %d for %s: %s", inbound_id, email, e)
@@ -249,7 +249,7 @@ async def _find_client_sub_id(api: AsyncApi, email: str) -> Optional[str]:
         try:
             client = await _api_call_with_retry(api.client.get_by_email, email)
             if client and client.sub_id:
-                logger.info("Found client %s sub_id via get_by_email: sub_id=%s", email, client.sub_id)
+                logger.debug("Found client %s sub_id via get_by_email", email)
                 return client.sub_id
         except Exception as e:
             logger.debug("get_by_email failed for %s: %s", email, e)
@@ -261,7 +261,7 @@ async def _find_client_sub_id(api: AsyncApi, email: str) -> Optional[str]:
             if inbound and inbound.client_stats:
                 for c in inbound.client_stats:
                     if c.email == email and c.sub_id:
-                        logger.info("Found client %s sub_id in inbound %d client_stats: sub_id=%s", email, inbound_id, c.sub_id)
+                        logger.debug("Found client %s sub_id in inbound %d client_stats", email, inbound_id)
                         return c.sub_id
         except Exception as e:
             logger.debug("Failed to search inbound %d for %s: %s", inbound_id, email, e)
@@ -281,7 +281,7 @@ async def _find_client_sub_id(api: AsyncApi, email: str) -> Optional[str]:
         if client_uuid:
             # Генерируем sub_id из uuid (убираем дефисы и берем первые 16 символов)
             generated_sub_id = client_uuid.replace("-", "")[:16]
-            logger.info("Generated sub_id for %s from uuid: %s", email, generated_sub_id)
+            logger.debug("Generated fallback sub_id for %s from its UUID", email)
             return generated_sub_id
     except Exception as e:
         logger.debug("Failed to generate sub_id from uuid for %s: %s", email, e)
@@ -323,7 +323,7 @@ async def create_xui_user(
         existing_uuid = await _find_client_uuid(api, email)
         
         if existing_uuid:
-            logger.info("Client %s already exists in 3x-ui (uuid=%s) - PRESERVING UUID and updating", email, existing_uuid)
+            logger.info("Client %s already exists in 3x-ui; preserving existing identity and updating", email)
             existing_sub_id = await _find_client_sub_id(api, email) or existing_uuid.replace("-", "")[:16]
             update_res = await update_xui_user(user_id, days=days, limit_ip=limit_ip)
             if update_res:
@@ -393,7 +393,7 @@ async def create_xui_user(
                                             sub_id = c.sub_id
                                         if c.uuid:
                                             client_uuid = c.uuid
-                                        logger.info("Found client in client_stats: uuid=%s, sub_id=%s", client_uuid, sub_id)
+                                        logger.debug("Found existing client identity in inbound %d client_stats", iid)
                                         return True
                         except Exception as get_err:
                             logger.warning("Failed to search client_stats: %s", get_err)
@@ -505,9 +505,9 @@ async def create_xui_user(
             existing_client = await _api_call_with_retry(api.client.get_by_email, email)
             if existing_client and existing_client.uuid:
                 client_uuid = existing_client.uuid
-                logger.info("Using verified uuid from panel: %s", client_uuid)
+                logger.debug("Using UUID verified by panel for %s", email)
             else:
-                logger.warning("Client created but no uuid found, using generated: %s", client_uuid)
+                logger.warning("Client created but panel did not return a UUID; retaining generated identity")
         except Exception as e:
             logger.warning("Failed to verify client: %s, using generated uuid", e)
 
@@ -520,7 +520,7 @@ async def create_xui_user(
                 # Получаем inbound конфигурацию
                 inbound = await _api_call_with_retry(api.inbound.get_by_id, iid)
                 if inbound:
-                    logger.info("Inbound %d data: %s", iid, inbound)
+                    logger.debug("Inbound %d configuration retrieved", iid)
                     
                     # Генерируем линк для клиента на основе данных inbound
                     try:
@@ -584,7 +584,7 @@ async def create_xui_user(
 
         # Генерируем ссылку на подписку
         subscription_url = _build_sub_url(sub_id)
-        logger.info("Subscription URL for %s: %s", email, subscription_url)
+        logger.debug("Subscription URL prepared for %s", email)
 
         return {
             "subscription_url": subscription_url,
@@ -650,7 +650,7 @@ async def delete_xui_user(user_id: int) -> bool:
         for inbound_id in inbound_ids:
             async def delete_from_inbound(iid):
                 try:
-                    logger.info("Deleting client %s (uuid=%s) from inbound %d", email, client_uuid, iid)
+                    logger.info("Deleting client %s from inbound %d", email, iid)
                     await _api_call_with_retry(api.client.delete, iid, client_uuid)
                     logger.info("Deleted client %s from inbound %d", email, iid)
                     return True
@@ -735,9 +735,8 @@ async def update_xui_user(
         )
         await _api_call_with_retry(api.client.update, client_uuid, updated)
         logger.info(
-            "update_xui_user: %s updated (uuid=%s, limit_ip=%d, expiry=%s)",
+            "update_xui_user: %s updated (limit_ip=%d, expiry=%s)",
             email,
-            client_uuid,
             final_limit_ip,
             datetime.fromtimestamp(final_expiry_ms / 1000).strftime("%d.%m.%Y"),
         )
