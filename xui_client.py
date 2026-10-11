@@ -304,13 +304,11 @@ async def create_xui_user(
         
         if existing_uuid:
             logger.info("Client %s already exists in 3x-ui; preserving existing identity and updating", email)
-            existing_sub_id = await _find_client_sub_id(api, email) or existing_uuid.replace("-", "")[:16]
             update_res = await update_xui_user(user_id, days=days, limit_ip=limit_ip)
             if update_res:
                 return update_res
-            # Fallback: keep existing UUID if update failed
-            client_uuid = existing_uuid
-            sub_id = existing_sub_id
+            logger.error("Existing client %s could not be updated; refusing to create duplicate inbounds", email)
+            return None
         else:
             logger.info("No existing client found for %s, creating new", email)
             client_uuid = str(uuid_lib.uuid4())
@@ -320,14 +318,7 @@ async def create_xui_user(
         logger.info("Adding client %s in inbounds %s", email, inbound_ids)
 
         # Названия для инбаундов (используем при создании клиентов и генерации ссылок)
-        inbound_names = {
-            2: "🇳🇱Netherlands",
-            3: "🇳🇱Netherlands-2",
-            7: "🇩🇪Germany",
-            8: "🇩🇪Germany-2",
-            10: "🇫🇮Finland",
-            11: "🇫🇮Finland-2",
-        }
+        inbound_names = {iid: "ByMeVPN-" + str(iid) for iid in inbound_ids}
 
         success_count = 0
         create_tasks = []
@@ -397,8 +388,9 @@ async def create_xui_user(
                 logger.error("Inbound %d: ❌ FAILED (returned False)", iid)
         logger.info("Total successful: %d/%d", success_count, len(inbound_ids))
         
-        # Remote nodes (7,8,10,11) need sync verification - check if client actually exists on remote node
-        remote_inbounds = [iid for iid in inbound_ids if iid in (7, 8, 10, 11)]
+        # Do not block the payment path on remote-node replication polling.
+        # Inbound IDs are taken exclusively from validated configuration.
+        remote_inbounds = []
         if remote_inbounds:
             logger.info("Verifying remote node sync for inbounds %s...", remote_inbounds)
             await asyncio.sleep(2)  # Small initial delay for sync to start
@@ -475,11 +467,25 @@ async def create_xui_user(
             if not all(client_state.values()):
                 logger.warning("⚠️ Some remote inbounds still missing client after monitoring period")
 
-        if success_count == 0:
-            logger.error("Failed to add client %s to any inbound", email)
+        if success_count != len(inbound_ids):
+            failed_ids = [
+                iid for iid, result in zip(inbound_ids, results)
+                if result is not True
+            ]
+            logger.critical(
+                "Provisioning incomplete for user %s: successful=%d/%d failed_inbounds=%s; cleaning partial client",
+                email, success_count, len(inbound_ids), failed_ids,
+            )
+            cleanup = await asyncio.gather(
+                *(_api_call_with_retry(api.client.delete, iid, client_uuid)
+                  for iid, result in zip(inbound_ids, results) if result is True),
+                return_exceptions=True,
+            )
+            if any(isinstance(item, Exception) for item in cleanup):
+                logger.critical("Partial provisioning cleanup was incomplete for user %s", email)
             return None
 
-        # Проверяем что клиент реально создан и получаем его uuid (no sleep needed)
+        # Verify the client identity after all configured inbound writes succeeded.
         logger.info("Verifying client creation and getting uuid for %s", email)
         try:
             existing_client = await _api_call_with_retry(api.client.get_by_email, email)
@@ -491,76 +497,9 @@ async def create_xui_user(
         except Exception as e:
             logger.warning("Failed to verify client: %s, using generated uuid", e)
 
-        # Генерируем VLESS ссылки для обоих инбаундов с разными названиями (parallel)
-        logger.info("Generating VLESS links for client %s", email)
-        vless_links = []
-        
-        async def generate_link_for_inbound(iid):
-            try:
-                # Получаем inbound конфигурацию
-                inbound = await _api_call_with_retry(api.inbound.get_by_id, iid)
-                if inbound:
-                    logger.debug("Inbound %d configuration retrieved", iid)
-                    
-                    # Генерируем линк для клиента на основе данных inbound
-                    try:
-                        # Получаем адрес и порт из inbound
-                        address = getattr(inbound, 'address', 'bymevpn.duckdns.org')
-                        port = getattr(inbound, 'port', 443)
-                        
-                        # Генерируем VLESS линк с названием для конкретного инбаунда
-                        inbound_name = inbound_names.get(iid, "🇳🇱Netherlands")
-                        vless_link = (
-                            f"vless://{client_uuid}@{address}:{port}"
-                            f"?encryption=none"
-                            f"&security=tls"
-                            f"&type=tcp"
-                            f"&flow=xtls-rprx-vision"
-                            f"&sni={address}"
-                            f"&alpn=h3,h2,http/1.1"
-                            f"&fp=chrome"
-                            f"&mux=4"  # Multiplexing for better speed
-                            f"&allowInsecure=0"
-                            f"#{inbound_name}"
-                        )
-                        
-                        logger.debug("Generated VLESS link for inbound %d", iid)
-                        return vless_link
-                    except Exception as gen_err:
-                        logger.warning("Failed to generate VLESS link for inbound %d: %s", iid, gen_err)
-                        
-                        # Простой fallback
-                        inbound_name = inbound_names.get(iid, "🇳🇱Netherlands")
-                        vless_link = (
-                            f"vless://{client_uuid}@bymevpn.duckdns.org:443"
-                            f"?encryption=none&security=tls&type=tcp&flow=xtls-rprx-vision"
-                            f"&sni=bymevpn.duckdns.org&alpn=h3,h2,http/1.1&fp=chrome"
-                            f"&mux=4&allowInsecure=0#{inbound_name}"
-                        )
-                        logger.info("Generated simple fallback VLESS link for inbound %d", iid)
-                        return vless_link
-            except Exception as e:
-                logger.warning("Failed to get inbound %d: %s", iid, e)
-                # Ultimate fallback
-                inbound_name = inbound_names.get(iid, "🇳🇱Netherlands")
-                vless_link = (
-                    f"vless://{client_uuid}@bymevpn.duckdns.org:443"
-                    f"?encryption=none&security=tls&type=tcp&flow=xtls-rprx-vision"
-                    f"&sni=bymevpn.duckdns.org&alpn=h3,h2,http/1.1&fp=chrome"
-                    f"&mux=4&allowInsecure=0#{inbound_name}"
-                )
-                logger.info("Generated ultimate fallback VLESS link for inbound %d", iid)
-                return vless_link
-        
-        # Generate all links in parallel
-        link_tasks = [generate_link_for_inbound(iid) for iid in inbound_ids]
-        link_results = await asyncio.gather(*link_tasks, return_exceptions=True)
-        
-        for result in link_results:
-            if isinstance(result, str) and result:
-                vless_links.append(result)
-
-        logger.info("Generated %d VLESS links for %s", len(vless_links), email)
+        # The canonical subscription URL is generated by 3x-ui. Do not synthesize
+        # direct VLESS links: transports may be Reality, TLS, Hysteria, or another mode.
+        vless_links: list[str] = []
 
         # Генерируем ссылку на подписку
         subscription_url = _build_sub_url(sub_id)
