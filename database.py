@@ -1154,8 +1154,9 @@ async def delete_key_by_uuid(uuid: str) -> bool:
 
 async def get_expired_keys() -> list[dict]:
     db = await get_db()
+    # Only process records that have not already been handled by the admin cleanup.
     cur = await db.execute(
-        "SELECT id, user_id, uuid FROM keys WHERE expiry < ?",
+        "SELECT id, user_id, uuid FROM keys WHERE expiry < ? AND COALESCE(cleaned, 0) = 0",
         (int(time.time()),),
     )
     rows = await cur.fetchall()
