@@ -91,7 +91,7 @@ class TestPaymentMonitorRecovery(unittest.IsolatedAsyncioTestCase):
     async def test_yookassa_monitor_delegates_marked_payment_to_recovery_handler(self):
         monitor = PaymentMonitor(MagicMock())
         with (
-            patch.object(monitor, "get_successful_payments", new=AsyncMock(return_value=[{"id": "legacy-marked-payment"}])),
+            patch.object(monitor, "get_successful_payments", new=AsyncMock(return_value=[{"id": "legacy-marked-payment", "description": "ByMeVPN subscription"}])),
             patch.object(monitor, "_get_failed_ledger_payment_ids", new=AsyncMock(return_value=[])),
             patch("payment_monitor._process_payment", new=AsyncMock()) as process_payment,
         ):
@@ -131,6 +131,7 @@ class TestPaymentMonitorRecovery(unittest.IsolatedAsyncioTestCase):
         with (
             patch("payment_monitor.get_paid_crypto_invoices", new=AsyncMock(return_value=[old_invoice])),
             patch("payment_monitor._process_crypto_invoice", new=AsyncMock()) as process_invoice,
+            patch("database.is_crypto_invoice_known", new=AsyncMock(return_value=True)),
         ):
             await monitor.check_and_process_payments()
 
