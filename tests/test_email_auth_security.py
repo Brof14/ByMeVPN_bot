@@ -1,0 +1,85 @@
+"""Regression tests for email-authentication abuse controls and account linking."""
+import os
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+os.environ.setdefault("DB_FILE", "/tmp/test_email_auth_security.db")
+
+import database
+
+
+class TestEmailAuthSecurity(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        await database.close_db()
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.tempdir.name, "auth.db")
+        self.db_file_patch = patch.object(database, "DB_FILE", self.db_path)
+        self.db_file_patch.start()
+        database._db_pool = None
+        await database.init_db()
+
+    async def asyncTearDown(self):
+        await database.close_db()
+        self.db_file_patch.stop()
+        self.tempdir.cleanup()
+
+    async def test_codes_are_hashed_and_single_use(self):
+        await database.ensure_user(111)
+        now = int(__import__("time").time())
+        await database.save_email_auth_code(111, "client@example.com", "123456", now + 300)
+        db = await database.get_db()
+        cur = await db.execute("SELECT code FROM email_auth WHERE user_id=?", (111,))
+        stored = (await cur.fetchone())[0]
+        self.assertTrue(stored.startswith("sha256:"))
+        self.assertNotEqual(stored, "123456")
+        self.assertTrue(await database.verify_email_auth_code(111, "123456"))
+        self.assertFalse(await database.verify_email_auth_code(111, "123456"))
+
+    async def test_five_failed_guesses_exhaust_the_code(self):
+        await database.ensure_user(222)
+        now = int(__import__("time").time())
+        await database.save_email_auth_code(222, "client2@example.com", "654321", now + 300)
+        for _ in range(5):
+            self.assertFalse(await database.verify_email_auth_code(222, "000000"))
+        self.assertFalse(await database.verify_email_auth_code(222, "654321"))
+
+    async def test_email_requests_are_rate_limited_persistently(self):
+        self.assertTrue(await database.allow_email_auth_request(333, "rate@example.com", now=1000))
+        self.assertFalse(await database.allow_email_auth_request(333, "rate@example.com", now=1020))
+        self.assertTrue(await database.allow_email_auth_request(333, "rate@example.com", now=1061))
+        self.assertFalse(await database.allow_email_auth_request(444, "rate@example.com", now=1062))
+
+    async def test_account_link_moves_keys_and_referral_balance(self):
+        await database.ensure_user(555)
+        await database.ensure_user(666)
+        db = await database.get_db()
+        await db.execute("UPDATE users SET email=? WHERE user_id=?", ("owner@example.com", 555))
+        await db.execute(
+            "INSERT INTO keys(user_id,key,remark,uuid,short_id,days,limit_ip,created,expiry) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (555, "sub-url", "test", "uuid-value", "sub-id", 30, 2, 1000, 2000),
+        )
+        await db.execute(
+            "INSERT INTO referral_balance(user_id,balance,total_earned) VALUES(?,?,?)",
+            (555, 50, 50),
+        )
+        await db.commit()
+
+        self.assertTrue(await database.link_telegram_to_user(666, "owner@example.com"))
+        cur = await db.execute("SELECT user_id,email FROM users WHERE user_id=666")
+        self.assertEqual(await cur.fetchone(), (666, "owner@example.com"))
+        cur = await db.execute("SELECT user_id FROM keys WHERE remark='test'")
+        self.assertEqual((await cur.fetchone())[0], 666)
+        cur = await db.execute("SELECT user_id,balance FROM referral_balance")
+        self.assertEqual(await cur.fetchone(), (666, 50))
+        cur = await db.execute("SELECT 1 FROM users WHERE user_id=555")
+        self.assertIsNone(await cur.fetchone())
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
