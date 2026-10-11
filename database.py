@@ -3530,7 +3530,7 @@ async def link_telegram_to_user(user_id: int, email: str) -> bool:
 
             # Move user-owned rows. Payment/key primary IDs remain unchanged.
             for table in (
-                "keys", "payments", "yookassa_pending", "crypto_pending",
+                "keys", "payments", "refunds", "yookassa_pending", "crypto_pending",
                 "referral_payouts", "email_auth", "key_errors", "auto_renew_subscriptions",
             ):
                 await db.execute(f"UPDATE {table} SET user_id=? WHERE user_id=?", (user_id, old_id))
