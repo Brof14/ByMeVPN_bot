@@ -92,11 +92,36 @@ class TestPaymentMonitorRecovery(unittest.IsolatedAsyncioTestCase):
         monitor = PaymentMonitor(MagicMock())
         with (
             patch.object(monitor, "get_successful_payments", new=AsyncMock(return_value=[{"id": "legacy-marked-payment"}])),
+            patch.object(monitor, "_get_failed_ledger_payment_ids", new=AsyncMock(return_value=[])),
             patch("payment_monitor._process_payment", new=AsyncMock()) as process_payment,
         ):
             await monitor.check_and_process_payments()
 
         process_payment.assert_awaited_once_with(monitor.bot, "legacy-marked-payment")
+
+
+    async def test_old_failed_ledger_payment_is_retried_outside_recent_window(self):
+        monitor = PaymentMonitor(MagicMock())
+        with (
+            patch.object(monitor, "get_successful_payments", new=AsyncMock(return_value=[])),
+            patch.object(monitor, "_get_failed_ledger_payment_ids", new=AsyncMock(return_value=["old-failed-payment"])),
+            patch("payment_monitor._process_payment", new=AsyncMock()) as process_payment,
+        ):
+            await monitor.check_and_process_payments(minutes_back=5)
+
+        process_payment.assert_awaited_once_with(monitor.bot, "old-failed-payment")
+
+    async def test_failed_payment_retry_is_throttled(self):
+        monitor = PaymentMonitor(MagicMock())
+        with (
+            patch.object(monitor, "get_successful_payments", new=AsyncMock(return_value=[{"id": "failed-payment"}])),
+            patch.object(monitor, "_get_failed_ledger_payment_ids", new=AsyncMock(return_value=["failed-payment"])),
+            patch("payment_monitor._process_payment", new=AsyncMock()) as process_payment,
+        ):
+            await monitor.check_and_process_payments(minutes_back=5)
+            await monitor.check_and_process_payments(minutes_back=5)
+
+        process_payment.assert_awaited_once_with(monitor.bot, "failed-payment")
 
     async def test_crypto_monitor_does_not_skip_old_paid_invoice_after_restart(self):
         from payment_monitor import CryptoPaymentMonitor
