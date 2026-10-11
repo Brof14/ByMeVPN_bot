@@ -640,14 +640,18 @@ async def update_xui_user(
             logger.info("update_xui_user: client %s not found in 3x-ui", email)
             return None
 
-        # Получаем текущие настройки клиента
-        client = None
+        # The existing panel object is required to preserve identity and settings.
+        # Do not guess defaults and overwrite a live client when the read fails.
         try:
             client = await _api_call_with_retry(api.client.get_by_email, email)
         except Exception as e:
-            logger.debug("update_xui_user: failed to get client settings: %s", e)
+            logger.warning("update_xui_user: could not read current client settings (%s)", type(e).__name__)
+            return None
+        if not client:
+            logger.warning("update_xui_user: panel returned no current client for user %d", user_id)
+            return None
 
-        current_limit_ip = client.limit_ip if (client and client.limit_ip) else 2
+        current_limit_ip = client.limit_ip if client.limit_ip else 2
         current_total_gb = client.total_gb if (client and client.total_gb) else 0
         current_sub_id = client.sub_id if (client and client.sub_id) else ""
         sub_id = current_sub_id or client_uuid.replace("-", "")[:16]
@@ -676,12 +680,78 @@ async def update_xui_user(
             total_gb=current_total_gb,
             sub_id=sub_id,
         )
-        await _api_call_with_retry(api.client.update, client_uuid, updated)
+        update_result = await _api_call_with_retry(api.client.update, client_uuid, updated)
+        if update_result is False:
+            logger.error("update_xui_user: panel explicitly rejected update for user %d", user_id)
+            return None
+
+        # Verify the write against the panel and every configured inbound before
+        # reporting success. This prevents paid renewals from being acknowledged
+        # when one of the client's server entries is missing or stale.
+        verified = False
+        for attempt in range(3):
+            try:
+                panel_client = await _api_call_with_retry(api.client.get_by_email, email)
+                panel_ok = bool(
+                    panel_client
+                    and panel_client.uuid == client_uuid
+                    and int(panel_client.expiry_time or 0) == int(final_expiry_ms)
+                    and int(panel_client.limit_ip or 0) == int(final_limit_ip)
+                    and (not panel_client.sub_id or panel_client.sub_id == sub_id)
+                    and bool(panel_client.enable) == bool(is_enabled)
+                )
+                inbounds_ok = True
+                for inbound_id in XUI_INBOUND_IDS:
+                    inbound = await _api_call_with_retry(api.inbound.get_by_id, inbound_id)
+                    stats = getattr(inbound, "client_stats", None) if inbound else None
+                    inbound_client = next(
+                        (item for item in (stats or []) if getattr(item, "email", None) == email),
+                        None,
+                    )
+                    if not inbound_client:
+                        inbounds_ok = False
+                        break
+                    actual_uuid = getattr(inbound_client, "uuid", None)
+                    actual_expiry = getattr(inbound_client, "expiry_time", None)
+                    actual_limit = getattr(inbound_client, "limit_ip", None)
+                    actual_sub_id = getattr(inbound_client, "sub_id", None)
+                    if actual_uuid and actual_uuid != client_uuid:
+                        inbounds_ok = False
+                        break
+                    if actual_expiry and int(actual_expiry) != int(final_expiry_ms):
+                        inbounds_ok = False
+                        break
+                    if actual_limit and int(actual_limit) != int(final_limit_ip):
+                        inbounds_ok = False
+                        break
+                    if actual_sub_id and actual_sub_id != sub_id:
+                        inbounds_ok = False
+                        break
+
+                if panel_ok and inbounds_ok:
+                    verified = True
+                    break
+            except Exception as verify_error:
+                logger.warning(
+                    "update_xui_user: read-back verification attempt %d failed (%s)",
+                    attempt + 1, type(verify_error).__name__,
+                )
+            if attempt < 2:
+                await asyncio.sleep(1)
+
+        if not verified:
+            logger.error(
+                "update_xui_user: panel write not verified for user %d across all configured inbounds",
+                user_id,
+            )
+            return None
+
         logger.info(
-            "update_xui_user: %s updated (limit_ip=%d, expiry=%s)",
-            email,
+            "update_xui_user: verified user %d (limit_ip=%d, expiry=%s, inbounds=%d)",
+            user_id,
             final_limit_ip,
             datetime.fromtimestamp(final_expiry_ms / 1000).strftime("%d.%m.%Y"),
+            len(XUI_INBOUND_IDS),
         )
 
         subscription_url = _build_sub_url(sub_id)
