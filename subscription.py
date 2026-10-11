@@ -276,29 +276,44 @@ async def ask_config_name(
         sub_url = xui_res.get("subscription_url")
         uuid = xui_res.get("uuid")
         new_expiry = int(xui_res.get("expiry_time", 0)) // 1000
-        if not sub_url or new_expiry <= 0:
+        if not sub_url or new_expiry <= 0 or not uuid:
             await log_key_error(
                 user_id=user_id,
                 error_type="subscription_extension_invalid_response",
                 error_message="3x-ui returned incomplete extension result",
                 context={"branch": "ask_config_name.import_xui"},
             )
-            return
-
-        key_id = await add_key(user_id, sub_url, f"ByMeVPN_{user_id}", uuid, days, limit_ip, expiry=new_expiry)
-
-        if is_paid and amount > 0:
-            tariff_name = f"Подписка {days} дней ({limit_ip} устр.)"
-            await record_payment_idempotent(
-                user_id, amount, currency, method, days, payload,
-                status="success", tariff=tariff_name, devices=limit_ip,
-                provider=method, provider_payment_id=payload,
+            raise ProvisioningOutcomeUnknown(
+                f"3x-ui expiry update returned incomplete data for user {user_id}"
             )
-            await log_analytics_event(
-                user_id=user_id, event_type="subscription_renewed",
-                tariff=tariff_name, devices=limit_ip, amount=amount,
-                payment_provider=method,
+
+        try:
+            key_id = await add_key(
+                user_id, sub_url, f"ByMeVPN_{user_id}", uuid, days, limit_ip,
+                expiry=new_expiry,
             )
+        except Exception as db_error:
+            raise ProvisioningOutcomeUnknown(
+                f"Panel updated but DB key import failed for user {user_id}"
+            ) from db_error
+
+        try:
+            if is_paid and amount > 0:
+                tariff_name = f"Подписка {days} дней ({limit_ip} устр.)"
+                await record_payment_idempotent(
+                    user_id, amount, currency, method, days, payload,
+                    status="success", tariff=tariff_name, devices=limit_ip,
+                    provider=method, provider_payment_id=payload,
+                )
+                await log_analytics_event(
+                    user_id=user_id, event_type="subscription_renewed",
+                    tariff=tariff_name, devices=limit_ip, amount=amount,
+                    payment_provider=method,
+                )
+        except Exception as ledger_error:
+            raise ProvisioningOutcomeUnknown(
+                f"Panel client imported but payment ledger update failed for user {user_id}"
+            ) from ledger_error
 
         text = (
             f"✅ <b>Подписка успешно активирована!</b>\n\n"
