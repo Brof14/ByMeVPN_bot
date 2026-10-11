@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import asyncio
 
 from py3xui import AsyncApi, Client
+from provisioning import ProvisioningOutcomeUnknown
 
 from config import (
     XUI_API_URL,
@@ -321,11 +322,12 @@ async def create_xui_user(
         inbound_names = {iid: "ByMeVPN-" + str(iid) for iid in inbound_ids}
 
         success_count = 0
+        identity_conflict = False
         create_tasks = []
         
         for inbound_id in inbound_ids:
             async def create_in_inbound(iid):
-                nonlocal success_count, sub_id, client_uuid
+                nonlocal success_count, identity_conflict
                 logger.info("=== Starting creation for inbound %d ===", iid)
                 try:
                     # Устанавливаем remark для каждого инбаунда отдельно
@@ -370,6 +372,7 @@ async def create_xui_user(
                                         if uuid_matches and sub_id_matches:
                                             logger.debug("Existing matching client identity found in inbound %d", iid)
                                             return True
+                                        identity_conflict = True
                                         logger.error(
                                             "Inbound %d already has a conflicting identity for user %s; refusing mixed provisioning",
                                             iid, email,
@@ -490,8 +493,15 @@ async def create_xui_user(
                   for iid, result in zip(inbound_ids, results) if result is True),
                 return_exceptions=True,
             )
-            if any(isinstance(item, Exception) for item in cleanup):
+            cleanup_failed = any(isinstance(item, Exception) or item is False for item in cleanup)
+            if cleanup_failed:
                 logger.critical("Partial provisioning cleanup was incomplete for user %s", email)
+            if cleanup_failed or identity_conflict:
+                # Do not automatically retry this payment: a client may remain
+                # on the panel, and an additive retry could extend it twice.
+                raise ProvisioningOutcomeUnknown(
+                    f"Partial provisioning for user {user_id} needs manual reconciliation"
+                )
             return None
 
         # Verify the client identity after all configured inbound writes succeeded.
@@ -520,8 +530,11 @@ async def create_xui_user(
             "vless_links": vless_links,
             "uuid": client_uuid,
             "sub_id": sub_id,
+            "expiry_time": expiry_ms,
         }
 
+    except ProvisioningOutcomeUnknown:
+        raise
     except Exception as e:
         logger.error("create_xui_user FAILED for user=%d (%s)", user_id, type(e).__name__)
         return None
