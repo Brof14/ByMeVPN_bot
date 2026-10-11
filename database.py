@@ -920,7 +920,8 @@ async def set_referrer(user_id: int, referrer_id: int) -> bool:
     if user_id <= 0 or referrer_id <= 0 or user_id == referrer_id:
         return False
 
-    db = await get_db()
+    db = await aiosqlite.connect(DB_FILE)
+    await db.execute("PRAGMA busy_timeout=30000")
     async with _db_semaphore:
         try:
             await db.execute("BEGIN IMMEDIATE")
@@ -946,6 +947,8 @@ async def set_referrer(user_id: int, referrer_id: int) -> bool:
             await db.rollback()
             logger.exception("Could not assign referral for user %d", user_id)
             return False
+        finally:
+            await db.close()
 
 
 @cache_user_info
@@ -1443,7 +1446,8 @@ async def get_referral_events(referrer_id: int, limit: int = 100) -> list[dict]:
 
 async def reserve_referral_bonus(referrer_id: int, referred_id: int, bonus_type: str) -> bool:
     """Atomically reserve one referral bonus; a crash leaves a blocked/manual-review slot."""
-    db = await get_db()
+    db = await aiosqlite.connect(DB_FILE)
+    await db.execute("PRAGMA busy_timeout=30000")
     async with _db_semaphore:
         try:
             await db.execute("BEGIN IMMEDIATE")
@@ -1475,22 +1479,22 @@ async def reserve_referral_bonus(referrer_id: int, referred_id: int, bonus_type:
             await db.rollback()
             logger.exception("Could not reserve referral bonus for referrer %d", referrer_id)
             return False
+        finally:
+            await db.close()
 
 
 async def finalize_referral_bonus(referrer_id: int, referred_id: int, *, success: bool) -> None:
     """Complete a reserved bonus or release it after a confirmed failure."""
-    db = await get_db()
-    async with _db_semaphore:
+    db = await aiosqlite.connect(DB_FILE)
+    try:
+        await db.execute("PRAGMA busy_timeout=30000")
         await db.execute(
             "UPDATE ref_bonus_claims SET claimed=? WHERE referrer_id=? AND referred_id=? AND claimed=2",
             (1 if success else 0, referrer_id, referred_id),
         )
         await db.commit()
-
-
-# ---------------------------------------------------------------------------
-# YooKassa
-# ---------------------------------------------------------------------------
+    finally:
+        await db.close()
 
 async def is_yookassa_processed(payment_id: str) -> bool:
     db = await get_db()
