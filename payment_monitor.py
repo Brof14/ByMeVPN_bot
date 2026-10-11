@@ -27,14 +27,12 @@ class PaymentMonitor:
         self.start_time = datetime.utcnow()  # Track when monitor started
         
     async def get_successful_payments(self, minutes_back: int = 5) -> List[Dict]:
-        """Получить успешные платежи за последние N минут, но только после старта монитора"""
+        """Получить успешные платежи за последние N минут, включая период до рестарта."""
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                # Use the later of: 5 minutes ago OR monitor start time
-                cutoff_time = max(
-                    datetime.utcnow() - timedelta(minutes=minutes_back),
-                    self.start_time
-                )
+                # Do not clamp to process start time: payments made during downtime
+                # must be discoverable after a restart.
+                cutoff_time = datetime.utcnow() - timedelta(minutes=minutes_back)
                 created_at_gte = cutoff_time.isoformat() + 'Z'
                 
                 url = f"https://api.yookassa.ru/v3/payments?limit=50&status=succeeded&created_at.gte={created_at_gte}"
@@ -48,10 +46,10 @@ class PaymentMonitor:
             logger.error(f"Error fetching payments: {e}")
             return []
     
-    async def check_and_process_payments(self):
-        """Проверить и обработать необработанные платежи"""
+    async def check_and_process_payments(self, minutes_back: int = 5):
+        """Проверить и обработать необработанные платежи за заданное окно."""
         try:
-            payments = await self.get_successful_payments()
+            payments = await self.get_successful_payments(minutes_back=minutes_back)
             
             if not payments:
                 return
@@ -68,11 +66,6 @@ class PaymentMonitor:
                     continue
                     
                 logger.info(f"Processing new payment: {payment_id}")
-                
-                # Проверяем, не обработан ли уже перед вызовом _process_payment
-                if await is_yookassa_processed(payment_id):
-                    logger.info(f"Payment {payment_id} already processed, skipping")
-                    continue
                 
                 # Обрабатываем платеж (функция сама пометит как обработанный)
                 await _process_payment(self.bot, payment_id)
@@ -91,8 +84,8 @@ class PaymentMonitor:
         self.running = True
         logger.info("Payment monitor started")
         
-        # Сначала обрабатываем все необработанные платежи за последний час
-        await self.check_and_process_payments()
+        # On startup scan an hour back so payments during downtime are recovered.
+        await self.check_and_process_payments(minutes_back=60)
         
         while self.running:
             try:
