@@ -1476,6 +1476,35 @@ async def get_yookassa_pending(payment_id: str) -> Optional[dict]:
         "created": row[4],
     }
 
+async def is_yookassa_payment_known(payment_id: str) -> bool:
+    """Return whether this provider payment belongs to a locally-created bot order."""
+    db = await get_db()
+    cur = await db.execute(
+        """SELECT 1 FROM payments
+           WHERE provider='yookassa' AND provider_payment_id=?
+           UNION ALL SELECT 1 FROM yookassa_pending WHERE payment_id=?
+           UNION ALL SELECT 1 FROM yookassa_trial_pending WHERE payment_id=?
+           LIMIT 1""",
+        (str(payment_id), str(payment_id), str(payment_id)),
+    )
+    return await cur.fetchone() is not None
+
+
+async def is_crypto_invoice_known(invoice_id) -> bool:
+    """Return whether a Crypto Pay invoice is pending or recorded by this bot."""
+    db = await get_db()
+    invoice_id = str(invoice_id)
+    cur = await db.execute(
+        """SELECT 1 FROM crypto_pending WHERE invoice_id=?
+           UNION ALL SELECT 1 FROM payments
+             WHERE provider='cryptobot' AND provider_payment_id=?
+           UNION ALL SELECT 1 FROM crypto_processed WHERE invoice_id=?
+           LIMIT 1""",
+        (invoice_id, invoice_id, invoice_id),
+    )
+    return await cur.fetchone() is not None
+
+
 
 async def delete_yookassa_pending(payment_id: str) -> None:
     db = await get_db()
