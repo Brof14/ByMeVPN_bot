@@ -53,6 +53,7 @@ async def create_yookassa_payment(
         "days": str(days),
         "devices": str(devices),
         "months": str(months),
+        "amount_rub": str(amount_rub),
     }
     if promo_code:
         metadata["promo_code"] = str(promo_code)
@@ -159,6 +160,7 @@ async def charge_yookassa_recurrent(
         "devices": str(devices),
         "months": str(months),
         "key_id": str(key_id),
+        "amount_rub": str(amount_rub),
         "auto_renew": "1",
     }
 
