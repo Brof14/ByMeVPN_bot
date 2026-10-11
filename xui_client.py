@@ -790,7 +790,7 @@ async def get_xui_client_details(user_id: int) -> Optional[Dict[str, Any]]:
 
 async def get_user_subscription_links(user_id: int) -> Optional[List[str]]:
     email = str(user_id)
-    inbound_id = 2  # Только VLESS
+    inbound_id = XUI_INBOUND_IDS[0] if XUI_INBOUND_IDS else 0  # configured primary inbound
     try:
         api = await _get_api()
 
