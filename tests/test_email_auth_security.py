@@ -54,6 +54,16 @@ class TestEmailAuthSecurity(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await database.allow_email_auth_request(333, "rate@example.com", now=1061))
         self.assertFalse(await database.allow_email_auth_request(444, "rate@example.com", now=1062))
 
+    async def test_referral_bonus_reservation_is_idempotent(self):
+        await database.ensure_user(901)
+        await database.ensure_user(902)
+        self.assertTrue(await database.reserve_referral_bonus(901, 902, "trial_bonus"))
+        self.assertFalse(await database.reserve_referral_bonus(901, 902, "trial_bonus"))
+        await database.finalize_referral_bonus(901, 902, success=False)
+        self.assertTrue(await database.reserve_referral_bonus(901, 902, "trial_bonus"))
+        await database.finalize_referral_bonus(901, 902, success=True)
+        self.assertFalse(await database.reserve_referral_bonus(901, 902, "trial_bonus"))
+
     async def test_referrer_assignment_is_one_time(self):
         await database.ensure_user(777)
         self.assertTrue(await database.set_referrer(777, 888))
