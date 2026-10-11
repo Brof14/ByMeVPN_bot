@@ -983,5 +983,22 @@ class TestAuditDatabaseHelpers(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payment["status"], "processing")
 
 
+    async def test_refund_stats_separate_rubles_and_stars(self):
+        user_id = 991003
+        await database.ensure_user(user_id)
+        await database.add_refund(
+            user_id=user_id, amount=100, currency="RUB", method="yookassa",
+            reason="test rubles", refunded_by=user_id,
+        )
+        await database.add_refund(
+            user_id=user_id, amount=25, currency="XTR", method="stars",
+            reason="test stars", refunded_by=user_id,
+        )
+        stats = await database.get_refund_stats()
+        self.assertEqual(stats["by_currency_total"]["RUB"]["sum"], 100)
+        self.assertEqual(stats["by_currency_total"]["XTR"]["sum"], 25)
+        self.assertEqual(stats["count_total"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()
