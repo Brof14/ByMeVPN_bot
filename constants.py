@@ -14,13 +14,6 @@ TRIAL_DAYS = 3          # Duration of the introductory trial (payment terms are 
 SECONDS_PER_DAY = 86400  # Seconds in a day
 CAPTION_LIMIT = 1024    # Telegram caption character limit
 
-# Days a referrer gets when their referral makes a first paid purchase.
-# NOTE: this is the value actually used by subscription.py / handlers/keys.py.
-# config.REF_BONUS_DAYS (read from .env) is a *different*, unrelated value used
-# only for the "+N days for referral click" bonus — they are intentionally
-# separate programs, do not merge them.
-REF_BONUS_DAYS = 15
-
 # ============================================================================
 # Days-grant safety bound (single source of truth)
 # ============================================================================
