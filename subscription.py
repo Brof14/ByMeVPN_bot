@@ -495,24 +495,30 @@ async def deliver_key(
 
                 external_mutation_confirmed = True
 
-                # Add payment record (idempotent)
-                if is_paid and amount > 0:
-                    tariff_name = f"Продление {days} дней ({limit_ip} устр.)"
-                    await record_payment_idempotent(
-                        user_id, amount, currency, method, days, payload,
-                        status="success", tariff=tariff_name, devices=limit_ip,
-                        provider=method, provider_payment_id=payload,
-                    )
-                    await log_analytics_event(
-                        user_id=user_id, event_type="subscription_renewed",
-                        tariff=tariff_name, devices=limit_ip, amount=amount,
-                        payment_provider=method,
-                    )
-                    if limit_ip != old_limit:
-                        await log_analytics_event(
-                            user_id=user_id, event_type="device_limit_changed",
-                            devices=limit_ip, details=f"From {old_limit} to {limit_ip}",
+                # Once the panel update is confirmed, a ledger failure is ambiguous:
+                # never let a retry apply the same extension again.
+                try:
+                    if is_paid and amount > 0:
+                        tariff_name = f"Продление {days} дней ({limit_ip} устр.)"
+                        await record_payment_idempotent(
+                            user_id, amount, currency, method, days, payload,
+                            status="success", tariff=tariff_name, devices=limit_ip,
+                            provider=method, provider_payment_id=payload,
                         )
+                        await log_analytics_event(
+                            user_id=user_id, event_type="subscription_renewed",
+                            tariff=tariff_name, devices=limit_ip, amount=amount,
+                            payment_provider=method,
+                        )
+                        if limit_ip != old_limit:
+                            await log_analytics_event(
+                                user_id=user_id, event_type="device_limit_changed",
+                                devices=limit_ip, details=f"From {old_limit} to {limit_ip}",
+                            )
+                except Exception as ledger_error:
+                    raise ProvisioningOutcomeUnknown(
+                        f"Panel extension confirmed but payment ledger update failed for user {user_id}"
+                    ) from ledger_error
 
                 # Get subscription URL from existing key
                 existing_key = key_to_extend.get("key", "")
@@ -591,18 +597,23 @@ async def deliver_key(
                     f"Panel updated but DB key import failed for user {user_id}"
                 ) from db_error
 
-            if is_paid and amount > 0:
-                tariff_name = f"Подписка {days} дней ({limit_ip} устр.)"
-                await record_payment_idempotent(
-                    user_id, amount, currency, method, days, payload,
-                    status="success", tariff=tariff_name, devices=limit_ip,
-                    provider=method, provider_payment_id=payload,
-                )
-                await log_analytics_event(
-                    user_id=user_id, event_type="subscription_created",
-                    tariff=tariff_name, devices=limit_ip, amount=amount,
-                    payment_provider=method,
-                )
+            try:
+                if is_paid and amount > 0:
+                    tariff_name = f"Подписка {days} дней ({limit_ip} устр.)"
+                    await record_payment_idempotent(
+                        user_id, amount, currency, method, days, payload,
+                        status="success", tariff=tariff_name, devices=limit_ip,
+                        provider=method, provider_payment_id=payload,
+                    )
+                    await log_analytics_event(
+                        user_id=user_id, event_type="subscription_created",
+                        tariff=tariff_name, devices=limit_ip, amount=amount,
+                        payment_provider=method,
+                    )
+            except Exception as ledger_error:
+                raise ProvisioningOutcomeUnknown(
+                    f"Panel client imported but payment ledger update failed for user {user_id}"
+                ) from ledger_error
 
             text = (
                 f"✅ <b>Подписка успешно активирована!</b>\n\n"
