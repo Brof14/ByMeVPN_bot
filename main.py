@@ -220,7 +220,7 @@ async def main() -> None:
             logger.critical("Critical background task %s %s", task_name, reason)
         else:
             reason = f"raised {type(exc).__name__}"
-            logger.critical("Critical background task %s %s", task_name, reason, exc_info=exc)
+            logger.critical("Critical background task %s %s", task_name, reason, exc_info=(type(exc), exc, exc.__traceback__))
         async def send_alert() -> None:
             try:
                 from utils import notify_admins
