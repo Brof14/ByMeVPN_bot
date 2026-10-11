@@ -84,22 +84,45 @@ async def yookassa_webhook(request: Request) -> Response:
     Receive YooKassa payment notification.
     Always responds 200 quickly — heavy work runs as background task.
     """
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > 65536:
+                return Response(status_code=413)
+        except ValueError:
+            return Response(status_code=400)
+
     try:
         body = await request.json()
-    except Exception as e:
-        logger.warning("Webhook: invalid JSON body - %s", str(e))
+    except Exception:
+        logger.warning("Webhook: invalid JSON body")
+        return Response(status_code=400)
+
+    if not isinstance(body, dict):
+        logger.warning("Webhook: JSON body must be an object")
         return Response(status_code=400)
 
     event = body.get("event", "")
-    obj = body.get("object", {})
-    payment_id = obj.get("id", "")
+    if not isinstance(event, str):
+        logger.warning("Webhook: event field must be a string")
+        return Response(status_code=400)
+
+    # We only care about succeeded payments. Other valid events are acknowledged.
+    if event != "payment.succeeded":
+        logger.debug("Webhook: ignoring event %r", event)
+        return Response(status_code=200)
+
+    obj = body.get("object")
+    if not isinstance(obj, dict):
+        logger.warning("Webhook: succeeded event has no valid object")
+        return Response(status_code=400)
+
+    payment_id = obj.get("id")
+    if not isinstance(payment_id, str) or not payment_id or len(payment_id) > 128:
+        logger.warning("Webhook: succeeded event has invalid payment ID")
+        return Response(status_code=400)
 
     logger.info("Webhook parsed: event='%s', payment_id='%s'", event, payment_id)
-
-    # We only care about succeeded payments
-    if event != "payment.succeeded" or not payment_id:
-        logger.info("Webhook: skipping - not payment.succeeded or no payment_id")
-        return Response(status_code=200)
 
     # Schedule async processing — respond immediately to YooKassa
     bot: Bot = app.state.bot
