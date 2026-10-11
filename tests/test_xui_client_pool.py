@@ -34,12 +34,64 @@ class _FakeApi:
             raise self.login_error
 
 
+
+class _FakeInboundApi:
+    def __init__(self, missing=()):
+        self.missing = set(missing)
+
+    async def get_by_id(self, inbound_id):
+        if inbound_id in self.missing:
+            return None
+        return object()
+
+
+class _FakePanelWithInbounds:
+    def __init__(self, missing=()):
+        self.inbound = _FakeInboundApi(missing)
+
+
 class TestXuiClientPool(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         xui_client._api_pool = None
 
     def tearDown(self):
         xui_client._api_pool = None
+
+
+    async def test_startup_rejects_missing_configured_inbound(self):
+        panel = _FakePanelWithInbounds(missing={5})
+
+        async def call_api(func, *args, **kwargs):
+            return await func(*args, **kwargs)
+
+        with (
+            patch.object(xui_client, "validate_xui_config", return_value=(True, "")),
+            patch.object(xui_client, "XUI_INBOUND_IDS", [2, 5, 6]),
+            patch.object(xui_client, "_get_api", new=AsyncMock(return_value=panel)),
+            patch.object(xui_client, "_api_call_with_retry", new=call_api),
+        ):
+            connected, message = await xui_client.test_xui_connection()
+
+        self.assertFalse(connected)
+        self.assertIn("5", message)
+        self.assertIn("недоступны", message)
+
+    async def test_startup_accepts_only_when_all_configured_inbounds_respond(self):
+        panel = _FakePanelWithInbounds()
+
+        async def call_api(func, *args, **kwargs):
+            return await func(*args, **kwargs)
+
+        with (
+            patch.object(xui_client, "validate_xui_config", return_value=(True, "")),
+            patch.object(xui_client, "XUI_INBOUND_IDS", [2, 5, 6]),
+            patch.object(xui_client, "_get_api", new=AsyncMock(return_value=panel)),
+            patch.object(xui_client, "_api_call_with_retry", new=call_api),
+        ):
+            connected, message = await xui_client.test_xui_connection()
+
+        self.assertTrue(connected)
+        self.assertIn("2, 5, 6", message)
 
     async def test_failed_login_is_not_published_and_next_login_recovers(self):
         failed = _FakeApi(RuntimeError("temporary login failure"))
