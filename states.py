@@ -17,6 +17,7 @@ class AdminFlow(StatesGroup):
     send_personal_msg = State()  # waiting for message text to send to user
     refund_amount = State()      # waiting for refund amount
     refund_reason = State()      # waiting for refund reason
+    refund_confirm = State()     # waiting for manual refund confirmation
     payment_search = State()     # waiting for user ID to search payments
     promo_code = State()         # waiting for promo code name
     promo_type = State()         # waiting for promo type selection
