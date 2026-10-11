@@ -65,7 +65,6 @@ async def _log_notification_failure(user_id: int, context: dict) -> None:
         logger.error("Failed to log notification failure for %s: %s", user_id, e)
 
 # Referral reward value is defined once in constants.py.
-from constants import REF_BONUS_DAYS
 
 
 async def ask_config_name(
@@ -606,7 +605,7 @@ async def deliver_key(
             f"3. Установите приложение и импортируйте ссылку\n"
             f"4. Подключитесь к VPN\n\n"
             f"💡 Если сервис зайдёт — в меню есть «Партнёрская программа»: "
-            f"своя ссылка, 50 ₽ за первую оплату друга."
+            f"своя ссылка, 50 ₽ за первую оплаченную подписку друга."
         )
         
         delivered = await _send_delivery_message(bot, chat_id, text)
@@ -680,31 +679,6 @@ async def deliver_key(
         except Exception:
             pass
         return False
-
-
-async def _notify_referral_bonus(bot: Bot, referrer_id: int, new_user_id: int) -> None:
-    """
-    Notify referrer: their referral just paid → bonus 15 days available.
-    Referrer must press a button and enter a config name to activate.
-    """
-    try:
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-        kb = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(
-                text=f"🎁 Активировать +{REF_BONUS_DAYS} дней",
-                callback_data=f"ref_bonus_activate:{new_user_id}",
-            )
-        ]])
-        await bot.send_message(
-            referrer_id,
-            f"🎁 <b>Ваш реферал оформил подписку!</b>\n\n"
-            f"Вам начислено <b>+{REF_BONUS_DAYS} дней</b> бесплатно.\n\n"
-            "Для активации нажмите кнопку ниже и введите название конфига:",
-            parse_mode="HTML",
-            reply_markup=kb,
-        )
-    except Exception as e:
-        logger.error("Failed to notify referrer %d: %s", referrer_id, e)
 
 
 # ---------------------------------------------------------------------------
