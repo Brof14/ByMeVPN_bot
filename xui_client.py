@@ -670,20 +670,48 @@ async def update_xui_user(
 
         is_enabled = enable if enable is not None else True
 
-        updated = Client(
-            email=email,
-            id=client_uuid,
-            uuid=client_uuid,
-            enable=is_enabled,
-            expiry_time=final_expiry_ms,
-            limit_ip=final_limit_ip,
-            total_gb=current_total_gb,
-            sub_id=sub_id,
-        )
-        update_result = await _api_call_with_retry(api.client.update, client_uuid, updated)
-        if update_result is False:
-            logger.error("update_xui_user: panel explicitly rejected update for user %d", user_id)
-            return None
+        # py3xui's update endpoint uses Client.inbound_id in its request body.
+        # Updating the client once only changes the inbound returned by get_by_email,
+        # so explicitly update every configured inbound using the same UUID/sub_id.
+        for inbound_id in XUI_INBOUND_IDS:
+            inbound = await _api_call_with_retry(api.inbound.get_by_id, inbound_id)
+            stats = getattr(inbound, "client_stats", None) if inbound else None
+            inbound_client = next(
+                (item for item in (stats or []) if getattr(item, "email", None) == email),
+                None,
+            )
+            if not inbound_client:
+                logger.error(
+                    "update_xui_user: user %d is missing from configured inbound %d",
+                    user_id, inbound_id,
+                )
+                return None
+            inbound_uuid = getattr(inbound_client, "uuid", None)
+            if inbound_uuid and inbound_uuid != client_uuid:
+                logger.error(
+                    "update_xui_user: identity mismatch for user %d in inbound %d",
+                    user_id, inbound_id,
+                )
+                return None
+
+            updated = Client(
+                email=email,
+                id=client_uuid,
+                uuid=client_uuid,
+                enable=is_enabled,
+                expiry_time=final_expiry_ms,
+                limit_ip=final_limit_ip,
+                total_gb=current_total_gb,
+                sub_id=sub_id,
+                inbound_id=inbound_id,
+            )
+            update_result = await _api_call_with_retry(api.client.update, client_uuid, updated)
+            if update_result is False:
+                logger.error(
+                    "update_xui_user: panel explicitly rejected update for user %d in inbound %d",
+                    user_id, inbound_id,
+                )
+                return None
 
         # Verify the write against the panel and every configured inbound before
         # reporting success. This prevents paid renewals from being acknowledged
