@@ -229,6 +229,7 @@ class CryptoPaymentMonitor:
 # Глобальный экземпляр монитора
 _monitor_instance: Optional[PaymentMonitor] = None
 _crypto_monitor_instance: Optional[CryptoPaymentMonitor] = None
+_monitor_tasks: list[asyncio.Task] = []
 
 async def start_payment_monitor(bot: Bot) -> None:
     """Запустить мониторинг платежей"""
@@ -250,7 +251,8 @@ async def start_payment_monitor(bot: Bot) -> None:
     else:
         if _monitor_instance is None:
             _monitor_instance = PaymentMonitor(bot)
-        asyncio.create_task(_monitor_instance.start_monitoring())
+        task = asyncio.create_task(_monitor_instance.start_monitoring(), name="yookassa-payment-monitor")
+        _monitor_tasks.append(task)
         logger.info("Payment monitoring task started")
 
     # Crypto Bot monitor — independent of YooKassa config
@@ -261,7 +263,8 @@ async def start_payment_monitor(bot: Bot) -> None:
     else:
         if _crypto_monitor_instance is None:
             _crypto_monitor_instance = CryptoPaymentMonitor(bot)
-        asyncio.create_task(_crypto_monitor_instance.start_monitoring())
+        task = asyncio.create_task(_crypto_monitor_instance.start_monitoring(), name="crypto-payment-monitor")
+        _monitor_tasks.append(task)
         logger.info("Crypto Bot payment monitoring task started")
 
 async def stop_payment_monitor() -> None:
@@ -275,3 +278,11 @@ async def stop_payment_monitor() -> None:
     if _crypto_monitor_instance:
         _crypto_monitor_instance.stop_monitoring()
         _crypto_monitor_instance = None
+
+    tasks = list(_monitor_tasks)
+    _monitor_tasks.clear()
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
