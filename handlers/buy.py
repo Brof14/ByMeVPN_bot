@@ -402,14 +402,19 @@ async def _process_successful_stars_payment(
     # state to decide what was paid for.
     parts = payload.split("_")
     try:
-        if len(parts) != 7 or parts[0] != "stars" or int(parts[1]) != user_id:
+        if len(parts) < 7 or parts[0] != "stars" or int(parts[1]) != user_id:
             raise ValueError("invalid invoice payload shape or owner")
         days = int(parts[2])
-        devices = validate_device_limit(int(parts[3]))
+        raw_devices = int(parts[3])
+        if raw_devices not in VALID_DEVICE_LIMITS:
+            raise ValueError("invalid device limit in invoice payload")
+        devices = validate_device_limit(raw_devices)
         months = int(parts[4])
-        if days <= 0 or months not in (1, 3, 6, 12):
-            raise ValueError("invalid subscription period")
-        promo_code = parts[5] or None
+        if days <= 0 or months not in (1, 3, 6, 12) or not parts[-1].isdigit():
+            raise ValueError("invalid subscription period or invoice timestamp")
+        if currency != "XTR" or stars <= 0:
+            raise ValueError("invalid Stars currency or amount")
+        promo_code = "_".join(parts[5:-1]) or None
     except (ValueError, TypeError, IndexError) as e:
         logger.error("Invalid Stars invoice payload for user %d, charge %s: %s", user_id, charge_id, e)
         await record_payment_idempotent(
