@@ -1,5 +1,6 @@
 """Utility helpers for ByMeVPN bot."""
 import logging
+import asyncio
 from aiogram import Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup
 from aiogram.exceptions import TelegramBadRequest
@@ -8,6 +9,25 @@ from constants import LOGO_URL, CAPTION_LIMIT
 from async_utils import monitor_performance, get_preloaded
 
 logger = logging.getLogger(__name__)
+
+
+async def notify_admins(bot: Bot, text: str, parse_mode: str = "HTML") -> int:
+    """Send an operational alert to every configured administrator."""
+    from config import ADMIN_IDS
+
+    admin_ids = sorted({int(uid) for uid in ADMIN_IDS if int(uid) > 0})
+    if not admin_ids:
+        logger.critical("No administrators configured; operational alert could not be delivered")
+        return 0
+    results = await asyncio.gather(
+        *(bot.send_message(chat_id=uid, text=text, parse_mode=parse_mode) for uid in admin_ids),
+        return_exceptions=True,
+    )
+    delivered = sum(not isinstance(result, Exception) for result in results)
+    if delivered < len(admin_ids):
+        logger.error("Operational alert delivered to %d/%d administrators", delivered, len(admin_ids))
+    return delivered
+
 
 
 # ---------------------------------------------------------------------------
