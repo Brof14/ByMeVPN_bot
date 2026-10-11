@@ -1,0 +1,44 @@
+# Never bake runtime configuration, credentials, databases, or local artifacts into the image.
+.env
+.env.*
+!.env.example
+data/
+backups/
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+*.log
+logs/
+actions.log
+output.txt
+
+# Python and tooling caches
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+venv311/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Version control and local IDE state
+.git/
+.github/
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Generated artifacts
+dist/
+build/
+*.egg-info/
