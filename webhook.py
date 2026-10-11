@@ -40,6 +40,11 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(docs_url=None, redoc_url=None)  # disable docs in production
 
+@app.get("/healthz")
+async def healthz() -> dict:
+    """Minimal liveness endpoint for local reverse proxies and container health checks."""
+    return {"status": "ok"}
+
 # Keep references to background jobs and serialize same-payment processing inside
 # this process. The database ledger remains the durable source of truth.
 _payment_tasks: set[asyncio.Task] = set()
