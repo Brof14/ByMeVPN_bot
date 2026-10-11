@@ -43,7 +43,7 @@ _stars_payment_locks: dict[str, asyncio.Lock] = {}
 def _stars_payload_signature(user_id: int, days: int, devices: int, months: int,
                              amount: int, promo_code: str, timestamp: int) -> str:
     canonical = f"{user_id}|{days}|{devices}|{months}|{amount}|{promo_code}|{timestamp}"
-    return hmac.new(BOT_TOKEN.encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
+    return hmac.new(BOT_TOKEN.encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
 
 
 def _build_stars_payload(user_id: int, days: int, devices: int, months: int,
