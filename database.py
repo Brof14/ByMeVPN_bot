@@ -3374,7 +3374,8 @@ async def allow_email_auth_request(requester_id: int, email: str, now: Optional[
         (f"user:{int(requester_id)}", 60, 5),
         (f"email:{email_digest}", 60, 5),
     ]
-    db = await get_db()
+    db = await aiosqlite.connect(DB_FILE)
+    await db.execute("PRAGMA busy_timeout=30000")
     async with _db_semaphore:
         try:
             await db.execute("BEGIN IMMEDIATE")
@@ -3415,14 +3416,18 @@ async def allow_email_auth_request(requester_id: int, email: str, now: Optional[
             await db.rollback()
             logger.exception("Email authentication rate-limit check failed closed")
             return False
+        finally:
+            await db.close()
 
 
 async def save_email_auth_code(user_id: int, email: str, code: str, expires_at: int) -> int:
     """Save a hashed, one-time email authentication code and invalidate older unused codes."""
-    db = await get_db()
+    db = await aiosqlite.connect(DB_FILE)
+    await db.execute("PRAGMA busy_timeout=30000")
     normalized_email = email.lower().strip()
     code_hash = "sha256:" + hashlib.sha256(code.encode("utf-8")).hexdigest()
-    async with _db_semaphore:
+    try:
+        await db.execute("BEGIN IMMEDIATE")
         await db.execute(
             "UPDATE email_auth SET used=1 WHERE user_id=? AND used=0",
             (user_id,),
@@ -3433,6 +3438,12 @@ async def save_email_auth_code(user_id: int, email: str, code: str, expires_at: 
         )
         await db.commit()
         return cur.lastrowid
+    except Exception:
+        await db.rollback()
+        logger.exception("Could not save email authentication code")
+        raise
+    finally:
+        await db.close()
 
 
 async def verify_email_auth_code(user_id: int, code: str) -> bool:
