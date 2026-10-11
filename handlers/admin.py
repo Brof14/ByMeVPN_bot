@@ -846,28 +846,34 @@ async def cb_admin_del_key(callback: CallbackQuery, bot: Bot):
     
     from database import get_key_by_id, delete_key_by_id
     k = await get_key_by_id(key_id)
-    
-    if not k:
-        await callback.answer("Ключ не найден.", show_alert=True)
+
+    if not k or int(k.get("user_id", 0)) != user_id:
+        await safe_answer(callback, "Ключ не найден у указанного пользователя.", alert=True)
         return
-    
-    # Delete from 3x-ui panel
+
+    user_keys = await get_user_keys(user_id)
+    other_keys = [item for item in user_keys if item.get("id") != key_id]
     deleted_from_panel = True
-    if k and k.get("uuid"):
+    if not other_keys and k.get("uuid"):
         deleted_from_panel = await delete_xui_user(user_id)
         if not deleted_from_panel:
-            logger.warning(f"Failed to delete user {user_id} from 3x-ui")
-    
-    # Delete from database
+            await safe_answer(
+                callback,
+                "Не удалось удалить клиента с 3x-ui. Запись в БД сохранена; повторите позже.",
+                alert=True,
+            )
+            return
+
     deleted_from_db = await delete_key_by_id(key_id)
-    
-    # Show result
-    status_msg = f"✅ Ключ #{key_id} удалён"
-    if not deleted_from_panel and k and k.get("uuid"):
-        status_msg += "\n⚠️ (Не удалось удалить из панели 3x-ui)"
-    
+    if not deleted_from_db:
+        await safe_answer(callback, "Не удалось удалить запись ключа из БД.", alert=True)
+        return
+
+    status_msg = f"✅ Запись ключа #{key_id} удалена"
+    if other_keys:
+        status_msg += "\nДругие ключи и общий VPN-доступ сохранены."
     await callback.answer(status_msg, show_alert=True)
-    
+
     # Refresh keys list
     keys = await get_user_keys(user_id)
     if not keys:
@@ -899,13 +905,32 @@ async def cb_del_user(callback: CallbackQuery, bot: Bot):
         await safe_answer(callback, "Нет доступа.", alert=True); return
     await safe_answer(callback)
     uid = int(callback.data.split(":")[1])
-    uuids = await delete_user_and_keys(uid)
-    # Delete from panel
-    for uuid in uuids:
-        await delete_xui_user(uuid)
+    try:
+        uuids = await delete_user_and_keys(uid)
+    except Exception as e:
+        logger.exception("Failed to delete user %d from database: %s", uid, e)
+        await callback.message.edit_text(
+            f"❌ Не удалось удалить пользователя <code>{uid}</code> из БД. "
+            "Удаление VPN-клиента не выполнялось.",
+            parse_mode="HTML",
+            reply_markup=_back_kb(),
+        )
+        return
+
+    # 3x-ui has one client per Telegram user; passing a UUID here was incorrect.
+    panel_deleted = await delete_xui_user(uid)
+    text = (
+        f"🗑 Пользователь <code>{uid}</code> и записи его ключей удалены из БД."
+    )
+    if panel_deleted:
+        text += "\nVPN-клиент удалён из 3x-ui."
+    else:
+        text += "\n⚠️ Клиент не удалён из 3x-ui. Требуется ручная очистка панели."
+        logger.error("User %d removed from DB but 3x-ui cleanup failed", uid)
     await callback.message.edit_text(
-        f"🗑 Пользователь <code>{uid}</code> и все его ключи ({len(uuids)}) удалены.",
-        parse_mode="HTML", reply_markup=_back_kb()
+        text,
+        parse_mode="HTML",
+        reply_markup=_back_kb(),
     )
 
 
