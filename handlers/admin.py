@@ -88,6 +88,17 @@ def _back_kb() -> InlineKeyboardMarkup:
     ])
 
 
+def _format_refund_breakdown(stats: dict, key: str) -> str:
+    """Format recorded refunds without combining incompatible currencies."""
+    values = stats.get(key, {}) or {}
+    if not values:
+        return "нет записей"
+    return "; ".join(
+        f"{escape(str(currency))}: {item.get('sum', 0)} ({item.get('count', 0)} шт.)"
+        for currency, item in sorted(values.items())
+    )
+
+
 def _user_kb(user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         # Row 1: View info
@@ -379,8 +390,8 @@ async def cb_stats_ext(callback: CallbackQuery):
             f"  ⏳ CryptoBot Pending: {s.get('pending_crypto', 0)}\n"
             f"  ⚠️ Ошибки provisioning: {s.get('key_errors_count', 0)}\n\n"
             "💰 <b>Возвраты:</b>\n"
-            f"  📅 30 дней: {refund_stats['count_30d']} ({refund_stats['sum_30d']} ₽)\n"
-            f"  🔢 Всего: {refund_stats['count_total']} ({refund_stats['sum_total']} ₽)\n"
+            f"  📅 30 дней: {refund_stats['count_30d']} — {_format_refund_breakdown(refund_stats, 'by_currency_30d')}\n"
+            f"  🔢 Всего: {refund_stats['count_total']} — {_format_refund_breakdown(refund_stats, 'by_currency_total')}\n"
             f"{top_text}"
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -687,7 +698,13 @@ async def _show_user(target, user_id: int):
     
     # Get refund info
     refunds = await get_user_refunds(user_id)
-    refund_total = sum(r["amount"] for r in refunds) if refunds else 0
+    refund_totals = {}
+    for refund in refunds:
+        currency = str(refund.get("currency") or "unknown")
+        refund_totals[currency] = refund_totals.get(currency, 0) + int(refund.get("amount") or 0)
+    refund_total_text = ", ".join(
+        f"{amount} {escape(currency)}" for currency, amount in sorted(refund_totals.items())
+    ) or "0"
     
     text = (
         f"👤 <b>Пользователь {user_id}</b>\n\n"
@@ -696,8 +713,8 @@ async def _show_user(target, user_id: int):
         f"🆓 <b>Пробник:</b> {'✅ Использован' if user['trial_used'] else '❌ Не использован'}\n"
         f"👥 <b>Реферер:</b> {user['referrer_id'] or '—'}\n"
         f"💰 <b>Всего оплачено:</b> {user['total_paid']} ₽\n"
-        f"💸 <b>Возвращено:</b> {refund_total} {'звёзд' if refunds else '0'}\n"
-        f"🔄 <b>Возвратов:</b> {len(refunds) if refunds else 0}"
+        f"💸 <b>Возвраты в журнале:</b> {refund_total_text}\n"
+        f"🔄 <b>Записей возврата:</b> {len(refunds)}"
     )
     kb = _user_kb(user_id)
     if isinstance(target, Message):
@@ -1115,8 +1132,8 @@ async def cb_refunds_main(callback: CallbackQuery):
     text = (
         "� <b>Управление возвратами</b>\n\n"
         f"📊 <b>Статистика:</b>\n"
-        f"  📅 30 дней: {stats['count_30d']} возвратов ({stats['sum_30d']} ₽)\n"
-        f"  🔢 Всего: {stats['count_total']} возвратов ({stats['sum_total']} ₽)\n\n"
+        f"  📅 30 дней: {stats['count_30d']} — {_format_refund_breakdown(stats, 'by_currency_30d')}\n"
+        f"  🔢 Всего: {stats['count_total']} — {_format_refund_breakdown(stats, 'by_currency_total')}\n\n"        "ℹ️ Старые записи до подтверждения вручную могли не означать фактический перевод; при необходимости сверьте их у провайдера.\n\n"
     )
     
     if refunds:
@@ -3245,8 +3262,8 @@ async def cb_admin_finance(callback: CallbackQuery, bot: Bot):
         f"👥 <b>Всего пользователей:</b> {stats['total_users']}\n"
         f"✅ <b>Активных пользователей:</b> {stats['active_users']}\n"
         f"🗝 <b>Активных ключей:</b> {stats['active_keys']}\n\n"
-        f"💸 <b>Всего возвратов:</b> {refund_stats.get('total_refunds', 0)} ₽\n"
-        f"📈 <b>Количество возвратов:</b> {refund_stats.get('refund_count', 0)}\n"
+        f"💸 <b>Возвраты в журнале:</b> {_format_refund_breakdown(refund_stats, 'by_currency_total')}\n"
+        f"📈 <b>Записей возврата:</b> {refund_stats.get('count_total', 0)}\n"
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
