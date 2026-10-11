@@ -141,12 +141,24 @@ def validate_xui_config() -> tuple[bool, str]:
     errors: list[str] = []
     if not XUI_API_URL:
         errors.append("XUI_API_URL не указан")
+    if not XUI_URL:
+        errors.append("XUI_URL не указан: без публичного URL нельзя выдать рабочую подписку")
+    else:
+        public_url = urlparse(XUI_URL)
+        if public_url.scheme not in ("http", "https") or not public_url.netloc:
+            errors.append("XUI_URL должен быть полным URL с http:// или https://")
     if not XUI_USERNAME:
         errors.append("XUI_USERNAME не указан")
     if not XUI_PASSWORD:
         errors.append("XUI_PASSWORD не указан")
     if not XUI_INBOUND_IDS:
         errors.append("XUI_INBOUND_IDS не указан")
+    elif any(inbound_id <= 0 for inbound_id in XUI_INBOUND_IDS):
+        errors.append("Все значения XUI_INBOUND_IDS должны быть положительными ID")
+    elif len(set(XUI_INBOUND_IDS)) != len(XUI_INBOUND_IDS):
+        errors.append("XUI_INBOUND_IDS содержит повторяющиеся ID")
+    if not XUI_SUB_PATH.strip("/"):
+        errors.append("XUI_SUB_PATH не должен быть пустым")
     return (False, "; ".join(errors)) if errors else (True, "")
 
 
@@ -547,7 +559,7 @@ async def create_xui_user(
                             f"#{inbound_name}"
                         )
                         
-                        logger.info("Generated VLESS link for inbound %d: %s", iid, vless_link[:80] + "...")
+                        logger.debug("Generated VLESS link for inbound %d", iid)
                         return vless_link
                     except Exception as gen_err:
                         logger.warning("Failed to generate VLESS link for inbound %d: %s", iid, gen_err)
