@@ -270,6 +270,9 @@ async def _process_payment(bot: Bot, payment_id: str) -> None:
             if existing_status == "failed":
                 logger.warning("Webhook: retrying failed provisioning for payment %s", payment_id)
                 await update_payment_status(pay_db_id, "processing")
+            elif existing_status == "recovery_required":
+                logger.warning("Webhook: payment %s awaits manual reconciliation", payment_id)
+                return
             else:
                 logger.error(
                     "Webhook: payment %s has interrupted status %r; requires reconciliation",
@@ -540,6 +543,9 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
             if existing_status == "failed":
                 logger.warning("Crypto monitor: retrying failed provisioning for invoice %s", invoice_id)
                 await update_payment_status(pay_db_id, "processing")
+            elif existing_status == "recovery_required":
+                logger.warning("Crypto monitor: invoice %s awaits manual reconciliation", invoice_id)
+                return
             else:
                 logger.error("Crypto monitor: invoice %s has interrupted status %r; requires reconciliation", invoice_id, existing_status)
                 await update_payment_status(pay_db_id, "recovery_required")
