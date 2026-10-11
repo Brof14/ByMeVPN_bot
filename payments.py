@@ -59,6 +59,9 @@ async def create_yookassa_payment(
         metadata["promo_code"] = str(promo_code)
     if extra_metadata:
         metadata.update({k: str(v) for k, v in extra_metadata.items()})
+    # This must reflect the amount actually sent to YooKassa, even if optional
+    # metadata contains an overlapping key.
+    metadata["amount_rub"] = str(amount_rub)
 
     payload = {
         "amount": {"value": f"{amount_rub}.00", "currency": "RUB"},
