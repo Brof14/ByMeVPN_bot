@@ -205,6 +205,27 @@ async def _process_payment(bot: Bot, payment_id: str) -> None:
             )
             return
         amount_rub = int(amount_decimal)
+        expected_amount = metadata.get("amount_rub")
+        if expected_amount is not None:
+            try:
+                expected_amount_decimal = Decimal(str(expected_amount))
+            except (InvalidOperation, ValueError, TypeError):
+                expected_amount_decimal = Decimal("0")
+            if (
+                not expected_amount_decimal.is_finite()
+                or expected_amount_decimal <= 0
+                or expected_amount_decimal != expected_amount_decimal.to_integral_value()
+                or amount_decimal != expected_amount_decimal
+            ):
+                logger.error(
+                    "Webhook: amount mismatch for payment %s: received=%s expected=%s",
+                    payment_id, amount_str, expected_amount,
+                )
+                await _notify_admin(
+                    bot,
+                    f"⚠️ Платёж YooKassa {payment_id}: сумма {amount_str} ₽ не совпадает с ожидаемой {expected_amount} ₽. Автоматическая выдача остановлена.",
+                )
+                return
 
         logger.info(
             "Webhook: processing payment %s — user=%d days=%d devices=%d amount=%d",
