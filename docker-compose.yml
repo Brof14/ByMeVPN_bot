@@ -8,6 +8,7 @@ services:
     env_file:
       - .env
     network_mode: host
+    # Set DOCKER_UID/DOCKER_GID to the owner of ./data on the host (usually 1000:1000).
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     volumes:
       - ./data:/app/data
-      - ./.env:/app/.env:ro
