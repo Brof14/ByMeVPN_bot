@@ -99,10 +99,20 @@ class PaymentMonitor:
         try:
             recent_payments = await self.get_successful_payments(minutes_back=minutes_back)
             payment_ids: dict[str, None] = {}
+            from database import is_yookassa_payment_known
             for payment in recent_payments:
                 payment_id = payment.get("id")
-                if payment_id:
+                if not payment_id:
+                    continue
+                metadata = payment.get("metadata") if isinstance(payment.get("metadata"), dict) else {}
+                description = payment.get("description")
+                legacy_byme_order = isinstance(description, str) and description.startswith("ByMeVPN")
+                if metadata.get("service") == "bymevpn" or legacy_byme_order:
                     payment_ids[str(payment_id)] = None
+                elif await is_yookassa_payment_known(str(payment_id)):
+                    payment_ids[str(payment_id)] = None
+                else:
+                    logger.debug("Skipping unrelated successful YooKassa payment %s", payment_id)
 
             # The provider time window is a discovery mechanism, not the source of
             # truth for retries. Failed ledger rows may be much older than the window.
@@ -192,10 +202,13 @@ class CryptoPaymentMonitor:
                 if invoice_id is None:
                     continue
 
-                # Do not skip old paid invoices solely because the process restarted
-                # or a legacy marker exists. The invoice handler checks the payment
-                # ledger and quarantines ambiguous cases without double-fulfillment.
-                logger.info(f"Checking paid invoice through recovery-safe handler: {invoice_id}")
+                # Crypto Pay lists all paid invoices for the merchant token. Only
+                # process invoices associated with this bot's local order/ledger.
+                from database import is_crypto_invoice_known
+                if not await is_crypto_invoice_known(invoice_id):
+                    logger.debug("Skipping unrelated paid Crypto Pay invoice %s", invoice_id)
+                    continue
+                logger.info("Reconciling known paid Crypto Pay invoice %s", invoice_id)
                 await _process_crypto_invoice(self.bot, invoice)
 
         except Exception as e:
