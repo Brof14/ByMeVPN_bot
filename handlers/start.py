@@ -30,6 +30,7 @@ from keyboards import main_menu_new_user, main_menu_existing, main_menu_with_key
 from utils import send_with_photo, safe_answer, LOGO_URL
 from async_utils import monitor_performance
 from cache import cache_subscription_data
+from constants import REFERRAL_CLICK_BONUS_DAYS
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -272,14 +273,14 @@ async def cmd_start(message: Message, bot: Bot) -> None:
                             # Extend the first active key
                             for key in referrer_keys:
                                 if key['expiry'] > int(time.time()):
-                                    await extend_key(key['id'], 15)
+                                    await extend_key(key['id'], REFERRAL_CLICK_BONUS_DAYS)
                                     # Notify referrer with beautiful text
                                     try:
                                         await bot.send_message(
                                             ref_id,
                                             "🎊 <b>Привлекли нового реферала!</b>\n\n"
                                             "✨ По вашей ссылке перешёл новый пользователь\n"
-                                            "🔑 Ваш ключ продлён на 15 дней\n"
+                                            f"🔑 Ваш ключ продлён на {REFERRAL_CLICK_BONUS_DAYS} дней\n"
                                             "💚 Продолжайте приглашать друзей!",
                                             parse_mode="HTML"
                                         )
@@ -294,7 +295,7 @@ async def cmd_start(message: Message, bot: Bot) -> None:
                                     "🎊 <b>Привлекли нового реферала!</b>\n\n"
                                     "✨ По вашей ссылке перешёл новый пользователь\n"
                                     "💡 У вас нет активного ключа для продления\n"
-                                    "💚 Оформите подписку и получите +15 дней бонуса!",
+                                    f"💚 Оформите подписку и получите +{REFERRAL_CLICK_BONUS_DAYS} дней бонуса!",
                                     parse_mode="HTML"
                                 )
                             except Exception as notify_error:
