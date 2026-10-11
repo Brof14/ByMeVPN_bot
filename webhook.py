@@ -21,6 +21,7 @@ import asyncio
 import base64
 import logging
 import traceback
+from decimal import Decimal, InvalidOperation
 from typing import Optional
 
 import httpx
@@ -164,22 +165,46 @@ async def _process_payment(bot: Bot, payment_id: str) -> None:
         logger.info("Webhook: payment_id=%s metadata=%s", payment_id, metadata)
         try:
             user_id = int(metadata["user_id"])
-            days = int(metadata["days"])
+            raw_days = int(metadata["days"])
             devices = int(metadata.get("devices", 1))
         except (KeyError, ValueError, TypeError) as e:
             logger.error("Webhook: bad metadata in payment %s: %s — %s", payment_id, metadata, e)
             await _notify_admin(bot, f"⚠️ YooKassa payment {payment_id}: bad metadata {metadata}")
             return
 
+        from constants import normalize_days
+        days = normalize_days(raw_days)
+        if user_id <= 0 or days is None:
+            logger.error("Webhook: invalid user_id/days for payment %s: user=%s days=%s", payment_id, user_id, raw_days)
+            await _notify_admin(bot, f"⚠️ YooKassa payment {payment_id}: invalid user_id/days in metadata")
+            return
+
         # Validate devices with single source of truth
         from constants import validate_device_limit
         devices = validate_device_limit(devices)
 
-        amount_str = payment.get("amount", {}).get("value", "0")
+        amount_data = payment.get("amount") or {}
+        amount_str = amount_data.get("value", "0")
+        currency = amount_data.get("currency")
         try:
-            amount_rub = int(float(amount_str))
-        except ValueError:
-            amount_rub = 0
+            amount_decimal = Decimal(str(amount_str))
+        except (InvalidOperation, ValueError, TypeError):
+            amount_decimal = Decimal("0")
+
+        # A succeeded payment must still match our currency and integer-ruble
+        # accounting model. Never truncate a fractional amount or silently
+        # reinterpret a foreign-currency payment as RUB.
+        if currency != "RUB" or not amount_decimal.is_finite() or amount_decimal <= 0 or amount_decimal != amount_decimal.to_integral_value():
+            logger.error(
+                "Webhook: invalid amount/currency for payment %s: amount=%r currency=%r",
+                payment_id, amount_str, currency,
+            )
+            await _notify_admin(
+                bot,
+                f"⚠️ Платёж YooKassa {payment_id}: некорректная сумма/валюта ({amount_str} {currency}); автоматическая выдача остановлена.",
+            )
+            return
+        amount_rub = int(amount_decimal)
 
         logger.info(
             "Webhook: processing payment %s — user=%d days=%d devices=%d amount=%d",
@@ -192,15 +217,16 @@ async def _process_payment(bot: Bot, payment_id: str) -> None:
         is_trial = metadata.get("trial") == "1"
         if is_trial:
             from constants import INTRO_TRIAL_PRICE_RUB
-            if amount_rub < INTRO_TRIAL_PRICE_RUB:
+            if amount_rub != INTRO_TRIAL_PRICE_RUB:
                 logger.error(
-                    "Webhook: trial payment %s amount=%s is below intro price — notifying admin",
+                    "Webhook: trial payment %s amount=%s does not match intro price",
                     payment_id, amount_str,
                 )
                 await _notify_admin(
                     bot,
-                    f"⚠️ Пробный платёж {payment_id}: сумма {amount_str} ₽ (ожидалось ≥{INTRO_TRIAL_PRICE_RUB} ₽), user {user_id}",
+                    f"⚠️ Пробный платёж {payment_id}: сумма {amount_str} ₽ (ожидалось {INTRO_TRIAL_PRICE_RUB} ₽), user {user_id}. Автоматическая выдача остановлена.",
                 )
+                return
 
         from database import (
             record_payment_idempotent, update_payment_status,
@@ -227,9 +253,34 @@ async def _process_payment(bot: Bot, payment_id: str) -> None:
         )
 
         if not is_new:
-            logger.info("Webhook: payment %s already processed in DB, skipping duplicate", payment_id)
-            await mark_yookassa_processed(payment_id)
-            return
+            # A unique payment row may exist from an earlier attempt that
+            # failed during provisioning. Only a confirmed success is safe to
+            # acknowledge as processed. Retry explicit failures; quarantine an
+            # interrupted "processing" row rather than silently losing a paid
+            # order or blindly extending the subscription twice.
+            from database import get_db
+            db = await get_db()
+            cur = await db.execute("SELECT status FROM payments WHERE id=?", (pay_db_id,))
+            status_row = await cur.fetchone()
+            existing_status = status_row[0] if status_row else None
+            if existing_status == "success":
+                logger.info("Webhook: payment %s already fulfilled in DB", payment_id)
+                await mark_yookassa_processed(payment_id)
+                return
+            if existing_status == "failed":
+                logger.warning("Webhook: retrying failed provisioning for payment %s", payment_id)
+                await update_payment_status(pay_db_id, "processing")
+            else:
+                logger.error(
+                    "Webhook: payment %s has interrupted status %r; requires reconciliation",
+                    payment_id, existing_status,
+                )
+                await update_payment_status(pay_db_id, "recovery_required")
+                await _notify_admin(
+                    bot,
+                    f"⚠️ Платёж {payment_id} уже записан со статусом {existing_status!r}, но не подтверждена выдача. Автоматически не повторяю, чтобы не продлить подписку дважды; нужна сверка.",
+                )
+                return
 
         # Deliver or extend key immediately without blocking on user input
         success = await deliver_key(
@@ -477,9 +528,26 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
         )
 
         if not is_new:
-            logger.info("Crypto monitor: invoice %s already processed in DB, skipping duplicate", invoice_id)
-            await mark_crypto_processed(invoice_id)
-            return
+            from database import get_db
+            db = await get_db()
+            cur = await db.execute("SELECT status FROM payments WHERE id=?", (pay_db_id,))
+            status_row = await cur.fetchone()
+            existing_status = status_row[0] if status_row else None
+            if existing_status == "success":
+                logger.info("Crypto monitor: invoice %s already fulfilled in DB", invoice_id)
+                await mark_crypto_processed(invoice_id)
+                return
+            if existing_status == "failed":
+                logger.warning("Crypto monitor: retrying failed provisioning for invoice %s", invoice_id)
+                await update_payment_status(pay_db_id, "processing")
+            else:
+                logger.error("Crypto monitor: invoice %s has interrupted status %r; requires reconciliation", invoice_id, existing_status)
+                await update_payment_status(pay_db_id, "recovery_required")
+                await _notify_admin(
+                    bot,
+                    f"⚠️ Crypto Bot инвойс {invoice_id} уже записан со статусом {existing_status!r}, но выдача не подтверждена. Нужна сверка.",
+                )
+                return
 
         success = await deliver_key(
             bot=bot,
