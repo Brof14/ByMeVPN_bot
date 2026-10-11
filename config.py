@@ -87,7 +87,7 @@ _xui_ids_raw = os.getenv("XUI_INBOUND_IDS", os.getenv("XUI_INBOUND_ID", "2,3,7,8
 XUI_INBOUND_IDS: list[int] = [
     int(x.strip()) for x in _xui_ids_raw.split(",") if x.strip()
 ]
-XUI_INBOUND_ID = XUI_INBOUND_IDS[0]  # primary (обратная совместимость)
+XUI_INBOUND_ID = XUI_INBOUND_IDS[0] if XUI_INBOUND_IDS else 0  # validated at startup
 XUI_SUB_PATH = os.getenv("XUI_SUB_PATH", "sub")
 
 # ============================================================================
