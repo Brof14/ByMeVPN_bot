@@ -110,11 +110,28 @@ async def ask_config_name(
         
         # Extend the key in database with device limit update
         success = await extend_key(key_id, days, limit_ip=limit_ip)
-        
+
         if success:
-            # Update expiry and limit_ip in 3x-ui
+            # Use the exact committed DB expiry in the panel. Repeating after a
+            # timeout is idempotent and cannot add the same days twice.
+            updated_key = next(
+                (key for key in await get_user_keys(user_id) if int(key.get("id") or 0) == int(key_id)),
+                None,
+            )
+            if not updated_key:
+                rollback_ok = await set_key_expiry(key_id, int(old_expiry or 0), old_limit)
+                await notify_admins(
+                    bot,
+                    f"⚠️ Не удалось прочитать срок ключа после изменения БД. Пользователь <code>{user_id}</code>; "
+                    f"откат БД: {'OK' if rollback_ok else 'НЕ ПОДТВЕРЖДЁН'}.",
+                    parse_mode="HTML",
+                )
+                return
+            new_expiry = int(updated_key["expiry"])
             from xui_client import update_xui_user
-            xui_res = await update_xui_user(user_id, days=days, limit_ip=limit_ip)
+            xui_res = await update_xui_user(
+                user_id, new_expiry_ms=new_expiry * 1000, limit_ip=limit_ip
+            )
 
             if not xui_res:
                 # The DB was extended first. Compensate it before reporting failure,
