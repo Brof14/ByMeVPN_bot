@@ -153,7 +153,7 @@ CREATE TABLE IF NOT EXISTS crypto_pending (
 );
 CREATE INDEX IF NOT EXISTS idx_cp_user ON crypto_pending(user_id);
 
--- Новая партнёрская программа: 80₽ за первую оплату приглашённого
+-- Партнёрская программа: 50 ₽ за первую оплаченную подписку приглашённого
 CREATE TABLE IF NOT EXISTS referral_balance (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL UNIQUE,
@@ -178,7 +178,7 @@ CREATE TABLE IF NOT EXISTS referral_earnings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     referrer_id INTEGER NOT NULL,
     referred_id INTEGER NOT NULL,
-    amount INTEGER NOT NULL,  -- 50 рублей за первую оплату
+    amount INTEGER NOT NULL,  -- 50 ₽ за первую оплаченную подписку
     payment_id INTEGER,  -- ID платежа приглашённого
     payment_status TEXT DEFAULT 'pending',
     created INTEGER DEFAULT (strftime('%s','now')),
