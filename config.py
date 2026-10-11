@@ -50,7 +50,7 @@ from database import DB_FILE  # noqa: E402
 ADMIN_IDS = [
     int(x.strip())
     for x in os.getenv("ADMIN_IDS", os.getenv("ADMIN_ID", "0")).split(",")
-    if x.strip()
+    if x.strip() and int(x.strip()) > 0
 ]
 ADMIN_ID = ADMIN_IDS[0] if ADMIN_IDS else 0  # Legacy single admin support
 
