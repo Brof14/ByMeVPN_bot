@@ -31,7 +31,7 @@ from fastapi import FastAPI, Request, Response
 
 from config import (
     YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY,
-    WEBHOOK_HOST, WEBHOOK_PORT, ADMIN_ID,
+    WEBHOOK_HOST, WEBHOOK_PORT, ADMIN_ID, ADMIN_IDS,
 )
 from database import init_db, is_yookassa_processed, mark_yookassa_processed
 from subscription import deliver_key
@@ -705,10 +705,17 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
 
 
 async def _notify_admin(bot: Bot, text: str) -> None:
-    try:
-        await bot.send_message(ADMIN_ID, text, parse_mode="HTML")
-    except Exception as e:
-        logger.error("Could not notify admin: %s", e)
+    admin_ids = [uid for uid in ADMIN_IDS if uid > 0]
+    if not admin_ids:
+        logger.critical("No ADMIN_IDS configured; payment alert cannot be delivered")
+        return
+    results = await asyncio.gather(
+        *(bot.send_message(uid, text, parse_mode="HTML") for uid in admin_ids),
+        return_exceptions=True,
+    )
+    failures = sum(isinstance(result, Exception) for result in results)
+    if failures:
+        logger.error("Payment alert delivery failed for %d/%d administrator(s)", failures, len(admin_ids))
 
 
 # ---------------------------------------------------------------------------
