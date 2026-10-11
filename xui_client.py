@@ -697,7 +697,7 @@ async def update_xui_user(
                     and panel_client.uuid == client_uuid
                     and int(panel_client.expiry_time or 0) == int(final_expiry_ms)
                     and int(panel_client.limit_ip or 0) == int(final_limit_ip)
-                    and (not panel_client.sub_id or panel_client.sub_id == sub_id)
+                    and panel_client.sub_id == sub_id
                     and bool(panel_client.enable) == bool(is_enabled)
                 )
                 inbounds_ok = True
