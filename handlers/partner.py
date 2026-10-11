@@ -64,11 +64,14 @@ async def cb_partner(callback: CallbackQuery, bot: Bot):
     from database import get_referral_stats_enhanced
     stats = await get_referral_stats_enhanced(user_id)
 
+    from constants import REFERRAL_TRIAL_BONUS_DAYS
     text = (
         "Приглашайте друзей и получайте вознаграждение:\n\n"
-        "💰 50 ₽ за первую оплаченную подписку приглашённого друга.\n"
-        "Средства зачисляются на партнёрский баланс.\n"
-        "Минимальная сумма вывода — 200 ₽.\n\n"
+        f"🎁 +{REFERRAL_CLICK_BONUS_DAYS} дней на активный ключ за первого переход нового пользователя.\n"
+        f"🎁 +{REFERRAL_TRIAL_BONUS_DAYS} дней на активный ключ, когда друг успешно оплачивает пробный период за 1 ₽.\n"
+        f"💰 {REFERRAL_CASH_REWARD_RUB} ₽ за первую обычную оплаченную подписку друга (пробный платёж не считается).\n"
+        "Денежные вознаграждения зачисляются на партнёрский баланс.\n"
+        "Минимальная сумма вывода — 200 ₽. Бонусные дни начисляются только при наличии активного ключа.\n\n"
         f"<b>📊 Ваша статистика:</b>\n"
         f"🔗 Переходов по ссылке: {stats['total_clicks']}\n"
         f"👤 Зарегистрировалось: {stats['total_registrations']}\n"
