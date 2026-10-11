@@ -17,6 +17,8 @@ class TestWebhookSecurity(unittest.TestCase):
         self.assertIn('if not isinstance(body, dict):', source)
         self.assertIn('if not isinstance(obj, dict):', source)
         self.assertIn('content-length', source)
+        self.assertIn("async for chunk in request.stream():", source)
+        self.assertIn("if len(raw_body) > 65536:", source)
 
     def test_startup_fails_closed_when_xui_is_unavailable(self):
         path = os.path.join(PROJECT_ROOT, "main.py")
