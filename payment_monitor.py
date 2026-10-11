@@ -5,6 +5,7 @@
 import asyncio
 import logging
 import base64
+import time
 import httpx
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
@@ -82,7 +83,7 @@ class PaymentMonitor:
         try:
             from database import get_db
             db = await get_db()
-            stale_before = int(datetime.utcnow().timestamp()) - 600
+            stale_before = int(time.time()) - 600
             cur = await db.execute(
                 "SELECT provider_payment_id FROM payments "
                 "WHERE provider='yookassa' AND status IN ('failed','processing') "
