@@ -5,6 +5,8 @@ VPN purchase flow:
 import asyncio
 import time
 import logging
+import hashlib
+import hmac
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
@@ -18,7 +20,7 @@ from constants import (
     VALID_DEVICE_LIMITS, DEFAULT_DEVICE_LIMIT, DEVICE_CONFIG,
     get_price_for_months, get_monthly_display, validate_device_limit,
 )
-from config import PRICE_1_MONTH, DAYS_1M
+from config import PRICE_1_MONTH, DAYS_1M, BOT_TOKEN
 from states import BuyFlow
 from keyboards import tariff_selection_kb, payment_kb
 from payments import create_yookassa_payment, create_crypto_payment
@@ -35,6 +37,50 @@ router = Router()
 
 # Serialize duplicate Telegram Stars updates for the same charge within this process.
 _stars_payment_locks: dict[str, asyncio.Lock] = {}
+
+
+def _stars_payload_signature(user_id: int, days: int, devices: int, months: int,
+                             amount: int, promo_code: str, timestamp: int) -> str:
+    canonical = f"{user_id}|{days}|{devices}|{months}|{amount}|{promo_code}|{timestamp}"
+    return hmac.new(BOT_TOKEN.encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
+
+
+def _build_stars_payload(user_id: int, days: int, devices: int, months: int,
+                         amount: int, promo_code: str, timestamp: int) -> str:
+    signature = _stars_payload_signature(user_id, days, devices, months, amount, promo_code, timestamp)
+    return f"stars_{user_id}_{days}_{devices}_{months}_{amount}_{promo_code}_{timestamp}_{signature}"
+
+
+def _parse_stars_payload(payload: str) -> dict | None:
+    try:
+        parts = payload.split("_")
+        if len(parts) < 8 or parts[0] != "stars":
+            return None
+        user_id = int(parts[1])
+        days = int(parts[2])
+        devices = int(parts[3])
+        months = int(parts[4])
+        amount = int(parts[5])
+        promo_code = "_".join(parts[6:-2])
+        timestamp = int(parts[-2])
+        signature = parts[-1]
+        if (
+            user_id <= 0 or days <= 0 or days > 3650
+            or devices not in VALID_DEVICE_LIMITS
+            or months not in (1, 3, 6, 12)
+            or amount <= 0 or timestamp <= 0
+        ):
+            return None
+        expected = _stars_payload_signature(user_id, days, devices, months, amount, promo_code, timestamp)
+        if not hmac.compare_digest(signature, expected):
+            return None
+        return {
+            "user_id": user_id, "days": days, "devices": devices,
+            "months": months, "amount": amount, "promo_code": promo_code or None,
+            "timestamp": timestamp,
+        }
+    except (ValueError, TypeError, IndexError):
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -236,7 +282,10 @@ async def cb_pay_stars(callback: CallbackQuery, bot: Bot, state: FSMContext):
 
     # Stars amount = rubles (1:1)
     stars = price_rub
-    payload = f"stars_{user_id}_{days}_{devices}_{months}_{promo_code}_{int(time.time())}"
+    payload = _build_stars_payload(user_id, days, devices, months, stars, promo_code or "", int(time.time()))
+    if len(payload.encode("utf-8")) > 128:
+        await safe_answer(callback, "Промокод слишком длинный для счёта Stars. Уберите его и попробуйте снова.", alert=True)
+        return
 
     try:
         await bot.send_invoice(
@@ -371,6 +420,19 @@ async def cb_pay_crypto(callback: CallbackQuery, bot: Bot, state: FSMContext):
 
 @router.pre_checkout_query()
 async def pre_checkout(pre: PreCheckoutQuery):
+    order = _parse_stars_payload(pre.invoice_payload or "")
+    if (
+        not order
+        or order["user_id"] != pre.from_user.id
+        or pre.currency != "XTR"
+        or pre.total_amount != order["amount"]
+    ):
+        logger.warning("Rejected invalid Telegram Stars pre-checkout query for user %d", pre.from_user.id)
+        await pre.answer(
+            ok=False,
+            error_message="Данные заказа не совпадают. Вернитесь в бот и создайте новый счёт.",
+        )
+        return
     await pre.answer(ok=True)
 
 
@@ -400,21 +462,16 @@ async def _process_successful_stars_payment(
 
     # The invoice payload is the immutable order snapshot. Never use mutable FSM
     # state to decide what was paid for.
-    parts = payload.split("_")
+    order = _parse_stars_payload(payload)
     try:
-        if len(parts) < 7 or parts[0] != "stars" or int(parts[1]) != user_id:
-            raise ValueError("invalid invoice payload shape or owner")
-        days = int(parts[2])
-        raw_devices = int(parts[3])
-        if raw_devices not in VALID_DEVICE_LIMITS:
-            raise ValueError("invalid device limit in invoice payload")
-        devices = validate_device_limit(raw_devices)
-        months = int(parts[4])
-        if days <= 0 or months not in (1, 3, 6, 12) or not parts[-1].isdigit():
-            raise ValueError("invalid subscription period or invoice timestamp")
-        if currency != "XTR" or stars <= 0:
-            raise ValueError("invalid Stars currency or amount")
-        promo_code = "_".join(parts[5:-1]) or None
+        if not order or order["user_id"] != user_id:
+            raise ValueError("invalid or unsigned invoice payload")
+        days = order["days"]
+        devices = order["devices"]
+        months = order["months"]
+        promo_code = order["promo_code"]
+        if currency != "XTR" or stars != order["amount"] or stars <= 0:
+            raise ValueError("Stars currency or amount does not match signed order")
     except (ValueError, TypeError, IndexError) as e:
         logger.error("Invalid Stars invoice payload for user %d, charge %s: %s", user_id, charge_id, e)
         await record_payment_idempotent(
