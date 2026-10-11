@@ -927,5 +927,61 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
         asyncio.run(run_test())
 
 
+class TestAuditDatabaseHelpers(unittest.IsolatedAsyncioTestCase):
+    TEST_DB_PATH = "/tmp/test_audit_database_helpers.db"
+
+    async def asyncSetUp(self):
+        for suffix in ("", "-wal", "-shm"):
+            path = self.TEST_DB_PATH + suffix
+            if os.path.exists(path):
+                os.remove(path)
+        database.DB_FILE = self.TEST_DB_PATH
+        database._db = None
+        await database.init_db()
+
+    async def asyncTearDown(self):
+        await database.close_db()
+        for suffix in ("", "-wal", "-shm"):
+            path = self.TEST_DB_PATH + suffix
+            if os.path.exists(path):
+                os.remove(path)
+
+    async def test_set_key_expiry_can_restore_expiry_and_device_limit(self):
+        user_id = 991001
+        await database.ensure_user(user_id)
+        key_id = await database.add_key(
+            user_id, "https://sub.example/audit", "audit", "uuid-audit", 30, 5
+        )
+        original = await database.get_key_by_id(key_id)
+
+        self.assertTrue(await database.set_key_expiry(key_id, original["expiry"], 2))
+        restored = await database.get_key_by_id(key_id)
+        self.assertEqual(restored["expiry"], original["expiry"])
+        self.assertEqual(restored["limit_ip"], 2)
+
+    async def test_get_payment_by_id_returns_provider_and_status(self):
+        user_id = 991002
+        await database.ensure_user(user_id)
+        is_new, payment_id = await database.record_payment_idempotent(
+            user_id=user_id,
+            amount=89,
+            currency="RUB",
+            method="yookassa",
+            days=30,
+            payload="audit-provider-payment",
+            status="processing",
+            tariff="audit",
+            devices=2,
+            provider="yookassa",
+            provider_payment_id="audit-provider-payment",
+        )
+        self.assertTrue(is_new)
+        payment = await database.get_payment_by_id(payment_id)
+        self.assertIsNotNone(payment)
+        self.assertEqual(payment["user_id"], user_id)
+        self.assertEqual(payment["provider_payment_id"], "audit-provider-payment")
+        self.assertEqual(payment["status"], "processing")
+
+
 if __name__ == "__main__":
     unittest.main()
