@@ -9,9 +9,9 @@ YooKassa Security model:
   2. NEVER trust the incoming body alone — always re-fetch the payment from
      YooKassa API using the payment_id from the body (prevents spoofing).
   3. Check payment status == "succeeded" on the verified response.
-  4. Idempotency: mark payment_id as processed in DB before delivering key,
-     so a duplicate webhook never gives a second key.
-  5. Validate devices value from metadata — only 1, 2, 5 are legal.
+  4. Use the unique payment ledger to guard fulfillment and mark the provider
+     payment processed only after access delivery is confirmed.
+  5. Validate device limits against the shared tariff configuration (2, 5, 10).
 
 Requires: fastapi, uvicorn[standard]  (added to requirements.txt)
 Config:   WEBHOOK_HOST, WEBHOOK_PORT in .env
