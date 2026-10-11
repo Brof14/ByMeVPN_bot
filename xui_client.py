@@ -309,7 +309,9 @@ async def create_xui_user(
             if update_res:
                 return update_res
             logger.error("Existing client %s could not be updated; refusing to create duplicate inbounds", email)
-            return None
+            raise ProvisioningOutcomeUnknown(
+                f"Existing 3x-ui client {user_id} could not be updated with a confirmed outcome"
+            )
         else:
             logger.info("No existing client found for %s, creating new", email)
             client_uuid = str(uuid_lib.uuid4())
