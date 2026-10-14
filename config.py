@@ -82,11 +82,9 @@ XUI_PASSWORD = os.getenv("XUI_PASSWORD", "")
 # only for a deliberately self-signed/private panel certificate.
 XUI_TLS_VERIFY = os.getenv("XUI_TLS_VERIFY", "true").strip().lower() not in {"0", "false", "no", "off"}
 
-# Список инбаундов через запятую: XUI_INBOUND_IDS=2,3,7,8,10,11 (VLESS)
-_xui_ids_raw = os.getenv("XUI_INBOUND_IDS", os.getenv("XUI_INBOUND_ID", "2,3,7,8,10,11"))
-XUI_INBOUND_IDS: list[int] = [
-    int(x.strip()) for x in _xui_ids_raw.split(",") if x.strip()
-]
+# Принудительно ограничиваем выдаваемые подписки этими четырьмя инбаундами.
+# Значение из .env намеренно игнорируется, чтобы состав подписки не менялся случайно.
+XUI_INBOUND_IDS: list[int] = [12, 13, 14, 15]
 XUI_INBOUND_ID = XUI_INBOUND_IDS[0]  # primary (обратная совместимость)
 XUI_SUB_PATH = os.getenv("XUI_SUB_PATH", "sub")
 
