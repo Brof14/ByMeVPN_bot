@@ -96,6 +96,14 @@ CREATE TABLE IF NOT EXISTS ref_bonus_claims (
 );
 CREATE INDEX IF NOT EXISTS idx_rbc_referrer ON ref_bonus_claims(referrer_id);
 
+CREATE TABLE IF NOT EXISTS referral_payment_rewards (
+    referrer_id INTEGER NOT NULL,
+    referred_id INTEGER NOT NULL,
+    payment_ref TEXT NOT NULL,
+    created INTEGER DEFAULT (strftime('%s','now')),
+    UNIQUE(referrer_id, referred_id)
+);
+
 -- Enhanced referral tracking
 CREATE TABLE IF NOT EXISTS referral_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1697,6 +1705,51 @@ async def cancel_auto_renew(user_id: int, key_id: Optional[int] = None) -> dict:
     return {"cancelled": sub_found, "expires_at": expiry, "pm_title": pm_title}
 
 
+async def unlink_auto_renew_payment_method(user_id: int, key_id: Optional[int] = None) -> dict:
+    """Stop future charges and erase the stored YooKassa token from our DB.
+
+    YooKassa recurring charges are authorized by the merchant's stored
+    payment_method_id. Removing that identifier locally disables future
+    charges; existing paid access is left untouched.
+    """
+    db = await get_db()
+    if key_id:
+        cur = await db.execute(
+            "SELECT id, payment_method_title FROM auto_renew_subscriptions "
+            "WHERE user_id=? AND (key_id=? OR key_id IS NULL) "
+            "ORDER BY (key_id IS NULL), id DESC LIMIT 1",
+            (user_id, key_id),
+        )
+    else:
+        cur = await db.execute(
+            "SELECT id, payment_method_title FROM auto_renew_subscriptions "
+            "WHERE user_id=? ORDER BY id DESC LIMIT 1",
+            (user_id,),
+        )
+    row = await cur.fetchone()
+    if not row:
+        return {"unlinked": False, "expires_at": None, "pm_title": ""}
+
+    sub_id, pm_title = row[0], row[1] or ""
+    await db.execute(
+        "UPDATE auto_renew_subscriptions SET status='cancelled', payment_method_id='', "
+        "payment_method_title='', payment_method_type='', next_retry_at=NULL, "
+        "fail_count=0, updated_at=strftime('%s','now') WHERE id=?",
+        (sub_id,),
+    )
+    if key_id:
+        cur = await db.execute("SELECT MAX(expiry) FROM keys WHERE user_id=? AND id=?", (user_id, key_id))
+    else:
+        cur = await db.execute("SELECT MAX(expiry) FROM keys WHERE user_id=? AND expiry>?", (user_id, int(time.time())))
+    expiry_row = await cur.fetchone()
+    await db.commit()
+    return {
+        "unlinked": True,
+        "expires_at": expiry_row[0] if expiry_row and expiry_row[0] else None,
+        "pm_title": pm_title,
+    }
+
+
 async def resume_auto_renew(user_id: int, key_id: Optional[int] = None) -> bool:
     """Re-enable previously cancelled auto-renew subscription (keeps saved payment method)."""
     db = await get_db()
@@ -2020,6 +2073,36 @@ async def try_claim_ref_bonus(referrer_id: int, referred_id: int) -> bool:
         return False
     await mark_ref_bonus_claimed(referrer_id, referred_id)
     return True
+
+
+async def record_referral_payment_reward(referrer_id: int, referred_id: int, payment_ref: str) -> bool:
+    """Idempotently record that a referral earned its one-time paid reward."""
+    db = await get_db()
+    cur = await db.execute(
+        "INSERT OR IGNORE INTO referral_payment_rewards(referrer_id, referred_id, payment_ref) VALUES(?,?,?)",
+        (referrer_id, referred_id, str(payment_ref)),
+    )
+    await db.commit()
+    return cur.rowcount == 1
+
+
+async def has_referral_payment_reward(referrer_id: int, referred_id: int) -> bool:
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT 1 FROM referral_payment_rewards WHERE referrer_id=? AND referred_id=?",
+        (referrer_id, referred_id),
+    )
+    return await cur.fetchone() is not None
+
+
+async def release_ref_bonus_claim(referrer_id: int, referred_id: int) -> None:
+    """Allow retry when delivery failed after a bonus claim was reserved."""
+    db = await get_db()
+    await db.execute(
+        "UPDATE ref_bonus_claims SET claimed=0 WHERE referrer_id=? AND referred_id=?",
+        (referrer_id, referred_id),
+    )
+    await db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -3910,6 +3993,7 @@ async def update_ad_application(
     post_message_id: int = None,
     rejection_reason: str = None,
     subscriber_count: int = None,
+    expected_statuses: list[str] | None = None,
 ) -> bool:
     """Update ad application."""
     db = await get_db()
@@ -3951,25 +4035,40 @@ async def update_ad_application(
         return False
 
     params.append(application_id)
-    query = f"UPDATE ad_applications SET {', '.join(updates)} WHERE id = ?"
-    await db.execute(query, params)
+    where = "id = ?"
+    if expected_statuses:
+        where += " AND status IN (" + ",".join("?" for _ in expected_statuses) + ")"
+        params.extend(expected_statuses)
+    cur = await db.execute(f"UPDATE ad_applications SET {', '.join(updates)} WHERE {where}", params)
     await db.commit()
-    return True
+    return cur.rowcount > 0
+
+
+async def delete_user_ad_application(application_id: int, user_id: int) -> bool:
+    """Delete a user's unfinished ad request; completed/rejected history is immutable."""
+    db = await get_db()
+    cur = await db.execute(
+        "DELETE FROM ad_applications WHERE id=? AND user_id=? "
+        "AND status IN ('draft','channel_pending','waiting_for_post','post_submitted','active_30_days','rejected')",
+        (application_id, user_id),
+    )
+    await db.commit()
+    return cur.rowcount > 0
 
 
 async def channel_already_used(channel_id: int | None, channel_ref: str | None = None) -> bool:
-    """Check if channel was already used for an approved/completed ad application."""
+    """Check whether this channel has an existing ad request or completed placement."""
     db = await get_db()
     if channel_ref:
         cur = await db.execute(
-            "SELECT 1 FROM ad_applications WHERE channel_ref = ? AND status IN ('approved', 'completed') LIMIT 1",
+            "SELECT 1 FROM ad_applications WHERE channel_ref = ? LIMIT 1",
             (channel_ref,),
         )
         if await cur.fetchone():
             return True
     if channel_id is not None:
         cur = await db.execute(
-            "SELECT 1 FROM ad_applications WHERE channel_id = ? AND status IN ('approved', 'completed') LIMIT 1",
+            "SELECT 1 FROM ad_applications WHERE channel_id = ? LIMIT 1",
             (channel_id,),
         )
         if await cur.fetchone():

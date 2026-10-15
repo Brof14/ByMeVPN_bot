@@ -185,7 +185,6 @@ def _get_payment_methods_text(
             "Продлить подписку можно вручную в разделе «Тарифы»."
         )
 
-    check_icon = "☑️" if is_checked else "⬜️"
     status_line = (
         "└ Статус: <b>✅ Автопродление активно</b>"
         if (sub and sub.get("status") == "active")
@@ -202,15 +201,15 @@ def _get_payment_methods_text(
 
     return (
         "💳 <b>Управление автопродлением</b>\n\n"
-        "Здесь отображается ваша сохранённая карта для автоматического продления подписки ByMeVPN.\n\n"
+        "Карта нужна только для автоматического продления. Её данные хранит ЮKassa; ByMeVPN хранит технический идентификатор карты для списаний.\n\n"
         "<b>Сохранённый способ оплаты:</b>\n"
-        f"{check_icon} 💳 <b>{card_title}</b>\n"
+        f"💳 <b>{card_title}</b>\n"
         f"{status_line}\n"
         f"{_pm_tariff_line(sub)}"
         f"{next_line}"
         f"{expiry_line}\n\n"
-        "Отключение автопродления <b>не отменяет уже оплаченный доступ</b> — "
-        "VPN продолжит работать до конца оплаченного периода."
+        "Кнопка ниже отключит будущие списания и удалит сохранённый идентификатор карты из ByMeVPN. "
+        "Уже оплаченный VPN продолжит работать до конца срока."
     )
 
 
@@ -273,15 +272,15 @@ async def cb_autorenew_unbind_prompt(callback: CallbackQuery, bot: Bot):
         await send_or_edit(bot, callback, text, back_to_menu())
         return
 
-    warning = "После отключения новых списаний не будет."
+    warning = "Будущие списания прекратятся, сохранённый идентификатор карты будет удалён из ByMeVPN."
     if expiry_str:
-        warning = f"После отключения новых списаний не будет. Доступ сохранится до <b>{expiry_str}</b>."
+        warning += f" Доступ сохранится до <b>{expiry_str}</b>."
 
     text = (
-        "🔕 <b>Отключить автопродление?</b>\n\n"
+        "🔕 <b>Отключить автопродление и отвязать карту?</b>\n\n"
         f"💳 Способ оплаты: <b>{card_title}</b>\n\n"
         f"{warning}\n\n"
-        "VPN продолжит работать до конца уже оплаченного периода."
+        "VPN продолжит работать до конца уже оплаченного периода. Чтобы снова включить автопродление, потребуется оплатить следующий тариф картой ЮKassa."
     )
     await send_or_edit(bot, callback, text, autorenew_cancel_confirm_kb(key_id))
 
@@ -294,10 +293,10 @@ async def cb_autorenew_unbind_confirm(callback: CallbackQuery, bot: Bot):
     key_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
     user_id = callback.from_user.id
 
-    from database import cancel_auto_renew
+    from database import unlink_auto_renew_payment_method
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-    res = await cancel_auto_renew(user_id, key_id if key_id > 0 else None)
+    res = await unlink_auto_renew_payment_method(user_id, key_id if key_id > 0 else None)
 
     expiry_str = ""
     if res.get("expires_at"):
@@ -309,14 +308,17 @@ async def cb_autorenew_unbind_confirm(callback: CallbackQuery, bot: Bot):
         else "Активных оплаченных периодов не осталось."
     )
 
-    text = (
-        "✅ <b>Автопродление отключено</b>\n\n"
-        "Новых списаний не будет.\n"
-        f"{keep_line}\n\n"
-        "Включить обратно можно в любой момент — карта сохранена в сервисе."
-    )
+    if not res.get("unlinked"):
+        text = "Сохранённая карта не найдена. Новых списаний не будет."
+    else:
+        text = (
+            "✅ <b>Автопродление отключено, карта отвязана</b>\n\n"
+            "Новых списаний не будет. Идентификатор способа оплаты удалён из ByMeVPN.\n"
+            f"{keep_line}\n\n"
+            "VPN продолжит работать до конца оплаченного периода. Чтобы подключить автопродление снова, оплатите тариф картой ЮKassa."
+        )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔔 Включить автопродление", callback_data=f"autorenew_enable:{key_id}")],
+        [InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu")],
     ])
     await send_or_edit(bot, callback, text, kb)
@@ -584,8 +586,7 @@ async def cb_rf_apps_guide(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith("ref_bonus_activate:"))
 async def cb_ref_bonus_activate(callback: CallbackQuery, bot: Bot, state: FSMContext):
-    await safe_answer(callback)
-    REF_BONUS_DAYS = 15  # days per paid referral
+    REF_BONUS_DAYS = 30
     referrer_id = callback.from_user.id
 
     # Parse the referred_id this bonus is tied to
@@ -595,29 +596,47 @@ async def cb_ref_bonus_activate(callback: CallbackQuery, bot: Bot, state: FSMCon
         await safe_answer(callback, "Неверный формат бонуса.", alert=True)
         return
 
-    # Atomic claim: only the referrer who earned this specific bonus can redeem it once
-    from database import try_claim_ref_bonus
+    from database import (
+        get_referrer, has_referral_payment_reward, try_claim_ref_bonus,
+        release_ref_bonus_claim,
+    )
+    if await get_referrer(referred_id) != referrer_id or not await has_referral_payment_reward(referrer_id, referred_id):
+        await safe_answer(callback, "Бонус не найден.", alert=True)
+        return
+
+    # Reserve the claim so a duplicate tap cannot extend twice. If delivery
+    # fails, release it so the customer can retry after the issue is fixed.
     claimed = await try_claim_ref_bonus(referrer_id, referred_id)
     if not claimed:
         await safe_answer(callback, "Этот бонус уже был активирован.", alert=True)
         return
-
     await state.clear()
-    await state.set_state(BuyFlow.waiting_name)
-    await state.update_data(
-        days=REF_BONUS_DAYS,
-        prefix="ref_bonus",
-        is_paid=False,
-        amount=0,
-        currency="RUB",
-        method="ref_bonus",
-        payload=f"ref_bonus_{referrer_id}_{referred_id}",
-        limit_ip=1,  # Referral bonus always 1 device
-    )
-    from keyboards import cancel_kb
-    await send_with_photo(
-        bot, callback,
-        f"🎁 <b>Бонус +{REF_BONUS_DAYS} дней!</b>\n\n"
-        "Введите название конфига для бонусного ключа:",
-        cancel_kb(),
-    )
+    try:
+        from subscription import deliver_key
+        from constants import DEFAULT_DEVICE_LIMIT
+        user_keys = await get_user_keys(referrer_id)
+        active_key = max(user_keys, key=lambda item: item.get("expiry", 0)) if user_keys else None
+        devices = active_key.get("limit_ip", DEFAULT_DEVICE_LIMIT) if active_key else DEFAULT_DEVICE_LIMIT
+
+        success = await deliver_key(
+            bot=bot,
+            user_id=referrer_id,
+            chat_id=referrer_id,
+            config_name=f"ByMeVPN_{referrer_id}",
+            days=REF_BONUS_DAYS,
+            limit_ip=devices,
+            is_paid=False,
+            amount=0,
+            method="ref_bonus",
+            payload=f"ref_bonus_{referrer_id}_{referred_id}",
+            extend_existing=True,
+        )
+    except Exception:
+        logger.exception("Failed to deliver referral bonus for referrer %d", referrer_id)
+        success = False
+
+    if not success:
+        await release_ref_bonus_claim(referrer_id, referred_id)
+        await safe_answer(callback, "Не получилось начислить бонус. Попробуйте позже или напишите в поддержку.", alert=True)
+        return
+    await safe_answer(callback, f"Готово: начислено +{REF_BONUS_DAYS} дней.", alert=True)

@@ -1,9 +1,9 @@
 """
 Referral integrity regression tests.
 
-Invariant under test: ONE qualifying payment → AT MOST ONE referral reward.
-  - duplicate add_referral_earning (concurrent webhooks) → single row;
-  - award_referral_for_payment is idempotent (UNIQUE + return code);
+Invariant under test: ONE qualifying payment → AT MOST ONE referral day reward.
+  - legacy duplicate add_referral_earning remains idempotent;
+  - award_referral_for_payment creates one days-only reward record;
   - intro-trial payments (1 ₽) never produce a reward;
   - renewals (second payment of the same referred user) produce no second reward;
   - duplicate provider payments (same provider_payment_id) are recorded once.
@@ -53,6 +53,11 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
         row = await cur.fetchone()
         return row[0]
 
+    async def _payment_rewards_count(self) -> int:
+        db = await database.get_db()
+        cur = await db.execute("SELECT COUNT(*) FROM referral_payment_rewards")
+        return (await cur.fetchone())[0]
+
     # ------------------------------------------------------------------
     async def test_01_duplicate_earning_insert_is_blocked(self):
         """Two concurrent-looking inserts for the same pair → one row, one credit."""
@@ -72,21 +77,24 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
         second = await award_referral_for_payment(222, "yk-payment-id-1", bot=None)
         self.assertTrue(first)
         self.assertFalse(second)
-        self.assertEqual(await self._earnings_count(), 1)
+        self.assertEqual(await self._payment_rewards_count(), 1)
+        self.assertEqual(await self._earnings_count(), 0, "new referral rewards must not create a cash ledger")
+        events = await database.get_referral_events(111)
+        self.assertTrue(any(event["event_type"] == "payment_bonus" and event["days_awarded"] == 30 for event in events))
 
     async def test_03_trial_payment_never_awards(self):
         """Intro-trial (1 ₽) is not a paid conversion → no reward, no row."""
         await self._seed_pair()
         result = await award_referral_for_payment(222, "trial-payment-id", is_trial=True, bot=None)
         self.assertFalse(result)
-        self.assertEqual(await self._earnings_count(), 0)
+        self.assertEqual(await self._payment_rewards_count(), 0)
 
     async def test_04_renewal_yields_no_second_reward(self):
         """Second (renewal) payment of the same referred user → no second reward."""
         await self._seed_pair()
         await award_referral_for_payment(222, "first-payment", bot=None)
         await award_referral_for_payment(222, "renewal-payment", bot=None)
-        self.assertEqual(await self._earnings_count(), 1)
+        self.assertEqual(await self._payment_rewards_count(), 1)
 
     async def test_05_no_referrer_no_reward(self):
         """Payment by a user without a referrer → nothing happens."""
