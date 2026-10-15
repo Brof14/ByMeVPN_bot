@@ -29,6 +29,7 @@ Environment Variables (.env file):
 
 import os
 import logging as _logging
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -81,6 +82,23 @@ XUI_PASSWORD = os.getenv("XUI_PASSWORD", "")
 # TLS certificate verification is enabled by default. Set XUI_TLS_VERIFY=false
 # only for a deliberately self-signed/private panel certificate.
 XUI_TLS_VERIFY = os.getenv("XUI_TLS_VERIFY", "true").strip().lower() not in {"0", "false", "no", "off"}
+
+# A common deployment mistake is reaching an HTTPS panel through localhost.
+# The panel then redirects to TLS with a certificate issued for its public
+# hostname, which cannot validate against 127.0.0.1/localhost.
+_api_parsed = urlparse(XUI_API_URL)
+_public_parsed = urlparse(XUI_URL)
+if (
+    XUI_TLS_VERIFY
+    and _api_parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+    and _public_parsed.scheme == "https"
+    and _public_parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+):
+    _logging.getLogger(__name__).warning(
+        "XUI_API_URL points to localhost while XUI_URL uses HTTPS. If the local "
+        "endpoint redirects to HTTPS, use the panel hostname in XUI_API_URL so "
+        "TLS certificate verification matches; do not disable verification."
+    )
 
 # Принудительно ограничиваем выдаваемые подписки этими четырьмя инбаундами.
 # Значение из .env намеренно игнорируется, чтобы состав подписки не менялся случайно.
