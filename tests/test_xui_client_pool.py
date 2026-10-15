@@ -69,6 +69,21 @@ class TestXuiClientPool(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(xui_client._api_pool)
 
+    async def test_existing_client_update_failure_never_falls_through_to_add(self):
+        """A found UUID must not be re-added when safe update fails."""
+        api = object()
+        with (
+            patch("xui_client._get_api", new=AsyncMock(return_value=api)),
+            patch("xui_client._find_client_uuid", new=AsyncMock(return_value="stable-uuid")),
+            patch("xui_client._find_client_sub_id", new=AsyncMock(return_value="stable-sub-id")),
+            patch("xui_client.update_xui_user", new=AsyncMock(return_value=None)),
+            patch("xui_client._api_call_with_retry", new=AsyncMock()) as api_call,
+        ):
+            result = await xui_client.create_xui_user(12345, days=30, limit_ip=5)
+
+        self.assertIsNone(result)
+        api_call.assert_not_awaited()
+
 
 if __name__ == "__main__":
     unittest.main()

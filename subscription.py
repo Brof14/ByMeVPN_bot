@@ -229,11 +229,36 @@ async def ask_config_name(
     if xui_client:
         logger.info("User %d has no DB key, but exists in 3x-ui - importing and extending safely", user_id)
         xui_res = await update_xui_user(user_id, days=days, limit_ip=limit_ip)
-        sub_url = (xui_res.get("subscription_url") if xui_res else None) or xui_client.get("subscription_url", "")
+        if not xui_res:
+            await log_key_error(
+                user_id=user_id,
+                error_type="subscription_import_update_failed",
+                error_message="Existing 3x-ui client could not be safely updated; key import aborted",
+                context={"branch": "ask_config_name.import_xui", "days": days, "limit_ip": limit_ip, "payment_id": payload},
+            )
+            try:
+                await bot.send_message(
+                    chat_id,
+                    "Платёж получен, но сервер пока не подтвердил обновление доступа. "
+                    "Не оплачивайте повторно — мы проверим операцию и восстановим подписку.",
+                )
+            except Exception:
+                pass
+            return
+        sub_url = xui_res.get("subscription_url") or xui_client.get("subscription_url", "")
         uuid = xui_client.get("uuid", "")
-        new_expiry = (xui_res.get("expiry_time", 0) // 1000) if xui_res else (int(time.time()) + days * 86400)
+        new_expiry = xui_res.get("expiry_time", 0) // 1000
+        if not sub_url or new_expiry <= 0:
+            logger.error(
+                "3x-ui update for user %d returned incomplete subscription data; key import aborted",
+                user_id,
+            )
+            return
 
-        key_id = await add_key(user_id, sub_url, f"ByMeVPN_{user_id}", uuid, days, limit_ip)
+        key_id = await add_key(
+            user_id, sub_url, f"ByMeVPN_{user_id}", uuid, days, limit_ip,
+            expiry=new_expiry,
+        )
 
         if is_paid and amount > 0:
             tariff_name = f"Подписка {days} дней ({limit_ip} устр.)"
@@ -473,11 +498,46 @@ async def deliver_key(
         if xui_client:
             logger.info("User %d exists in 3x-ui but not in DB keys - updating safely", user_id)
             xui_res = await update_xui_user(user_id, days=days, limit_ip=limit_ip)
-            sub_url = (xui_res.get("subscription_url") if xui_res else None) or xui_client.get("subscription_url", "")
-            uuid = xui_client.get("uuid", "")
-            new_expiry = (xui_res.get("expiry_time", 0) // 1000) if xui_res else (int(time.time()) + days * 86400)
+            if not xui_res:
+                # Do not import a stale panel snapshot as a newly provisioned
+                # key: the renewal/upgrade may not have reached 3x-ui.
+                await log_key_error(
+                    user_id=user_id,
+                    error_type="subscription_import_update_failed",
+                    error_message="Existing 3x-ui client could not be safely updated; key import aborted",
+                    context={"branch": "deliver_key.import_xui", "days": days, "limit_ip": limit_ip, "payment_id": payload},
+                )
+                try:
+                    await bot.send_message(
+                        ADMIN_ID,
+                        f"⚠️ Не удалось безопасно обновить клиента 3x-ui перед восстановлением ключа. "
+                        f"Пользователь: <code>{user_id}</code>; платёж: <code>{payload}</code>. Нужна сверка.",
+                        parse_mode="HTML",
+                    )
+                    await bot.send_message(
+                        chat_id,
+                        "Платёж получен, но сервер пока не подтвердил обновление доступа. "
+                        "Не оплачивайте повторно — мы проверим операцию и восстановим подписку.",
+                    )
+                except Exception:
+                    pass
+                return False
 
-            key_id = await add_key(user_id, sub_url, config_name or f"ByMeVPN_{user_id}", uuid, days, limit_ip)
+            sub_url = xui_res.get("subscription_url") or xui_client.get("subscription_url", "")
+            uuid = xui_client.get("uuid", "")
+            new_expiry = xui_res.get("expiry_time", 0) // 1000
+
+            if not sub_url or new_expiry <= 0:
+                logger.error(
+                    "3x-ui update for user %d returned incomplete subscription data; key import aborted",
+                    user_id,
+                )
+                return False
+
+            key_id = await add_key(
+                user_id, sub_url, config_name or f"ByMeVPN_{user_id}", uuid,
+                days, limit_ip, expiry=new_expiry,
+            )
 
             if is_paid and amount > 0:
                 tariff_name = f"Подписка {days} дней ({limit_ip} устр.)"

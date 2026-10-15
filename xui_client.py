@@ -328,9 +328,14 @@ async def create_xui_user(
             update_res = await update_xui_user(user_id, days=days, limit_ip=limit_ip)
             if update_res:
                 return update_res
-            # Fallback: keep existing UUID if update failed
-            client_uuid = existing_uuid
-            sub_id = existing_sub_id
+            # Never fall through to client.add after finding a live account.
+            # A partial add can leave inbounds with mixed expiry/device limits,
+            # while falsely returning a successful subscription to the caller.
+            logger.error(
+                "Existing 3x-ui client %s (uuid=%s, sub_id=%s) could not be updated; refusing to create or mutate inbounds",
+                email, existing_uuid, existing_sub_id,
+            )
+            return None
         else:
             logger.info("No existing client found for %s, creating new", email)
             client_uuid = str(uuid_lib.uuid4())
@@ -702,7 +707,14 @@ async def update_xui_user(
         try:
             client = await _api_call_with_retry(api.client.get_by_email, email)
         except Exception as e:
-            logger.debug("update_xui_user: failed to get client settings: %s", e)
+            logger.warning("update_xui_user: failed to get client settings for %s: %s", email, e)
+
+        # UUID alone is not enough to safely update an existing client: without
+        # the current object we cannot preserve its expiry, device limit, traffic
+        # cap, or subscription ID. Fail closed instead of resetting fields.
+        if not client or not getattr(client, "uuid", None):
+            logger.error("update_xui_user: refusing partial update for %s; full client details unavailable", email)
+            return None
 
         current_limit_ip = client.limit_ip if (client and client.limit_ip) else 2
         current_total_gb = client.total_gb if (client and client.total_gb) else 0

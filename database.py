@@ -1054,9 +1054,10 @@ async def add_key(
     uuid: str,
     days: int,
     limit_ip: int = 1,
+    expiry: Optional[int] = None,
 ) -> int:
     db = await get_db()
-    expiry = int(time.time()) + days * 86400
+    expiry = int(expiry) if expiry is not None else int(time.time()) + days * 86400
     cur = await db.execute(
         "INSERT INTO keys(user_id, key, remark, uuid, days, limit_ip, created, expiry) "
         "VALUES(?,?,?,?,?,?,?,?)",
