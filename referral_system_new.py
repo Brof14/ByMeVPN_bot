@@ -24,15 +24,7 @@ async def process_referral_click(referrer_id: int, referred_id: int, user_agent:
         # Log the click
         click_id = await log_referral_click(referrer_id, user_agent, ip_address)
         
-        # Add referral event for the click with 15 days bonus
-        await add_referral_event(
-            referrer_id=referrer_id,
-            referred_id=referred_id,
-            event_type="trial_pending",
-            days_awarded=15
-        )
-        
-        logger.info(f"Referral click processed: referrer={referrer_id}, referred={referred_id}, days_awarded=15")
+        logger.info("Referral click processed: referrer=%d, referred=%d", referrer_id, referred_id)
         return True
     except Exception as e:
         logger.error(f"Error processing referral click: {e}")
@@ -230,8 +222,7 @@ async def award_referral_for_payment(
     The ONE place where a payment may award a referral reward.
 
     Guarantees:
-    - one qualifying payment → at most one reward: referral_earnings has
-      UNIQUE(referrer_id, referred_id) and add_referral_earning is idempotent;
+    - one qualifying payment → at most one reward through ref_bonus_claims;
     - intro-trial payments (1 ₽) are never a paid conversion → no reward;
     - duplicate webhooks / retries / renewals → no second reward.
 
@@ -246,13 +237,13 @@ async def award_referral_for_payment(
         return False
 
     try:
-        from database import get_referrer, add_referral_earning
+        from database import get_referrer, record_referral_payment_reward
 
         referrer_id = await get_referrer(user_id)
         if not referrer_id:
             return False
 
-        bonus_added = await add_referral_earning(referrer_id, user_id, amount, payment_ref)
+        bonus_added = await record_referral_payment_reward(referrer_id, user_id, payment_ref)
         if not bonus_added:
             logger.info(
                 "Referral reward already exists for referrer %d / referred %d (payment %s)",
@@ -260,20 +251,35 @@ async def award_referral_for_payment(
             )
             return False
 
+        from database import add_referral_event
+        await add_referral_event(
+            referrer_id=referrer_id,
+            referred_id=user_id,
+            event_type="payment_bonus",
+            days_awarded=30,
+            description=f"First paid subscription; payment={payment_ref}",
+        )
         logger.info(
-            "Referral reward +%d₽ awarded: referrer=%d, referred=%d, payment=%s",
-            amount, referrer_id, user_id, payment_ref,
+            "Referral reward +30 days awarded: referrer=%d, referred=%d, payment=%s",
+            referrer_id, user_id, payment_ref,
         )
 
         if bot is not None:
             try:
+                from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
                 await bot.send_message(
                     referrer_id,
-                    "🎉 <b>Поздравляем!</b>\n\n"
-                    "Ваш приглашённый оформил платную подписку.\n"
-                    f"Начислено: +{amount} ₽\n"
-                    "Текущий баланс обновлён в партнёрской программе.",
+                    "🎉 <b>Ваш приглашённый оформил платную подписку!</b>\n\n"
+                    "Вам доступен бонус <b>+30 дней VPN</b>.\n"
+                    "Нажмите кнопку — бот автоматически продлит ваш ключ или выдаст бонусный ключ.",
                     parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                        InlineKeyboardButton(
+                            text="🎁 Получить +30 дней",
+                            callback_data=f"ref_bonus_activate:{user_id}",
+                        )
+                    ]]),
                 )
             except Exception as notify_error:
                 logger.error("Failed to notify referrer %d: %s", referrer_id, notify_error)

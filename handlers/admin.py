@@ -79,6 +79,9 @@ def _main_kb() -> InlineKeyboardMarkup:
         # Row 8: Giveaways & Ad program review
         [InlineKeyboardButton(text="🎉 Розыгрыши", callback_data="admin_giveaways"),
          InlineKeyboardButton(text="📣 Реклама (заявки)", callback_data="ad_admin_list")],
+        # Row 9: Operational tools already implemented by the bot
+        [InlineKeyboardButton(text="🖥 Состояние и 3x-ui", callback_data="admin_system"),
+         InlineKeyboardButton(text="🧹 Истёкшие ключи", callback_data="admin_cleanup")],
     ])
 
 
@@ -3314,128 +3317,6 @@ async def cb_admin_settings(callback: CallbackQuery, bot: Bot):
 # ---------------------------------------------------------------------------
 # Mass Actions
 # ---------------------------------------------------------------------------
-
-@router.callback_query(F.data == "admin_mass_trial")
-async def cb_admin_mass_trial(callback: CallbackQuery, state: FSMContext):
-    """Start mass trial distribution flow."""
-    if not _is_admin(callback.from_user.id):
-        await safe_answer(callback, "Нет доступа.", alert=True)
-        return
-
-    await safe_answer(callback)
-    await state.set_state(AdminFlow.mass_trial_days)
-    
-    await callback.message.edit_text(
-        "🎁 <b>Выдать пробник всем пользователям</b>\n\n"
-        "Введите количество дней для пробника (1-365):",
-        reply_markup=_back_kb()
-    )
-
-
-@router.message(AdminFlow.mass_trial_days)
-async def msg_mass_trial_days(message: Message, state: FSMContext, bot: Bot):
-    """Handle mass trial days input."""
-    if not _is_admin(message.from_user.id):
-        return
-
-    try:
-        days = int(message.text.strip())
-        if days < 1 or days > 365:
-            await message.answer("❌ Количество дней должно быть от 1 до 365.")
-            return
-    except ValueError:
-        await message.answer("❌ Укажите число от 1 до 365.")
-        return
-    
-    await state.clear()
-    
-    # Get all users
-    db = await get_db()
-    cur = await db.execute("SELECT user_id FROM users")
-    rows = await cur.fetchall()
-    
-    if not rows:
-        await message.answer("ℹ️ В базе нет пользователей.", reply_markup=_main_kb())
-        return
-    
-    # Status message
-    status_msg = await message.answer(
-        f"⏳ Выдача пробников {len(rows)} пользователям на {days} дней...\n"
-        f"✅ Успешно: 0\n"
-        f"❌ Ошибок: 0\n"
-        f"⏭️ Пропущено: 0"
-    )
-    
-    success_count = 0
-    failed_count = 0
-    skipped_count = 0
-    
-    from subscription import deliver_key
-    
-    for i, (user_id,) in enumerate(rows):
-        try:
-            # Reset trial flag so user can receive the key
-            await reset_trial_for_user(user_id)
-            
-            # Deliver trial key
-            success = await deliver_key(
-                bot=bot,
-                user_id=user_id,
-                chat_id=user_id,
-                config_name=f"Trial-{user_id}",
-                days=days,
-                limit_ip=2,
-                is_paid=False,
-                amount=0,
-                currency="RUB",
-                method="admin_mass_trial",
-                payload=f"mass_trial_{user_id}_{days}d",
-                extend_existing=False,  # Always create new key for mass trials
-            )
-            
-            if success:
-                success_count += 1
-                logger.info(f"Mass trial: delivered {days} days to user {user_id}")
-            else:
-                failed_count += 1
-                logger.warning(f"Mass trial: failed to deliver to user {user_id}")
-                
-        except Exception as e:
-            failed_count += 1
-            logger.error(f"Mass trial: error delivering to {user_id}: {e}")
-        
-        # Update status every 5 users
-        if (i + 1) % 5 == 0 or i == len(rows) - 1:
-            try:
-                await status_msg.edit_text(
-                    f"⏳ Выдача пробников... ({i+1}/{len(rows)})\n"
-                    f"✅ Успешно: {success_count}\n"
-                    f"❌ Ошибок: {failed_count}\n"
-                    f"⏭️ Пропущено: {skipped_count}"
-                )
-            except:
-                pass
-        
-        # Small delay to avoid rate limits
-        await asyncio.sleep(0.3)
-    
-    # Final report
-    await log_admin_action(
-        admin_id=message.from_user.id,
-        action_type="mass_trial",
-        action_details=f"Mass trial: {success_count} success, {failed_count} failed, {skipped_count} skipped",
-    )
-    
-    await status_msg.edit_text(
-        f"✅ <b>Выдача пробников завершена</b>\n\n"
-        f"📊 <b>Результаты:</b>\n"
-        f"✅ Успешно: {success_count}\n"
-        f"❌ Ошибок: {failed_count}\n"
-        f"⏭️ Пропущено: {skipped_count}\n"
-        f"📁 Всего: {len(rows)}",
-        reply_markup=_main_kb()
-    )
-
 
 @router.callback_query(F.data == "admin_mass_days")
 async def cb_admin_mass_days(callback: CallbackQuery, state: FSMContext):

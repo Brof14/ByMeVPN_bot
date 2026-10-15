@@ -432,7 +432,7 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
             connection_guide_kb, linux_distro_kb,
             linux_guide_back_kb, guide_back_kb,
         )
-        from handlers.guide import _GUIDES, _LINUX_GUIDES
+        from handlers.guide import _GUIDES, HAPP_ANDROID_APK, HAPP_IOS_RU, HAPP_LINUX
 
         # 1. Connection guide keyboard has Linux button
         conn_kb = connection_guide_kb()
@@ -460,33 +460,16 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
         gen_back_cbs = [btn.callback_data for row in gen_back.inline_keyboard for btn in row if btn.callback_data]
         self.assertIn("connection_guide", gen_back_cbs, "Back button from general guide must go to connection_guide")
 
-        # 5. iOS guide content: INCY (current client app)
+        # 5. iOS guide points at the current official Happ listings
         ios_text = _GUIDES["ios"]
-        self.assertIn("INCY", ios_text)
-        self.assertIn("https://apps.apple.com/ru/app/incy/id6756943388", ios_text)
+        self.assertIn("Happ", ios_text)
+        self.assertIn(HAPP_IOS_RU, ios_text)
+        self.assertIn("https://apps.apple.com/us/app/happ-proxy-utility/id6504287215", ios_text)
         self.assertNotIn("Streisand", ios_text, "Streisand must be removed from iOS guide")
-        self.assertNotIn("HAPP Proxy", ios_text, "iOS guide must not recommend HAPP (INCY is the current app)")
 
-        # 6. Linux Arch guide: v2rayN (simplified guide, no nftables deep-dive)
-        arch_text = _LINUX_GUIDES["arch"]
-        self.assertIn("Arch / EndeavourOS / Manjaro", arch_text)
-        self.assertIn("v2rayN-linux-64.zip", arch_text)
-        self.assertIn("v2rayN", arch_text)
-
-        # 7. Linux Ubuntu guide: v2rayN
-        ubuntu_text = _LINUX_GUIDES["ubuntu"]
-        self.assertIn("Ubuntu", ubuntu_text)
-        self.assertIn("v2rayN", ubuntu_text)
-
-        # 8. Linux Fedora guide: v2rayN
-        fedora_text = _LINUX_GUIDES["fedora"]
-        self.assertIn("Fedora", fedora_text)
-        self.assertIn("v2rayN", fedora_text)
-
-        # 9. Other Linux guide: v2rayN
-        other_text = _LINUX_GUIDES["other"]
-        self.assertIn("Другой Linux", other_text)
-        self.assertIn("v2rayN", other_text)
+        # 6. Linux and Android downloads are from Happ's official releases
+        self.assertIn(HAPP_LINUX, _GUIDES["linux"])
+        self.assertIn(HAPP_ANDROID_APK, _GUIDES["android"])
 
     # ------------------------------------------------------------------------
     # Test 11: Device switching edits caption and preserves photo (no deletion)
@@ -712,6 +695,36 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
             sub_re = await get_auto_renew_subscription(user_id, key_id)
             self.assertEqual(sub_re["status"], "active")
             self.assertEqual(sub_re["payment_method_id"], "pm_saved_card_999")
+
+        asyncio.run(run_test())
+
+
+    def test_13b_unlink_autorenew_removes_token_but_preserves_access(self):
+        from database import (
+            init_db, ensure_user, add_key, get_key_by_id,
+            save_auto_renew_subscription, get_auto_renew_subscription,
+            unlink_auto_renew_payment_method,
+        )
+
+        async def run_test():
+            await init_db()
+            user_id = 777322
+            await ensure_user(user_id)
+            key_id = await add_key(user_id, "vless://test_unlink", "Key", "uuid-unlink", 30, 2)
+            await save_auto_renew_subscription(
+                user_id=user_id, key_id=key_id,
+                payment_method_id="pm_saved_card_123", payment_method_title="*1234",
+                payment_method_type="bank_card", months=1, days=30, devices=2, amount_rub=89,
+            )
+            expiry_before = (await get_key_by_id(key_id))["expiry"]
+            result = await unlink_auto_renew_payment_method(user_id, key_id)
+            self.assertTrue(result["unlinked"])
+            self.assertEqual(result["expires_at"], expiry_before)
+            sub = await get_auto_renew_subscription(user_id, key_id)
+            self.assertEqual(sub["status"], "cancelled")
+            self.assertEqual(sub["payment_method_id"], "")
+            self.assertEqual(sub["payment_method_title"], "")
+            self.assertEqual((await get_key_by_id(key_id))["expiry"], expiry_before)
 
         asyncio.run(run_test())
 

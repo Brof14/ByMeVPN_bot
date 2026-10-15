@@ -19,8 +19,6 @@ def main_menu_new_user() -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="🎁 Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
     kb.row(InlineKeyboardButton(text="💳 Тарифы", callback_data="buy_vpn", style="primary"))
     kb.row(InlineKeyboardButton(text="📣 VPN за рекламу", callback_data="ad_program", style="primary"))
-    kb.row(InlineKeyboardButton(text="🔌 Как подключить", callback_data="connection_guide"))
-    kb.row(InlineKeyboardButton(text="Я уже клиент ByMeVPN", callback_data="auth_existing_client"))
     kb.row(InlineKeyboardButton(text="Партнёрская программа", callback_data="partner"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
@@ -34,8 +32,6 @@ def main_menu_existing() -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="🎁 Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
     kb.row(InlineKeyboardButton(text="💳 Тарифы", callback_data="buy_vpn", style="primary"))
     kb.row(InlineKeyboardButton(text="📣 VPN за рекламу", callback_data="ad_program", style="primary"))
-    kb.row(InlineKeyboardButton(text="🔌 Как подключить", callback_data="connection_guide"))
-    kb.row(InlineKeyboardButton(text="Я уже клиент ByMeVPN", callback_data="auth_existing_client"))
     kb.row(InlineKeyboardButton(text="Партнёрская программа", callback_data="partner"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
@@ -221,7 +217,7 @@ def key_detail_kb(key_id: int, has_autorenew: bool = False, autorenew_active: bo
 def autorenew_cancel_confirm_kb(key_id: int) -> InlineKeyboardMarkup:
     """Confirm disabling auto-renew. Cancelling NEVER revokes paid access."""
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="✅ Да, отключить автопродление", callback_data=f"autorenew_unbind_confirm:{key_id}"))
+    kb.row(InlineKeyboardButton(text="✅ Да, отвязать карту", callback_data=f"autorenew_unbind_confirm:{key_id}"))
     kb.row(InlineKeyboardButton(text="◀️ Оставить как есть", callback_data=f"manage_payment_methods:{key_id}"))
     return kb.as_markup()
 
@@ -236,15 +232,12 @@ def manage_payment_methods_kb(
     """Payment-methods screen. Only shows a card when one is really saved."""
     kb = InlineKeyboardBuilder()
     if has_card:
-        check_icon = "☑️" if is_checked else "⬜️"
-        kb.row(InlineKeyboardButton(
-            text=f"{check_icon} 💳 {card_title}",
-            callback_data=f"card_toggle_check:{key_id}:{1 if is_checked else 0}"
-        ))
-        if autorenew_active:
-            kb.row(InlineKeyboardButton(text="🔕 Отключить автопродление", callback_data=f"autorenew_unbind_prompt:{key_id}"))
-        else:
+        if not autorenew_active:
             kb.row(InlineKeyboardButton(text="🔔 Включить автопродление", callback_data=f"autorenew_enable:{key_id}"))
+        kb.row(InlineKeyboardButton(
+            text="🔕 Отключить автопродление и отвязать карту",
+            callback_data=f"autorenew_unbind_prompt:{key_id}",
+        ))
     kb.row(
         InlineKeyboardButton(text="◀️ Назад", callback_data=f"key_info:{key_id}" if key_id else "my_keys"),
         InlineKeyboardButton(text="Поддержка", url=_SUPPORT_URL),

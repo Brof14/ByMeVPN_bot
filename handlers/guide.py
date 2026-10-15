@@ -1,178 +1,130 @@
-"""Connection guide for all platforms — with logo photo and updated links."""
+"""Short, platform-specific ByMeVPN setup guide using Happ's official downloads."""
 import logging
 
 from aiogram import Bot, F, Router
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
-from keyboards import (
-    connection_guide_kb, guide_back_kb,
-    linux_distro_kb, linux_guide_back_kb,
-)
+from keyboards import connection_guide_kb, guide_back_kb
 from utils import send_with_photo, safe_answer
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+HAPP_SITE = "https://www.happ.su/main/ru"
+HAPP_IOS_RU = "https://apps.apple.com/ru/app/happ-lite/id6799917773"
+HAPP_IOS_GLOBAL = "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215"
+HAPP_ANDROID = "https://play.google.com/store/apps/details?id=com.happproxy"
+HAPP_ANDROID_APK = "https://github.com/Happ-proxy/happ-android/releases/latest/download/Happ.apk"
+HAPP_WINDOWS = "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe"
+HAPP_MACOS_RU = "https://apps.apple.com/ru/app/happ-proxy-utility/id6783623643"
+HAPP_MACOS_GLOBAL = "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215"
+HAPP_MACOS_DMG = "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/Happ.macOS.universal.dmg"
+HAPP_LINUX = "https://github.com/Happ-proxy/happ-desktop/releases/latest"
 
 
 @router.callback_query(F.data == "connection_guide")
 async def cb_guide_menu(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
-        "<b>Выберите вашу платформу</b>\n\n"
-        "Нажмите на вашу операционную систему "
-        "и следуйте простой инструкции.\n\n"
-        "Если что-то не получится — внизу есть «Не получается?»."
+        "<b>Подключение ByMeVPN</b>\n\n"
+        "1. Выберите устройство.\n"
+        "2. Установите Happ по официальной ссылке.\n"
+        "3. В боте откройте «Мои ключи» → ваш ключ → «Скопировать ссылку».\n"
+        "4. Вернитесь в Happ, нажмите «Вставить из буфера», затем «Подключить».\n\n"
+        "Если Happ не находится в российском App Store, ниже есть официальное приложение для российского каталога. "
+        "Не скачивайте VPN-клиенты с неизвестных сайтов."
     )
     await send_with_photo(bot, callback, text, connection_guide_kb())
 
 
-# Как понять, что VPN работает + куда идти, если нет (дописывается к каждой инструкции)
-_GUIDE_CHECK = (
-    "\n\n✅ <b>Как понять, что всё работает:</b> нажмите кнопку подключения — "
-    "появится статус «подключено». Откройте любой сайт: если загружается, готово.\n\n"
-    "Не получилось? Нажмите «Не получается?» ниже."
-)
-
-
 @router.callback_query(F.data == "trouble")
 async def cb_trouble(callback: CallbackQuery, bot: Bot):
-    """Self-service troubleshooting: concrete ordered steps, honest, no promises."""
     await safe_answer(callback)
     text = (
-        "⚠️ <b>Не получается подключить?</b>\n\n"
-        "Пройдите по порядку — чаще всего помогает первый же шаг:\n\n"
-        "1. Выключите другие VPN и прокси (включая системные) и переподключитесь.\n\n"
-        "2. Обновите подписку: «Мои ключи» → скопируйте ссылку заново → в приложении «Вставить из буфера».\n\n"
-        "3. Проверьте, что в приложении появилась именно подписка ByMeVPN.\n\n"
-        "4. VPN подключён, но сайты не открываются? Переподключитесь или выберите другой сервер в приложении.\n\n"
-        "5. Не помогло — напишите в поддержку, разберёмся."
+        "⚠️ <b>Не получается подключиться?</b>\n\n"
+        "1. Отключите другие VPN и прокси.\n"
+        "2. В Happ откройте подписку ByMeVPN и нажмите «Обновить».\n"
+        "3. Если подписки нет, скопируйте ссылку заново: «Мои ключи» → ключ → «Скопировать ссылку».\n"
+        "4. Включите VPN ещё раз и откройте сайт.\n\n"
+        "Если не помогло, отправьте в поддержку модель устройства, название приложения и скриншот ошибки. "
+        "Саму ссылку-подписку не пересылайте — это ваш доступ."
     )
-    from aiogram.types import InlineKeyboardBuilder, InlineKeyboardButton
-    from keyboards import _SUPPORT_URL
-    kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="📋 Открыть инструкцию", callback_data="connection_guide"))
-    kb.row(InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys"))
-    kb.row(InlineKeyboardButton(text="Написать в поддержку", url=_SUPPORT_URL))
-    kb.row(InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu"))
-    await send_with_photo(bot, callback, text, kb.as_markup())
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys")],
+        [InlineKeyboardButton(text="📋 Инструкция", callback_data="connection_guide")],
+        [InlineKeyboardButton(text="Написать в поддержку", url="https://t.me/ByMeVPN_support_bot")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu")],
+    ])
+    await send_with_photo(bot, callback, text, kb)
 
 
-_GUIDES: dict[str, str] = {
+_GUIDES = {
     "ios": (
-        "🍏 <b>iOS (iPhone / iPad) — Инструкция подключения</b>\n\n"
-        "1. Установите INCY из App Store:\n"
-        "<a href='https://apps.apple.com/ru/app/incy/id6756943388'>INCY</a>\n\n"
-        "2. Вернитесь в ByMeVPN и откройте «Мои ключи»\n\n"
-        "3. Откройте свой ключ и скопируйте ссылку\n\n"
-        "4. Откройте INCY\n\n"
-        "5. Нажмите кнопку «Импортировать подписку» или «Вставить из буфера»\n\n"
-        "6. Выберите ByMeVPN\n\n"
-        "7. Подключитесь"
+        "🍏 <b>iPhone и iPad</b>\n\n"
+        f"1. Установите Happ из российского App Store: <a href=\"{HAPP_IOS_RU}\">Happ для России</a>.\n"
+        f"Если у вашего Apple ID другой регион, откройте <a href=\"{HAPP_IOS_GLOBAL}\">глобальную версию</a>.\n\n"
+        "2. В боте: «Мои ключи» → ключ → «Скопировать ссылку».\n"
+        "3. Откройте Happ и разрешите добавление VPN-конфигурации, когда iPhone спросит.\n"
+        "4. Нажмите «Вставить из буфера», затем «Подключить»."
     ),
     "android": (
-        "🤖 <b>Android — Инструкция подключения</b>\n\n"
-        "1. Установите HAPP Proxy из Google Play:\n"
-        "<a href='https://play.google.com/store/apps/details?id=com.happproxy'>HAPP Proxy</a>\n\n"
-        "2. В ByMeVPN откройте «Мои ключи» и скопируйте ссылку\n\n"
-        "3. Откройте HAPP Proxy\n\n"
-        "4. Нажмите кнопку «Вставить из буфера»\n\n"
-        "5. Нажмите кнопку подключения в центре экрана"
+        "🤖 <b>Android</b>\n\n"
+        f"1. Установите <a href=\"{HAPP_ANDROID}\">Happ из Google Play</a>. "
+        f"Если Play недоступен, скачайте APK только с <a href=\"{HAPP_ANDROID_APK}\">официальной страницы Happ на GitHub</a>.\n\n"
+        "2. Скопируйте ссылку: бот → «Мои ключи» → ключ → «Скопировать ссылку».\n"
+        "3. Откройте Happ и нажмите «Вставить из буфера».\n"
+        "4. Нажмите кнопку подключения и подтвердите запрос Android."
     ),
     "windows": (
-        "💻 <b>Windows — Инструкция подключения</b>\n\n"
-        "1. Скачайте HAPP для Windows:\n"
-        "<a href='https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe'>Скачать HAPP</a>\n\n"
-        "2. Запустите установку и дождитесь завершения\n\n"
-        "3. В ByMeVPN откройте «Мои ключи» и скопируйте ссылку\n\n"
-        "4. В HAPP нажмите «Вставить из буфера»\n\n"
-        "5. Нажмите кнопку Connect для подключения"
+        "💻 <b>Windows</b>\n\n"
+        f"1. <a href=\"{HAPP_WINDOWS}\">Скачайте Happ для Windows x64</a> с официального GitHub Happ.\n"
+        "2. Установите и откройте приложение.\n"
+        "3. Скопируйте ссылку в боте: «Мои ключи» → ключ → «Скопировать ссылку».\n"
+        "4. В Happ нажмите «Вставить из буфера», затем кнопку подключения."
     ),
     "macos": (
-        "🍎 <b>macOS — Инструкция подключения</b>\n\n"
-        "1. Скачайте HAPP из Mac App Store:\n"
-        "<a href='https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973'>HAPP Proxy Utility Plus</a>\n\n"
-        "2. Запустите приложение\n\n"
-        "3. В ByMeVPN откройте «Мои ключи» и скопируйте ссылку\n\n"
-        "4. В HAPP нажмите «Вставить из буфера»\n\n"
-        "5. Нажмите кнопку Connect для подключения"
+        "🍎 <b>macOS</b>\n\n"
+        f"1. Для российского Apple ID установите <a href=\"{HAPP_MACOS_RU}\">Happ из российского App Store</a>. "
+        f"Для другого региона — <a href=\"{HAPP_MACOS_GLOBAL}\">глобальная версия</a>. "
+        f"Можно также скачать <a href=\"{HAPP_MACOS_DMG}\">официальный универсальный установщик</a>.\n\n"
+        "2. Скопируйте ссылку в боте: «Мои ключи» → ключ → «Скопировать ссылку».\n"
+        "3. Откройте Happ, вставьте ссылку и нажмите кнопку подключения."
     ),
-}
-
-_LINUX_GUIDES: dict[str, str] = {
-    "arch": (
-        "🐧 <b>Arch / EndeavourOS / Manjaro</b>\n\n"
-        "1. Скачайте v2rayN для Linux:\n"
-        "<a href='https://github.com/2dust/v2rayN/releases'>GitHub → Releases</a> → Linux → <code>v2rayN-linux-64.zip</code>\n\n"
-        "2. Распакуйте архив и запустите v2rayN\n\n"
-        "3. В ByMeVPN откройте «Мои ключи» и скопируйте ссылку\n\n"
-        "4. Добавьте ссылку в v2rayN\n\n"
-        "5. Включите System Proxy и Global\n\n"
-        "6. Подключитесь"
-    ),
-    "ubuntu": (
-        "🐧 <b>Ubuntu / Debian / Linux Mint</b>\n\n"
-        "1. Скачайте v2rayN для Linux (.deb):\n"
-        "<a href='https://github.com/2dust/v2rayN/releases'>GitHub → Releases</a> → <code>v2rayN-linux-64.deb</code>\n\n"
-        "2. Откройте терминал в папке с файлом и выполните:\n"
-        "<code>sudo apt install -y ./v2rayN-linux-64.deb</code>\n\n"
-        "3. Откройте v2rayN\n\n"
-        "4. В ByMeVPN откройте «Мои ключи» и скопируйте ссылку\n\n"
-        "5. Добавьте ссылку в v2rayN\n\n"
-        "6. Включите System Proxy и Global\n\n"
-        "7. Подключитесь"
-    ),
-    "fedora": (
-        "🐧 <b>Fedora / RHEL</b>\n\n"
-        "1. Скачайте v2rayN для Linux (.rpm):\n"
-        "<a href='https://github.com/2dust/v2rayN/releases'>GitHub → Releases</a> → <code>v2rayN-linux-rhel-64.rpm</code>\n\n"
-        "2. Откройте терминал в папке с файлом и выполните:\n"
-        "<code>sudo dnf install -y ./v2rayN-linux-rhel-64.rpm</code>\n\n"
-        "3. Откройте v2rayN\n\n"
-        "4. В ByMeVPN откройте «Мои ключи» и скопируйте ссылку\n\n"
-        "5. Добавьте ссылку в v2rayN\n\n"
-        "6. Включите System Proxy и Global\n\n"
-        "7. Подключитесь"
-    ),
-    "other": (
-        "🐧 <b>Другой Linux</b>\n\n"
-        "1. Скачайте v2rayN для Linux:\n"
-        "<a href='https://github.com/2dust/v2rayN/releases'>GitHub → Releases</a> → <code>v2rayN-linux-64.zip</code>\n\n"
-        "2. Распакуйте архив и запустите v2rayN\n\n"
-        "3. В ByMeVPN откройте «Мои ключи» и скопируйте ссылку\n\n"
-        "4. Добавьте ссылку в v2rayN\n\n"
-        "5. Включите System Proxy и Global\n\n"
-        "6. Подключитесь"
+    "linux": (
+        "🐧 <b>Linux</b>\n\n"
+        f"1. Откройте <a href=\"{HAPP_LINUX}\">официальные релизы Happ</a> и скачайте пакет для своей системы (.deb, .rpm или Arch).\n"
+        "2. Установите пакет средствами своей системы и откройте Happ.\n"
+        "3. Скопируйте ссылку в боте: «Мои ключи» → ключ → «Скопировать ссылку».\n"
+        "4. В Happ вставьте ссылку и нажмите кнопку подключения."
     ),
 }
 
 
 @router.callback_query(F.data == "guide_linux")
 async def cb_guide_linux(callback: CallbackQuery, bot: Bot):
-    await safe_answer(callback)
-    text = (
-        "🐧 <b>Linux</b>\n\n"
-        "Выберите вашу систему:"
-    )
-    await send_with_photo(bot, callback, text, linux_distro_kb())
+    await _send_platform_guide(callback, bot, "linux")
 
 
 @router.callback_query(F.data.startswith("guide_linux_"))
-async def cb_guide_linux_distro(callback: CallbackQuery, bot: Bot):
-    await safe_answer(callback)
-    distro = callback.data.split("guide_linux_", 1)[1]
-    text = _LINUX_GUIDES.get(
-        distro,
-        "Инструкция для данного дистрибутива в разработке.",
-    )
-    await send_with_photo(bot, callback, text + _GUIDE_CHECK, linux_guide_back_kb())
+async def cb_guide_linux_legacy(callback: CallbackQuery, bot: Bot):
+    """Keep old saved Linux-distro buttons working after the guide simplification."""
+    await _send_platform_guide(callback, bot, "linux")
 
 
 @router.callback_query(F.data.in_({"guide_ios", "guide_android", "guide_windows", "guide_macos"}))
 async def cb_platform_guide(callback: CallbackQuery, bot: Bot):
+    await _send_platform_guide(callback, bot, callback.data.removeprefix("guide_"))
+
+
+async def _send_platform_guide(callback: CallbackQuery, bot: Bot, platform: str):
     await safe_answer(callback)
-    platform = callback.data.split("_", 1)[1]
-    text = _GUIDES.get(
-        platform,
-        "Инструкция для этой платформы будет добавлена в ближайшее время.",
-    )
-    await send_with_photo(bot, callback, text + _GUIDE_CHECK, guide_back_kb())
+    text = _GUIDES.get(platform)
+    if text is None:
+        text = f"Инструкция не найдена. Откройте официальный сайт Happ: <a href=\"{HAPP_SITE}\">happ.su</a>."
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ Выбрать устройство", callback_data="connection_guide")],
+        [InlineKeyboardButton(text="⚠️ Не получается?", callback_data="trouble")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu"),
+         InlineKeyboardButton(text="Поддержка", url="https://t.me/ByMeVPN_support_bot")],
+    ])
+    await send_with_photo(bot, callback, text, kb)

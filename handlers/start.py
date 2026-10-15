@@ -140,13 +140,7 @@ async def _send_main_menu(
             "это займёт пару минут и не потребует сложных настроек.\n\n"
             "🎁 <b>3 дня за 1 ₽</b> — попробуйте прежде чем платить полную цену.\n"
             "💳 Дальше — 89 ₽/мес (или выгоднее при оплате за 3–12 месяцев).\n\n"
-            "Наши приложения доступны для:\n"
-            "<a href='https://apps.apple.com/ru/app/incy/id6756943388'>iOS</a>, "
-            "<a href='https://play.google.com/store/apps/details?id=com.happproxy&pcampaignid=web_share'>Android</a>, "
-            "<a href='https://github.com/Happ-proxy/happ-desktop/releases'>Windows</a>, "
-            "<a href='https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973'>macOS</a> и "
-            "<a href='https://github.com/2dust/v2rayN/releases'>Linux</a>.\n\n"
-            "После оплаты бот пришлёт ключ — просто вставьте его в приложение."
+            "После оплаты бот пришлёт ключ и откроет короткую инструкцию для вашего устройства."
         )
         kb = main_menu_new_user()
     elif state == "expired":
@@ -255,7 +249,7 @@ async def cmd_start(message: Message, bot: Bot) -> None:
             # Process referral (set referrer + give bonus)
             if ref_id != user_id:
                 try:
-                    from database import set_referrer, get_user_keys, extend_key
+                    from database import set_referrer, get_user_keys
                     from referral_system_new import process_referral_click
                     
                     existing_keys = await get_user_keys(user_id)
@@ -270,39 +264,38 @@ async def cmd_start(message: Message, bot: Bot) -> None:
                         # Process referral click using referral_system_new
                         await process_referral_click(ref_id, user_id)
                         
-                        # Extend referrer's key by 15 days
-                        referrer_keys = await get_user_keys(ref_id)
-                        if referrer_keys:
-                            # Extend the first active key
-                            for key in referrer_keys:
-                                if key['expiry'] > int(time.time()):
-                                    await extend_key(key['id'], 15)
-                                    # Notify referrer with beautiful text
-                                    try:
-                                        await bot.send_message(
-                                            ref_id,
-                                            "🎊 <b>Привлекли нового реферала!</b>\n\n"
-                                            "✨ По вашей ссылке перешёл новый пользователь\n"
-                                            "🔑 Ваш ключ продлён на 15 дней\n"
-                                            "💚 Продолжайте приглашать друзей!",
-                                            parse_mode="HTML"
-                                        )
-                                    except Exception as notify_error:
-                                        logger.error("Failed to notify referrer: %s", notify_error)
-                                    break
-                        else:
-                            # Referrer has no active key - notify them anyway
-                            try:
-                                await bot.send_message(
-                                    ref_id,
-                                    "🎊 <b>Привлекли нового реферала!</b>\n\n"
-                                    "✨ По вашей ссылке перешёл новый пользователь\n"
-                                    "💡 У вас нет активного ключа для продления\n"
-                                    "💚 Оформите подписку и получите +15 дней бонуса!",
-                                    parse_mode="HTML"
+                        # Grant the signup bonus through the regular delivery
+                        # path so both the database and 3x-ui stay in sync.
+                        try:
+                            from subscription import deliver_key
+                            from constants import DEFAULT_DEVICE_LIMIT
+                            referrer_keys = await get_user_keys(ref_id)
+                            existing_key = max(referrer_keys, key=lambda item: item.get("expiry", 0)) if referrer_keys else None
+                            referrer_devices = existing_key.get("limit_ip", DEFAULT_DEVICE_LIMIT) if existing_key else DEFAULT_DEVICE_LIMIT
+                            bonus_delivered = await deliver_key(
+                                bot=bot,
+                                user_id=ref_id,
+                                chat_id=ref_id,
+                                config_name=f"ByMeVPN_{ref_id}",
+                                days=15,
+                                limit_ip=referrer_devices,
+                                is_paid=False,
+                                amount=0,
+                                method="ref_signup_bonus",
+                                payload=f"ref_signup_{ref_id}_{user_id}",
+                                extend_existing=True,
+                            )
+                            if bonus_delivered:
+                                from database import add_referral_event
+                                await add_referral_event(
+                                    referrer_id=ref_id,
+                                    referred_id=user_id,
+                                    event_type="registration_bonus",
+                                    days_awarded=15,
+                                    description="New user registered via referral link",
                                 )
-                            except Exception as notify_error:
-                                logger.error("Failed to notify referrer: %s", notify_error)
+                        except Exception as bonus_error:
+                            logger.exception("Could not grant referral signup bonus to %d: %s", ref_id, bonus_error)
                         
                         # Send beautiful message to new user with button
                         try:
@@ -404,15 +397,6 @@ async def _start_intro_trial(bot: Bot, callback: CallbackQuery, ref_id: int | No
         )
         return
 
-    # Small click-bonus for the referrer (trial signup) — main reward is
-    # granted only after a real recurring payment.
-    if ref_id and ref_id != user_id:
-        try:
-            from referral_system_new import claim_referral_bonus
-            await claim_referral_bonus(bot, ref_id, user_id, "trial_bonus")
-        except Exception as e:
-            logger.error("Failed to claim referral click bonus for referrer %s: %s", ref_id, e)
-
     text = (
         "🎁 <b>3 дня ByMeVPN — 1 ₽</b>\n\n"
         f"Сегодня: <b>1 ₽</b>\n"
@@ -488,14 +472,14 @@ async def cb_back_to_menu(callback: CallbackQuery, bot: Bot, state: FSMContext):
 async def cb_about(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
-        "ByMeVPN был создан в марте 2026 года.\n\n"
-        "⚡️ Наш сервис работает на быстром и безопасном протоколе VLESS, поверх которого используется дополнительная маскировка трафика. Благодаря этому ByMeVPN умело обходит блокировки и работает во всех странах.\n\n"
-        "👨‍💻 Мы используем специальные приложения для всех платформ. Начало работы с нашим сервисом максимально простое и не требует никаких специальных умений, не нужны никакие сложные инструкции.\n\n"
-        "🔒 В нашем сервисе весь ваш трафик полностью зашифрован. Мы не храним логи и не видим, на какие сайты вы заходите. И никто не увидит.\n\n"
-        "🌎 Наши сервера размещены по всему миру, и на любом из наших тарифов (даже на пробном) вы получаете полный доступ ко всем локациям. На одном сервере мы размещаем не более 10 клиентов – таким образом вы получаете максимальную скорость, до 10 Гбит/сек.\n\n"
-        "👨‍👩‍👧‍👦 Доступны тарифы на 2, 5 или 10 устройств. Можно делиться вашим ключом от ByMeVPN с близкими.\n\n"
-        "🌐 Подробнее о сервисе:\n"
-        "https://bymevpn-site.duckdns.org"
+        "<b>ByMeVPN — доступ к VPN по подписке.</b>\n\n"
+        "Как начать:\n"
+        "1. Выберите тариф и способ оплаты.\n"
+        "2. Получите ссылку-подписку в этом боте.\n"
+        "3. Установите приложение по инструкции и добавьте ссылку — подключение готово.\n\n"
+        "Тариф задаёт срок подписки и число устройств. Подключение и управление ключами доступны в боте.\n\n"
+        "При оплате через ЮKassa сохранённая карта используется для автопродления выбранного тарифа. Автопродление можно отключить и отвязать в разделе «Мои ключи» → «Управление картой». Оплата через Stars и CryptoBot не продлевается автоматически.\n\n"
+        "Вопросы по оплате или подключению? Нажмите «Поддержка» — поможем пройти настройку."
     )
     # Создаем клавиатуру с кнопками "Назад" и "Поддержка" в одном ряду
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton

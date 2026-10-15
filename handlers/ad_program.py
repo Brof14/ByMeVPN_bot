@@ -18,6 +18,7 @@ Legacy status 'active_30_days' (older schema) is treated as post_submitted.
 import logging
 import re
 import time
+from html import escape
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
@@ -32,7 +33,7 @@ from database import (
     get_ad_application_by_id, get_ad_applications_by_statuses,
     channel_already_used, get_active_ad_campaign, log_ad_notification,
     calculate_bonus_months, log_ad_analytics_event, log_ad_audit,
-    get_user_keys, extend_key,
+    get_user_keys, extend_key, delete_user_ad_application,
 )
 from utils import send_with_photo, safe_answer
 from keyboards import back_to_menu
@@ -96,9 +97,10 @@ def _is_admin(user_id: int) -> bool:
 
 
 @router.callback_query(F.data == "ad_program")
-async def cb_ad_program(callback: CallbackQuery, bot: Bot):
+async def cb_ad_program(callback: CallbackQuery, bot: Bot, state: FSMContext):
     """Show main ad program screen."""
     await safe_answer(callback)
+    await state.clear()
     user_id = callback.from_user.id
 
     try:
@@ -137,6 +139,7 @@ async def cb_ad_program(callback: CallbackQuery, bot: Bot):
 async def cb_ad_check_channel(callback: CallbackQuery, bot: Bot, state: FSMContext):
     """Start channel verification flow."""
     await safe_answer(callback)
+    await state.clear()
     user_id = callback.from_user.id
 
     await log_ad_analytics_event(user_id, "ad_offer_click", {"action": "check_channel"})
@@ -262,16 +265,30 @@ async def _create_application_and_reply(
     campaign = await get_active_ad_campaign()
     campaign_id = campaign["id"] if campaign else None
 
-    app_id = await create_ad_application(
-        user_id=user_id,
-        channel_id=channel_id,
-        channel_username=channel_username,
-        subscriber_count=subscriber_count,
-        bonus_months=bonus_months,
-        campaign_id=campaign_id,
-        channel_ref=channel_ref,
-        status=status,
-    )
+    try:
+        app_id = await create_ad_application(
+            user_id=user_id,
+            channel_id=channel_id,
+            channel_username=channel_username,
+            subscriber_count=subscriber_count,
+            bonus_months=bonus_months,
+            campaign_id=campaign_id,
+            channel_ref=channel_ref,
+            status=status,
+        )
+    except Exception as error:
+        if "unique" in str(error).lower():
+            await message.answer(
+                "⚠️ По этому каналу уже есть заявка или он участвовал раньше. "
+                "Откройте «Мои заявки» или выберите другой канал.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="📋 Мои заявки", callback_data="ad_my_applications")
+                ]]),
+            )
+            return
+        logger.exception("Failed to create ad application for user %d", user_id)
+        await message.answer("Не удалось создать заявку. Попробуйте позже или напишите в поддержку.", reply_markup=back_to_menu())
+        return
 
     await log_ad_analytics_event(user_id, "ad_application_submitted", {
         "app_id": app_id,
@@ -285,7 +302,7 @@ async def _create_application_and_reply(
     if needs_review:
         text = (
             f"📣 <b>Заявка #{app_id} принята!</b>\n\n"
-            f"Канал: <b>{chat_title}</b>\n"
+            f"Канал: <b>{escape(str(chat_title))}</b>\n"
             f"👥 Подписчиков: <b>{subscriber_count}</b>{' (указано вами)' if manual_count else ''}\n"
             f"🎁 Потенциальный бонус: <b>{bonus_months} мес.</b>\n\n"
             "Заявку проверит администратор. После подтверждения вы получите рекламный пост."
@@ -296,7 +313,7 @@ async def _create_application_and_reply(
         ])
     else:
         text = (
-            f"📣 <b>Канал найден: {chat_title}</b>\n\n"
+            f"📣 <b>Канал найден: {escape(str(chat_title))}</b>\n\n"
             f"👥 Подписчиков: <b>{subscriber_count}</b>\n"
             f"🎁 Ваш бонус: <b>{bonus_months} мес.</b>\n\n"
             "<b>Что дальше:</b>\n"
@@ -495,7 +512,14 @@ async def msg_ad_post_url(message: Message, bot: Bot, state: FSMContext):
         )
         return
 
-    await update_ad_application(app_id, status="post_submitted", post_url=post_url)
+    updated = await update_ad_application(
+        app_id, status="post_submitted", post_url=post_url,
+        expected_statuses=["waiting_for_post", "channel_pending"],
+    )
+    if not updated:
+        await message.answer("Заявка уже закрыта или удалена. Откройте раздел «Мои заявки».", reply_markup=back_to_menu())
+        await state.clear()
+        return
     await log_ad_analytics_event(user_id, "ad_post_submitted", {"app_id": app_id, "post_url": post_url})
     await log_ad_audit(user_id, "ad_post_submitted", f"app={app_id} url={post_url}")
 
@@ -516,9 +540,10 @@ async def msg_ad_post_url(message: Message, bot: Bot, state: FSMContext):
 
 
 @router.callback_query(F.data == "ad_my_applications")
-async def cb_ad_my_applications(callback: CallbackQuery, bot: Bot):
+async def cb_ad_my_applications(callback: CallbackQuery, bot: Bot, state: FSMContext):
     """Show user's ad applications."""
     await safe_answer(callback)
+    await state.clear()
     user_id = callback.from_user.id
 
     applications = await get_user_ad_applications(user_id)
@@ -550,17 +575,75 @@ async def cb_ad_my_applications(callback: CallbackQuery, bot: Bot):
             f"Статус: {status_label}\n"
         )
         if app["status"] == "rejected" and app.get("rejection_reason"):
-            text += f"Причина: {app['rejection_reason']}\n"
+            text += f"Причина: {escape(str(app['rejection_reason']))}\n"
         if app["status"] in ("waiting_for_post", "channel_pending"):
             text += f"👉 Отправить пост: /ad_post_{app['id']}\n"
+        if app["status"] in _ACTIVE_APP_STATUSES or app["status"] == "rejected":
+            text += "Можно удалить эту заявку, пока бонус ещё не начислен.\n"
         text += "\n"
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+    rows = []
+    for app in applications:
+        if app["status"] in _ACTIVE_APP_STATUSES or app["status"] == "rejected":
+            rows.append([InlineKeyboardButton(
+                text=f"🗑 Удалить заявку #{app['id']}",
+                callback_data=f"ad_cancel_confirm:{app['id']}",
+            )])
+    rows.extend([
         [InlineKeyboardButton(text="📣 Проверить новый канал", callback_data="ad_check_channel")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="ad_program")]
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="ad_program")],
     ])
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
 
     await send_with_photo(bot, callback, text, kb)
+
+
+@router.callback_query(F.data.startswith("ad_cancel_confirm:"))
+async def cb_ad_cancel_confirm(callback: CallbackQuery, bot: Bot):
+    await safe_answer(callback)
+    try:
+        app_id = int(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await safe_answer(callback, "Неверный номер заявки.", alert=True)
+        return
+    app = await get_ad_application_by_id(app_id)
+    if not app or app["user_id"] != callback.from_user.id or (app["status"] not in _ACTIVE_APP_STATUSES and app["status"] != "rejected"):
+        await safe_answer(callback, "Эту заявку нельзя удалить.", alert=True)
+        return
+    text = (
+        f"Удалить заявку <b>#{app_id}</b>?\n\n"
+        "Заявка будет закрыта, а проверка и начисление бонуса остановятся. "
+        "Если захотите участвовать снова, можно будет отправить новую заявку."
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Да, удалить заявку", callback_data=f"ad_cancel:{app_id}")],
+        [InlineKeyboardButton(text="◀️ Оставить заявку", callback_data="ad_my_applications")],
+    ])
+    await send_with_photo(bot, callback, text, kb)
+
+
+@router.callback_query(F.data.startswith("ad_cancel:"))
+async def cb_ad_cancel(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    await safe_answer(callback)
+    try:
+        app_id = int(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await safe_answer(callback, "Неверный номер заявки.", alert=True)
+        return
+    deleted = await delete_user_ad_application(app_id, callback.from_user.id)
+    if not deleted:
+        await safe_answer(callback, "Заявку уже закрыли или её нельзя удалить.", alert=True)
+        return
+    await log_ad_audit(callback.from_user.id, "ad_application_deleted_by_user", f"app={app_id}")
+    await log_ad_analytics_event(callback.from_user.id, "ad_application_cancelled", {"app_id": app_id})
+    data = await state.get_data()
+    if data.get("current_app_id") == app_id:
+        await state.clear()
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📋 Мои заявки", callback_data="ad_my_applications")],
+        [InlineKeyboardButton(text="◀️ В раздел VPN за рекламу", callback_data="ad_program")],
+    ])
+    await send_with_photo(bot, callback, f"✅ Заявка #{app_id} удалена. Бонус за неё начисляться не будет.", kb)
 
 
 @router.message(F.text.regexp(r"^/ad_post_(\d+)$"))
@@ -706,7 +789,11 @@ async def cb_ad_admin_approve(callback: CallbackQuery, bot: Bot):
     days = int(app["bonus_months"]) * 30
 
     # Approve FIRST (idempotent guard against double-click), then grant.
-    ok = await update_ad_application(app_id, status="approved")
+    ok = await update_ad_application(
+        app_id,
+        status="approved",
+        expected_statuses=["post_submitted", "active_30_days", "channel_pending"],
+    )
     if not ok:
         await safe_answer(callback, "Не удалось обновить заявку", alert=True)
         return
@@ -789,7 +876,15 @@ async def msg_ad_rejection_reason(message: Message, bot: Bot, state: FSMContext)
         await message.answer("Заявка уже закрыта.")
         return
 
-    await update_ad_application(app_id, status="rejected", rejection_reason=reason or "Не соответствует условиям")
+    updated = await update_ad_application(
+        app_id,
+        status="rejected",
+        rejection_reason=reason or "Не соответствует условиям",
+        expected_statuses=["post_submitted", "active_30_days", "channel_pending"],
+    )
+    if not updated:
+        await message.answer("Заявка была удалена или уже обработана.")
+        return
     await log_ad_audit(admin_id, "ad_rejected", f"app={app_id} user={app['user_id']} reason={reason}")
     await log_ad_analytics_event(app["user_id"], "ad_rejected", {"app_id": app_id})
 
@@ -797,7 +892,7 @@ async def msg_ad_rejection_reason(message: Message, bot: Bot, state: FSMContext)
         await bot.send_message(
             app["user_id"],
             f"❌ <b>Заявка #{app_id} отклонена</b>\n\n"
-            f"{('Причина: ' + reason) if reason else 'Заявка не соответствует условиям программы.'}\n\n"
+            f"{('Причина: ' + escape(reason)) if reason else 'Заявка не соответствует условиям программы.'}\n\n"
             f"Если считаете это ошибкой — напишите в поддержку.",
             parse_mode="HTML",
         )

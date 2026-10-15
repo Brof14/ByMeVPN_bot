@@ -164,6 +164,10 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
     text += (
         "\nОплачивая подписку, вы соглашаетесь с <a href='https://telegra.ph/POLITIKA-KONFIDENCIALNOSTI-ByMeVPN-03-12'>политикой обработки персональных данных</a>, с <a href='https://telegra.ph/DOGOVOR-PUBLICHNOJ-OFERTY-ByMyVPN-03-12'>договором оферты</a> и с <a href='https://telegra.ph/SOGLASHENIE-O-REGULYARNYH-REKURRENTNYH-PLATEZHAH-ByMeVPN-03-12'>соглашением о присоединении к рекуррентной системе платежей</a>.\n\n"
         "После оплаты подписка будет активирована автоматически.\n\n"
+        f"<b>Автопродление:</b> при оплате через ЮKassa оно включается по умолчанию, если ЮKassa подтвердит сохранение карты. "
+        f"После выбранных {days} дней спишется {price_rub} ₽ за следующий такой же срок. "
+        "Отключить автопродление и отвязать карту можно в любой момент в меню ключа. "
+        "Оплата Stars и CryptoBot не продлевается автоматически.\n\n"
         "<b>Выберите способ оплаты:</b>"
     )
 
