@@ -36,7 +36,7 @@ from database import (
     log_admin_action, get_admin_logs,
     ban_user, unban_user, add_manual_days,
     create_giveaway, get_active_giveaways, get_giveaway_by_id,
-    pick_giveaway_winners, set_giveaway_status,
+    set_giveaway_status,
 )
 from states import AdminFlow
 from utils import safe_answer
@@ -3572,7 +3572,6 @@ async def cb_admin_giveaways(callback: CallbackQuery):
                 f"   Команда для участников: <code>/start gw_{gw_id}</code>\n\n"
             )
             rows.append([
-                InlineKeyboardButton(text=f"🎲 Итоги #{gw_id}", callback_data=f"admin_draw_gw:{gw_id}"),
                 InlineKeyboardButton(text=f"❌ Отменить #{gw_id}", callback_data=f"admin_cancel_gw:{gw_id}"),
             ])
 
@@ -3676,7 +3675,14 @@ async def handle_gw_duration(message: Message, bot: Bot, state: FSMContext):
 
     import time
     end_time = int(time.time()) + duration_h * 3600
-    gw_id = await create_giveaway(title, prize_days, winners, end_time, created_by=message.from_user.id)
+    gw_id = await create_giveaway(
+        title=title,
+        description="Розыгрыш VPN-дней ByMeVPN",
+        prize_days=prize_days,
+        winners_count=winners,
+        end_date=end_time,
+        created_by=message.from_user.id,
+    )
 
     try:
         bot_info = await bot.get_me()
@@ -3705,47 +3711,25 @@ async def cb_admin_draw_gw(callback: CallbackQuery, bot: Bot):
         await safe_answer(callback, "Нет доступа.", alert=True)
         return
     await safe_answer(callback)
+    import time
     gw_id = int(callback.data.split(":")[1])
     
     gw = await get_giveaway_by_id(gw_id)
     if not gw:
         await callback.message.edit_text("❌ Розыгрыш не найден.", reply_markup=_back_kb())
         return
-
-    winner_ids = await pick_giveaway_winners(gw_id)
-    if not winner_ids:
+    if gw["end_date"] > int(time.time()):
         await callback.message.edit_text(
-            f"❌ В розыгрыше #{gw_id} нет участников для выбора победителя.",
-            reply_markup=_back_kb()
+            f"🎉 Итоги розыгрыша #{gw_id} бот подведёт автоматически после {fmt_date(gw['end_date'])}.",
+            reply_markup=_back_kb(),
         )
         return
-
-    prize_days = gw["prize_days"]
-    success_notified = 0
-    from database import add_manual_days
-    for uid in winner_ids:
-        try:
-            await add_manual_days(uid, prize_days, callback.from_user.id)
-            await bot.send_message(
-                uid,
-                f"🎉 <b>Поздравляем!</b>\n\n"
-                f"Вы стали победителем в розыгрыше «<b>{gw['title']}</b>»!\n"
-                f"Вам начислено: <b>+{prize_days} дней</b> VPN подписки.\n"
-                f"Проверить статус можно в меню «Мои ключи».",
-                parse_mode="HTML"
-            )
-            success_notified += 1
-        except Exception as e:
-            logger.error("Failed to reward giveaway winner %d: %s", uid, e)
-
-    text = (
-        f"🏆 <b>Итоги розыгрыша #{gw_id} «{gw['title']}»</b>\n\n"
-        f"👥 Выбрано победителей: <b>{len(winner_ids)}</b>\n"
-        f"🎁 Начислено каждому: <b>+{prize_days} дней</b>\n"
-        f"✉️ Успешно уведомлено: <b>{success_notified}</b>\n\n"
-        f"ID победителей: {', '.join(str(w) for w in winner_ids)}"
+    from giveaway_automation import process_due_giveaways
+    await process_due_giveaways(bot)
+    await callback.message.edit_text(
+        f"🏆 Итоги розыгрыша #{gw_id} подведены автоматически. Проверьте отчёт от бота.",
+        reply_markup=_main_kb(),
     )
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=_main_kb())
 
 
 @router.callback_query(F.data.startswith("admin_cancel_gw:"))

@@ -294,6 +294,8 @@ async def award_referral_for_payment(
                 "Referral reward already exists for referrer %d / referred %d (payment %s)",
                 referrer_id, user_id, payment_ref,
             )
+            if bot is not None:
+                await process_pending_referral_payment_rewards(bot)
             return False
 
         from database import add_referral_event
@@ -310,25 +312,49 @@ async def award_referral_for_payment(
         )
 
         if bot is not None:
-            try:
-                from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-
-                await bot.send_message(
-                    referrer_id,
-                    "🎉 <b>Ваш приглашённый оформил платную подписку!</b>\n\n"
-                    "Вам доступен бонус <b>+30 дней VPN</b>.\n"
-                    "Нажмите кнопку — бот автоматически продлит ваш ключ или выдаст бонусный ключ.",
-                    parse_mode="HTML",
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                        InlineKeyboardButton(
-                            text="🎁 Получить +30 дней",
-                            callback_data=f"ref_bonus_activate:{user_id}",
-                        )
-                    ]]),
-                )
-            except Exception as notify_error:
-                logger.error("Failed to notify referrer %d: %s", referrer_id, notify_error)
+            await process_pending_referral_payment_rewards(bot)
         return True
     except Exception as e:
         logger.error("Error awarding referral reward for user %d: %s", user_id, e)
         return False
+
+
+async def process_pending_referral_payment_rewards(bot, limit: int = 100) -> int:
+    """Automatically grant +30 days for paid referrals, retrying safely after outages."""
+    from database import (
+        get_pending_referral_payment_rewards, get_user_keys, mark_ref_bonus_claimed,
+    )
+    from subscription import deliver_key
+    from constants import DEFAULT_DEVICE_LIMIT
+
+    delivered_count = 0
+    for reward in await get_pending_referral_payment_rewards(limit=limit):
+        referrer_id = int(reward["referrer_id"])
+        referred_id = int(reward["referred_id"])
+        keys = await get_user_keys(referrer_id)
+        latest = max(keys, key=lambda key: key.get("expiry", 0)) if keys else None
+        try:
+            success = await deliver_key(
+                bot=bot, user_id=referrer_id, chat_id=referrer_id,
+                config_name=f"ByMeVPN_{referrer_id}", days=30,
+                limit_ip=latest.get("limit_ip", DEFAULT_DEVICE_LIMIT) if latest else DEFAULT_DEVICE_LIMIT,
+                is_paid=False, amount=0, method="ref_bonus",
+                payload=f"ref_bonus_{referrer_id}_{referred_id}", extend_existing=True,
+            )
+            if not success:
+                logger.warning("Paid referral bonus remains pending: referrer=%s referred=%s", referrer_id, referred_id)
+                continue
+            await mark_ref_bonus_claimed(referrer_id, referred_id)
+            delivered_count += 1
+            try:
+                await bot.send_message(
+                    referrer_id,
+                    "🎉 <b>Ваш друг оформил первую платную подписку!</b>\n\n"
+                    "Бонус <b>+30 дней ByMeVPN</b> уже автоматически начислен на ваш ключ.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                logger.info("Paid referral reward delivered; confirmation message failed for %s", referrer_id)
+        except Exception:
+            logger.exception("Automatic paid referral bonus failed: referrer=%s referred=%s", referrer_id, referred_id)
+    return delivered_count

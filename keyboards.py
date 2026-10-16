@@ -309,15 +309,13 @@ def connection_guide_kb(key_id: int | None = None) -> InlineKeyboardMarkup:
         return f"guide_{name}:{key_id}" if key_id else f"guide_{name}"
 
     kb.row(
-        InlineKeyboardButton(text="iPhone / iPad", callback_data=platform_callback("ios")),
+        InlineKeyboardButton(text="📱 iPhone / iPad", callback_data=platform_callback("ios")),
         InlineKeyboardButton(text="🤖 Android", callback_data=platform_callback("android")),
     )
     kb.row(
-        InlineKeyboardButton(text="Windows", callback_data=platform_callback("windows")),
-        InlineKeyboardButton(text="Linux", callback_data=platform_callback("linux")),
+        InlineKeyboardButton(text="💻 Windows", callback_data=platform_callback("windows")),
+        InlineKeyboardButton(text="🐧 Linux", callback_data=platform_callback("linux")),
     )
-    more_callback = f"guide_more:{key_id}" if key_id else "guide_more"
-    kb.row(InlineKeyboardButton(text="Другие устройства", callback_data=more_callback))
     back_callback = f"key_info:{key_id}" if key_id else "back_to_menu"
     back_text = "← Назад" if key_id else "← Назад в меню"
     kb.row(InlineKeyboardButton(text=back_text, callback_data=back_callback))

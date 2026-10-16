@@ -21,7 +21,7 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from database import (
-    ensure_user, set_referrer,
+    ensure_user, set_referrer, find_user_by_id, get_referrer,
     has_trial_used,
     has_active_subscription,
     has_ever_had_key, get_user_keys,
@@ -121,12 +121,20 @@ async def _send_main_menu(
         return
 
     if state == "new":
-        text = (
-            "<b>ByMeVPN — VPN для сайтов и приложений, которыми вы пользуетесь каждый день.</b>\n\n"
-            "Подключение займёт несколько шагов — бот подскажет, как установить приложение и добавить ключ.\n"
-            "🇷🇺 Российские сайты и приложения доступны без отключения VPN и дополнительных настроек.\n\n"
-            "Попробуйте 3 дня за 1 ₽ или выберите тариф. Получать VPN бесплатно можно за приглашения друзей."
-        )
+        if is_new_referral:
+            text = (
+                "<b>Добро пожаловать в ByMeVPN!</b>\n\n"
+                "Приглашение учтено. Подключение займёт несколько шагов — бот подскажет, как установить приложение и добавить ключ.\n"
+                "🇷🇺 Российские сайты и приложения работают с VPN — отключать его не нужно.\n\n"
+                "Попробуйте 3 дня за 1 ₽ или выберите тариф. Бесплатный доступ за приглашения — в отдельном разделе."
+            )
+        else:
+            text = (
+                "<b>ByMeVPN — VPN для сайтов и приложений, которыми вы пользуетесь каждый день.</b>\n\n"
+                "Подключение займёт несколько шагов — бот подскажет, как установить приложение и добавить ключ.\n"
+                "🇷🇺 Российские сайты и приложения доступны без отключения VPN и дополнительных настроек.\n\n"
+                "Попробуйте 3 дня за 1 ₽ или выберите тариф. Получать VPN бесплатно можно за приглашения друзей."
+            )
         kb = main_menu_new_user()
     elif state == "expired":
         text = (
@@ -184,6 +192,9 @@ async def cmd_start(message: Message, bot: Bot) -> None:
     user_id = message.from_user.id
     user_name = message.from_user.full_name or message.from_user.first_name or "Друг"
 
+    # Remember whether this is a genuinely new bot user before idempotent insert.
+    is_first_start = await find_user_by_id(user_id) is None
+
     # Register user (idempotent)
     await ensure_user(user_id, message.from_user.username)
 
@@ -216,6 +227,10 @@ async def cmd_start(message: Message, bot: Bot) -> None:
                         "Результаты будут подведены автоматически. Удачи! 🍀",
                         parse_mode="HTML"
                     )
+                else:
+                    await message.answer(
+                        "Вы уже участвуете в этом розыгрыше или он завершён.",
+                    )
             except Exception as e:
                 logger.error("Error joining giveaway %s for user %d: %s", param, user_id, e)
 
@@ -224,28 +239,31 @@ async def cmd_start(message: Message, bot: Bot) -> None:
             ref_id = int(param[4:]) if param.startswith("ref_") else int(param)
             
             # Process referral (set referrer + give bonus)
-            if ref_id != user_id:
+            if ref_id != user_id and is_first_start and await find_user_by_id(ref_id):
                 try:
                     from database import set_referrer, get_user_keys
                     from referral_system_new import process_referral_click
                     
                     existing_keys = await get_user_keys(user_id)
                     if not existing_keys:
-                        # New referral - show welcome screen
-                        is_new_referral = True
-                        referral_processed = True
-                        
                         # Set referrer
                         await set_referrer(user_id, ref_id)
+
+                        # Only acknowledge a referral if this inviter was newly
+                        # attached to a genuinely new user. Repeated /start links
+                        # must not look like fresh referrals or earn duplicate days.
+                        is_new_referral = await get_referrer(user_id) == ref_id
+                        referral_processed = is_new_referral
                         
                         # Process referral click using referral_system_new
-                        await process_referral_click(ref_id, user_id)
+                        if is_new_referral:
+                            await process_referral_click(ref_id, user_id)
                         
-                        try:
-                            from referral_system_new import award_referral_signup_bonus
-                            await award_referral_signup_bonus(bot, ref_id, user_id)
-                        except Exception as bonus_error:
-                            logger.exception("Could not grant referral signup bonus to %d: %s", ref_id, bonus_error)
+                            try:
+                                from referral_system_new import award_referral_signup_bonus
+                                await award_referral_signup_bonus(bot, ref_id, user_id)
+                            except Exception as bonus_error:
+                                logger.exception("Could not grant referral signup bonus to %d: %s", ref_id, bonus_error)
                         
                         logger.info("Referral click from user %s with code %s", user_id, args[1])
                 except Exception as e:

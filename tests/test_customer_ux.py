@@ -111,7 +111,9 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         self.assertIn("guide_ios", actions)
         self.assertIn("guide_android", actions)
         self.assertIn("guide_linux", actions)
-        self.assertIn("guide_more", actions)
+        self.assertNotIn("guide_more", actions)
+        labels = [button.text for row in markup.inline_keyboard for button in row]
+        self.assertEqual(labels[:4], ["📱 iPhone / iPad", "🤖 Android", "💻 Windows", "🐧 Linux"])
 
     def test_additional_platforms_keep_mac_and_tv_accessible(self):
         from keyboards import additional_platforms_kb
@@ -119,6 +121,20 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         self.assertIn("guide_macos:9", actions)
         self.assertIn("guide_android_tv:9", actions)
         self.assertIn("connection_guide:9", actions)
+
+    async def test_referral_start_uses_a_welcome_variant(self):
+        from types import SimpleNamespace
+        from handlers.start import _send_main_menu
+
+        with (
+            patch("handlers.start._user_state", new=AsyncMock(return_value="new")),
+            patch("handlers.start.send_with_photo", new=AsyncMock()) as send,
+        ):
+            await _send_main_menu(SimpleNamespace(), SimpleNamespace(), 123, "Алексей", is_new_referral=True)
+        welcome = send.call_args.args[2]
+        self.assertIn("Добро пожаловать в ByMeVPN", welcome)
+        self.assertIn("Вы пришли по ссылке друга", welcome)
+        self.assertIn("3 дня за 1 ₽", welcome)
 
     def test_key_settings_remove_rf_routing_and_highlight_only_destructive_action(self):
         markup = key_settings_kb(9)

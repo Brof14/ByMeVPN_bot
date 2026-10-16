@@ -24,7 +24,10 @@ os.environ["DB_FILE"] = TEST_DB_PATH
 
 import database  # noqa: E402
 from referral_system_new import award_referral_for_payment  # noqa: E402
-from referral_system_new import retry_pending_signup_bonuses  # noqa: E402
+from referral_system_new import (  # noqa: E402
+    retry_pending_signup_bonuses,
+    process_pending_referral_payment_rewards,
+)
 
 
 class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
@@ -145,6 +148,23 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
         signup_rewards = [e for e in events if e["referred_id"] == 722 and e["event_type"] == "registration_bonus"]
         self.assertEqual(len(signup_rewards), 1)
         self.assertEqual(signup_rewards[0]["days_awarded"], 15)
+
+    async def test_08_paid_referral_bonus_is_automatic_and_retryable(self):
+        from unittest.mock import AsyncMock, patch
+
+        await self._seed_pair(referrer_id=911, referred_id=922)
+        await database.record_referral_payment_reward(911, 922, "payment-922")
+        delivery = AsyncMock(side_effect=[False, True])
+        bot = type("BotStub", (), {"send_message": AsyncMock()})()
+        with patch("subscription.deliver_key", new=delivery):
+            self.assertEqual(await process_pending_referral_payment_rewards(bot), 0)
+            self.assertEqual(await process_pending_referral_payment_rewards(bot), 1)
+            self.assertEqual(await process_pending_referral_payment_rewards(bot), 0)
+
+        self.assertEqual(delivery.await_count, 2)
+        self.assertEqual(delivery.await_args.kwargs["days"], 30)
+        self.assertEqual(delivery.await_args.kwargs["payload"], "ref_bonus_911_922")
+        self.assertFalse(await database.get_pending_referral_payment_rewards())
 
 
 if __name__ == "__main__":

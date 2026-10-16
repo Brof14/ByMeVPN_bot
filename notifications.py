@@ -7,7 +7,7 @@ Also handles daily database backup at 03:00.
 """
 import asyncio
 import logging
-import random
+import secrets
 import string
 import time
 import zipfile
@@ -19,7 +19,10 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.types import BufferedInputFile
 
 from config import ADMIN_ID, DB_FILE
-from database import get_keys_nearing_expiry, create_promo_code, validate_promo_code, update_key_last_notification
+from database import (
+    get_keys_nearing_expiry, create_promo_code, validate_promo_code,
+    update_key_last_notification, is_promotional_opted_out,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +39,8 @@ def get_day_word(days: int) -> str:
 
 def generate_promo_code(length: int = 5) -> str:
     """Generate a short random promo code."""
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
+    alphabet = string.ascii_uppercase + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
 async def get_or_create_renewal_promo(user_id: int) -> str:
@@ -61,32 +65,20 @@ async def get_or_create_renewal_promo(user_id: int) -> str:
             if promo["expires_at"] > int(time.time()):
                 return promo["code"]
 
-    # No suitable existing promo code, create a new one
-    # Short code (5 chars), 30% discount, 7 days validity, 10 uses
-    code = generate_promo_code(5)
-
-    success = await create_promo_code(
-        code=code,
-        promo_type="percent",
-        discount_value=30,
-        max_uses=10,
-        valid_days=7
-    )
-
-    if success:
-        logger.info("Created shared renewal promo code %s (30%%, 10 uses, 7 days)", code)
-        return code
-    else:
-        # Fallback with different code if creation fails
-        code = generate_promo_code(6)
-        await create_promo_code(
+    # Keep existing discount and usage limits, but retry code collisions rather
+    # than returning a code the database failed to create.
+    for attempt in range(5):
+        code = generate_promo_code(5 + min(attempt, 2))
+        if await create_promo_code(
             code=code,
             promo_type="percent",
             discount_value=30,
             max_uses=10,
-            valid_days=7
-        )
-        return code
+            valid_days=7,
+        ):
+            logger.info("Created shared renewal promo code (30%%, 10 uses, 7 days)")
+            return code
+    raise RuntimeError("Could not create a unique renewal promo code after 5 attempts")
 
 
 async def _get_active_autorenew(user_id: int) -> dict | None:
@@ -142,25 +134,23 @@ async def _send_urgent_notification(bot: Bot, item: dict) -> None:
     date_str = datetime.fromtimestamp(item["expiry"]).strftime("%d.%m.%Y")
     days_left = max(1, int((item["expiry"] - int(time.time())) / 86400))
 
-    promo_code = await get_or_create_renewal_promo(item["user_id"])
+    promo_code = None
+    if not await is_promotional_opted_out(item["user_id"]):
+        promo_code = await get_or_create_renewal_promo(item["user_id"])
 
+    promo = await validate_promo_code(promo_code) if promo_code else None
+    promo_expiry = datetime.fromtimestamp(promo["expires_at"]).strftime("%d.%m.%Y") if promo else None
     text = (
-        f"🚨 <b>Ваша подписка истекает!</b>\n\n"
-        f"📅 Дата окончания: <b>{date_str}</b>\n"
-        f"🔔 Осталось: <b>{days_left} {get_day_word(days_left)}</b>\n\n"
-        f"Продлите сейчас, чтобы YouTube, Telegram и сайты продолжали работать без перерывов.\n\n"
-        f"🎁 <b>Промокод на продление:</b> <code>{promo_code}</code> — <b>30% скидки</b>, "
-        f"действителен 7 дней.\n\n"
-        f"💡 <b>Выгоднее сразу надолго:</b>\n"
-        f"• 12 месяцев — 708 ₽ (≈59 ₽/мес)\n"
-        f"• 6 месяцев — 414 ₽ (≈69 ₽/мес)\n"
-        f"• 3 месяца — 237 ₽ (≈79 ₽/мес)"
+        f"⏳ <b>До окончания подписки — {days_left} {get_day_word(days_left)}</b>\n\n"
+        f"Доступ активен до <b>{date_str}</b>. Продлите подписку, чтобы пользоваться VPN и дальше.\n\n"
+        + (f"🎁 Промокод <code>{promo_code}</code> даёт <b>30% скидки</b> до {promo_expiry}.\n\n" if promo_expiry else "")
+        + "На длительном тарифе ниже цена за месяц: 12 месяцев — 708 ₽ (≈59 ₽/мес)."
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Активировать промокод", callback_data=f"activate_promo:{promo_code}")],
-        [InlineKeyboardButton(text="🔄 Продлить сейчас", callback_data="buy_vpn")],
-        [InlineKeyboardButton(text="🎁 Пригласить друга и получить +15 дней", callback_data="partner")]
+        [InlineKeyboardButton(text="Продлить подписку", callback_data="buy_vpn", style="primary")],
+        [InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn")],
+        *([[InlineKeyboardButton(text="Применить промокод", callback_data=f"activate_promo:{promo_code}")]] if promo_expiry else []),
     ])
 
     await bot.send_message(item["user_id"], text, parse_mode="HTML", reply_markup=kb)
@@ -170,32 +160,29 @@ async def _send_warning_notification(bot: Bot, item: dict) -> None:
     """Send warning notification for keys expiring in 7-14 days."""
     sub = await _get_active_autorenew(item["user_id"])
     if sub:
-        await _send_autorenew_upcoming(bot, item, sub)
+        # Keep renewal messages to one clear reminder in the final days.
         return
 
     date_str = datetime.fromtimestamp(item["expiry"]).strftime("%d.%m.%Y")
     days_left = max(1, int((item["expiry"] - int(time.time())) / 86400))
 
-    promo_code = await get_or_create_renewal_promo(item["user_id"])
+    promo_code = None
+    if not await is_promotional_opted_out(item["user_id"]):
+        promo_code = await get_or_create_renewal_promo(item["user_id"])
 
+    promo = await validate_promo_code(promo_code) if promo_code else None
+    promo_expiry = datetime.fromtimestamp(promo["expires_at"]).strftime("%d.%m.%Y") if promo else None
     text = (
-        f"⏳ <b>Напоминание о продлении подписки</b>\n\n"
-        f"📅 Дата окончания: <b>{date_str}</b>\n"
-        f"🔔 Осталось: <b>{days_left} {get_day_word(days_left)}</b>\n\n"
-        f"🎁 <b>Промокод на продление:</b>\n"
-        f"<code>{promo_code}</code> — <b>30% СКИДКА</b>!\n"
-        f"Действителен 7 дней.\n\n"
-        f"💡 <b>Выгоднее сразу надолго:</b>\n"
-        f"• 12 месяцев — 708 ₽ (≈59 ₽/мес)\n"
-        f"• 6 месяцев — 414 ₽ (≈69 ₽/мес)\n"
-        f"• 3 месяца — 237 ₽ (≈79 ₽/мес)\n\n"
-        f"🤝 <b>Партнёрская программа:</b> Приглашайте друзей и получайте +15 дней за каждого!"
+        f"📅 <b>Подписка активна до {date_str}</b>\n"
+        f"Осталось {days_left} {get_day_word(days_left)}. Продлить можно заранее — ваши ключи и настройки сохранятся.\n\n"
+        + (f"🎁 Промокод <code>{promo_code}</code> — <b>30% скидки</b> до {promo_expiry}.\n\n" if promo_expiry else "")
+        + "На длительном тарифе ниже цена за месяц: 12 месяцев — 708 ₽ (≈59 ₽/мес)."
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Активировать промокод", callback_data=f"activate_promo:{promo_code}")],
-        [InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="buy_vpn")],
-        [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="partner")]
+        [InlineKeyboardButton(text="Продлить подписку", callback_data="buy_vpn", style="primary")],
+        [InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn")],
+        *([[InlineKeyboardButton(text="Применить промокод", callback_data=f"activate_promo:{promo_code}")]] if promo_expiry else []),
     ])
 
     await bot.send_message(item["user_id"], text, parse_mode="HTML", reply_markup=kb)
@@ -205,26 +192,20 @@ async def _send_early_notification(bot: Bot, item: dict) -> None:
     """Send early notification for keys expiring in 21-30 days."""
     sub = await _get_active_autorenew(item["user_id"])
     if sub:
-        await _send_autorenew_upcoming(bot, item, sub)
+        # An auto-renewing customer only gets the pre-charge reminder close to billing.
         return
 
     date_str = datetime.fromtimestamp(item["expiry"]).strftime("%d.%m.%Y")
     days_left = max(1, int((item["expiry"] - int(time.time())) / 86400))
 
     text = (
-        f"📢 <b>Информация о вашей подписке</b>\n\n"
-        f"📅 Дата окончания: <b>{date_str}</b>\n"
-        f"🔔 Осталось: <b>{days_left} {get_day_word(days_left)}</b>\n\n"
-        f"✅ <b>Ваша подписка активна!</b>\n"
-        f"Продлите заранее, чтобы избежать перерывов в работе.\n\n"
-        f"💡 <b>Цена за месяц ниже при оплате за длинный срок:</b>\n"
-        f"• 1 месяц — 89 ₽/мес\n"
-        f"• 12 месяцев — 708 ₽ всего (≈59 ₽/мес)"
+        f"✅ <b>Подписка активна ещё {days_left} {get_day_word(days_left)}</b>\n\n"
+        f"Доступ завершится {date_str}. На тарифе на 12 месяцев месяц стоит около 59 ₽."
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="buy_vpn")],
-        [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="partner")]
+        [InlineKeyboardButton(text="Посмотреть тарифы", callback_data="buy_vpn", style="primary")],
+        [InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn")]
     ])
 
     await bot.send_message(item["user_id"], text, parse_mode="HTML", reply_markup=kb)
@@ -371,6 +352,17 @@ async def _wait_until_03_00() -> None:
 async def start_notification_scheduler(bot: Bot) -> None:
     """Run expiry notifications once per day at ~10:00 and backup at 03:00."""
     logger.info("Notification scheduler started")
+
+    async def giveaway_scheduler():
+        from giveaway_automation import run_giveaway_automation
+        while True:
+            try:
+                await run_giveaway_automation(bot)
+            except Exception as e:
+                logger.exception("Giveaway automation pass failed: %s", e)
+            await asyncio.sleep(60)
+
+    asyncio.create_task(giveaway_scheduler())
 
     # Start backup scheduler as separate task
     async def backup_scheduler():

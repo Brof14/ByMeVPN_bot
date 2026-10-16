@@ -39,6 +39,7 @@ from handlers import (
 from subscription import router as subscription_router
 from webhook import start_webhook_server
 from payment_monitor import start_payment_monitor
+from handlers.marketing import router as marketing_router
 
 # Configure logging
 logging.basicConfig(
@@ -206,7 +207,7 @@ async def main() -> None:
     routers = [
         start_router, buy_router, subscription_router, keys_router,
         partner_router, guide_router, legal_router,
-        admin_router, auth_router, ad_program_router, fallback_router
+        admin_router, auth_router, ad_program_router, marketing_router, fallback_router
     ]
 
     for router in routers:

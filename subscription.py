@@ -194,9 +194,25 @@ async def deliver_key(
                     logger.exception("Failed to get fresh subscription URL for user %d: %s", user_id, e)
                     key_to_show = existing_key
 
-                title = "🎉 Бонус за рекламу начислен!" if method == "ad_bonus" else "✅ <b>Подписка продлена!</b>"
+                title = (
+                    "🎉 <b>Друг присоединился по вашей ссылке!</b>"
+                    if method == "ref_signup_bonus"
+                    else "🎉 <b>Бонус за приглашённого начислен!</b>" if method == "ref_bonus"
+                    else "🎉 <b>Вы выиграли в розыгрыше ByMeVPN!</b>" if method == "giveaway_prize"
+                    else "🎉 Бонус за рекламу начислен!" if method == "ad_bonus"
+                    else "✅ <b>Подписка продлена!</b>"
+                )
+                bonus_note = (
+                    f"За регистрацию приглашённого начислено <b>+{days} дней</b>.\n\n"
+                    if method == "ref_signup_bonus" else
+                    f"За первую оплату приглашённого начислено <b>+{days} дней</b>.\n\n"
+                    if method == "ref_bonus" else
+                    f"Вам автоматически начислен приз <b>+{days} дней</b>.\n\n"
+                    if method == "giveaway_prize" else ""
+                )
                 text = (
                     f"{title}\n\n"
+                    f"{bonus_note}"
                     f"🔑 <b>Ключ #{key_id}</b> продлен на <b>{days} дней</b>\n"
                     f"📱 Доступно устройств: <b>{limit_ip}</b>\n"
                     f"📅 Новый срок: до <b>{format_timestamp(new_expiry)[:10]}</b>\n\n"
@@ -287,9 +303,22 @@ async def deliver_key(
                     payment_provider=method,
                 )
 
-            title = "🎉 VPN-бонус за рекламу активирован!" if method == "ad_bonus" else "✅ <b>Подписка успешно активирована!</b>"
+            title = (
+                "🎉 <b>Друг присоединился по вашей ссылке!</b>"
+                if method == "ref_signup_bonus"
+                else "🎉 <b>Вы выиграли в розыгрыше ByMeVPN!</b>" if method == "giveaway_prize"
+                else "🎉 VPN-бонус за рекламу активирован!" if method == "ad_bonus"
+                else "✅ <b>Подписка успешно активирована!</b>"
+            )
+            bonus_note = (
+                f"За регистрацию приглашённого начислено <b>+{days} дней</b>.\n\n"
+                if method == "ref_signup_bonus" else
+                f"Вам автоматически начислен приз <b>+{days} дней</b>.\n\n"
+                if method == "giveaway_prize" else ""
+            )
             text = (
                 f"{title}\n\n"
+                f"{bonus_note}"
                 f"🔑 <b>Ключ #{key_id}</b> активирован на <b>{days} дней</b>\n"
                 f"📱 Доступно устройств: <b>{limit_ip}</b>\n"
                 f"📅 Срок действия: до <b>{format_timestamp(new_expiry)[:10]}</b>\n\n"
@@ -369,9 +398,22 @@ async def deliver_key(
             )
 
         device_word = "устройство" if limit_ip == 1 else ("устройства" if limit_ip in (2, 3, 4) else "устройств")
-        title = "🎉 VPN-бонус за рекламу активирован!" if method == "ad_bonus" else "✅ <b>VPN подключён!</b>"
+        title = (
+            "🎉 <b>Друг присоединился по вашей ссылке!</b>"
+            if method == "ref_signup_bonus"
+            else "🎉 <b>Вы выиграли в розыгрыше ByMeVPN!</b>" if method == "giveaway_prize"
+            else "🎉 VPN-бонус за рекламу активирован!" if method == "ad_bonus"
+            else "✅ <b>VPN подключён!</b>"
+        )
+        bonus_note = (
+            f"За регистрацию приглашённого начислено <b>+{days} дней</b>.\n\n"
+            if method == "ref_signup_bonus" else
+            f"Вам автоматически начислен приз <b>+{days} дней</b>.\n\n"
+            if method == "giveaway_prize" else ""
+        )
         text = (
             f"{title}\n\n"
+            f"{bonus_note}"
             f"🔑 <b>Ваша подписка:</b>\n"
             f"<code>{subscription_url}</code>\n\n"
             f"📱 Доступно устройств: <b>{limit_ip}</b>\n"
