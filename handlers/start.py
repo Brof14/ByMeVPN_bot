@@ -94,7 +94,7 @@ async def _clean_chat(bot: Bot, chat_id: int, anchor_msg_id: int, count: int = 3
 def _referral_welcome_kb() -> InlineKeyboardMarkup:
     """Welcome keyboard for referral users (intro trial: 1 ₽ → 3 days)."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎁 Попробовать за 1 ₽", callback_data="trial_ref", style="success")],
+        [InlineKeyboardButton(text="🎁 Попробовать за 1 ₽", callback_data="trial_ref")],
     ])
 
 
@@ -128,28 +128,39 @@ async def _send_main_menu(
         return
 
     if is_new_referral and state == "new":
-        # Referral landing: one compact, transparent welcome screen.
+        # Referral landing - fire bonus text (when someone clicks referral link)
         text = (
-            "🎁 <b>Вас пригласили попробовать ByMeVPN</b>\n\n"
-            "Подключение через Happ: бот даст личную ссылку и покажет шаги для вашего устройства.\n\n"
-            "Пробный доступ один раз: 3 дня за 1 ₽. Если ЮKassa сохранит способ оплаты, через 3 дня начнётся продление за 89 ₽ каждые 30 дней. "
-            "Автопродление можно отключить в любой момент."
+            "🔥 Нормальный VPN сейчас найти сложно — либо дорогой, либо не работает.\n\n"
+            "🎁 <b>3 дня ByMeVPN — за 1 ₽</b>\n\n"
+            "Что получите сразу:\n"
+            "• VPN-подключение для приложений и сайтов\n"
+            "• Короткая инструкция под ваше устройство\n"
+            "• Подключение за пару минут, без сложных настроек\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "💳 Сегодня — 1 ₽\n"
+            "🔁 Через 3 дня — 89 ₽/мес, автопродление каждые 30 дней\n"
+            "🔓 Отключить автопродление можно в любой момент\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "👇 Нажмите кнопку и подключитесь"
         )
         kb = _referral_welcome_kb()
     elif state == "new":
         # Main menu - standard welcome text
         text = (
-            "<b>ByMeVPN — VPN с подключением через Happ и пошаговой инструкцией в боте.</b>\n\n"
-            "Выберите тариф на 2, 5 или 10 устройств. Российские приложения можно оставить в обходе — VPN для остальных приложений останется включённым.\n\n"
-            "🎁 Новым пользователям один раз доступны 3 дня за 1 ₽. Если способ оплаты сохранён, затем — 89 ₽ за каждые 30 дней; автопродление можно отключить.\n"
-            "🎁 За приглашения друзей можно получать бесплатные дни без привязки карты; ещё один способ — разместить рекламу ByMeVPN в Telegram-канале."
+            "<b>ByMeVPN — VPN с простым подключением.</b>\n\n"
+            "Если приложения или сайты не открываются, ByMeVPN поможет подключиться через VPN. "
+            "Настройка займёт пару минут.\n\n"
+            "🎁 <b>3 дня за 1 ₽</b> — попробуйте прежде чем платить полную цену.\n"
+            "💳 Дальше — 89 ₽/мес (или выгоднее при оплате за 3–12 месяцев).\n\n"
+            "После оплаты бот пришлёт ключ и откроет короткую инструкцию для вашего устройства."
         )
         kb = main_menu_new_user()
     elif state == "expired":
         text = (
             f"<b>Здравствуйте, {user_name}!</b>\n\n"
-            "Доступ по подписке завершён. Продлите его, чтобы снова пользоваться VPN.\n"
-            "Можно выбрать срок и число устройств — бонусные месяцы уже учтены в тарифах."
+            "Ваша подписка закончилась.\n\n"
+            "Продлите подписку, чтобы снова подключаться к VPN. Перед оплатой выберите нужное число устройств.\n\n"
+            "Чем дольше срок, тем больше вы экономите!"
         )
         # Check if user has keys to show appropriate menu (use direct DB check, not cache)
         user_keys = await get_user_keys(user_id)
@@ -175,10 +186,7 @@ async def _send_main_menu(
             )
         else:
             text = f"<b>Здравствуйте, {user_name}!</b>"
-        kb = (
-            main_menu_with_keys(trial_used=trial_used, has_active_key=bool(active_keys))
-            if has_keys else main_menu_existing(trial_used=trial_used)
-        )
+        kb = main_menu_with_keys(trial_used=trial_used) if has_keys else main_menu_existing(trial_used=trial_used)
 
     if isinstance(target, Message):
         await bot.send_photo(
@@ -293,7 +301,21 @@ async def cmd_start(message: Message, bot: Bot) -> None:
                         except Exception as bonus_error:
                             logger.exception("Could not grant referral signup bonus to %d: %s", ref_id, bonus_error)
                         
-                        # The referral offer is included in the single welcome screen below.
+                        # Send beautiful message to new user with button
+                        try:
+                            await bot.send_message(
+                                user_id,
+                                "🎁 <b>Вы перешли по реферальной ссылке</b>\n\n"
+                                "🌟 <b>3 дня ByMeVPN — за 1 ₽</b>\n"
+                                "🚀 Нажмите кнопку ниже, чтобы попробовать",
+                                parse_mode="HTML",
+                                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                                    InlineKeyboardButton(text="🎁 Попробовать за 1 ₽", callback_data=f"claim_trial:{ref_id}")
+                                ]])
+                            )
+                        except Exception as msg_error:
+                            logger.error("Failed to send referral welcome message: %s", msg_error)
+                        
                         logger.info("Referral click from user %s with code %s", user_id, args[1])
                 except Exception as e:
                     logger.error("Error processing referral: %s", e)
@@ -324,7 +346,7 @@ async def _start_intro_trial(bot: Bot, callback: CallbackQuery, ref_id: int | No
     """
     from database import (
         has_trial_used, get_user_active_keys,
-        get_yookassa_trial_pending,
+        get_yookassa_trial_pending, save_yookassa_trial_pending,
     )
     from constants import (
         INTRO_TRIAL_PRICE_RUB, INTRO_TRIAL_DAYS, INTRO_TRIAL_DEVICES,
@@ -343,7 +365,14 @@ async def _start_intro_trial(bot: Bot, callback: CallbackQuery, ref_id: int | No
     # Reuse a recent pending checkout to avoid duplicate 1 ₽ invoices
     pending = await get_yookassa_trial_pending(user_id)
     if pending and pending.get("confirmation_url") and int(time.time()) - (pending.get("created") or 0) < 1800:
-        text = _intro_trial_payment_text()
+        text = (
+            "🎁 <b>3 дня ByMeVPN — 1 ₽</b>\n\n"
+            f"Сегодня: <b>1 ₽</b>\n"
+            f"Через {INTRO_TRIAL_DAYS} дня: <b>{RECURRING_MONTHLY_PRICE} ₽/мес</b> — "
+            "далее каждые 30 дней, пока автопродление не отключено.\n\n"
+            "🔓 Отключить автопродление можно в любой момент — "
+            "доступ сохранится до конца оплаченного периода."
+        )
         await send_with_photo(bot, callback, text, trial_pay_kb(pending["confirmation_url"]))
         return
 
@@ -363,32 +392,25 @@ async def _start_intro_trial(bot: Bot, callback: CallbackQuery, ref_id: int | No
         await safe_answer(callback, "Оплата временно недоступна, попробуйте чуть позже.", alert=True)
         await send_with_photo(
             bot, callback,
-            "Оплата временно недоступна. Попробуйте ещё раз через минуту "
+            "😔 Не удалось создать платёж. Попробуйте ещё раз через минуту "
             "или выберите обычный тариф.",
             InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="💳 Тарифы", callback_data="buy_vpn", style="primary"),
+                InlineKeyboardButton(text="💳 Тарифы", callback_data="buy_vpn"),
                 InlineKeyboardButton(text="🏠 Меню", callback_data="back_to_menu"),
             ]]),
         )
         return
 
-    text = _intro_trial_payment_text(include_next_step=True)
-    await send_with_photo(bot, callback, text, trial_pay_kb(confirmation_url))
-
-
-def _intro_trial_payment_text(*, include_next_step: bool = False) -> str:
-    """Plain, accurate trial and recurring terms shown immediately before checkout."""
-    from constants import INTRO_TRIAL_DAYS, RECURRING_MONTHLY_PRICE
-
     text = (
-        "🎁 <b>Пробный доступ — 3 дня за 1 ₽, один раз</b>\n\n"
-        f"Сегодня: <b>1 ₽</b>. Если ЮKassa сохранит способ оплаты, через {INTRO_TRIAL_DAYS} дня спишется "
-        f"<b>{RECURRING_MONTHLY_PRICE} ₽</b> за следующие 30 дней, затем — каждые 30 дней.\n\n"
-        "Автопродление можно отключить в любой момент в настройках ключа. Если способ оплаты не сохранится, доступ можно будет продлить вручную."
+        "🎁 <b>3 дня ByMeVPN — 1 ₽</b>\n\n"
+        f"Сегодня: <b>1 ₽</b>\n"
+        f"Через {INTRO_TRIAL_DAYS} дня: <b>{RECURRING_MONTHLY_PRICE} ₽/мес</b> — "
+        "далее каждые 30 дней, пока автопродление не отключено.\n\n"
+        "🔓 Отключить автопродление можно в любой момент — "
+        "доступ сохранится до конца оплаченного периода.\n\n"
+        "👇 Нажмите «Оплатить 1 ₽» — ключ придёт автоматически."
     )
-    if include_next_step:
-        text += "\n\nПосле оплаты бот сразу пришлёт ключ и инструкцию для вашего устройства."
-    return text
+    await send_with_photo(bot, callback, text, trial_pay_kb(confirmation_url))
 
 
 @router.callback_query(F.data == "trial_1r")
@@ -454,21 +476,20 @@ async def cb_back_to_menu(callback: CallbackQuery, bot: Bot, state: FSMContext):
 async def cb_about(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
-        "<b>VPN, который просто подключить и удобно настроить.</b>\n\n"
-        "• Личная ссылка и короткая инструкция для Happ — прямо в боте.\n"
-        "• Тарифы на 2, 5 или 10 устройств.\n"
-        "• Российские приложения можно добавить в обход, не выключая VPN для остальных.\n"
-        "• Бесплатные дни за приглашения — без привязки карты; ещё можно разместить рекламу в Telegram-канале.\n\n"
-        "Новым пользователям один раз доступно 3 дня за 1 ₽. Условия продления и оплаты бот покажет до платежа."
+        "<b>ByMeVPN — простой способ подключить VPN на своих устройствах.</b>\n\n"
+        "Одна подписка — доступ к привычным сайтам и приложениям через удобный VPN-клиент. Выберите число устройств, получите личную ссылку и подключитесь за несколько шагов.\n\n"
+        "🎁 Попробуйте 3 дня за 1 ₽, затем выберите подходящий тариф.\n"
+        "🎁 Бесплатные дни можно получать, приглашая друзей — без карты и её привязки.\n"
+        "🌐 Российские приложения можно оставить в обходе: VPN остаётся включённым для остальных.\n"
+        "📱 Инструкции и управление подпиской — прямо в боте.\n"
+        "🤝 Можно получить VPN за размещение рекламы ByMeVPN в Telegram-канале.\n\n"
+        "При оплате через ЮKassa сохранённый способ оплаты используется для автопродления выбранного тарифа; отключить его можно в «Мои ключи» → «Управление автопродлением». Stars и CryptoBot автоматически не продлеваются."
     )
     # Keep the menu navigation in a fixed, full-width bottom row.
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Выбрать тариф", callback_data="buy_vpn", style="primary")],
-        [
-            InlineKeyboardButton(text="📣 VPN за рекламу", callback_data="ad_program"),
-            InlineKeyboardButton(text="🎁 Бонусы за друзей", callback_data="partner"),
-        ],
+        [InlineKeyboardButton(text="💳 Выбрать тариф", callback_data="buy_vpn")],
+        [InlineKeyboardButton(text="📣 VPN за рекламу", callback_data="ad_program")],
         [InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu")],
     ])
     await send_with_photo(bot, callback, text, kb)

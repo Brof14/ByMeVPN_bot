@@ -30,16 +30,16 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("connection_guide", actions)
             self.assertNotIn("auth_existing_client", actions)
 
-    def test_main_menu_uses_clear_hierarchy_and_limited_semantic_colors(self):
+    def test_main_menu_uses_compact_rows_and_limited_semantic_colors(self):
         for markup in (main_menu_new_user(), main_menu_existing(), main_menu_with_keys()):
             rows = markup.inline_keyboard
-            self.assertEqual([button.text for button in rows[-1]], ["О сервисе", "Поддержка"])
+            self.assertEqual(len(rows[-1]), 1)  # support stays separate
+            self.assertEqual(rows[-1][0].text, "Поддержка")
             self.assertLessEqual(sum(button.style is not None for row in rows for button in row), 2)
-        menu = main_menu_with_keys(trial_used=True)
-        self.assertEqual([len(row) for row in menu.inline_keyboard], [1, 1, 1, 1, 2])
-        self.assertEqual(menu.inline_keyboard[0][0].text, "💳 Выбрать тариф")
-        self.assertEqual(menu.inline_keyboard[0][0].style, "primary")
-        self.assertNotIn("trial_1r", callbacks(main_menu_with_keys(has_active_key=True)))
+        menu = main_menu_with_keys()
+        self.assertEqual([len(row) for row in menu.inline_keyboard], [2, 2, 2, 1])
+        self.assertEqual(menu.inline_keyboard[0][0].style, "success")
+        self.assertEqual(menu.inline_keyboard[0][1].style, "primary")
         used_trial = main_menu_existing(trial_used=True)
         self.assertNotIn("trial_1r", callbacks(used_trial))
 
