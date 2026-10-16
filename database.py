@@ -132,7 +132,8 @@ CREATE TABLE IF NOT EXISTS yookassa_processed (
     processed   INTEGER DEFAULT (strftime('%s','now'))
 );
 
--- YooKassa: pending deliveries waiting for user to enter config name
+-- Legacy YooKassa pending records retained for compatibility with old rows.
+-- Current payments are delivered immediately and do not wait for user input.
 CREATE TABLE IF NOT EXISTS yookassa_pending (
     payment_id  TEXT PRIMARY KEY,
     user_id     INTEGER NOT NULL,
@@ -157,7 +158,8 @@ CREATE TABLE IF NOT EXISTS crypto_processed (
     processed   INTEGER DEFAULT (strftime('%s','now'))
 );
 
--- Crypto Bot: pending deliveries waiting for user to enter config name
+-- Legacy Crypto Bot pending records retained for compatibility with old rows.
+-- Current payments are delivered immediately and do not wait for user input.
 CREATE TABLE IF NOT EXISTS crypto_pending (
     invoice_id  TEXT PRIMARY KEY,
     user_id     INTEGER NOT NULL,

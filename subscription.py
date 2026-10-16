@@ -471,7 +471,7 @@ async def _notify_referral_bonus(bot: Bot, referrer_id: int, new_user_id: int) -
             referrer_id,
             f"🎁 <b>Ваш реферал оформил подписку!</b>\n\n"
             f"Вам начислено <b>+{REF_BONUS_DAYS} дней</b> бесплатно.\n\n"
-            "Для активации нажмите кнопку ниже и введите название конфига:",
+            "Нажмите кнопку ниже — бот автоматически добавит бонус к вашему доступу.",
             parse_mode="HTML",
             reply_markup=kb,
         )
