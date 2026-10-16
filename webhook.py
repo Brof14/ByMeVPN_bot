@@ -167,6 +167,10 @@ async def _process_payment(bot: Bot, payment_id: str) -> None:
 
         if payment.get("status") != "succeeded":
             logger.info("Webhook: payment %s status=%s, skipping", payment_id, payment.get("status"))
+            if payment.get("status") == "canceled":
+                # Stop polling a checkout that can no longer become paid.
+                from database import delete_yookassa_pending
+                await delete_yookassa_pending(payment_id)
             return
 
         # ── Step 2: Read the legacy processed marker, but do not trust it alone ──

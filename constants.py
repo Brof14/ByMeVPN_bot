@@ -48,7 +48,7 @@ def normalize_days(days) -> int | None:
 # URLs and Links
 # ============================================================================
 LOGO_URL = "https://i.ibb.co/rG9F5PCS/logo.jpg"
-SUPPORT_URL_TEMPLATE = "https://t.me/ByMeVPN_support_bot?text={}"
+SUPPORT_URL_TEMPLATE = "https://t.me/ByMeVPNSupportBot?text={}"
 
 # ============================================================================
 # Device Limits & Configuration (Single Source of Truth)

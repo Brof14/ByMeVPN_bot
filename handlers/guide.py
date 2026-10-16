@@ -1,11 +1,12 @@
 """Short, platform-specific ByMeVPN setup guide using Happ's official downloads."""
 import logging
+from html import escape
 
 from aiogram import Bot, F, Router
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
-from keyboards import connection_guide_kb, guide_back_kb
-from utils import send_with_photo, safe_answer
+from keyboards import connection_guide_kb
+from utils import send_with_photo, send_or_edit, safe_answer
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -28,15 +29,32 @@ HAPP_LINUX_ARCH = "https://github.com/Happ-proxy/happ-desktop/releases/latest/do
 async def cb_guide_menu(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
-        "<b>Подключение — три шага</b>\n\n"
-        "1. Выберите устройство и установите Happ по официальной ссылке.\n"
-        "2. Нажмите «Открыть мои ключи» и скопируйте ссылку подписки.\n"
-        "3. Вернитесь в Happ, добавьте ссылку и нажмите «Подключить».\n\n"
-        "Доступность приложения на iPhone зависит от региона App Store. "
-        "Не устанавливайте VPN-клиенты с неофициальных сайтов."
+        "📲 <b>Подключение ByMeVPN</b>\n\n"
+        "Выберите устройство — покажу приложение и короткую инструкцию. "
+        "Ссылка на подписку находится в разделе «Мои ключи»."
     )
     await _track_guide_event(callback.from_user.id, "connection_guide_open")
-    await send_with_photo(bot, callback, text, connection_guide_kb())
+    await send_or_edit(bot, callback, text, connection_guide_kb())
+
+
+@router.callback_query(F.data.startswith("connection_guide:"))
+async def cb_guide_for_key(callback: CallbackQuery, bot: Bot):
+    await safe_answer(callback)
+    try:
+        key_id = int(callback.data.split(":", 1)[1])
+    except (IndexError, ValueError):
+        await safe_answer(callback, "Ключ не найден.", alert=True)
+        return
+    from database import get_key_by_id
+    key = await get_key_by_id(key_id)
+    if not key or key["user_id"] != callback.from_user.id:
+        await safe_answer(callback, "Ключ не найден.", alert=True)
+        return
+    text = (
+        f"📲 <b>Подключение · {escape(key.get('remark') or f'Ключ #{key_id}')}</b>\n\n"
+        "Выберите устройство для короткой инструкции."
+    )
+    await send_or_edit(bot, callback, text, connection_guide_kb(key_id))
 
 
 @router.callback_query(F.data == "trouble")
@@ -44,19 +62,13 @@ async def cb_trouble(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     await _track_guide_event(callback.from_user.id, "connection_help_open")
     text = (
-        "⚠️ <b>Не получается подключиться?</b>\n\n"
-        "1. Отключите другие VPN и прокси.\n"
-        "2. В Happ откройте подписку ByMeVPN и нажмите «Обновить».\n"
-        "3. Если подписки нет, скопируйте ссылку заново: «Мои ключи» → ключ → «Скопировать ссылку».\n"
-        "4. Включите VPN ещё раз и откройте сайт.\n\n"
-        "Если не помогло, отправьте в поддержку модель устройства, название приложения и скриншот ошибки. "
-        "Саму ссылку-подписку не пересылайте — это ваш доступ."
+        "🛠 <b>Поможем подключиться</b>\n\n"
+        "Обновите подписку в Happ и проверьте, что активен только один VPN.\n\n"
+        "Если нужна помощь, напишите в поддержку и укажите модель устройства и приложение."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys")],
-        [InlineKeyboardButton(text="📋 Инструкция", callback_data="connection_guide")],
-        [InlineKeyboardButton(text="Написать в поддержку", url="https://t.me/ByMeVPN_support_bot")],
-        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu")],
+        [InlineKeyboardButton(text="Написать в поддержку", url="https://t.me/ByMeVPNSupportBot")],
+        [InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu")],
     ])
     await send_with_photo(bot, callback, text, kb)
 
@@ -64,41 +76,44 @@ async def cb_trouble(callback: CallbackQuery, bot: Bot):
 _GUIDES = {
     "ios": (
         "🍏 <b>iPhone и iPad</b>\n\n"
-        f"1. Установите <a href=\"{HAPP_IOS_RU}\">Happ Lite для российского App Store</a>.\n"
-        f"Для другого региона используйте <a href=\"{HAPP_IOS_GLOBAL}\">Happ в App Store</a>.\n\n"
-        "2. Нажмите «Открыть мои ключи» под инструкцией и скопируйте ссылку.\n"
-        "3. Откройте Happ и подтвердите добавление VPN-конфигурации.\n"
-        "4. Нажмите кнопку подключения."
+        "1. Установите Happ из App Store по кнопке ниже.\n"
+        "2. В «Моих ключах» скопируйте ссылку подписки.\n"
+        "3. Откройте Happ, добавьте ссылку и подключитесь."
     ),
     "android": (
         "🤖 <b>Android</b>\n\n"
-        f"1. Установите <a href=\"{HAPP_ANDROID}\">Happ из Google Play</a>. "
-        f"Если Play недоступен, скачайте APK только с <a href=\"{HAPP_ANDROID_APK}\">официальной страницы Happ на GitHub</a>.\n\n"
-        "2. Откройте «Мои ключи» под инструкцией и скопируйте ссылку.\n"
-        "3. Вернитесь в Happ и добавьте ссылку из буфера обмена.\n"
-        "4. Нажмите подключение и подтвердите запрос Android."
+        "1. Установите Happ из Google Play или скачайте APK по кнопкам ниже.\n"
+        "2. В «Моих ключах» скопируйте ссылку подписки.\n"
+        "3. Добавьте ссылку в Happ и нажмите «Подключить»."
+    ),
+    "android_tv": (
+        "📺 <b>Android TV</b>\n\n"
+        "1. Установите Happ из Google Play по кнопке ниже.\n"
+        "2. В «Моих ключах» скопируйте ссылку подписки.\n"
+        "3. Добавьте ссылку в Happ и подключитесь."
+    ),
+    "ios_mac": (
+        "🍎 <b>iPhone, iPad и Mac</b>\n\n"
+        "Выберите приложение по кнопке ниже. Затем скопируйте ссылку в «Моих ключах», "
+        "добавьте её в Happ и подключитесь."
     ),
     "windows": (
         "💻 <b>Windows</b>\n\n"
-        f"1. <a href=\"{HAPP_WINDOWS}\">Скачайте Happ для Windows</a> с официального GitHub Happ.\n"
-        "2. Установите и откройте приложение.\n"
-        "3. Откройте «Мои ключи» под инструкцией и скопируйте ссылку.\n"
-        "4. Вернитесь в Happ, добавьте ссылку и нажмите подключение."
+        "1. Скачайте и установите Happ по кнопке ниже.\n"
+        "2. В «Моих ключах» скопируйте ссылку подписки.\n"
+        "3. Добавьте ссылку в Happ и нажмите «Подключить»."
     ),
     "macos": (
         "🍎 <b>macOS</b>\n\n"
-        f"1. Для российского Apple ID установите <a href=\"{HAPP_MACOS_RU}\">Happ из российского App Store</a>. "
-        f"Для другого региона — <a href=\"{HAPP_MACOS_GLOBAL}\">глобальная версия</a>. "
-        f"Можно также скачать <a href=\"{HAPP_MACOS_DMG}\">официальный универсальный установщик</a>.\n\n"
-        "2. Откройте «Мои ключи» под инструкцией и скопируйте ссылку.\n"
-        "3. В Happ добавьте ссылку и нажмите кнопку подключения."
+        "1. Установите Happ из App Store или скачайте установщик по кнопкам ниже.\n"
+        "2. В «Моих ключах» скопируйте ссылку подписки.\n"
+        "3. Добавьте ссылку в Happ и подключитесь."
     ),
     "linux": (
         "🐧 <b>Linux</b>\n\n"
-        f"1. Ubuntu/Debian: <a href=\"{HAPP_LINUX_DEB}\">.deb</a>; Fedora: <a href=\"{HAPP_LINUX_RPM}\">.rpm</a>; Arch: <a href=\"{HAPP_LINUX_ARCH}\">пакет Arch</a>.\n"
-        "2. Установите пакет средствами своей системы и откройте Happ.\n"
-        "3. Откройте «Мои ключи» под инструкцией и скопируйте ссылку.\n"
-        "4. В Happ вставьте ссылку и нажмите кнопку подключения."
+        "1. Скачайте пакет для своего дистрибутива по кнопкам ниже и установите его.\n"
+        "2. В «Моих ключах» скопируйте ссылку подписки.\n"
+        "3. Добавьте ссылку в Happ и подключитесь."
     ),
 }
 
@@ -114,25 +129,78 @@ async def cb_guide_linux_legacy(callback: CallbackQuery, bot: Bot):
     await _send_platform_guide(callback, bot, "linux")
 
 
-@router.callback_query(F.data.in_({"guide_ios", "guide_android", "guide_windows", "guide_macos"}))
+@router.callback_query(F.data.in_({"guide_ios", "guide_android", "guide_windows", "guide_macos", "guide_android_tv", "guide_ios_mac"}))
 async def cb_platform_guide(callback: CallbackQuery, bot: Bot):
     await _send_platform_guide(callback, bot, callback.data.removeprefix("guide_"))
 
 
-async def _send_platform_guide(callback: CallbackQuery, bot: Bot, platform: str):
+@router.callback_query(F.data.regexp(r"^guide_(ios|android|windows|macos|android_tv|ios_mac|linux):[0-9]+$"))
+async def cb_platform_guide_for_key(callback: CallbackQuery, bot: Bot):
+    platform_and_key = callback.data.removeprefix("guide_")
+    platform, raw_key_id = platform_and_key.rsplit(":", 1)
+    try:
+        key_id = int(raw_key_id)
+    except ValueError:
+        await safe_answer(callback, "Ключ не найден.", alert=True)
+        return
+    from database import get_key_by_id
+    key = await get_key_by_id(key_id)
+    if not key or key["user_id"] != callback.from_user.id:
+        await safe_answer(callback, "Ключ не найден.", alert=True)
+        return
+    await _send_platform_guide(callback, bot, platform, key_id=key_id)
+
+
+async def _send_platform_guide(callback: CallbackQuery, bot: Bot, platform: str, key_id: int | None = None):
     await safe_answer(callback)
     await _track_guide_event(callback.from_user.id, "connection_guide_platform", platform)
     text = _GUIDES.get(platform)
     if text is None:
         text = f"Инструкция не найдена. Откройте официальный сайт Happ: <a href=\"{HAPP_SITE}\">happ.info</a>."
+    choose_callback = f"connection_guide:{key_id}" if key_id else "connection_guide"
+    download_rows = {
+        "android": [[
+            InlineKeyboardButton(text="Google Play", url=HAPP_ANDROID),
+            InlineKeyboardButton(text="Скачать APK", url=HAPP_ANDROID_APK),
+        ]],
+        "android_tv": [[InlineKeyboardButton(text="Happ в Google Play", url=HAPP_ANDROID)]],
+        "ios": [[
+            InlineKeyboardButton(text="App Store · Россия", url=HAPP_IOS_RU),
+            InlineKeyboardButton(text="App Store · другие регионы", url=HAPP_IOS_GLOBAL),
+        ]],
+        "windows": [[InlineKeyboardButton(text="Скачать Happ для Windows", url=HAPP_WINDOWS)]],
+        "macos": [
+            [
+                InlineKeyboardButton(text="App Store · Россия", url=HAPP_MACOS_RU),
+                InlineKeyboardButton(text="App Store · другие регионы", url=HAPP_MACOS_GLOBAL),
+            ],
+            [InlineKeyboardButton(text="Скачать Happ для Mac", url=HAPP_MACOS_DMG)],
+        ],
+        "linux": [
+            [
+                InlineKeyboardButton(text="Ubuntu / Debian · .deb", url=HAPP_LINUX_DEB),
+                InlineKeyboardButton(text="Fedora · .rpm", url=HAPP_LINUX_RPM),
+            ],
+            [InlineKeyboardButton(text="Arch Linux", url=HAPP_LINUX_ARCH)],
+        ],
+        # Compatibility for already-sent device buttons.
+        "ios_mac": [
+            [
+                InlineKeyboardButton(text="iPhone · App Store РФ", url=HAPP_IOS_RU),
+                InlineKeyboardButton(text="iPhone · другие регионы", url=HAPP_IOS_GLOBAL),
+            ],
+            [
+                InlineKeyboardButton(text="Mac · App Store РФ", url=HAPP_MACOS_RU),
+                InlineKeyboardButton(text="Mac · другие регионы", url=HAPP_MACOS_GLOBAL),
+            ],
+            [InlineKeyboardButton(text="Установщик для Mac", url=HAPP_MACOS_DMG)],
+        ],
+    }.get(platform, [])
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔑 Открыть мои ключи", callback_data="my_keys")],
-        [InlineKeyboardButton(text="◀️ Выбрать устройство", callback_data="connection_guide")],
-        [InlineKeyboardButton(text="⚠️ Не получается?", callback_data="trouble")],
-        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu"),
-         InlineKeyboardButton(text="Поддержка", url="https://t.me/ByMeVPN_support_bot")],
+        *download_rows,
+        [InlineKeyboardButton(text="← Назад", callback_data=choose_callback)],
     ])
-    await send_with_photo(bot, callback, text, kb)
+    await send_or_edit(bot, callback, text, kb)
 
 
 async def _track_guide_event(user_id: int, event_type: str, platform: str | None = None) -> None:

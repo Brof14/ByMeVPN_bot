@@ -132,8 +132,8 @@ CREATE TABLE IF NOT EXISTS yookassa_processed (
     processed   INTEGER DEFAULT (strftime('%s','now'))
 );
 
--- Legacy YooKassa pending records retained for compatibility with old rows.
--- Current payments are delivered immediately and do not wait for user input.
+-- Unsettled YooKassa checkout IDs. These durable IDs let the monitor recover
+-- paid orders after outages that exceed its short provider query window.
 CREATE TABLE IF NOT EXISTS yookassa_pending (
     payment_id  TEXT PRIMARY KEY,
     user_id     INTEGER NOT NULL,
@@ -158,8 +158,7 @@ CREATE TABLE IF NOT EXISTS crypto_processed (
     processed   INTEGER DEFAULT (strftime('%s','now'))
 );
 
--- Legacy Crypto Bot pending records retained for compatibility with old rows.
--- Current payments are delivered immediately and do not wait for user input.
+-- Unsettled Crypto Pay invoice IDs, retained until delivery or provider expiry.
 CREATE TABLE IF NOT EXISTS crypto_pending (
     invoice_id  TEXT PRIMARY KEY,
     user_id     INTEGER NOT NULL,
@@ -1510,6 +1509,19 @@ async def get_yookassa_pending(payment_id: str) -> Optional[dict]:
     }
 
 
+async def get_all_yookassa_pending() -> list[str]:
+    """Return checkout IDs that still need provider-side reconciliation."""
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT pending.payment_id FROM yookassa_pending AS pending "
+        "LEFT JOIN payments ON payments.provider='yookassa' "
+        "AND payments.provider_payment_id=pending.payment_id "
+        "WHERE payments.status IS NULL OR payments.status='failed' "
+        "ORDER BY pending.created ASC"
+    )
+    return [row[0] for row in await cur.fetchall()]
+
+
 async def delete_yookassa_pending(payment_id: str) -> None:
     db = await get_db()
     await db.execute(
@@ -2066,6 +2078,19 @@ async def get_crypto_pending(invoice_id) -> Optional[dict]:
         "amount_rub": row[3],
         "created": row[4],
     }
+
+
+async def get_all_crypto_pending() -> list[str]:
+    """Return Crypto Pay invoice IDs that still need provider-side reconciliation."""
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT pending.invoice_id FROM crypto_pending AS pending "
+        "LEFT JOIN payments ON payments.provider='cryptobot' "
+        "AND payments.provider_payment_id=CAST(pending.invoice_id AS TEXT) "
+        "WHERE payments.status IS NULL OR payments.status='failed' "
+        "ORDER BY pending.created ASC"
+    )
+    return [row[0] for row in await cur.fetchall()]
 
 
 async def get_crypto_pending_by_user(user_id: int) -> Optional[dict]:

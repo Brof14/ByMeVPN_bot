@@ -118,8 +118,8 @@ async def _send_main_menu(
             "ваш доступ и платежи не изменились. Попробуйте ещё раз через минуту."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Повторить", callback_data="back_to_menu")],
-            [InlineKeyboardButton(text="Поддержка", url="https://t.me/ByMeVPN_support_bot")],
+            [InlineKeyboardButton(text="Поддержка", url="https://t.me/ByMeVPNSupportBot")],
+            [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
         ])
         if isinstance(target, Message):
             await bot.send_message(chat_id=user_id, text=text, reply_markup=kb)
@@ -195,24 +195,6 @@ async def _send_main_menu(
         )
     else:
         await send_with_photo(bot, target, text, kb)
-
-
-# ---------------------------------------------------------------------------
-# /proxy
-# ---------------------------------------------------------------------------
-
-@router.message(F.text == "/proxy")
-@monitor_performance("proxy_command")
-async def cmd_proxy(message: Message, bot: Bot) -> None:
-    """Do not route users through an unverified third-party proxy."""
-    text = (
-        "Раздел Telegram-прокси временно недоступен. "
-        "Мы не подключаем клиентов к сторонним прокси."
-    )
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu")]
-    ])
-    await message.answer(text, reply_markup=kb)
 
 
 # ---------------------------------------------------------------------------
@@ -494,20 +476,19 @@ async def cb_back_to_menu(callback: CallbackQuery, bot: Bot, state: FSMContext):
 async def cb_about(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
-        "<b>ByMeVPN — доступ к VPN по подписке.</b>\n\n"
-        "Как начать:\n"
-        "1. Выберите тариф и способ оплаты.\n"
-        "2. Получите ссылку-подписку в этом боте.\n"
-        "3. Установите приложение по инструкции и добавьте ссылку — подключение готово.\n\n"
-        "Тариф задаёт срок подписки и число устройств. Подключение и управление ключами доступны в боте.\n\n"
-        "При оплате через ЮKassa сохранённая карта используется для автопродления выбранного тарифа. Автопродление можно отключить и отвязать в разделе «Мои ключи» → «Управление картой». Оплата через Stars и CryptoBot не продлевается автоматически.\n\n"
-        "Вопросы по оплате или подключению? Нажмите «Поддержка» — поможем пройти настройку."
+        "<b>ByMeVPN — простой способ подключить VPN на своих устройствах.</b>\n\n"
+        "Одна подписка — доступ к привычным сайтам и приложениям через удобный VPN-клиент. Выберите число устройств, получите личную ссылку и подключитесь за несколько шагов.\n\n"
+        "🎁 Попробуйте 3 дня за 1 ₽, затем выберите подходящий тариф.\n"
+        "📱 Инструкции и управление подпиской — прямо в боте.\n"
+        "🤝 Можно получить VPN за размещение рекламы ByMeVPN в Telegram-канале.\n\n"
+        "При оплате через ЮKassa сохранённый способ оплаты используется для автопродления выбранного тарифа; отключить его можно в «Мои ключи» → «Управление автопродлением». Stars и CryptoBot автоматически не продлеваются."
     )
-    # Создаем клавиатуру с кнопками "Назад" и "Поддержка" в одном ряду
+    # Keep the menu navigation in a fixed, full-width bottom row.
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Назад", callback_data="back_to_menu"),
-         InlineKeyboardButton(text="Поддержка", url="https://t.me/ByMeVPN_support_bot")]
+        [InlineKeyboardButton(text="💳 Выбрать тариф", callback_data="buy_vpn")],
+        [InlineKeyboardButton(text="📣 VPN за рекламу", callback_data="ad_program")],
+        [InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu")],
     ])
     await send_with_photo(bot, callback, text, kb)
 

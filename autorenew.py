@@ -36,7 +36,7 @@ async def _notify_autorenew_failed(
         if disabled:
             text = (
                 f"❌ <b>Автопродление ByMeVPN отключено</b>\n\n"
-                f"Не удалось списать <b>{amount_rub} ₽</b> с карты {pm_title or ''} "
+                f"Не удалось списать <b>{amount_rub} ₽</b> через {pm_title or 'сохранённый способ оплаты'} "
                 f"после нескольких попыток"
                 f"{f' ({reason})' if reason else ''}.\n\n"
                 f"Ваша подписка истекла. Пожалуйста, продлите доступ вручную, "
@@ -46,8 +46,8 @@ async def _notify_autorenew_failed(
             text = (
                 f"⚠️ <b>Не удалось списать оплату за автопродление VPN</b>\n\n"
                 f"Сумма к списанию: <b>{amount_rub} ₽</b>\n"
-                f"Карта: {pm_title or 'Банковская карта'}\n\n"
-                f"Пожалуйста, проверьте баланс карты. Мы повторим попытку позже.\n"
+                f"Способ оплаты: {pm_title or 'Сохранённый способ оплаты'}\n\n"
+                f"Пожалуйста, проверьте доступность выбранного способа оплаты. Мы повторим попытку позже.\n"
                 f"Вы также можете продлить подписку вручную."
             )
 
@@ -81,7 +81,10 @@ async def process_auto_renewals(bot: Bot) -> None:
         months = sub["months"]
         amount_rub = sub["amount_rub"]
         payment_method_id = sub["payment_method_id"]
-        pm_title = sub.get("payment_method_title") or "Банковская карта"
+        pm_title = sub.get("payment_method_title") or {
+            "sbp": "Счёт СБП",
+            "bank_card": "Банковская карта",
+        }.get((sub.get("payment_method_type") or "").lower(), "Сохранённый способ оплаты")
 
         logger.info(
             "Executing auto-renewal for user %d (sub_id=%d, key_id=%d, days=%d, devices=%d, amount=%d)",
@@ -90,7 +93,11 @@ async def process_auto_renewals(bot: Bot) -> None:
 
         # One stable key per billing period. In particular, uncertain network
         # failures must retry this same request and never start a second charge.
-        idempotence_key = f"autorenew_{sub_id}_{key_id or 0}_{sub['expiry']}"
+        # A confirmed cancellation is a completed attempt, so the next retry
+        # needs a fresh idempotency key. Uncertain network outcomes do not
+        # increment fail_count and therefore keep the same key safely.
+        attempt = sub.get("fail_count", 0)
+        idempotence_key = f"autorenew_{sub_id}_{key_id or 0}_{sub['expiry']}_{attempt}"
 
         description = f"Автопродление ByMeVPN ({devices} устр., {days} дн.)"
         payment_res = await charge_yookassa_recurrent(
@@ -115,6 +122,15 @@ async def process_auto_renewals(bot: Bot) -> None:
 
         p_status = payment_res.get("status")
         payment_id = payment_res.get("id")
+
+        if payment_id and p_status in ("succeeded", "pending"):
+            try:
+                from database import add_yookassa_pending
+                await add_yookassa_pending(payment_id, user_id, days, devices, amount_rub)
+            except Exception:
+                # The payment already exists. Keep the worker alive and leave
+                # a clear log entry if durable recovery tracking failed.
+                logger.exception("Could not persist auto-renew payment %s for recovery", payment_id)
 
         if p_status == "succeeded":
             logger.info("Auto-renew payment %s succeeded immediately for user %d", payment_id, user_id)

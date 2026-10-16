@@ -21,8 +21,7 @@ def partner_main_kb(link: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="Поделиться ссылкой", url=f"https://t.me/share/url?url={quote_plus(link)}&text={share_text}")],
         [InlineKeyboardButton(text="👥 Мои приглашения", callback_data="partner_referrals_list")],
         [InlineKeyboardButton(text="📣 VPN за рекламу", callback_data="ad_program")],
-        [InlineKeyboardButton(text="Назад", callback_data="back_to_menu"),
-         InlineKeyboardButton(text="Поддержка", url="https://t.me/ByMeVPN_support_bot")],
+        [InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu")],
     ])
 
 

@@ -322,7 +322,7 @@ async def deliver_key(
                 "❌ <b>Ошибка создания подписки</b>\n\n"
                 "Не удалось создать пользователя.\n"
                 "Пожалуйста, попробуйте позже или напишите в поддержку.\n\n"
-                "📞 Поддержка: @ByMeVPN_support_bot",
+                "📞 Поддержка: @ByMeVPNSupportBot",
                 parse_mode="HTML",
             )
             return False
@@ -342,7 +342,7 @@ async def deliver_key(
                 "❌ <b>Ошибка создания ключа</b>\n\n"
                 "Не удалось получить ссылку на подписку.\n"
                 "Пожалуйста, напишите в поддержку.\n\n"
-                "📞 Поддержка: @ByMeVPN_support_bot",
+                "📞 Поддержка: @ByMeVPNSupportBot",
                 parse_mode="HTML",
             )
             return False
@@ -446,7 +446,7 @@ async def deliver_key(
                 "❌ <b>Ошибка создания VPN подписки</b>\n\n"
                 "Не удалось подтвердить создание подписки на сервере.\n"
                 "Если вы оплатили, не оплачивайте повторно — поддержка проверит платёж и восстановит доступ.\n\n"
-                "📞 Поддержка: @ByMeVPN_support_bot",
+                "📞 Поддержка: @ByMeVPNSupportBot",
                 parse_mode="HTML",
             )
         except Exception:

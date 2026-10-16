@@ -111,20 +111,23 @@ async def _send_autorenew_upcoming(bot: Bot, item: dict, sub: dict) -> None:
     days_left = max(1, int((item["expiry"] - int(time.time()) + 86399) / 86400))
     amount = sub.get("amount_rub") or 89
     devices = sub.get("devices") or 2
-    pm_title = sub.get("payment_method_title") or "сохранённая карта"
+    pm_title = sub.get("payment_method_title") or {
+        "sbp": "счёт СБП",
+        "bank_card": "банковская карта",
+    }.get((sub.get("payment_method_type") or "").lower(), "сохранённый способ оплаты")
 
     text = (
         f"🔁 <b>Подписка продлится автоматически</b>\n\n"
         f"📅 Дата списания: <b>{date_str}</b> (через {days_left} {get_day_word(days_left)})\n"
         f"💳 Сумма: <b>{amount} ₽</b> за следующие 30 дней ({devices} устр.)\n"
-        f"Карта: {pm_title}\n\n"
+        f"Способ оплаты: {pm_title}\n\n"
         f"✅ Ничего делать не нужно — доступ продолжится без перерывов.\n"
         f"🔓 Не хотите продлевать? Отключите автопродление в меню ключа — "
         f"доступ сохранится до конца оплаченного периода."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys")],
-        [InlineKeyboardButton(text="🆘 Поддержка", url="https://t.me/ByMeVPN_support_bot")],
+        [InlineKeyboardButton(text="🆘 Поддержка", url="https://t.me/ByMeVPNSupportBot")],
     ])
     await bot.send_message(item["user_id"], text, parse_mode="HTML", reply_markup=kb)
 

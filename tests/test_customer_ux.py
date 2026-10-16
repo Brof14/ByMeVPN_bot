@@ -1,12 +1,17 @@
 """Regression tests for simplified customer menus and card-management controls."""
 import unittest
+from unittest.mock import AsyncMock, patch
 
 from keyboards import (
     main_menu_new_user,
     main_menu_existing,
     main_menu_with_keys,
     manage_payment_methods_kb,
+    connection_guide_kb,
+    back_to_menu,
+    tariff_selection_kb,
 )
+from handlers.keys import _get_payment_methods_text, _load_autorenew_context
 
 
 def callbacks(markup):
@@ -18,7 +23,7 @@ def callbacks(markup):
     ]
 
 
-class TestCustomerMenus(unittest.TestCase):
+class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
     def test_users_without_a_subscription_do_not_see_connection_guide_or_account_switch(self):
         for markup in (main_menu_new_user(), main_menu_existing()):
             actions = callbacks(markup)
@@ -29,6 +34,62 @@ class TestCustomerMenus(unittest.TestCase):
         actions = callbacks(main_menu_with_keys(trial_used=True))
         self.assertNotIn("connection_guide", actions)
         self.assertNotIn("auth_existing_client", actions)
+        self.assertIn("ad_program", actions)
+
+    def test_guide_device_selector_uses_compact_two_column_rows(self):
+        markup = connection_guide_kb()
+        self.assertEqual([len(row) for row in markup.inline_keyboard[:2]], [2, 2])
+        actions = callbacks(markup)
+        self.assertIn("guide_android_tv", actions)
+        self.assertIn("guide_ios", actions)
+        self.assertIn("guide_macos", actions)
+
+    def test_back_is_full_width_and_support_is_not_mixed_into_navigation(self):
+        back = back_to_menu().inline_keyboard
+        self.assertEqual(len(back), 1)
+        self.assertEqual(len(back[0]), 1)
+        self.assertEqual(back[0][0].callback_data, "back_to_menu")
+
+        for markup in (tariff_selection_kb(), connection_guide_kb()):
+            for row in markup.inline_keyboard:
+                self.assertFalse(any(button.url for button in row))
+
+    def test_tariff_grid_restores_bonus_marketing_without_color_styles(self):
+        markup = tariff_selection_kb()
+        labels = [button.text for row in markup.inline_keyboard for button in row]
+        self.assertTrue(any("3 мес. + 1 мес. 🎁 — 79 ₽ / мес." in label for label in labels))
+        self.assertTrue(all(button.style is None for row in markup.inline_keyboard for button in row))
+
+    async def test_saved_sbp_method_without_title_is_still_manageable(self):
+        sub = {
+            "payment_method_id": "opaque-test-value",
+            "payment_method_title": "",
+            "payment_method_type": "sbp",
+            "status": "active",
+            "amount_rub": 89,
+            "months": 1,
+            "days": 30,
+            "devices": 2,
+        }
+        with (
+            patch("database.get_auto_renew_subscription", new=AsyncMock(return_value=sub)),
+            patch("database.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("handlers.keys.get_key_by_id", new=AsyncMock(return_value={"user_id": 123, "expiry": 1_800_000_000})),
+        ):
+            loaded, title, _ = await _load_autorenew_context(123, 5)
+
+        self.assertIs(loaded, sub)
+        self.assertEqual(title, "Счёт СБП")
+        text = _get_payment_methods_text(card_title=title, sub=sub)
+        self.assertIn("Автопродление включено", text)
+        self.assertIn("Счёт СБП", text)
+        actions = callbacks(manage_payment_methods_kb(
+            card_title=title,
+            key_id=5,
+            has_card=bool(sub["payment_method_id"]),
+            autorenew_active=True,
+        ))
+        self.assertIn("autorenew_unbind_prompt:5", actions)
 
     def test_card_controls_distinguish_resume_from_unlink(self):
         active = callbacks(manage_payment_methods_kb(

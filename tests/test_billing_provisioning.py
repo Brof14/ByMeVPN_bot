@@ -8,6 +8,7 @@ import sys
 import time
 import asyncio
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # Ensure project root is in python path
@@ -423,10 +424,9 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
     # ------------------------------------------------------------------------
     # Test 10: Guide navigation and content verification
     # ------------------------------------------------------------------------
-    def test_10_guide_navigation_and_content(self):
+    async def test_10_guide_navigation_and_content(self):
         """
-        Verify Linux distro selection keyboard, back buttons,
-        and platform guide texts (iOS HAPP + V2Box, Linux v2rayN distros).
+        Verify device navigation and ensure application downloads are buttons.
         """
         from keyboards import (
             connection_guide_kb, linux_distro_kb,
@@ -435,6 +435,7 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
         from handlers.guide import (
             _GUIDES, HAPP_ANDROID_APK, HAPP_IOS_RU,
             HAPP_LINUX_ARCH, HAPP_LINUX_DEB, HAPP_LINUX_RPM,
+            _send_platform_guide,
         )
 
         # 1. Connection guide keyboard has Linux button
@@ -442,6 +443,8 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
         conn_cbs = [btn.callback_data for row in conn_kb.inline_keyboard for btn in row if btn.callback_data]
         self.assertIn("guide_linux", conn_cbs)
         self.assertIn("guide_ios", conn_cbs)
+        self.assertIn("guide_macos", conn_cbs)
+        self.assertIn("guide_android_tv", conn_cbs)
         self.assertIn("back_to_menu", conn_cbs)
 
         # 2. Linux distro keyboard has 4 distros and back to connection_guide
@@ -466,14 +469,31 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
         # 5. iOS guide points at the current official Happ listings
         ios_text = _GUIDES["ios"]
         self.assertIn("Happ", ios_text)
-        self.assertIn(HAPP_IOS_RU, ios_text)
-        self.assertIn("https://apps.apple.com/us/app/happ-proxy-utility/id6504287215", ios_text)
+        self.assertNotIn("<a href", ios_text)
         self.assertNotIn("Streisand", ios_text, "Streisand must be removed from iOS guide")
 
-        # 6. Linux and Android downloads are from Happ's official releases
-        for linux_download in (HAPP_LINUX_DEB, HAPP_LINUX_RPM, HAPP_LINUX_ARCH):
-            self.assertIn(linux_download, _GUIDES["linux"])
-        self.assertIn(HAPP_ANDROID_APK, _GUIDES["android"])
+        # 6. Device downloads are exposed as labeled Telegram buttons.
+        bot = MagicMock()
+        callback = SimpleNamespace(from_user=SimpleNamespace(id=42))
+        with (
+            patch("handlers.guide._track_guide_event", new=AsyncMock()),
+            patch("handlers.guide.send_or_edit", new=AsyncMock()) as send_or_edit_mock,
+        ):
+            await _send_platform_guide(callback, bot, "ios")
+            ios_markup = send_or_edit_mock.call_args.args[3]
+            ios_urls = {button.url for row in ios_markup.inline_keyboard for button in row if button.url}
+            self.assertIn(HAPP_IOS_RU, ios_urls)
+            self.assertIn("https://apps.apple.com/us/app/happ-proxy-utility/id6504287215", ios_urls)
+
+            await _send_platform_guide(callback, bot, "linux")
+            linux_markup = send_or_edit_mock.call_args.args[3]
+            linux_urls = {button.url for row in linux_markup.inline_keyboard for button in row if button.url}
+            self.assertEqual(linux_urls, {HAPP_LINUX_DEB, HAPP_LINUX_RPM, HAPP_LINUX_ARCH})
+
+            await _send_platform_guide(callback, bot, "android")
+            android_markup = send_or_edit_mock.call_args.args[3]
+            android_urls = {button.url for row in android_markup.inline_keyboard for button in row if button.url}
+            self.assertIn(HAPP_ANDROID_APK, android_urls)
 
     # ------------------------------------------------------------------------
     # Test 11: Device switching edits caption and preserves photo (no deletion)
@@ -938,7 +958,7 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(matching)
             sub = matching[0]
 
-            expected_key = f"autorenew_{sub['sub_id']}_{sub['key_id'] or 0}_{sub['expiry']}"
+            expected_key = f"autorenew_{sub['sub_id']}_{sub['key_id'] or 0}_{sub['expiry']}_{sub['fail_count']}"
 
             captured = {}
 

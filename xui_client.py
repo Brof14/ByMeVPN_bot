@@ -157,35 +157,26 @@ async def test_xui_connection() -> tuple[bool, str]:
     try:
         api = await _get_api()
         ids_str = ",".join(map(str, XUI_INBOUND_IDS))
-        try:
-            inbounds = await _api_call_with_retry(api.inbound.get_list)
-            return True, (
-                f"Соединение с 3x-ui успешно. "
-                f"Инбаундов в панели: {len(inbounds)}, настроенные: {ids_str}"
+        # Only probe the inbounds used for provisioning. Listing every panel
+        # inbound can fail on unrelated malformed entries and adds retries to
+        # startup, while the per-ID endpoint is the path key operations use.
+        results = await asyncio.gather(
+            *(_api_call_with_retry(api.inbound.get_by_id, iid) for iid in XUI_INBOUND_IDS),
+            return_exceptions=True,
+        )
+        working = [
+            iid for iid, result in zip(XUI_INBOUND_IDS, results)
+            if not isinstance(result, Exception) and result is not None
+        ]
+        if not working:
+            failures = [str(result)[:120] for result in results if isinstance(result, Exception)]
+            raise RuntimeError(
+                "No configured 3x-ui inbound responded"
+                + (f": {'; '.join(failures)}" if failures else "")
             )
-        except Exception as list_err:
-            # Some panels contain inbounds with null streamSettings, which breaks
-            # py3xui's strict Inbound.model_validate on get_list() — while the
-            # per-id get_by_id() path used by ALL key operations works fine.
-            # Fall back to checking the configured inbounds individually.
-            working = []
-            for iid in XUI_INBOUND_IDS:
-                try:
-                    inbound = await _api_call_with_retry(api.inbound.get_by_id, iid)
-                    if inbound is not None:
-                        working.append(iid)
-                except Exception:
-                    continue
-            if working:
-                logger.warning(
-                    "test_xui_connection: get_list() failed (%s) but configured inbounds %s respond via get_by_id",
-                    str(list_err)[:120], working,
-                )
-                return True, (
-                    f"Соединение с 3x-ui успешно (get_list недоступен из-за битого инбаунда в панели). "
-                    f"Рабочие настроенные инбаунды: {working}, настроенные: {ids_str}"
-                )
-            raise
+        if len(working) != len(XUI_INBOUND_IDS):
+            logger.warning("Only configured 3x-ui inbounds %s respond; expected %s", working, ids_str)
+        return True, f"Соединение с 3x-ui успешно. Рабочие настроенные инбаунды: {working}, настроенные: {ids_str}"
     except Exception as e:
         logger.exception("test_xui_connection failed: %s", e)
         return False, f"Ошибка подключения к 3x-ui API: {str(e)}"

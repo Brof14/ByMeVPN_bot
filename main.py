@@ -22,6 +22,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import ErrorEvent
 
@@ -129,6 +130,12 @@ async def error_handler(event: ErrorEvent, bot: Bot) -> None:
     Sends formatted error cause and full traceback to admin.
     """
     exc = event.exception
+    if isinstance(exc, TelegramBadRequest) and "message is not modified" in str(exc).lower():
+        # Telegram reports an error for idempotent edits; no user or admin
+        # action is needed, and these should not be surfaced as bot failures.
+        logger.debug("Ignored Telegram no-op message edit")
+        return
+
     logger.error("Bot error [%s]: %s", type(exc).__name__, exc, exc_info=exc)
 
     try:

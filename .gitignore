@@ -64,6 +64,7 @@ test_*.py
 # Bot specific
 vpnbot.db
 logs/
+/data/
 
 # Backups
 backups/

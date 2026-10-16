@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from aiogram import Bot
 from config import YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY, CRYPTO_BOT_TOKEN
 from webhook import _process_payment, _process_crypto_invoice
-from payments import get_paid_crypto_invoices
+from payments import get_crypto_invoices, get_paid_crypto_invoices
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +49,18 @@ class PaymentMonitor:
         """Проверить и обработать необработанные платежи за заданное окно."""
         try:
             payments = await self.get_successful_payments(minutes_back=minutes_back)
+
+            # The provider time window is only a fast path. Persistent checkout
+            # IDs cover payments older than the window and failed deliveries.
+            from database import get_all_yookassa_pending
+            pending_ids = await get_all_yookassa_pending()
+            known_ids = {payment.get("id") for payment in payments}
+            payments.extend({"id": payment_id} for payment_id in pending_ids if payment_id not in known_ids)
             
             if not payments:
                 return
                 
-            logger.info(f"Found {len(payments)} successful payments to check")
+            logger.info("Checking %d recent or locally tracked YooKassa payment(s)", len(payments))
             
             for payment in payments:
                 payment_id = payment.get('id')
@@ -62,12 +69,12 @@ class PaymentMonitor:
                     
                 # Delegate deduplication to the payment ledger. A legacy
                 # processed marker alone must not hide an interrupted delivery.
-                logger.info(f"Checking payment through recovery-safe handler: {payment_id}")
+                logger.info("Checking YooKassa payment through recovery-safe handler: %s", payment_id)
                 
                 # Обрабатываем платеж (функция сама пометит как обработанный)
                 await _process_payment(self.bot, payment_id)
                 
-                logger.info(f"Payment {payment_id} processed successfully")
+                logger.info("YooKassa payment check finished: %s", payment_id)
                 
         except Exception as e:
             logger.error(f"Error in payment check: {e}")
@@ -119,12 +126,45 @@ class CryptoPaymentMonitor:
     async def check_and_process_payments(self):
         """Проверить и обработать неучтённые оплаченные инвойсы"""
         try:
+            # Keep the latest provider page for legacy invoices, then explicitly
+            # reconcile every locally persisted invoice so the 50-item page
+            # limit cannot strand an older paid order.
             invoices = await get_paid_crypto_invoices()
+            from database import get_all_crypto_pending
+            pending_ids = await get_all_crypto_pending()
+            invoices_by_id = {
+                str(invoice.get("invoice_id")): invoice
+                for invoice in invoices if invoice.get("invoice_id") is not None
+            }
+
+            pending_ids = [
+                invoice_id for invoice_id in pending_ids
+                if invoice_id not in invoices_by_id
+            ]
+            batches = [pending_ids[i:i + 50] for i in range(0, len(pending_ids), 50)]
+            semaphore = asyncio.Semaphore(5)
+
+            async def lookup_batch(invoice_ids: list[str]):
+                async with semaphore:
+                    batch = await get_crypto_invoices(invoice_ids)
+                for invoice in batch:
+                    if invoice.get("invoice_id") is not None:
+                        invoices_by_id[str(invoice["invoice_id"])] = invoice
+
+            await asyncio.gather(*(lookup_batch(batch) for batch in batches))
+            invoices = list(invoices_by_id.values())
 
             if not invoices:
                 return
 
-            logger.info(f"Crypto monitor: found {len(invoices)} paid invoices to check")
+            # Expired invoices can no longer be paid; remove them from the
+            # reconciliation queue so old abandoned checkouts do not add work.
+            from database import delete_crypto_pending
+            for invoice in invoices:
+                if invoice.get("status") == "expired" and invoice.get("invoice_id") is not None:
+                    await delete_crypto_pending(invoice["invoice_id"])
+
+            logger.info("Crypto monitor: reconciling %d locally tracked invoice(s)", len(invoices))
 
             for invoice in invoices:
                 invoice_id = invoice.get("invoice_id")
@@ -134,7 +174,7 @@ class CryptoPaymentMonitor:
                 # Do not skip old paid invoices solely because the process restarted
                 # or a legacy marker exists. The invoice handler checks the payment
                 # ledger and quarantines ambiguous cases without double-fulfillment.
-                logger.info(f"Checking paid invoice through recovery-safe handler: {invoice_id}")
+                logger.info("Checking invoice through recovery-safe handler: %s", invoice_id)
                 await _process_crypto_invoice(self.bot, invoice)
 
         except Exception as e:

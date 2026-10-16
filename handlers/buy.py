@@ -56,9 +56,9 @@ async def cb_buy_vpn(callback: CallbackQuery, bot: Bot, state: FSMContext):
     text = (
         f"<b>Тариф: {dev_info['name']} ({dev_info['badge']})</b>\n"
         f"<i>{dev_info['description']}</i>\n\n"
-        "Чем дольше срок, тем ниже стоимость одного месяца.\n"
-        "Все тарифы поддерживают стабильное и быстрое подключение.\n\n"
-        "<b>Выберите срок подписки:</b>"
+        "Выберите удобный срок: чем он дольше, тем ниже цена за месяц.\n"
+        "Бонусные месяцы уже учтены; итоговая сумма покажется следующим шагом.\n\n"
+        "<b>Тарифы:</b>"
     )
     await send_with_photo(
         bot, callback,
@@ -94,9 +94,9 @@ async def cb_select_devtier(callback: CallbackQuery, bot: Bot, state: FSMContext
         text = (
             f"<b>Тариф: {dev_info['name']} ({dev_info['badge']})</b>\n"
             f"<i>{dev_info['description']}</i>\n\n"
-            "Чем дольше срок, тем ниже стоимость одного месяца.\n"
-            "Все тарифы поддерживают стабильное и быстрое подключение.\n\n"
-            "<b>Выберите срок подписки:</b>"
+            "Выберите удобный срок: чем он дольше, тем ниже цена за месяц.\n"
+            "Бонусные месяцы уже учтены; итоговая сумма покажется следующим шагом.\n\n"
+            "<b>Тарифы:</b>"
         )
     await send_with_photo(
         bot, callback,
@@ -149,11 +149,10 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
 
     await state.update_data(months=months, devices=devices, price_rub=price_rub, days=days, original_price=original_price)
 
-    period_name = PERIOD_LABELS.get(months, f"{months} мес.")
     dev_name = DEVICE_CONFIG.get(devices, {}).get("name", f"{devices} устройств")
 
     text = (
-        f"<b>Вы покупаете доступ на {days} дней.</b>\n\n"
+        f"<b>Доступ на {days} дней</b>\n\n"
         f"📱 Устройств: <b>{dev_name}</b>\n"
         f"💰 Стоимость: <b>{price_rub} ₽</b>{promo_text}\n"
     )
@@ -162,12 +161,12 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
         text += f"<s>Без скидки: {original_price} ₽</s>\n"
 
     text += (
-        "\nОплачивая подписку, вы соглашаетесь с <a href='https://telegra.ph/POLITIKA-KONFIDENCIALNOSTI-ByMeVPN-03-12'>политикой обработки персональных данных</a>, с <a href='https://telegra.ph/DOGOVOR-PUBLICHNOJ-OFERTY-ByMyVPN-03-12'>договором оферты</a> и с <a href='https://telegra.ph/SOGLASHENIE-O-REGULYARNYH-REKURRENTNYH-PLATEZHAH-ByMeVPN-03-12'>соглашением о присоединении к рекуррентной системе платежей</a>.\n\n"
-        "После оплаты подписка будет активирована автоматически.\n\n"
-        f"<b>Автопродление:</b> при оплате через ЮKassa оно включается по умолчанию, если ЮKassa подтвердит сохранение карты. "
-        f"После выбранных {days} дней спишется {price_rub} ₽ за следующий такой же срок. "
-        "Отключить автопродление и отвязать карту можно в любой момент в меню ключа. "
-        "Оплата Stars и CryptoBot не продлевается автоматически.\n\n"
+        "\nПродолжая, вы принимаете <a href='https://telegra.ph/DOGOVOR-PUBLICHNOJ-OFERTY-ByMyVPN-03-12'>оферту</a>, "
+        "<a href='https://telegra.ph/POLITIKA-KONFIDENCIALNOSTI-ByMeVPN-03-12'>политику конфиденциальности</a> и "
+        "<a href='https://telegra.ph/SOGLASHENIE-O-REGULYARNYH-REKURRENTNYH-PLATEZHAH-ByMeVPN-03-12'>условия автоплатежей</a>.\n\n"
+        "Доступ включится сразу после оплаты. При оплате через ЮKassa автопродление включится, если способ оплаты будет сохранён: "
+        f"через {days} дней спишется {price_rub} ₽ за следующий такой же период. Его можно отключить в «Мои ключи».\n"
+        "Stars и CryptoBot — разовая оплата.\n\n"
         "<b>Выберите способ оплаты:</b>"
     )
 
@@ -215,7 +214,7 @@ async def cb_select_period_legacy(callback: CallbackQuery, bot: Bot, state: FSMC
     await safe_answer(callback)
     await send_with_photo(
         bot, callback,
-        "<b>Выберите срок подписки</b>\n\nЧем дольше срок, тем ниже стоимость одного месяца.",
+        "<b>Выберите срок подписки</b>\n\nЦена на кнопке — за месяц тарифа, итоговая сумма будет показана перед оплатой.",
         tariff_selection_kb(),
     )
 

@@ -37,7 +37,7 @@ class TestUncertainAutoRenew(unittest.IsolatedAsyncioTestCase):
             await autorenew.process_auto_renewals(bot)
 
         charge.assert_awaited_once()
-        self.assertEqual(charge.await_args.kwargs["idempotence_key"], "autorenew_77_9_1800000000")
+        self.assertEqual(charge.await_args.kwargs["idempotence_key"], "autorenew_77_9_1800000000_2")
         defer.assert_awaited_once_with(77, "provider response was not confirmed")
         mark_failed.assert_not_awaited()
 
@@ -59,10 +59,12 @@ class TestUncertainAutoRenew(unittest.IsolatedAsyncioTestCase):
         with (
             patch("autorenew.get_expiring_auto_renew_subscriptions", new=AsyncMock(return_value=[subscription])),
             patch("autorenew.charge_yookassa_recurrent", new=AsyncMock(return_value={"id": "yk-1", "status": "succeeded"})),
+            patch("database.add_yookassa_pending", new=AsyncMock()) as persist_payment,
             patch("webhook._process_payment", new=AsyncMock()) as fulfill,
         ):
             await autorenew.process_auto_renewals(bot)
 
+        persist_payment.assert_awaited_once_with("yk-1", 12346, 30, 2, 89)
         fulfill.assert_awaited_once_with(bot, "yk-1")
 
 

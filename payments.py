@@ -13,6 +13,23 @@ logger = logging.getLogger(__name__)
 _yookassa_recurring_supported: Optional[bool] = None
 
 
+async def _remember_yookassa_checkout(
+    payment_id: Optional[str], user_id: int, days: int, devices: int, amount_rub: int,
+) -> None:
+    """Persist a checkout ID so polling can recover payments after long outages."""
+    if not payment_id:
+        logger.error("YooKassa created a checkout without an ID (user=%d)", user_id)
+        return
+    try:
+        from database import add_yookassa_pending
+
+        await add_yookassa_pending(payment_id, user_id, days, devices, amount_rub)
+    except Exception:
+        # The checkout is already created. Keep returning its URL, but make the
+        # missing recovery record visible so the user is not blocked from paying.
+        logger.exception("Could not persist YooKassa checkout %s for recovery", payment_id)
+
+
 def is_yookassa_recurring_supported() -> bool:
     """Check if YooKassa store supports recurring payments."""
     global _yookassa_recurring_supported
@@ -85,6 +102,7 @@ async def create_yookassa_payment(
             r.raise_for_status()
             data = r.json()
             url = data["confirmation"]["confirmation_url"]
+            await _remember_yookassa_checkout(data.get("id"), user_id, days, devices, amount_rub)
             logger.info("YooKassa payment created for user %d: %s", user_id, data.get("id"))
             return url
             
@@ -106,6 +124,7 @@ async def create_yookassa_payment(
                     r2.raise_for_status()
                     data = r2.json()
                     url = data["confirmation"]["confirmation_url"]
+                    await _remember_yookassa_checkout(data.get("id"), user_id, days, devices, amount_rub)
                     logger.info("YooKassa fallback standard payment created for user %d: %s", user_id, data.get("id"))
                     return url
             except Exception as retry_e:
@@ -285,8 +304,8 @@ async def get_paid_crypto_invoices(limit: int = 50) -> list[dict]:
             logger.error("Crypto Bot getInvoices error: %s", data.get("error"))
             return []
     except httpx.HTTPStatusError as e:
-        # Crypto Bot often returns 500/520 errors - log as warning instead of error
-        if e.response.status_code in (500, 520):
+        # Provider-side gateway failures are transient and the monitor retries.
+        if e.response.status_code in (500, 502, 503, 504, 520):
             logger.warning("Crypto Bot server error %d (expected, will retry): %s", e.response.status_code, str(e)[:100])
         else:
             logger.error("Crypto Bot HTTP error %d: %s", e.response.status_code, str(e)[:200])
@@ -297,3 +316,36 @@ async def get_paid_crypto_invoices(limit: int = 50) -> list[dict]:
     except Exception as e:
         logger.error("Crypto Bot getInvoices unexpected error: %s", str(e))
         return []
+
+
+async def get_crypto_invoice(invoice_id: str | int) -> Optional[dict]:
+    """Fetch one persisted invoice by ID, including invoices older than the latest page."""
+    invoices = await get_crypto_invoices([invoice_id])
+    return invoices[0] if invoices else None
+
+
+async def get_crypto_invoices(invoice_ids: list[str | int]) -> list[dict]:
+    """Fetch specific persisted invoices from Crypto Pay in one provider request."""
+    if not CRYPTO_BOT_TOKEN:
+        return []
+    if not invoice_ids:
+        return []
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(
+                "https://pay.crypt.bot/api/getInvoices",
+                params={"invoice_ids": ",".join(str(invoice_id) for invoice_id in invoice_ids)},
+                headers={"Crypto-Pay-API-Token": CRYPTO_BOT_TOKEN},
+            )
+            response.raise_for_status()
+            data = response.json()
+            if not data.get("ok"):
+                logger.warning("Crypto Bot getInvoices error: %s", data.get("error"))
+                return []
+            return data.get("result", {}).get("items", [])
+    except httpx.RequestError as exc:
+        logger.warning("Crypto Bot invoice lookup failed: %s", str(exc)[:160])
+    except Exception:
+        logger.exception("Unexpected Crypto Bot invoice lookup failure")
+    return []

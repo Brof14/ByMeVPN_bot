@@ -6,7 +6,7 @@ All sensitive credentials should be stored in the .env file (not committed to gi
 
 Environment Variables (.env file):
     BOT_TOKEN: Telegram bot token from BotFather
-    SUPPORT_USERNAME: Support bot username (default: @ByMeVPN_support_bot)
+    Support contact is fixed to @ByMeVPNSupportBot.
     MENU_PHOTO: URL or file ID for menu photo
     DB_FILE: Database file path (default: data/vpnbot.db)
     ADMIN_IDS: Comma-separated list of admin Telegram user IDs
@@ -41,7 +41,7 @@ load_dotenv()
 # ============================================================================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
-SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@ByMeVPN_support_bot")
+SUPPORT_USERNAME = "@ByMeVPNSupportBot"
 MENU_PHOTO = os.getenv("MENU_PHOTO", "")
 # DB_FILE is NOT defined independently here anymore — database.py is the single
 # source of truth (it reads the same .env var). Re-exporting it avoids the old
