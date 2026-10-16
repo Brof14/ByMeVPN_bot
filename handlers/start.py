@@ -219,20 +219,71 @@ async def cmd_start(message: Message, bot: Bot) -> None:
         elif param.startswith("gw_") or param.startswith("giveaway_"):
             try:
                 gw_id = int(param.split("_")[1])
-                from database import join_giveaway
-                joined = await join_giveaway(gw_id, user_id)
-                if joined:
+                from database import join_giveaway, get_giveaway_entry_status, get_giveaway_by_id
+                from urllib.parse import urlencode
+
+                contest = await get_giveaway_by_id(gw_id)
+                status = await get_giveaway_entry_status(gw_id, user_id)
+                if not contest or not status:
+                    await message.answer("Не удалось найти этот конкурс. Откройте актуальную ссылку из сообщения бота.")
+                    return
+                if not status["is_open"]:
                     await message.answer(
-                        "🎉 <b>Вы успешно зарегистрировались в розыгрыше!</b>\n\n"
-                        "Результаты будут подведены автоматически. Удачи! 🍀",
-                        parse_mode="HTML"
+                        "Приём участников завершён. Итоги конкурса бот подведёт автоматически.",
+                    )
+                    return
+
+                already_joined = status["joined"]
+                if not already_joined:
+                    await join_giveaway(gw_id, user_id)
+                    status = await get_giveaway_entry_status(gw_id, user_id)
+                if not status or not status["is_open"]:
+                    await message.answer("Приём участников завершён. Итоги конкурса бот подведёт автоматически.")
+                    return
+
+                bot_info = await bot.get_me()
+                referral_link = f"https://t.me/{bot_info.username}?start={user_id}"
+                share_url = "https://t.me/share/url?" + urlencode({
+                    "url": referral_link,
+                    "text": "Попробуй ByMeVPN — подключение к YouTube, Telegram, Instagram и сайтам за минуту.",
+                })
+                invite_kb = InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="🤝 Пригласить друга", url=share_url, style="primary")
+                ]])
+
+                referral_count = status["referral_count"]
+                if status["qualified"]:
+                    entry_text = (
+                        "✅ <b>Участие засчитано</b>" if not already_joined
+                        else "✅ <b>Вы уже участвуете</b>"
+                    )
+                    text = (
+                        f"{entry_text} в ежемесячном конкурсе ByMeVPN.\n\n"
+                        f"В зачёт уже идут приглашённые в этом месяце: <b>{referral_count}</b>.\n"
+                        "В конце месяца будут 3 призовых места по числу приглашённых; "
+                        "если подходящих участников меньше трёх, приз получит каждый. "
+                        f"Награда за место — <b>+{contest['prize_days']} дней VPN</b>. "
+                        "При равном числе приглашённых место определит жребий."
                     )
                 else:
-                    await message.answer(
-                        "Вы уже участвуете в этом розыгрыше или он завершён.",
+                    pending_intro = (
+                        "📝 <b>Заявка уже сохранена — осталось выполнить условие</b>\n\n"
+                        if already_joined else
+                        "📝 <b>Заявка сохранена — осталось выполнить условие</b>\n\n"
                     )
+                    text = pending_intro + (
+                        "Пригласите хотя бы одного нового пользователя по своей ссылке в этом месяце. "
+                        "После регистрации приглашённого участие будет засчитано автоматически.\n\n"
+                        "В конце месяца будут 3 призовых места по числу приглашённых; "
+                        "если подходящих участников меньше трёх, приз получит каждый. "
+                        f"Награда за место — <b>+{contest['prize_days']} дней VPN</b>."
+                    )
+                await message.answer(text, parse_mode="HTML", reply_markup=invite_kb)
+                return
             except Exception as e:
                 logger.error("Error joining giveaway %s for user %d: %s", param, user_id, e)
+                await message.answer("Не получилось открыть конкурс. Попробуйте ещё раз чуть позже.")
+                return
 
         # Referral link: /start 123456 or /start ref_123456
         elif param.isdigit() or (param.startswith("ref_") and param[4:].isdigit()):

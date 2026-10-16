@@ -133,7 +133,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             await _send_main_menu(SimpleNamespace(), SimpleNamespace(), 123, "Алексей", is_new_referral=True)
         welcome = send.call_args.args[2]
         self.assertIn("Добро пожаловать в ByMeVPN", welcome)
-        self.assertIn("Вы пришли по ссылке друга", welcome)
+        self.assertIn("Приглашение учтено", welcome)
         self.assertIn("3 дня за 1 ₽", welcome)
 
     def test_key_settings_remove_rf_routing_and_highlight_only_destructive_action(self):

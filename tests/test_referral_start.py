@@ -47,3 +47,32 @@ class TestReferralStart(unittest.IsolatedAsyncioTestCase):
             await cmd_start(message, SimpleNamespace())
         award.assert_not_awaited()
         self.assertFalse(menu.await_args.kwargs["is_new_referral"])
+
+    async def test_giveaway_deep_link_saves_pending_entry_and_does_not_open_main_menu(self):
+        from handlers.start import cmd_start
+
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=833, full_name="New", first_name="New", username=None),
+            text="/start gw_44", answer=AsyncMock(),
+        )
+        bot = SimpleNamespace(get_me=AsyncMock(return_value=SimpleNamespace(username="ByMeVPNbot")))
+        with (
+            patch("handlers.start.find_user_by_id", new=AsyncMock(return_value=None)),
+            patch("handlers.start.ensure_user", new=AsyncMock()),
+            patch("handlers.start._send_main_menu", new=AsyncMock()) as menu,
+            patch("database.get_giveaway_by_id", new=AsyncMock(return_value={"id": 44, "prize_days": 30})),
+            patch("database.get_giveaway_entry_status", new=AsyncMock(side_effect=[
+                {"is_open": True, "joined": False, "qualified": False, "referral_count": 0},
+                {"is_open": True, "joined": True, "qualified": False, "referral_count": 0},
+            ])),
+            patch("database.join_giveaway", new=AsyncMock(return_value=True)) as join,
+        ):
+            await cmd_start(message, bot)
+
+        join.assert_awaited_once_with(44, 833)
+        menu.assert_not_awaited()
+        sent_text = message.answer.await_args.args[0]
+        self.assertIn("Заявка сохранена", sent_text)
+        self.assertIn("хотя бы одного", sent_text)
+        self.assertIn("+30 дней VPN", sent_text)
+        self.assertEqual(message.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0].text, "🤝 Пригласить друга")

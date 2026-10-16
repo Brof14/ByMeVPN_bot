@@ -26,26 +26,39 @@ from database import (
     mark_giveaway_reward_attempt,
     mark_giveaway_winner_rewarded,
     pick_giveaway_winners,
+    requeue_giveaway_announcements,
     set_giveaway_notification_status,
     get_user_keys,
+    update_automated_monthly_giveaway,
 )
 
 logger = logging.getLogger(__name__)
 
 MONTHLY_PRIZE_DAYS = 30
-MONTHLY_WINNERS = 1
-GIVEAWAY_LENGTH_DAYS = 7
+MONTHLY_WINNERS = 3
 ANNOUNCEMENT_BATCH = 50
 REWARD_RETRY_SECONDS = 15 * 60
 
 
-def _month_key(now: datetime | None = None) -> tuple[str, str]:
+def _month_period(now: datetime | None = None) -> tuple[str, str, int, int]:
     now = now or (datetime.now(timezone.utc) + timedelta(hours=3))
     month_names = (
         "января", "февраля", "марта", "апреля", "мая", "июня",
         "июля", "августа", "сентября", "октября", "ноября", "декабря",
     )
-    return now.strftime("%Y-%m"), f"{month_names[now.month - 1]} {now.year}"
+    local_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if local_start.month == 12:
+        local_end = local_start.replace(year=local_start.year + 1, month=1)
+    else:
+        local_end = local_start.replace(month=local_start.month + 1)
+    utc_start = local_start - timedelta(hours=3)
+    utc_end = local_end - timedelta(hours=3)
+    return (
+        now.strftime("%Y-%m"),
+        f"{month_names[now.month - 1]} {now.year}",
+        int(utc_start.replace(tzinfo=timezone.utc).timestamp()),
+        int(utc_end.replace(tzinfo=timezone.utc).timestamp()),
+    )
 
 
 def _moscow_date(timestamp: int) -> str:
@@ -61,26 +74,36 @@ async def _notify_admins(bot: Bot, text: str) -> None:
 
 
 async def ensure_monthly_giveaway(bot: Bot) -> dict:
-    """Create at most one auto campaign per month, without overlapping campaigns."""
-    month, month_label = _month_key()
+    """Create/update one calendar-month referral leaderboard."""
+    month, month_label, period_start, period_end = _month_period()
     key = f"auto-monthly-{month}"
     existing = await get_giveaway_by_automation_key(key)
     if existing:
-        return existing
+        changed = await update_automated_monthly_giveaway(
+            existing["id"], f"Конкурс ByMeVPN · {month_label}", period_end,
+            period_start, winners_count=MONTHLY_WINNERS, prize_days=MONTHLY_PRIZE_DAYS,
+        )
+        if changed:
+            await requeue_giveaway_announcements(existing["id"])
+            await _notify_admins(
+                bot,
+                f"📣 Обновлены условия конкурса <b>#{existing['id']}</b>: "
+                "теперь в зачёт идут приглашённые за месяц, победителей — 3, приз каждому — +30 дней.",
+            )
+        return await get_giveaway_by_id(existing["id"])
 
     active = await get_active_automated_giveaway()
     if active:
         return active
-
-    end_date = int(time.time()) + GIVEAWAY_LENGTH_DAYS * 86400
     giveaway_id = await create_giveaway(
-        title=f"Розыгрыш ByMeVPN · {month_label}",
-        description="Ежемесячный розыгрыш подписки ByMeVPN",
+        title=f"Конкурс ByMeVPN · {month_label}",
+        description="Ежемесячный конкурс приглашений",
         prize_days=MONTHLY_PRIZE_DAYS,
         winners_count=MONTHLY_WINNERS,
-        end_date=end_date,
+        end_date=period_end,
         created_by=0,
         automation_key=key,
+        period_start=period_start,
     )
     giveaway = await get_giveaway_by_id(giveaway_id)
     if not giveaway:
@@ -89,9 +112,9 @@ async def ensure_monthly_giveaway(bot: Bot) -> dict:
     queued = await create_giveaway_notification_snapshot(giveaway_id)
     await _notify_admins(
         bot,
-        f"🎁 Создан ежемесячный розыгрыш <b>#{giveaway_id}</b>.\n"
-        f"Приз: +{MONTHLY_PRIZE_DAYS} дней · победителей: {MONTHLY_WINNERS}\n"
-        f"Участие до: {_moscow_date(end_date)}\n"
+        f"🎁 Создан ежемесячный конкурс приглашений <b>#{giveaway_id}</b>.\n"
+        f"Победителей: {MONTHLY_WINNERS} · каждому +{MONTHLY_PRIZE_DAYS} дней\n"
+        f"Период: {_moscow_date(period_start)} — {_moscow_date(period_end - 1)}\n"
         f"Уведомлений в очереди: {queued}.",
     )
     logger.info("Created monthly giveaway %s (id=%s, queued=%s)", month, giveaway_id, queued)
@@ -105,10 +128,19 @@ async def _send_campaign_announcements(bot: Bot, giveaway: dict) -> None:
     info = await bot.get_me()
     link = f"https://t.me/{info.username}?start=gw_{giveaway['id']}"
     text = (
-        "🎁 <b>Розыгрыш ByMeVPN</b>\n\n"
-        f"Можно выиграть <b>+{giveaway['prize_days']} дней VPN</b>.\n"
-        "Участие бесплатное. Бот случайно выберет победителя и автоматически начислит приз.\n\n"
-        f"Участвуйте до <b>{_moscow_date(giveaway['end_date'])}</b>."
+        "🏆 <b>Ежемесячный конкурс ByMeVPN</b>\n\n"
+        "Если не грузят:\n"
+        "• 🎥 YouTube\n• ✈️ Telegram\n• 📸 Instagram\n• 🌐 сайты\n"
+        "— ByMeVPN поможет подключиться за минуту.\n\n"
+        "<b>Как участвовать</b>\n"
+        "1. Пригласи хотя бы одного нового пользователя по своей ссылке в этом месяце.\n"
+        "2. Нажми «Участвовать» — бот проверит приглашение.\n\n"
+        "В конце месяца определим <b>3 призовых места</b> по числу приглашённых. "
+        "Если подходящих участников будет меньше трёх, приз получит каждый из них. "
+        "При равном числе приглашённых место определит жребий. "
+        f"Награда за место — <b>+{giveaway['prize_days']} дней VPN</b>. Итоги подведём автоматически; "
+        f"победителей и бонусы объявим <b>{_moscow_date(giveaway['end_date'])}</b>.\n\n"
+        f"Приглашения принимаются до <b>{_moscow_date(giveaway['end_date'] - 1)}</b>."
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎉 Участвовать", url=link, style="primary")],
@@ -162,16 +194,26 @@ async def process_due_giveaways(bot: Bot) -> None:
             logger.exception("Giveaway prize delivery failed: giveaway=%s user=%s", giveaway_id, user_id)
 
     for result in await get_giveaways_ready_to_report():
-        winner_ids = result["winner_ids"]
-        if winner_ids:
-            winner_lines = "\n".join(f"• <code>{user_id}</code>" for user_id in winner_ids)
+        winners = result["winners"]
+        if winners:
+            if result["is_referral_contest"]:
+                winner_lines = "\n".join(
+                    f"{winner['rank']}. <code>{winner['user_id']}</code> — "
+                    f"{winner['referral_count']} приглашённых, +{result['prize_days']} дней"
+                    for winner in winners
+                )
+                detail = "Топ участников по приглашённым за месяц:"
+            else:
+                winner_lines = "\n".join(f"• <code>{winner['user_id']}</code>" for winner in winners)
+                detail = f"Победителям начислено +{result['prize_days']} дней:"
             text = (
-                f"🏆 Розыгрыш <b>#{result['id']} {escape(result['title'])}</b> завершён.\n"
-                f"Приз: +{result['prize_days']} дней. Победитель(и):\n{winner_lines}\n"
+                f"🏆 {'Конкурс' if result['is_referral_contest'] else 'Розыгрыш'} "
+                f"<b>#{result['id']} {escape(result['title'])}</b> завершён.\n"
+                f"{detail}\n{winner_lines}\n"
                 "Призы начислены автоматически."
             )
         else:
-            text = f"ℹ️ Розыгрыш <b>#{result['id']} {escape(result['title'])}</b> завершён без участников; приз не выдавался."
+            text = f"ℹ️ Конкурс <b>#{result['id']} {escape(result['title'])}</b> завершён без участников, выполнивших условие; призы не выдавались."
         await _notify_admins(bot, text)
         await mark_giveaway_results_notified(result["id"])
 

@@ -53,9 +53,35 @@ class TestGiveawayAutomation(unittest.IsolatedAsyncioTestCase):
         giveaways = await database.get_all_giveaways()
         self.assertEqual(len(giveaways), 1)
         self.assertEqual(giveaways[0]["prize_days"], 30)
+        self.assertEqual(giveaways[0]["winners_count"], 3)
         self.assertEqual(bot.send_message.await_count, 1)
         self.assertEqual(bot.send_message.await_args.args[0], 501)
         self.assertIn("Участвовать", bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard[0][0].text)
+        self.assertIn("YouTube", bot.send_message.await_args.args[1])
+        self.assertIn("Instagram", bot.send_message.await_args.args[1])
+        self.assertIn("3 призовых места", bot.send_message.await_args.args[1])
+
+    async def test_old_monthly_campaign_is_updated_and_sent_users_are_queued_for_correction(self):
+        from giveaway_automation import _month_period, ensure_monthly_giveaway
+
+        month, label, period_start, period_end = _month_period()
+        await database.ensure_user(550)
+        giveaway_id = await database.create_giveaway(
+            title=f"Розыгрыш ByMeVPN · {label}", description="old rules",
+            prize_days=30, winners_count=1, end_date=int(time.time()) + 86400,
+            created_by=0, automation_key=f"auto-monthly-{month}",
+        )
+        await database.create_giveaway_notification_snapshot(giveaway_id)
+        await database.set_giveaway_notification_status(giveaway_id, 550, "sent")
+
+        with patch("giveaway_automation._notify_admins", new=AsyncMock()):
+            updated = await ensure_monthly_giveaway(SimpleNamespace())
+
+        self.assertEqual(updated["winners_count"], 3)
+        self.assertEqual(updated["prize_days"], 30)
+        self.assertEqual(updated["period_start"], period_start)
+        self.assertEqual(updated["end_date"], period_end)
+        self.assertEqual(await database.get_pending_giveaway_notifications(giveaway_id), [550])
 
     async def test_due_draw_grants_winner_once_and_reports_results(self):
         from giveaway_automation import process_due_giveaways
@@ -97,4 +123,36 @@ class TestGiveawayAutomation(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await database.join_giveaway(giveaway_id, participant_id))
         await database.set_giveaway_status(giveaway_id, "cancelled")
         self.assertFalse(await database.join_giveaway(giveaway_id, 702))
+
+    async def test_monthly_contest_qualifies_on_one_referral_and_ranks_top_three(self):
+        now = int(time.time())
+        giveaway_id = await database.create_giveaway(
+            title="Monthly contest", description="test", prize_days=30,
+            winners_count=3, end_date=now + 60, period_start=now - 86400,
+            automation_key="auto-monthly-test",
+        )
+        referral_counts = {801: 4, 802: 3, 803: 2, 804: 1, 805: 0}
+        for user_id, count in referral_counts.items():
+            await database.ensure_user(user_id)
+            await database.join_giveaway(giveaway_id, user_id)
+            for offset in range(count):
+                referred_id = 9000 + user_id * 10 + offset
+                await database.ensure_user(referred_id)
+                await database.set_referrer(referred_id, user_id)
+                db = await database.get_db()
+                await db.execute("UPDATE referrals SET created=? WHERE referred_id=?", (now - 10, referred_id))
+                await db.commit()
+
+        for user_id, count in referral_counts.items():
+            status = await database.get_giveaway_entry_status(giveaway_id, user_id)
+            self.assertEqual(status["qualified"], count > 0)
+            self.assertEqual(status["referral_count"], count)
+
+        db = await database.get_db()
+        await db.execute("UPDATE giveaways SET end_date=? WHERE id=?", (now - 1, giveaway_id))
+        await db.commit()
+        winners = await database.pick_giveaway_winners(giveaway_id)
+        self.assertEqual(set(winners), {801, 802, 803})
+        winner_data = await database.get_unrewarded_giveaway_winners(retry_after_seconds=0)
+        self.assertEqual({row["user_id"] for row in winner_data}, {801, 802, 803})
 

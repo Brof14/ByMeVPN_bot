@@ -814,7 +814,8 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
                 created_by INTEGER,
                 automation_key TEXT UNIQUE,
                 drawn_at INTEGER,
-                results_notified_at INTEGER
+                results_notified_at INTEGER,
+                period_start INTEGER
             )
         """)
         await db.execute("""
@@ -827,6 +828,8 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
                 rewarded_at INTEGER,
                 reward_attempts INTEGER DEFAULT 0,
                 last_reward_attempt_at INTEGER,
+                referral_count INTEGER DEFAULT 0,
+                winner_rank INTEGER,
                 UNIQUE(giveaway_id, user_id),
                 FOREIGN KEY(giveaway_id) REFERENCES giveaways(id)
             )
@@ -839,9 +842,12 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
             ("giveaways", "automation_key TEXT"),
             ("giveaways", "drawn_at INTEGER"),
             ("giveaways", "results_notified_at INTEGER"),
+            ("giveaways", "period_start INTEGER"),
             ("giveaway_participants", "rewarded_at INTEGER"),
             ("giveaway_participants", "reward_attempts INTEGER DEFAULT 0"),
             ("giveaway_participants", "last_reward_attempt_at INTEGER"),
+            ("giveaway_participants", "referral_count INTEGER DEFAULT 0"),
+            ("giveaway_participants", "winner_rank INTEGER"),
         ):
             try:
                 await db.execute(f"ALTER TABLE {table} ADD COLUMN {definition}")
@@ -4022,6 +4028,7 @@ async def create_giveaway(
     *,
     created_by: int | None = None,
     automation_key: str | None = None,
+    period_start: int | None = None,
 ) -> int:
     """Create a giveaway, optionally with an idempotency key for automation."""
     db = await get_db()
@@ -4030,9 +4037,9 @@ async def create_giveaway(
             cur = await db.execute(
                 """INSERT OR IGNORE INTO giveaways
                 (title, description, prize_days, winners_count, end_date, is_active,
-                 created_at, created_by, automation_key)
-                VALUES(?,?,?,?,?,1,strftime('%s','now'),?,?)""",
-                (title, description, prize_days, winners_count, end_date, created_by, automation_key),
+                 created_at, created_by, automation_key, period_start)
+                VALUES(?,?,?,?,?,1,strftime('%s','now'),?,?,?)""",
+                (title, description, prize_days, winners_count, end_date, created_by, automation_key, period_start),
             )
             if cur.rowcount == 0:
                 cur = await db.execute("SELECT id FROM giveaways WHERE automation_key=?", (automation_key,))
@@ -4043,9 +4050,9 @@ async def create_giveaway(
             cur = await db.execute(
                 """INSERT INTO giveaways
                 (title, description, prize_days, winners_count, end_date, is_active,
-                 created_at, created_by)
-                VALUES(?,?,?,?,?,1,strftime('%s','now'),?)""",
-                (title, description, prize_days, winners_count, end_date, created_by),
+                 created_at, created_by, period_start)
+                VALUES(?,?,?,?,?,1,strftime('%s','now'),?,?)""",
+                (title, description, prize_days, winners_count, end_date, created_by, period_start),
             )
         await db.commit()
         return cur.lastrowid
@@ -4069,6 +4076,44 @@ async def get_active_automated_giveaway(now: int | None = None) -> dict | None:
     )
     row = await cur.fetchone()
     return await get_giveaway_by_id(row[0]) if row else None
+
+
+async def update_automated_monthly_giveaway(
+    giveaway_id: int, title: str, end_date: int, period_start: int,
+    winners_count: int = 3, prize_days: int = 30,
+) -> bool:
+    """Update an existing monthly campaign; return whether its public terms changed."""
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT title, end_date, period_start, winners_count, prize_days "
+        "FROM giveaways WHERE id=? AND automation_key LIKE 'auto-monthly-%'",
+        (giveaway_id,),
+    )
+    row = await cur.fetchone()
+    if not row:
+        return False
+    values = (title, int(end_date), int(period_start), int(winners_count), int(prize_days))
+    if tuple(row) == values:
+        return False
+    async with _db_semaphore:
+        await db.execute(
+            "UPDATE giveaways SET title=?, end_date=?, period_start=?, winners_count=?, prize_days=? WHERE id=?",
+            (*values, giveaway_id),
+        )
+        await db.commit()
+    return True
+
+
+async def requeue_giveaway_announcements(giveaway_id: int) -> None:
+    """Re-send a correction when an active campaign's advertised terms change."""
+    db = await get_db()
+    async with _db_semaphore:
+        await db.execute(
+            "UPDATE giveaway_notifications SET status='pending', sent_at=NULL "
+            "WHERE giveaway_id=? AND status='sent'",
+            (giveaway_id,),
+        )
+        await db.commit()
 
 
 async def get_all_giveaways() -> list[dict]:
@@ -4109,7 +4154,7 @@ async def get_giveaway_by_id(giveaway_id: int) -> dict | None:
     """Get a giveaway by ID."""
     db = await get_db()
     cur = await db.execute(
-        "SELECT id, title, description, prize_days, winners_count, end_date, is_active, created_at FROM giveaways WHERE id = ?",
+        "SELECT id, title, description, prize_days, winners_count, end_date, is_active, created_at, period_start FROM giveaways WHERE id = ?",
         (giveaway_id,)
     )
     row = await cur.fetchone()
@@ -4118,7 +4163,7 @@ async def get_giveaway_by_id(giveaway_id: int) -> dict | None:
     return {
         "id": row[0], "title": row[1], "description": row[2], "prize_days": row[3],
         "winners_count": row[4], "winner_count": row[4], "end_date": row[5], "end_time": row[5],
-        "is_active": row[6], "created_at": row[7],
+        "is_active": row[6], "created_at": row[7], "period_start": row[8],
     }
 
 
@@ -4494,6 +4539,31 @@ async def join_giveaway(giveaway_id: int, user_id: int) -> bool:
             raise
 
 
+async def get_giveaway_entry_status(giveaway_id: int, user_id: int) -> dict | None:
+    """Return contest state, entry state and valid referrals for the campaign period."""
+    db = await get_db()
+    cur = await db.execute(
+        """SELECT g.is_active, g.end_date, COALESCE(g.period_start,g.created_at),
+        EXISTS(SELECT 1 FROM giveaway_participants p WHERE p.giveaway_id=g.id AND p.user_id=?),
+        (SELECT COUNT(*) FROM referrals r WHERE r.referrer_id=?
+          AND r.created>=COALESCE(g.period_start,g.created_at) AND r.created<g.end_date)
+        FROM giveaways g WHERE g.id=?""",
+        (user_id, user_id, giveaway_id),
+    )
+    row = await cur.fetchone()
+    if not row:
+        return None
+    is_open = bool(row[0]) and int(row[1]) > int(time.time())
+    return {
+        "is_open": is_open,
+        "end_date": int(row[1]),
+        "period_start": int(row[2]),
+        "joined": bool(row[3]),
+        "referral_count": int(row[4] or 0),
+        "qualified": int(row[4] or 0) >= 1,
+    }
+
+
 async def get_giveaway_participants_count(giveaway_id: int) -> int:
     """Get number of participants in a giveaway."""
     db = await get_db()
@@ -4602,7 +4672,7 @@ async def get_unrewarded_giveaway_winners(retry_after_seconds: int = 900) -> lis
     db = await get_db()
     now = int(time.time())
     cur = await db.execute(
-        """SELECT g.id, g.title, g.prize_days, p.user_id FROM giveaway_participants p
+        """SELECT g.id, g.title, g.prize_days, p.user_id, p.winner_rank, p.referral_count FROM giveaway_participants p
         JOIN giveaways g ON g.id=p.giveaway_id
         WHERE p.is_winner=1 AND p.rewarded_at IS NULL
           AND g.drawn_at IS NOT NULL
@@ -4611,7 +4681,8 @@ async def get_unrewarded_giveaway_winners(retry_after_seconds: int = 900) -> lis
         (now - int(retry_after_seconds),),
     )
     return [
-        {"giveaway_id": r[0], "title": r[1], "prize_days": r[2], "user_id": r[3]}
+        {"giveaway_id": r[0], "title": r[1], "prize_days": r[2], "user_id": r[3],
+         "winner_rank": r[4], "referral_count": r[5]}
         for r in await cur.fetchall()
     ]
 
@@ -4631,7 +4702,7 @@ async def mark_giveaway_winner_rewarded(giveaway_id: int, user_id: int) -> bool:
 async def get_giveaways_ready_to_report() -> list[dict]:
     db = await get_db()
     cur = await db.execute(
-        """SELECT g.id, g.title, g.prize_days FROM giveaways g
+        """SELECT g.id, g.title, g.prize_days, g.automation_key FROM giveaways g
         WHERE g.drawn_at IS NOT NULL AND g.results_notified_at IS NULL
           AND NOT EXISTS (
               SELECT 1 FROM giveaway_participants p WHERE p.giveaway_id=g.id
@@ -4642,11 +4713,20 @@ async def get_giveaways_ready_to_report() -> list[dict]:
     out = []
     for row in rows:
         winners_cur = await db.execute(
-            "SELECT user_id FROM giveaway_participants WHERE giveaway_id=? AND is_winner=1 ORDER BY user_id",
+            "SELECT user_id, COALESCE(winner_rank,0), COALESCE(referral_count,0) "
+            "FROM giveaway_participants WHERE giveaway_id=? AND is_winner=1 "
+            "ORDER BY CASE WHEN winner_rank IS NULL THEN 999 ELSE winner_rank END, user_id",
             (row[0],),
         )
-        out.append({"id": row[0], "title": row[1], "prize_days": row[2],
-                    "winner_ids": [r[0] for r in await winners_cur.fetchall()]})
+        winner_rows = await winners_cur.fetchall()
+        out.append({
+            "id": row[0], "title": row[1], "prize_days": row[2],
+            "is_referral_contest": bool(row[3] and str(row[3]).startswith("auto-monthly-")),
+            "winners": [
+                {"user_id": winner[0], "rank": winner[1], "referral_count": winner[2]}
+                for winner in winner_rows
+            ],
+        })
     return out
 
 
@@ -4663,10 +4743,12 @@ async def mark_giveaway_results_notified(giveaway_id: int) -> None:
 async def pick_giveaway_winners(giveaway_id: int) -> list[int]:
     """Pick and persist winners once; retries return the same winners."""
     import random
+    import secrets
     db = await get_db()
     async with _db_semaphore:
         cur = await db.execute(
-            "SELECT winners_count, is_active, end_date, drawn_at FROM giveaways WHERE id = ?",
+            "SELECT winners_count, is_active, end_date, drawn_at, automation_key, "
+            "COALESCE(period_start,created_at) FROM giveaways WHERE id = ?",
             (giveaway_id,),
         )
         g_row = await cur.fetchone()
@@ -4682,9 +4764,11 @@ async def pick_giveaway_winners(giveaway_id: int) -> list[int]:
         if not g_row[1] or int(g_row[2]) > int(time.time()):
             return []
 
-        cur = await db.execute("SELECT user_id FROM giveaway_participants WHERE giveaway_id = ?", (giveaway_id,))
-        participants = [r[0] for r in await cur.fetchall()]
-        if not participants:
+        cur = await db.execute(
+            "SELECT user_id FROM giveaway_participants WHERE giveaway_id = ?", (giveaway_id,)
+        )
+        participant_ids = [int(r[0]) for r in await cur.fetchall()]
+        if not participant_ids:
             await db.execute(
                 "UPDATE giveaways SET is_active=0, drawn_at=? WHERE id=?",
                 (int(time.time()), giveaway_id),
@@ -4692,18 +4776,50 @@ async def pick_giveaway_winners(giveaway_id: int) -> list[int]:
             await db.commit()
             return []
 
-        selected = random.sample(participants, min(len(participants), winners_count))
-        for uid in selected:
-            await db.execute(
-                "UPDATE giveaway_participants SET is_winner = 1 WHERE giveaway_id = ? AND user_id = ?",
-                (giveaway_id, uid)
-            )
+        if g_row[4] and str(g_row[4]).startswith("auto-monthly-"):
+            ranked = []
+            for uid in participant_ids:
+                count_cur = await db.execute(
+                    "SELECT COUNT(*) FROM referrals WHERE referrer_id=? AND created>=? AND created<?",
+                    (uid, int(g_row[5]), int(g_row[2])),
+                )
+                count = int((await count_cur.fetchone())[0] or 0)
+                await db.execute(
+                    "UPDATE giveaway_participants SET referral_count=? WHERE giveaway_id=? AND user_id=?",
+                    (count, giveaway_id, uid),
+                )
+                if count >= 1:
+                    ranked.append((uid, count))
+
+            # Highest monthly referral count wins. Equal counts at the cutoff
+            # are resolved randomly, so joining earlier gives no hidden edge.
+            ranked.sort(key=lambda item: item[1], reverse=True)
+            selected = []
+            while ranked and len(selected) < int(winners_count):
+                score = ranked[0][1]
+                tied = [item for item in ranked if item[1] == score]
+                ranked = [item for item in ranked if item[1] != score]
+                take = min(int(winners_count) - len(selected), len(tied))
+                selected.extend(secrets.SystemRandom().sample(tied, take))
+            for position, (uid, count) in enumerate(selected, 1):
+                await db.execute(
+                    "UPDATE giveaway_participants SET is_winner=1, winner_rank=? "
+                    "WHERE giveaway_id=? AND user_id=?",
+                    (position, giveaway_id, uid),
+                )
+        else:
+            selected = [(uid, 0) for uid in random.sample(participant_ids, min(len(participant_ids), winners_count))]
+            for position, (uid, _count) in enumerate(selected, 1):
+                await db.execute(
+                    "UPDATE giveaway_participants SET is_winner=1, winner_rank=? WHERE giveaway_id=? AND user_id=?",
+                    (position, giveaway_id, uid),
+                )
         await db.execute(
             "UPDATE giveaways SET is_active=0, drawn_at=? WHERE id=?",
             (int(time.time()), giveaway_id),
         )
         await db.commit()
-        return selected
+        return [uid for uid, _count in selected]
 
 
 async def set_giveaway_status(giveaway_id: int, is_active: int | str) -> bool:
