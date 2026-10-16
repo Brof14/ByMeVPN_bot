@@ -24,6 +24,7 @@ os.environ["DB_FILE"] = TEST_DB_PATH
 
 import database  # noqa: E402
 from referral_system_new import award_referral_for_payment  # noqa: E402
+from referral_system_new import retry_pending_signup_bonuses  # noqa: E402
 
 
 class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
@@ -121,6 +122,29 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual((await cur.fetchone())[0], 1)
         self.assertEqual(pay_id_1, pay_id_2, "duplicate must map to the original payments row")
+
+    async def test_07_failed_signup_bonus_is_retryable_and_not_duplicated(self):
+        """A panel outage leaves the 15-day signup reward pending for retry."""
+        from unittest.mock import AsyncMock, patch
+
+        await self._seed_pair(referrer_id=711, referred_id=722)
+        delivery = AsyncMock(side_effect=[False, True])
+        with patch("subscription.deliver_key", new=delivery):
+            pending_after_failure = await retry_pending_signup_bonuses(None, 711)
+            self.assertEqual(pending_after_failure, 1)
+            pending_after_retry = await retry_pending_signup_bonuses(None, 711)
+            self.assertEqual(pending_after_retry, 0)
+            pending_after_success = await retry_pending_signup_bonuses(None, 711)
+            self.assertEqual(pending_after_success, 0)
+
+        self.assertEqual(delivery.await_count, 2)
+        self.assertTrue(delivery.await_args.kwargs["is_paid"])
+        self.assertEqual(delivery.await_args.kwargs["amount"], 0)
+        self.assertEqual(delivery.await_args.kwargs["payload"], "ref_signup_711_722")
+        events = await database.get_referral_events(711)
+        signup_rewards = [e for e in events if e["referred_id"] == 722 and e["event_type"] == "registration_bonus"]
+        self.assertEqual(len(signup_rewards), 1)
+        self.assertEqual(signup_rewards[0]["days_awarded"], 15)
 
 
 if __name__ == "__main__":

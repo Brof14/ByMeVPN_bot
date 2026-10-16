@@ -26,7 +26,7 @@ from database import (
     has_active_subscription,
     has_ever_had_key, get_user_keys,
 )
-from keyboards import main_menu_new_user, main_menu_existing, main_menu_with_keys, back_to_menu, cancel_kb
+from keyboards import main_menu_new_user, main_menu_existing, main_menu_with_keys, back_to_menu, cancel_kb, support_url
 from utils import send_with_photo, safe_answer, LOGO_URL
 from async_utils import monitor_performance
 from cache import cache_subscription_data
@@ -91,13 +91,6 @@ async def _clean_chat(bot: Bot, chat_id: int, anchor_msg_id: int, count: int = 3
     await asyncio.gather(*[delete_with_timeout(mid) for mid in ids], return_exceptions=True)
 
 
-def _referral_welcome_kb() -> InlineKeyboardMarkup:
-    """Welcome keyboard for referral users (intro trial: 1 ₽ → 3 days)."""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎁 Попробовать за 1 ₽", callback_data="trial_ref")],
-    ])
-
-
 async def _send_main_menu(
     bot: Bot,
     target: "Message | CallbackQuery",
@@ -118,7 +111,7 @@ async def _send_main_menu(
             "ваш доступ и платежи не изменились. Попробуйте ещё раз через минуту."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Поддержка", url="https://t.me/ByMeVPNSupportBot")],
+            [InlineKeyboardButton(text="Поддержка", url=support_url())],
             [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
         ])
         if isinstance(target, Message):
@@ -127,40 +120,22 @@ async def _send_main_menu(
             await send_with_photo(bot, target, text, kb)
         return
 
-    if is_new_referral and state == "new":
-        # Referral landing - fire bonus text (when someone clicks referral link)
-        text = (
-            "🔥 Нормальный VPN сейчас найти сложно — либо дорогой, либо не работает.\n\n"
-            "🎁 <b>3 дня ByMeVPN — за 1 ₽</b>\n\n"
-            "Что получите сразу:\n"
-            "• VPN-подключение для приложений и сайтов\n"
-            "• Короткая инструкция под ваше устройство\n"
-            "• Подключение за пару минут, без сложных настроек\n\n"
-            "━━━━━━━━━━━━━━━━━━━━━\n"
-            "💳 Сегодня — 1 ₽\n"
-            "🔁 Через 3 дня — 89 ₽/мес, автопродление каждые 30 дней\n"
-            "🔓 Отключить автопродление можно в любой момент\n"
-            "━━━━━━━━━━━━━━━━━━━━━\n\n"
-            "👇 Нажмите кнопку и подключитесь"
-        )
-        kb = _referral_welcome_kb()
-    elif state == "new":
+    if state == "new":
         # Main menu - standard welcome text
         text = (
-            "<b>ByMeVPN — VPN с простым подключением.</b>\n\n"
-            "Если приложения или сайты не открываются, ByMeVPN поможет подключиться через VPN. "
-            "Настройка займёт пару минут.\n\n"
-            "🎁 <b>3 дня за 1 ₽</b> — попробуйте прежде чем платить полную цену.\n"
-            "💳 Дальше — 89 ₽/мес (или выгоднее при оплате за 3–12 месяцев).\n\n"
-            "После оплаты бот пришлёт ключ и откроет короткую инструкцию для вашего устройства."
+            "<b>ByMeVPN — VPN, который просто подключить.</b>\n\n"
+            "Получите личную ссылку и подключите нужные приложения в несколько шагов.\n"
+            "Для выбранных российских приложений можно настроить работу напрямую — "
+            "не выключая VPN целиком.\n\n"
+            "Есть пробный тариф за 1 ₽ и бесплатный способ через приглашения."
         )
         kb = main_menu_new_user()
     elif state == "expired":
         text = (
             f"<b>Здравствуйте, {user_name}!</b>\n\n"
             "Ваша подписка закончилась.\n\n"
-            "Продлите подписку, чтобы снова подключаться к VPN. Перед оплатой выберите нужное число устройств.\n\n"
-            "Чем дольше срок, тем больше вы экономите!"
+            "Можно продлить её или получить бонусные дни, приглашая друзей. "
+            "Сохранённые ключи доступны в разделе «Мои ключи»."
         )
         # Check if user has keys to show appropriate menu (use direct DB check, not cache)
         user_keys = await get_user_keys(user_id)
@@ -182,7 +157,8 @@ async def _send_main_menu(
                 f"<b>Здравствуйте, {user_name}!</b>\n\n"
                 f"✅ VPN активен до <b>{expires}</b>\n"
                 f"📱 Устройств: <b>{device_count}</b>\n\n"
-                "Откройте «Мои ключи», чтобы скопировать ссылку, продлить подписку или управлять автопродлением."
+                "В «Моих ключах» — подключение и настройки подписки. "
+                "Бонусные дни можно получить, приглашая друзей."
             )
         else:
             text = f"<b>Здравствуйте, {user_name}!</b>"
@@ -268,53 +244,11 @@ async def cmd_start(message: Message, bot: Bot) -> None:
                         # Process referral click using referral_system_new
                         await process_referral_click(ref_id, user_id)
                         
-                        # Grant the signup bonus through the regular delivery
-                        # path so both the database and 3x-ui stay in sync.
                         try:
-                            from subscription import deliver_key
-                            from constants import DEFAULT_DEVICE_LIMIT
-                            referrer_keys = await get_user_keys(ref_id)
-                            existing_key = max(referrer_keys, key=lambda item: item.get("expiry", 0)) if referrer_keys else None
-                            referrer_devices = existing_key.get("limit_ip", DEFAULT_DEVICE_LIMIT) if existing_key else DEFAULT_DEVICE_LIMIT
-                            bonus_delivered = await deliver_key(
-                                bot=bot,
-                                user_id=ref_id,
-                                chat_id=ref_id,
-                                config_name=f"ByMeVPN_{ref_id}",
-                                days=15,
-                                limit_ip=referrer_devices,
-                                is_paid=False,
-                                amount=0,
-                                method="ref_signup_bonus",
-                                payload=f"ref_signup_{ref_id}_{user_id}",
-                                extend_existing=True,
-                            )
-                            if bonus_delivered:
-                                from database import add_referral_event
-                                await add_referral_event(
-                                    referrer_id=ref_id,
-                                    referred_id=user_id,
-                                    event_type="registration_bonus",
-                                    days_awarded=15,
-                                    description="New user registered via referral link",
-                                )
+                            from referral_system_new import award_referral_signup_bonus
+                            await award_referral_signup_bonus(bot, ref_id, user_id)
                         except Exception as bonus_error:
                             logger.exception("Could not grant referral signup bonus to %d: %s", ref_id, bonus_error)
-                        
-                        # Send beautiful message to new user with button
-                        try:
-                            await bot.send_message(
-                                user_id,
-                                "🎁 <b>Вы перешли по реферальной ссылке</b>\n\n"
-                                "🌟 <b>3 дня ByMeVPN — за 1 ₽</b>\n"
-                                "🚀 Нажмите кнопку ниже, чтобы попробовать",
-                                parse_mode="HTML",
-                                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                                    InlineKeyboardButton(text="🎁 Попробовать за 1 ₽", callback_data=f"claim_trial:{ref_id}")
-                                ]])
-                            )
-                        except Exception as msg_error:
-                            logger.error("Failed to send referral welcome message: %s", msg_error)
                         
                         logger.info("Referral click from user %s with code %s", user_id, args[1])
                 except Exception as e:
@@ -368,8 +302,9 @@ async def _start_intro_trial(bot: Bot, callback: CallbackQuery, ref_id: int | No
         text = (
             "🎁 <b>3 дня ByMeVPN — 1 ₽</b>\n\n"
             f"Сегодня: <b>1 ₽</b>\n"
-            f"Через {INTRO_TRIAL_DAYS} дня: <b>{RECURRING_MONTHLY_PRICE} ₽/мес</b> — "
-            "далее каждые 30 дней, пока автопродление не отключено.\n\n"
+            f"Если способ оплаты сохранится: через {INTRO_TRIAL_DAYS} дня — "
+            f"<b>{RECURRING_MONTHLY_PRICE} ₽ за следующие 30 дней</b>, затем каждые 30 дней, пока автопродление не отключено.\n"
+            "Если способ оплаты не сохранится, автосписаний не будет — доступ можно продлить вручную.\n\n"
             "🔓 Отключить автопродление можно в любой момент — "
             "доступ сохранится до конца оплаченного периода."
         )
@@ -404,8 +339,9 @@ async def _start_intro_trial(bot: Bot, callback: CallbackQuery, ref_id: int | No
     text = (
         "🎁 <b>3 дня ByMeVPN — 1 ₽</b>\n\n"
         f"Сегодня: <b>1 ₽</b>\n"
-        f"Через {INTRO_TRIAL_DAYS} дня: <b>{RECURRING_MONTHLY_PRICE} ₽/мес</b> — "
-        "далее каждые 30 дней, пока автопродление не отключено.\n\n"
+        f"Если способ оплаты сохранится: через {INTRO_TRIAL_DAYS} дня — "
+        f"<b>{RECURRING_MONTHLY_PRICE} ₽ за следующие 30 дней</b>, затем каждые 30 дней, пока автопродление не отключено.\n"
+        "Если способ оплаты не сохранится, автосписаний не будет — доступ можно продлить вручную.\n\n"
         "🔓 Отключить автопродление можно в любой момент — "
         "доступ сохранится до конца оплаченного периода.\n\n"
         "👇 Нажмите «Оплатить 1 ₽» — ключ придёт автоматически."
@@ -476,23 +412,43 @@ async def cb_back_to_menu(callback: CallbackQuery, bot: Bot, state: FSMContext):
 async def cb_about(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
-        "<b>ByMeVPN — простой способ подключить VPN на своих устройствах.</b>\n\n"
-        "Одна подписка — доступ к привычным сайтам и приложениям через удобный VPN-клиент. Выберите число устройств, получите личную ссылку и подключитесь за несколько шагов.\n\n"
-        "🎁 Попробуйте 3 дня за 1 ₽, затем выберите подходящий тариф.\n"
-        "🎁 Бесплатные дни можно получать, приглашая друзей — без карты и её привязки.\n"
-        "🌐 Российские приложения можно оставить в обходе: VPN остаётся включённым для остальных.\n"
-        "📱 Инструкции и управление подпиской — прямо в боте.\n"
-        "🤝 Можно получить VPN за размещение рекламы ByMeVPN в Telegram-канале.\n\n"
-        "При оплате через ЮKassa сохранённый способ оплаты используется для автопродления выбранного тарифа; отключить его можно в «Мои ключи» → «Управление автопродлением». Stars и CryptoBot автоматически не продлеваются."
+        "<b>ByMeVPN — VPN, который просто подключить.</b>\n\n"
+        "Получите личную ссылку, добавьте её в приложение и подключитесь. "
+        "Инструкции и управление подпиской находятся в боте.\n\n"
+        "• Подключение для телефона и компьютера.\n"
+        "• Выбранные российские приложения можно настроить для работы напрямую.\n"
+        "• Бонусные дни за приглашённых друзей — без карты.\n"
+        "• Для владельцев Telegram-каналов есть отдельная программа размещения рекламы.\n\n"
+        "Автопродление и способы оплаты доступны в «Моих ключах». Условия будущих списаний бот показывает до оплаты."
     )
     # Keep the menu navigation in a fixed, full-width bottom row.
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Выбрать тариф", callback_data="buy_vpn")],
-        [InlineKeyboardButton(text="📣 VPN за рекламу", callback_data="ad_program")],
+        [InlineKeyboardButton(text="Выбрать тариф", callback_data="buy_vpn")],
         [InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu")],
     ])
     await send_with_photo(bot, callback, text, kb)
+
+
+@router.callback_query(F.data == "free_vpn")
+async def cb_free_vpn(callback: CallbackQuery, bot: Bot):
+    await safe_answer(callback)
+    text = (
+        "<b>Получить VPN бесплатно</b>\n\n"
+        "Выберите подходящий способ:\n\n"
+        "<b>Пригласить друзей</b> — получать бонусные дни за приглашения. "
+        "Карта и оплата не нужны.\n\n"
+        "<b>Реклама в канале</b> — для владельцев Telegram-каналов. "
+        "Бонус зависит от размера аудитории."
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Пригласить друзей", callback_data="partner")],
+        [InlineKeyboardButton(text="VPN за рекламу", callback_data="ad_program")],
+        [InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu")],
+    ])
+    await send_with_photo(bot, callback, text, kb)
+
+
 
 
 # ---------------------------------------------------------------------------

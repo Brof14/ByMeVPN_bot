@@ -13,7 +13,7 @@ from xui_client import delete_xui_user, get_xui_user, format_traffic
 from keyboards import (
     my_keys_kb, my_keys_list_kb, key_detail_kb, confirm_delete_kb,
     payment_kb, back_to_menu, connection_guide_kb, tariff_selection_kb,
-    autorenew_cancel_confirm_kb, manage_payment_methods_kb, key_settings_kb,
+    autorenew_cancel_confirm_kb, manage_payment_methods_kb, key_settings_kb, support_url,
 )
 from utils import send_with_photo, send_or_edit, safe_answer
 from constants import format_timestamp as fmt_date, format_days_left as fmt_days_left
@@ -553,23 +553,12 @@ async def cb_rf_apps_guide(callback: CallbackQuery, bot: Bot):
             return
     
     text = (
-        "🌐 <b>Как пользоваться VPN и РФ-приложениями одновременно</b>\n\n"
-        "ByMeVPN можно оставить включённым — отключать VPN не нужно. Российские приложения "
-        "(например, <b>MAX</b>, банковские приложения и Госуслуги) добавьте в обход: "
-        "они будут работать напрямую, а остальные приложения продолжат использовать VPN.\n\n"
-        "<b>Инструкция для Happ:</b>\n\n"
-        "1. Откройте приложение <b>Happ</b> на устройстве.\n\n"
-        "2. Нажмите <b>⚙️ Настройки</b> в правом верхнем углу главного экрана.\n\n"
-        "3. Откройте раздел <b>«Настройки туннеля»</b>.\n\n"
-        "4. Выберите <b>«Прокси для выбранных приложений»</b>.\n\n"
-        "5. Установите режим <b>«Обход»</b>.\n\n"
-        "6. В списке приложений отметьте те, которые должны работать <b>без VPN</b> "
-        "— например, <b>MAX</b> и другие российские приложения.\n\n"
-        "7. Вернитесь назад — настройки сохранятся автоматически.\n\n"
-        "<b>Готово.</b> Теперь выбранные приложения будут работать напрямую, без VPN, "
-        "а остальные приложения продолжат использовать VPN.\n\n"
-        "Таким образом, <b>VPN можно не отключать полностью</b>: российские приложения "
-        "работают напрямую, а иностранные — через VPN."
+        "<b>Российские приложения без отключения VPN</b>\n\n"
+        "На устройствах с поддержкой обхода можно направить выбранные приложения напрямую. "
+        "Остальные продолжат работать через VPN. Доступность и название настройки зависят от устройства и версии Happ.\n\n"
+        "<b>Android · Happ</b>\n"
+        "Откройте настройки туннеля → «Прокси для выбранных приложений» → режим «Обход» и отметьте нужные приложения.\n\n"
+        "Для других устройств откройте настройки маршрутизации Happ. Если такой настройки нет или приложение всё ещё не работает, напишите нам — подскажем для вашей платформы."
     )
     
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -577,7 +566,8 @@ async def cb_rf_apps_guide(callback: CallbackQuery, bot: Bot):
         InlineKeyboardButton(text="← Настройки ключа", callback_data=f"key_settings:{key_id}")
         if key_id else InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu")
     )
-    await send_or_edit(bot, callback, text, InlineKeyboardMarkup(inline_keyboard=[[back_button]]))
+    kb_rows = [[InlineKeyboardButton(text="Написать в поддержку", url=support_url())], [back_button]]
+    await send_or_edit(bot, callback, text, InlineKeyboardMarkup(inline_keyboard=kb_rows))
 
 
 # ---------------------------------------------------------------------------

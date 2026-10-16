@@ -1422,13 +1422,39 @@ async def add_referral_event(
     description: str = None,
 ) -> int:
     db = await get_db()
-    cur = await db.execute(
-        "INSERT INTO referral_events(referrer_id, referred_id, event_type, days_awarded, description) "
-        "VALUES(?,?,?,?,?)",
-        (referrer_id, referred_id, event_type, days_awarded, description),
-    )
+    if event_type == "registration_bonus":
+        cur = await db.execute(
+            """INSERT INTO referral_events(referrer_id, referred_id, event_type, days_awarded, description)
+            SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (
+                SELECT 1 FROM referral_events WHERE referrer_id=? AND referred_id=? AND event_type=?
+            )""",
+            (referrer_id, referred_id, event_type, days_awarded, description,
+             referrer_id, referred_id, event_type),
+        )
+    else:
+        cur = await db.execute(
+            "INSERT INTO referral_events(referrer_id, referred_id, event_type, days_awarded, description) "
+            "VALUES(?,?,?,?,?)",
+            (referrer_id, referred_id, event_type, days_awarded, description),
+        )
     await db.commit()
-    return cur.lastrowid
+    return cur.lastrowid if cur.rowcount else 0
+
+
+async def get_referrals_missing_signup_bonus(referrer_id: int, limit: int = 100) -> list[int]:
+    """Return referred user IDs whose 15-day signup bonus is still pending."""
+    db = await get_db()
+    cur = await db.execute(
+        """SELECT r.referred_id FROM referrals r
+        WHERE r.referrer_id = ? AND NOT EXISTS (
+            SELECT 1 FROM referral_events e
+            WHERE e.referrer_id=r.referrer_id AND e.referred_id=r.referred_id
+              AND e.event_type='registration_bonus'
+        )
+        ORDER BY r.created ASC LIMIT ?""",
+        (referrer_id, int(limit)),
+    )
+    return [row[0] for row in await cur.fetchall()]
 
 
 async def get_referral_events(referrer_id: int) -> list[dict]:
@@ -4085,6 +4111,33 @@ async def get_ad_applications_by_statuses(statuses: list[str], limit: int = 20) 
         FROM ad_applications WHERE status IN ({placeholders})
         ORDER BY created_at ASC LIMIT {int(limit)}""",
         tuple(statuses),
+    )
+    rows = await cur.fetchall()
+    return [
+        {
+            "id": r[0], "user_id": r[1], "channel_id": r[2], "channel_username": r[3],
+            "channel_ref": r[4], "subscriber_count": r[5], "bonus_months": r[6],
+            "status": r[7], "post_url": r[8], "post_message_id": r[9], "campaign_id": r[10],
+            "created_at": r[11], "published_at": r[12], "verification_due_at": r[13],
+            "approved_at": r[14], "rejected_at": r[15], "rejection_reason": r[16],
+        }
+        for r in rows
+    ]
+
+
+async def get_ad_applications_due_for_retention(now: int | None = None, limit: int = 100) -> list[dict]:
+    """Applications whose 30-day post-retention period is due for manual review."""
+    db = await get_db()
+    now = int(now or time.time())
+    cur = await db.execute(
+        """SELECT id, user_id, channel_id, channel_username, channel_ref, subscriber_count, bonus_months,
+        status, post_url, post_message_id, campaign_id, created_at, published_at,
+        verification_due_at, approved_at, rejected_at, rejection_reason
+        FROM ad_applications
+        WHERE status IN ('approved', 'retention_issue') AND verification_due_at IS NOT NULL
+          AND verification_due_at <= ?
+        ORDER BY verification_due_at ASC LIMIT ?""",
+        (now, int(limit)),
     )
     rows = await cur.fetchall()
     return [

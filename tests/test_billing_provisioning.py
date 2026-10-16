@@ -430,10 +430,10 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
         """
         from keyboards import (
             connection_guide_kb, linux_distro_kb,
-            linux_guide_back_kb, guide_back_kb,
+            linux_guide_back_kb, guide_back_kb, additional_platforms_kb,
         )
         from handlers.guide import (
-            _GUIDES, HAPP_ANDROID_APK, HAPP_IOS_RU,
+            _GUIDES, HAPP_ANDROID_APK, HAPP_SITE,
             HAPP_LINUX_ARCH, HAPP_LINUX_DEB, HAPP_LINUX_RPM,
             _send_platform_guide,
         )
@@ -443,9 +443,11 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
         conn_cbs = [btn.callback_data for row in conn_kb.inline_keyboard for btn in row if btn.callback_data]
         self.assertIn("guide_linux", conn_cbs)
         self.assertIn("guide_ios", conn_cbs)
-        self.assertIn("guide_macos", conn_cbs)
-        self.assertIn("guide_android_tv", conn_cbs)
+        self.assertIn("guide_more", conn_cbs)
         self.assertIn("back_to_menu", conn_cbs)
+        extra_cbs = [btn.callback_data for row in additional_platforms_kb().inline_keyboard for btn in row if btn.callback_data]
+        self.assertIn("guide_macos", extra_cbs)
+        self.assertIn("guide_android_tv", extra_cbs)
 
         # 2. Linux distro keyboard has 4 distros and back to connection_guide
         linux_kb = linux_distro_kb()
@@ -466,7 +468,7 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
         gen_back_cbs = [btn.callback_data for row in gen_back.inline_keyboard for btn in row if btn.callback_data]
         self.assertIn("connection_guide", gen_back_cbs, "Back button from general guide must go to connection_guide")
 
-        # 5. iOS guide points at the current official Happ listings
+        # 5. iOS guide avoids a Russia-specific listing that can move or disappear.
         ios_text = _GUIDES["ios"]
         self.assertIn("Happ", ios_text)
         self.assertNotIn("<a href", ios_text)
@@ -482,7 +484,7 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
             await _send_platform_guide(callback, bot, "ios")
             ios_markup = send_or_edit_mock.call_args.args[3]
             ios_urls = {button.url for row in ios_markup.inline_keyboard for button in row if button.url}
-            self.assertIn(HAPP_IOS_RU, ios_urls)
+            self.assertIn(HAPP_SITE, ios_urls)
             self.assertIn("https://apps.apple.com/us/app/happ-proxy-utility/id6504287215", ios_urls)
 
             await _send_platform_guide(callback, bot, "linux")

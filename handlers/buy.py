@@ -301,7 +301,13 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
     from payments import is_yookassa_recurring_supported
     ar_note = ""
     if is_yookassa_recurring_supported():
-        ar_note = "🔄 <b>Автопродление:</b> включено (по истечении срока подписка продлится автоматически, можно отключить в любой момент в меню ключа).\n\n"
+        ar_note = (
+            "<b>Автопродление ЮKassa:</b> если при оплате сохранится способ оплаты, "
+            f"{price_rub} ₽ будут списываться за выбранный срок ({months} мес.) по его окончании. "
+            "Отключить автопродление можно в любой момент в настройках ключа; оплаченный срок сохранится.\n\n"
+        )
+    else:
+        ar_note = "ЮKassa проведёт разовый платёж: автопродление для него сейчас недоступно.\n\n"
 
     await send_with_photo(
         bot, callback,

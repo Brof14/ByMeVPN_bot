@@ -16,13 +16,12 @@ _SUPPORT_URL = (
 
 def main_menu_new_user() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="🎁 Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
-    kb.row(InlineKeyboardButton(text="💳 Выбрать тариф", callback_data="buy_vpn", style="primary"))
-    kb.row(InlineKeyboardButton(text="📣 VPN за рекламу", callback_data="ad_program", style="primary"))
-    kb.row(InlineKeyboardButton(text="Партнёрская программа", callback_data="partner"))
+    kb.row(InlineKeyboardButton(text="Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
+    kb.row(InlineKeyboardButton(text="Выбрать тариф", callback_data="buy_vpn"))
+    kb.row(InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
-        InlineKeyboardButton(text="Поддержка", url=_SUPPORT_URL),
+        InlineKeyboardButton(text="Поддержка", callback_data="trouble"),
     )
     return kb.as_markup()
 
@@ -30,13 +29,12 @@ def main_menu_new_user() -> InlineKeyboardMarkup:
 def main_menu_existing(trial_used: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     if not trial_used:
-        kb.row(InlineKeyboardButton(text="🎁 Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
-    kb.row(InlineKeyboardButton(text="💳 Выбрать тариф", callback_data="buy_vpn", style="primary"))
-    kb.row(InlineKeyboardButton(text="📣 VPN за рекламу", callback_data="ad_program", style="primary"))
-    kb.row(InlineKeyboardButton(text="Партнёрская программа", callback_data="partner"))
+        kb.row(InlineKeyboardButton(text="Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
+    kb.row(InlineKeyboardButton(text="Выбрать тариф", callback_data="buy_vpn"))
+    kb.row(InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
-        InlineKeyboardButton(text="Поддержка", url=_SUPPORT_URL),
+        InlineKeyboardButton(text="Поддержка", callback_data="trouble"),
     )
     return kb.as_markup()
 
@@ -50,17 +48,16 @@ def main_menu_with_keys(trial_used: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     # Show intro-trial button only if user hasn't used it yet
     if not trial_used:
-        kb.row(InlineKeyboardButton(text="🎁 Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
-    kb.row(InlineKeyboardButton(text="💳 Выбрать тариф", callback_data="buy_vpn", style="primary"))
-    kb.row(InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys", style="primary"))
-    kb.row(InlineKeyboardButton(text="📣 VPN за рекламу", callback_data="ad_program", style="primary"))
+        kb.row(InlineKeyboardButton(text="Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
+    kb.row(InlineKeyboardButton(text="Мои ключи", callback_data="my_keys", style="primary"))
+    kb.row(InlineKeyboardButton(text="Выбрать тариф", callback_data="buy_vpn"))
+    kb.row(InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn"))
     # «Войти в другой аккаунт» скрыт (§24): функционал не готов, callback
     # auth_existing_client остаётся в handlers/auth.py — вернём, когда будет
     # рабочий account switching.
-    kb.row(InlineKeyboardButton(text="Партнёрская программа", callback_data="partner"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
-        InlineKeyboardButton(text="Поддержка", url=_SUPPORT_URL),
+        InlineKeyboardButton(text="Поддержка", callback_data="trouble"),
     )
     return kb.as_markup()
 
@@ -71,13 +68,17 @@ def back_to_menu() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def support_url() -> str:
+    return _SUPPORT_URL
+
+
 def authorized_user_menu() -> InlineKeyboardMarkup:
     """Menu for authorized existing clients (4 buttons in strict order)."""
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="Продление подписки", callback_data="buy_vpn"))
     kb.row(InlineKeyboardButton(text="Мои ключи", callback_data="my_keys"))
     kb.row(InlineKeyboardButton(text="Партнёрская программа", callback_data="partner"))
-    kb.row(InlineKeyboardButton(text="Поддержка", url=_SUPPORT_URL))
+    kb.row(InlineKeyboardButton(text="Поддержка", callback_data="trouble"))
     return kb.as_markup()
 
 
@@ -311,20 +312,29 @@ def connection_guide_kb(key_id: int | None = None) -> InlineKeyboardMarkup:
         return f"guide_{name}:{key_id}" if key_id else f"guide_{name}"
 
     kb.row(
-        InlineKeyboardButton(text="💻 Windows", callback_data=platform_callback("windows")),
+        InlineKeyboardButton(text="iPhone / iPad", callback_data=platform_callback("ios")),
         InlineKeyboardButton(text="🤖 Android", callback_data=platform_callback("android")),
     )
     kb.row(
-        InlineKeyboardButton(text="📺 Android TV", callback_data=platform_callback("android_tv")),
-        InlineKeyboardButton(text="🍎 iPhone и iPad", callback_data=platform_callback("ios")),
+        InlineKeyboardButton(text="Windows", callback_data=platform_callback("windows")),
+        InlineKeyboardButton(text="Linux", callback_data=platform_callback("linux")),
     )
-    kb.row(
-        InlineKeyboardButton(text="💻 Mac", callback_data=platform_callback("macos")),
-        InlineKeyboardButton(text="🐧 Linux", callback_data=platform_callback("linux")),
-    )
+    more_callback = f"guide_more:{key_id}" if key_id else "guide_more"
+    kb.row(InlineKeyboardButton(text="Другие устройства", callback_data=more_callback))
     back_callback = f"key_info:{key_id}" if key_id else "back_to_menu"
     back_text = "← Назад" if key_id else "← Назад в меню"
     kb.row(InlineKeyboardButton(text=back_text, callback_data=back_callback))
+    return kb.as_markup()
+
+
+def additional_platforms_kb(key_id: int | None = None) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    def platform_callback(name: str) -> str:
+        return f"guide_{name}:{key_id}" if key_id else f"guide_{name}"
+    kb.row(InlineKeyboardButton(text="Mac", callback_data=platform_callback("macos")))
+    kb.row(InlineKeyboardButton(text="Android TV", callback_data=platform_callback("android_tv")))
+    back = f"connection_guide:{key_id}" if key_id else "connection_guide"
+    kb.row(InlineKeyboardButton(text="← К устройствам", callback_data=back))
     return kb.as_markup()
 
 

@@ -9,9 +9,8 @@ Flow (spec #23-29):
                     count → application pending manual review.
   post            → user gets the ad post, publishes it, submits the post URL
                     (status post_submitted, 30-day retention clock starts).
-  bonus           → granted ONLY by admin approval (never on application
-                    creation). Admin reviews, approves → +N days on the user's
-                    key. All admin actions are written to ad_audit_log.
+  bonus           → granted immediately after an admin verifies the published
+                    post. The post is separately checked after 30 days.
 
 Legacy status 'active_30_days' (older schema) is treated as post_submitted.
 """
@@ -31,12 +30,13 @@ from config import ADMIN_IDS
 from database import (
     create_ad_application, get_user_ad_applications, update_ad_application,
     get_ad_application_by_id, get_ad_applications_by_statuses,
+    get_ad_applications_due_for_retention,
     channel_already_used, get_active_ad_campaign, log_ad_notification,
     calculate_bonus_months, log_ad_analytics_event, log_ad_audit,
-    get_user_keys, extend_key, delete_user_ad_application,
+    get_user_keys, delete_user_ad_application,
 )
 from utils import send_with_photo, safe_answer
-from keyboards import back_to_menu
+from keyboards import back_to_menu, support_url
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -60,7 +60,7 @@ BONUS_TIERS = (
 )
 
 # Statuses that mean "user is working on the application" (only one allowed)
-_ACTIVE_APP_STATUSES = ("draft", "channel_pending", "waiting_for_post", "post_submitted", "active_30_days")
+_ACTIVE_APP_STATUSES = ("draft", "channel_pending", "waiting_for_post", "post_submitted", "active_30_days", "grant_pending")
 
 STATUS_EMOJI = {
     "draft": "📝",
@@ -69,18 +69,22 @@ STATUS_EMOJI = {
     "post_submitted": "🔍",
     "active_30_days": "🔍",
     "approved": "✅",
+    "grant_pending": "⚙️",
     "rejected": "❌",
     "completed": "🎉",
+    "retention_issue": "⚠️",
 }
 STATUS_TEXT = {
     "draft": "Черновик",
     "channel_pending": "Ожидает проверки",
     "waiting_for_post": "Ожидает пост",
-    "post_submitted": "Пост размещён, идёт проверка 30 дней",
-    "active_30_days": "Пост размещён, идёт проверка 30 дней",
-    "approved": "Одобрено",
+    "post_submitted": "Пост отправлен на проверку",
+    "active_30_days": "Пост отправлен на проверку",
+    "grant_pending": "Пост подтверждён, бонус начисляется",
+    "approved": "Бонус начислен · пост нужно сохранить 30 дней",
     "rejected": "Отклонено",
-    "completed": "Завершено",
+    "completed": "Проверка поста завершена",
+    "retention_issue": "Нужна ручная проверка поста",
 }
 
 # Public channel username patterns
@@ -90,6 +94,7 @@ _PUBLIC_PATTERNS = (
 )
 # Private invite patterns: https://t.me/+Hh0x... or https://t.me/joinchat/... or t.me/c/1234/5
 _PRIVATE_INVITE_RE = re.compile(r"^(?:https?://)?t\.me/(?:\+[\w-]{10,}|joinchat/[\w-]{10,}|c/\d+(?:/\d+)?)$")
+_POST_URL_RE = re.compile(r"^(https?://)?t\.me/(?:[A-Za-z0-9_]{4,64}/\d+|c/\d+/\d+)(?:\?single)?/?$", re.IGNORECASE)
 
 
 def _is_admin(user_id: int) -> bool:
@@ -112,15 +117,15 @@ async def cb_ad_program(callback: CallbackQuery, bot: Bot, state: FSMContext):
 
     text = (
         "📣 <b>VPN за рекламу</b>\n\n"
-        "Разместите рекламный пост ByMeVPN\n"
-        "в своём Telegram-канале на 30 дней —\n"
-        "и получите VPN в подарок:\n\n"
+        "Опубликуйте рекламный пост ByMeVPN в своём Telegram-канале.\n"
+        "После проверки получите VPN-бонус; пост нужно сохранить на 30 дней.\n\n"
         f"{BONUS_TIERS}\n\n"
         "<b>Как это работает:</b>\n"
         "1. Отправьте ссылку на ваш канал\n"
         "2. Получите готовый рекламный пост\n"
         "3. Опубликуйте его и отправьте ссылку на пост\n"
-        "4. Через 30 дней мы проверим размещение и начислим бонус\n\n"
+        "4. После проверки поста бот сразу начислит бонус.\n"
+        "5. Оставьте публикацию в канале на 30 дней — затем мы проверим её сохранность.\n\n"
         "• Публичные каналы проверяются автоматически\n"
         "• Приватные каналы — по ссылке-приглашению, вручную\n"
         "• Один канал может участвовать только один раз"
@@ -320,7 +325,7 @@ async def _create_application_and_reply(
             "1. Получите рекламный пост\n"
             "2. Опубликуйте его в канале\n"
             "3. Отправьте ссылку на пост\n"
-            "4. Пост должен находиться в канале 30 дней — после этого бонус начислят"
+            "4. После проверки публикации бонус начислится сразу. Оставьте пост в канале на 30 дней."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📋 Получить рекламный пост", callback_data=f"ad_get_post:{app_id}")],
@@ -438,12 +443,11 @@ async def cb_ad_get_post(callback: CallbackQuery, bot: Bot):
         "📋 <b>Рекламный пост</b>\n\n"
         "Скопируйте текст ниже и разместите в своём канале:\n\n"
         "━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "🔥 Не грузится YouTube, Telegram, Instagram или сайты?\n\n"
+        "Нужен доступ к привычным сайтам и приложениям?\n\n"
         "ByMeVPN — VPN, который просто работает.\n\n"
-        "✅ Подключение за пару минут, без сложных настроек\n"
-        "✅ Telegram, YouTube, сайты — всё открывается\n"
-        "✅ Стабильная связь для видео и игр\n"
-        "✅ Работает на iPhone, Android, Windows, macOS, Linux\n\n"
+        "• Понятная инструкция для телефона и компьютера\n"
+        "• Личная ссылка для подключения\n"
+        "• Управление подпиской в Telegram-боте\n\n"
         "🎁 3 дня — за 1 ₽\n"
         "💳 Дальше — 89 ₽/мес, отключить автопродление можно в любой момент\n\n"
         "👇 Попробовать: https://t.me/ByMeVPN_bot\n\n"
@@ -502,15 +506,18 @@ async def msg_ad_post_url(message: Message, bot: Bot, state: FSMContext):
         await state.clear()
         return
 
-    if "t.me/" not in post_url:
+    post_match = _POST_URL_RE.fullmatch(post_url)
+    if not post_match:
         await message.answer(
             "❌ Неверный формат ссылки. Пожалуйста, отправьте ссылку на пост "
-            "в формате https://t.me/channel/123",
+            "из вашего канала, например https://t.me/channel/123 или https://t.me/c/123456/5",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="◀️ Отмена", callback_data=f"ad_get_post:{app_id}")]
             ])
         )
         return
+    if not post_match.group(1):
+        post_url = f"https://{post_url.lstrip('/')}"
 
     updated = await update_ad_application(
         app_id, status="post_submitted", post_url=post_url,
@@ -525,9 +532,8 @@ async def msg_ad_post_url(message: Message, bot: Bot, state: FSMContext):
 
     text = (
         "✅ <b>Ссылка на пост получена!</b>\n\n"
-        "Пост должен оставаться в канале <b>30 дней</b>.\n\n"
-        "Мы проверим размещение, и администратор начислит бонус.\n"
-        "Вы получите уведомление о результате."
+        "Мы проверим публикацию. После подтверждения бонус будет начислен сразу.\n\n"
+        "Пожалуйста, оставьте пост в канале на <b>30 дней</b> — после этого мы проверим его сохранность."
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -574,17 +580,28 @@ async def cb_ad_my_applications(callback: CallbackQuery, bot: Bot, state: FSMCon
             f"Бонус: {app['bonus_months']} мес.\n"
             f"Статус: {status_label}\n"
         )
+        if app["status"] == "approved" and app.get("verification_due_at"):
+            text += f"Сохраните публикацию до {time.strftime('%d.%m.%Y', time.localtime(app['verification_due_at']))}.\n"
+        if app["status"] == "grant_pending":
+            text += "Если статус не изменится, напишите в поддержку — заявка сохранена.\n"
         if app["status"] == "rejected" and app.get("rejection_reason"):
             text += f"Причина: {escape(str(app['rejection_reason']))}\n"
-        if app["status"] in ("waiting_for_post", "channel_pending"):
-            text += f"👉 Отправить пост: /ad_post_{app['id']}\n"
+        if app["status"] == "channel_pending":
+            text += "Канал проверяет администратор. После проверки здесь появится рекламный пост.\n"
+        elif app["status"] == "waiting_for_post":
+            text += "Откройте рекламный пост кнопкой ниже, опубликуйте его и отправьте ссылку.\n"
         if app["status"] in _ACTIVE_APP_STATUSES or app["status"] == "rejected":
             text += "Можно удалить эту заявку, пока бонус ещё не начислен.\n"
         text += "\n"
 
     rows = []
     for app in applications:
-        if app["status"] in _ACTIVE_APP_STATUSES or app["status"] == "rejected":
+        if app["status"] == "waiting_for_post":
+            rows.append([InlineKeyboardButton(
+                text=f"Открыть пост · заявка #{app['id']}",
+                callback_data=f"ad_get_post:{app['id']}",
+            )])
+        if app["status"] in ("draft", "channel_pending", "waiting_for_post", "post_submitted", "active_30_days", "rejected"):
             rows.append([InlineKeyboardButton(
                 text=f"🗑 Удалить заявку #{app['id']}",
                 callback_data=f"ad_cancel_confirm:{app['id']}",
@@ -691,8 +708,11 @@ async def cb_ad_admin_list(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
 
     apps = await get_ad_applications_by_statuses(
-        ["post_submitted", "active_30_days", "channel_pending"], limit=15
+        ["post_submitted", "active_30_days", "channel_pending", "grant_pending"], limit=15
     )
+    retention_apps = await get_ad_applications_due_for_retention(limit=50)
+    apps.extend(retention_apps)
+    apps = list({app["id"]: app for app in apps}.values())[:50]
     if not apps:
         await send_with_photo(bot, callback, "📭 Новых заявок на проверку нет.", _ad_admin_kb())
         return
@@ -749,21 +769,84 @@ async def cb_ad_admin_view(callback: CallbackQuery, bot: Bot):
         f"Бонус: <b>{app['bonus_months']} мес. ({app['bonus_months'] * 30} дн.)</b>\n"
         f"Статус: {STATUS_TEXT.get(app['status'], app['status'])}\n"
         f"Проверка 30 дней: {retention}\n"
-        f"Пост: {app.get('post_url') or '—'}\n"
+        f"Пост: {escape(str(app.get('post_url') or '—'))}\n"
         f"User: <code>{app['user_id']}</code>\n"
         f"Создана: {time.strftime('%d.%m.%Y', time.localtime(app['created_at']))}"
     )
 
     kb = InlineKeyboardBuilder()
-    if app["status"] in ("post_submitted", "active_30_days", "channel_pending"):
+    if app["status"] in ("post_submitted", "active_30_days"):
         kb.row(
-            InlineKeyboardButton(text="✅ Одобрить и выдать бонус", callback_data=f"ad_admin_approve:{app_id}"),
+            InlineKeyboardButton(text="✅ Подтвердить пост и выдать бонус", callback_data=f"ad_admin_approve:{app_id}"),
         )
         kb.row(InlineKeyboardButton(text="❌ Отклонить", callback_data=f"ad_admin_reject:{app_id}"))
+    elif app["status"] == "grant_pending":
+        kb.row(InlineKeyboardButton(text="↻ Повторить начисление", callback_data=f"ad_admin_approve:{app_id}"))
+    elif app["status"] == "channel_pending":
+        kb.row(InlineKeyboardButton(text="✓ Канал проверен · ждать пост", callback_data=f"ad_admin_channel_ok:{app_id}"))
+        kb.row(InlineKeyboardButton(text="❌ Отклонить", callback_data=f"ad_admin_reject:{app_id}"))
+    elif app["status"] in ("approved", "retention_issue") and due and due <= now:
+        kb.row(InlineKeyboardButton(text="✓ Пост сохранён 30 дней", callback_data=f"ad_admin_retention_ok:{app_id}"))
+        if app["status"] == "approved":
+            kb.row(InlineKeyboardButton(text="⚠️ Пост не найден · нужна связь", callback_data=f"ad_admin_retention_issue:{app_id}"))
     else:
         text += f"\n\nСтатус финальный — действие недоступно."
     kb.row(InlineKeyboardButton(text="◀️ К списку", callback_data="ad_admin_list"))
     await send_or_edit_safe(bot, callback, text, kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("ad_admin_retention_ok:"))
+async def cb_ad_admin_retention_ok(callback: CallbackQuery, bot: Bot):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Недоступно", alert=True)
+        return
+    await safe_answer(callback)
+    try:
+        app_id = int(callback.data.split(":", 1)[1])
+    except ValueError:
+        await safe_answer(callback, "Неверный номер заявки.", alert=True)
+        return
+    app = await get_ad_application_by_id(app_id)
+    if not app or app["status"] not in ("approved", "retention_issue") or (app.get("verification_due_at") or 0) > int(time.time()):
+        await safe_answer(callback, "Срок проверки ещё не наступил или заявка уже закрыта.", alert=True)
+        return
+    updated = await update_ad_application(app_id, status="completed", expected_statuses=["approved", "retention_issue"])
+    if not updated:
+        await safe_answer(callback, "Заявка уже обработана.", alert=True)
+        return
+    await log_ad_audit(callback.from_user.id, "ad_post_retained_30_days", f"app={app_id}")
+    await send_or_edit_safe(bot, callback, f"Проверка поста по заявке #{app_id} завершена. Выданный бонус не менялся.", _ad_admin_kb())
+
+
+@router.callback_query(F.data.startswith("ad_admin_retention_issue:"))
+async def cb_ad_admin_retention_issue(callback: CallbackQuery, bot: Bot):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Недоступно", alert=True)
+        return
+    await safe_answer(callback)
+    try:
+        app_id = int(callback.data.split(":", 1)[1])
+    except ValueError:
+        await safe_answer(callback, "Неверный номер заявки.", alert=True)
+        return
+    app = await get_ad_application_by_id(app_id)
+    if not app or app["status"] != "approved" or (app.get("verification_due_at") or 0) > int(time.time()):
+        await safe_answer(callback, "Срок проверки ещё не наступил или заявка уже закрыта.", alert=True)
+        return
+    updated = await update_ad_application(app_id, status="retention_issue", expected_statuses=["approved"])
+    if not updated:
+        await safe_answer(callback, "Заявка уже обработана.", alert=True)
+        return
+    await log_ad_audit(callback.from_user.id, "ad_post_retention_manual_review", f"app={app_id}")
+    try:
+        await bot.send_message(
+            app["user_id"],
+            f"Нам не удалось найти публикацию по заявке #{app_id}. Выданный бонус остаётся у вас. Если пост опубликован, отправьте ссылку в поддержку — мы проверим вручную.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Написать в поддержку", url=support_url())]]),
+        )
+    except Exception:
+        logger.warning("Could not notify user about ad retention check (app=%d)", app_id)
+    await send_or_edit_safe(bot, callback, f"Заявка #{app_id} отмечена для ручной проверки. Бонус пользователю не отзывался.", _ad_admin_kb())
 
 
 async def send_or_edit_safe(bot: Bot, callback: CallbackQuery, text: str, kb) -> None:
@@ -781,61 +864,94 @@ async def cb_ad_admin_approve(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     app_id = int(callback.data.split(":")[1])
     app = await get_ad_application_by_id(app_id)
-    if not app or app["status"] not in ("post_submitted", "active_30_days", "channel_pending"):
+    if not app or app["status"] not in ("post_submitted", "active_30_days", "grant_pending"):
         await safe_answer(callback, "Заявка уже закрыта", alert=True)
         return
 
     user_id = app["user_id"]
     days = int(app["bonus_months"]) * 30
 
-    # Approve FIRST (idempotent guard against double-click), then grant.
-    ok = await update_ad_application(
-        app_id,
-        status="approved",
-        expected_statuses=["post_submitted", "active_30_days", "channel_pending"],
-    )
-    if not ok:
-        await safe_answer(callback, "Не удалось обновить заявку", alert=True)
-        return
-
-    granted_via = ""
+    # Keep the request retryable until the idempotent provisioning operation
+    # succeeds. deliver_key stores a fixed expiry intent for this application,
+    # so retrying after a timeout cannot add the same reward twice.
+    if app["status"] != "grant_pending":
+        marked = await update_ad_application(
+            app_id, status="grant_pending",
+            expected_statuses=["post_submitted", "active_30_days"],
+        )
+        if not marked:
+            await safe_answer(callback, "Заявка уже обрабатывается.", alert=True)
+            return
     try:
+        from subscription import deliver_key
         keys = await get_user_keys(user_id)
-        active_keys = [k for k in keys if (k.get("expiry") or 0) > int(time.time())]
-        if active_keys:
-            target = max(active_keys, key=lambda k: k["expiry"])
-            await extend_key(target["id"], days)
-            granted_via = f"extended key #{target['id']} +{days}d"
-            await bot.send_message(
-                user_id,
-                f"🎉 <b>Бонус начислен!</b>\n\n"
-                f"Реклама в вашем канале подтверждена.\n"
-                f"Ваш ключ ByMeVPN продлён на <b>{days} дней</b>.\n"
-                f"Спасибо за сотрудничество!",
-                parse_mode="HTML",
-            )
-        else:
-            from subscription import deliver_key
-            success = await deliver_key(
-                bot=bot, user_id=user_id, chat_id=user_id,
-                config_name=f"ad_bonus_{user_id}",
-                days=days, limit_ip=2, is_paid=False, amount=0,
-                method="ad_bonus", payload=f"ad_bonus_{app_id}",
-                extend_existing=False,
-            )
-            granted_via = "delivered new key" if success else "delivery FAILED"
+        existing_key = max(keys, key=lambda k: k.get("expiry", 0)) if keys else None
+        devices = existing_key.get("limit_ip", 2) if existing_key else 2
+        success = await deliver_key(
+            bot=bot, user_id=user_id, chat_id=user_id,
+            config_name=f"ByMeVPN_{user_id}", days=days, limit_ip=devices,
+            # A deterministic provisioning intent makes retries safe without
+            # creating a payment record or changing the subscription price.
+            is_paid=True, amount=0, method="ad_bonus", payload=f"ad_bonus_{app_id}",
+            extend_existing=True,
+        )
     except Exception as e:
         logger.error("Failed to grant ad bonus for app %d: %s", app_id, e)
-        granted_via = f"ERROR: {e}"
+        success = False
 
-    await log_ad_audit(callback.from_user.id, "ad_approved", f"app={app_id} user={user_id} via={granted_via}")
+    if not success:
+        await log_ad_audit(callback.from_user.id, "ad_bonus_pending", f"app={app_id} user={user_id}")
+        await send_or_edit_safe(
+            bot, callback,
+            f"⚠️ Пост подтверждён, но бонус по заявке #{app_id} пока не выдан. Заявка сохранена; можно безопасно повторить начисление.",
+            InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="↻ Повторить начисление", callback_data=f"ad_admin_approve:{app_id}")]]),
+        )
+        return
+
+    await update_ad_application(app_id, status="approved", expected_statuses=["grant_pending"])
+
+    await log_ad_audit(callback.from_user.id, "ad_approved", f"app={app_id} user={user_id} days={days}")
     await log_ad_analytics_event(user_id, "ad_approved", {"app_id": app_id, "days": days})
 
     await send_or_edit_safe(
         bot, callback,
-        f"✅ Заявка #{app_id} одобрена. Бонус {app['bonus_months']} мес. ({days} дн.) начислен ({granted_via}).",
+        f"✅ Заявка #{app_id} одобрена. Бонус {app['bonus_months']} мес. ({days} дн.) начислен.",
         InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ К списку", callback_data="ad_admin_list")]]),
     )
+
+
+@router.callback_query(F.data.startswith("ad_admin_channel_ok:"))
+async def cb_ad_admin_channel_ok(callback: CallbackQuery, bot: Bot):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Недоступно", alert=True)
+        return
+    await safe_answer(callback)
+    try:
+        app_id = int(callback.data.split(":", 1)[1])
+    except ValueError:
+        await safe_answer(callback, "Неверный номер заявки.", alert=True)
+        return
+    app = await get_ad_application_by_id(app_id)
+    if not app or app["status"] != "channel_pending":
+        await safe_answer(callback, "Заявка уже обработана.", alert=True)
+        return
+    updated = await update_ad_application(app_id, status="waiting_for_post", expected_statuses=["channel_pending"])
+    if not updated:
+        await safe_answer(callback, "Заявка уже обрабатывается.", alert=True)
+        return
+    await log_ad_audit(callback.from_user.id, "ad_channel_verified", f"app={app_id}")
+    try:
+        await bot.send_message(
+            app["user_id"],
+            f"✅ Канал в заявке #{app_id} проверен. Опубликуйте рекламный текст и отправьте ссылку на пост — бонус будет начислен после проверки публикации.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Открыть рекламный пост", callback_data=f"ad_get_post:{app_id}")],
+                [InlineKeyboardButton(text="Мои заявки", callback_data="ad_my_applications")],
+            ]),
+        )
+    except Exception:
+        logger.warning("Could not notify user about verified ad channel (app=%d)", app_id)
+    await send_or_edit_safe(bot, callback, f"Канал по заявке #{app_id} проверен. Ожидаем ссылку на публикацию.", _ad_admin_kb())
 
 
 @router.callback_query(F.data.startswith("ad_admin_reject:"))

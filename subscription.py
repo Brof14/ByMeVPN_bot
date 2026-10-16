@@ -194,8 +194,9 @@ async def deliver_key(
                     logger.exception("Failed to get fresh subscription URL for user %d: %s", user_id, e)
                     key_to_show = existing_key
 
+                title = "🎉 Бонус за рекламу начислен!" if method == "ad_bonus" else "✅ <b>Подписка продлена!</b>"
                 text = (
-                    f"✅ <b>Подписка продлена!</b>\n\n"
+                    f"{title}\n\n"
                     f"🔑 <b>Ключ #{key_id}</b> продлен на <b>{days} дней</b>\n"
                     f"📱 Доступно устройств: <b>{limit_ip}</b>\n"
                     f"📅 Новый срок: до <b>{format_timestamp(new_expiry)[:10]}</b>\n\n"
@@ -286,8 +287,9 @@ async def deliver_key(
                     payment_provider=method,
                 )
 
+            title = "🎉 VPN-бонус за рекламу активирован!" if method == "ad_bonus" else "✅ <b>Подписка успешно активирована!</b>"
             text = (
-                f"✅ <b>Подписка успешно активирована!</b>\n\n"
+                f"{title}\n\n"
                 f"🔑 <b>Ключ #{key_id}</b> активирован на <b>{days} дней</b>\n"
                 f"📱 Доступно устройств: <b>{limit_ip}</b>\n"
                 f"📅 Срок действия: до <b>{format_timestamp(new_expiry)[:10]}</b>\n\n"
@@ -367,8 +369,9 @@ async def deliver_key(
             )
 
         device_word = "устройство" if limit_ip == 1 else ("устройства" if limit_ip in (2, 3, 4) else "устройств")
+        title = "🎉 VPN-бонус за рекламу активирован!" if method == "ad_bonus" else "✅ <b>VPN подключён!</b>"
         text = (
-            f"✅ <b>VPN подключён!</b>\n\n"
+            f"{title}\n\n"
             f"🔑 <b>Ваша подписка:</b>\n"
             f"<code>{subscription_url}</code>\n\n"
             f"📱 Доступно устройств: <b>{limit_ip}</b>\n"

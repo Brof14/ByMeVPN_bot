@@ -31,6 +31,51 @@ async def process_referral_click(referrer_id: int, referred_id: int, user_agent:
         return False
 
 
+async def award_referral_signup_bonus(bot, referrer_id: int, referred_id: int) -> bool:
+    """Grant the existing +15-day signup reward with a retry-safe target expiry."""
+    from database import get_referrer, get_referral_events, get_user_keys, add_referral_event
+    from subscription import deliver_key
+    from constants import DEFAULT_DEVICE_LIMIT
+
+    if await get_referrer(referred_id) != referrer_id:
+        return False
+    events = await get_referral_events(referrer_id)
+    if any(e["referred_id"] == referred_id and e["event_type"] == "registration_bonus" for e in events):
+        return True
+
+    keys = await get_user_keys(referrer_id)
+    latest_key = max(keys, key=lambda item: item.get("expiry", 0)) if keys else None
+    devices = latest_key.get("limit_ip", DEFAULT_DEVICE_LIMIT) if latest_key else DEFAULT_DEVICE_LIMIT
+    delivered = await deliver_key(
+        bot=bot, user_id=referrer_id, chat_id=referrer_id,
+        config_name=f"ByMeVPN_{referrer_id}", days=15, limit_ip=devices,
+        # amount=0 prevents a payment record; the deterministic intent makes
+        # retries safe if the panel succeeded but the DB/event response timed out.
+        is_paid=True, amount=0, method="ref_signup_bonus",
+        payload=f"ref_signup_{referrer_id}_{referred_id}", extend_existing=True,
+    )
+    if not delivered:
+        return False
+    return bool(await add_referral_event(
+        referrer_id=referrer_id, referred_id=referred_id,
+        event_type="registration_bonus", days_awarded=15,
+        description="New user registered via referral link",
+    )) or any(e["referred_id"] == referred_id and e["event_type"] == "registration_bonus" for e in events)
+
+
+async def retry_pending_signup_bonuses(bot, referrer_id: int) -> int:
+    """Retry outstanding signup rewards when the referrer opens their bonus page."""
+    from database import get_referrals_missing_signup_bonus
+    pending = await get_referrals_missing_signup_bonus(referrer_id)
+    completed = 0
+    for referred_id in pending:
+        try:
+            completed += bool(await award_referral_signup_bonus(bot, referrer_id, referred_id))
+        except Exception:
+            logger.exception("Could not retry referral signup bonus for referrer %d", referrer_id)
+    return len(pending) - completed
+
+
 async def claim_referral_bonus(bot, referrer_id: int, referred_id: int, bonus_type: str) -> bool:
     """
     Claim a referral bonus for the referrer.

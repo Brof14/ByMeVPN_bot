@@ -5,19 +5,17 @@ from html import escape
 from aiogram import Bot, F, Router
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
-from keyboards import connection_guide_kb
+from keyboards import connection_guide_kb, additional_platforms_kb, support_url
 from utils import send_with_photo, send_or_edit, safe_answer
 
 logger = logging.getLogger(__name__)
 router = Router()
 
 HAPP_SITE = "https://happ.info/"
-HAPP_IOS_RU = "https://apps.apple.com/ru/app/happ-lite/id6799917773"
 HAPP_IOS_GLOBAL = "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215"
 HAPP_ANDROID = "https://play.google.com/store/apps/details?id=com.happproxy"
 HAPP_ANDROID_APK = "https://github.com/Happ-proxy/happ-android/releases/latest/download/Happ.apk"
 HAPP_WINDOWS = "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe"
-HAPP_MACOS_RU = "https://apps.apple.com/ru/app/happ-proxy-utility/id6783623643"
 HAPP_MACOS_GLOBAL = "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215"
 HAPP_MACOS_DMG = "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/Happ.macOS.universal.dmg"
 HAPP_LINUX_DEB = "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/Happ.linux.x64.deb"
@@ -62,55 +60,112 @@ async def cb_trouble(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     await _track_guide_event(callback.from_user.id, "connection_help_open")
     text = (
-        "🛠 <b>Поможем подключиться</b>\n\n"
-        "Обновите подписку в Happ и проверьте, что активен только один VPN.\n\n"
-        "Если нужна помощь, напишите в поддержку и укажите модель устройства и приложение."
+        "<b>С чем помочь?</b>\n\n"
+        "Выберите проблему. Если подсказка не поможет, можно сразу написать в поддержку."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Написать в поддержку", url="https://t.me/ByMeVPNSupportBot")],
+        [InlineKeyboardButton(text="VPN не подключается", callback_data="support_topic:no_connection")],
+        [InlineKeyboardButton(text="VPN включён, но нет интернета", callback_data="support_topic:no_internet")],
+        [InlineKeyboardButton(text="Не работает приложение", callback_data="support_topic:app")],
+        [InlineKeyboardButton(text="Не добавляется подписка", callback_data="support_topic:import")],
+        [InlineKeyboardButton(text="Написать в поддержку", url=support_url())],
         [InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu")],
     ])
     await send_with_photo(bot, callback, text, kb)
 
 
+@router.callback_query(F.data.startswith("support_topic:"))
+async def cb_support_topic(callback: CallbackQuery, bot: Bot):
+    await safe_answer(callback)
+    topic = callback.data.split(":", 1)[1]
+    guidance = {
+        "no_connection": (
+            "<b>VPN не подключается</b>\n\n"
+            "Проверьте, что интернет работает без VPN. Обновите подписку в Happ и попробуйте подключиться снова."
+        ),
+        "no_internet": (
+            "<b>VPN включён, но интернета нет</b>\n\n"
+            "Отключите другие VPN или прокси, обновите подписку в Happ и подключитесь снова."
+        ),
+        "app": (
+            "<b>Не работает приложение</b>\n\n"
+            "Для российских приложений настройте обход в Happ, если эта функция доступна на вашем устройстве. "
+            "Если проблема остаётся, напишите в поддержку и укажите название приложения."
+        ),
+        "import": (
+            "<b>Не добавляется подписка</b>\n\n"
+            "В «Моих ключах» скопируйте ссылку целиком. В Happ нажмите «+», выберите добавление подписки "
+            "и вставьте ссылку."
+        ),
+    }
+    text = guidance.get(topic)
+    if not text:
+        await safe_answer(callback, "Подсказка не найдена.", alert=True)
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Написать в поддержку", url=support_url())],
+        [InlineKeyboardButton(text="← К выбору проблемы", callback_data="trouble")],
+    ])
+    await send_with_photo(bot, callback, text, kb)
+
+
+@router.callback_query(F.data.startswith("guide_more"))
+async def cb_guide_more(callback: CallbackQuery, bot: Bot):
+    await safe_answer(callback)
+    key_id = None
+    if ":" in callback.data:
+        try:
+            key_id = int(callback.data.split(":", 1)[1])
+        except ValueError:
+            await safe_answer(callback, "Ключ не найден.", alert=True)
+            return
+        from database import get_key_by_id
+        key = await get_key_by_id(key_id)
+        if not key or key["user_id"] != callback.from_user.id:
+            await safe_answer(callback, "Ключ не найден.", alert=True)
+            return
+    text = "<b>Другие устройства</b>\n\nВыберите инструкцию."
+    await send_or_edit(bot, callback, text, additional_platforms_kb(key_id))
+
+
 _GUIDES = {
     "ios": (
-        "🍏 <b>iPhone и iPad</b>\n\n"
-        "1. Установите Happ из App Store по кнопке ниже.\n"
+        "<b>iPhone и iPad</b>\n\n"
+        "1. Установите Happ из App Store.\n"
         "2. В «Моих ключах» скопируйте ссылку подписки.\n"
-        "3. Откройте Happ, добавьте ссылку и подключитесь."
+        "3. В Happ добавьте подписку и нажмите подключение."
     ),
     "android": (
-        "🤖 <b>Android</b>\n\n"
+        "<b>Android</b>\n\n"
         "1. Установите Happ из Google Play или скачайте APK по кнопкам ниже.\n"
         "2. В «Моих ключах» скопируйте ссылку подписки.\n"
         "3. Добавьте ссылку в Happ и нажмите «Подключить»."
     ),
     "android_tv": (
-        "📺 <b>Android TV</b>\n\n"
+        "<b>Android TV</b>\n\n"
         "1. Установите Happ из Google Play по кнопке ниже.\n"
         "2. В «Моих ключах» скопируйте ссылку подписки.\n"
         "3. Добавьте ссылку в Happ и подключитесь."
     ),
     "ios_mac": (
-        "🍎 <b>iPhone, iPad и Mac</b>\n\n"
-        "Выберите приложение по кнопке ниже. Затем скопируйте ссылку в «Моих ключах», "
+        "<b>iPhone, iPad и Mac</b>\n\n"
+        "Выберите подходящее приложение по кнопке ниже. Затем скопируйте ссылку в «Моих ключах», "
         "добавьте её в Happ и подключитесь."
     ),
     "windows": (
-        "💻 <b>Windows</b>\n\n"
+        "<b>Windows</b>\n\n"
         "1. Скачайте и установите Happ по кнопке ниже.\n"
         "2. В «Моих ключах» скопируйте ссылку подписки.\n"
         "3. Добавьте ссылку в Happ и нажмите «Подключить»."
     ),
     "macos": (
-        "🍎 <b>macOS</b>\n\n"
+        "<b>macOS</b>\n\n"
         "1. Установите Happ из App Store или скачайте установщик по кнопкам ниже.\n"
         "2. В «Моих ключах» скопируйте ссылку подписки.\n"
         "3. Добавьте ссылку в Happ и подключитесь."
     ),
     "linux": (
-        "🐧 <b>Linux</b>\n\n"
+        "<b>Linux</b>\n\n"
         "1. Скачайте пакет для своего дистрибутива по кнопкам ниже и установите его.\n"
         "2. В «Моих ключах» скопируйте ссылку подписки.\n"
         "3. Добавьте ссылку в Happ и подключитесь."
@@ -165,13 +220,13 @@ async def _send_platform_guide(callback: CallbackQuery, bot: Bot, platform: str,
         ]],
         "android_tv": [[InlineKeyboardButton(text="Happ в Google Play", url=HAPP_ANDROID)]],
         "ios": [[
-            InlineKeyboardButton(text="App Store · Россия", url=HAPP_IOS_RU),
+            InlineKeyboardButton(text="Официальная страница Happ", url=HAPP_SITE),
             InlineKeyboardButton(text="App Store · другие регионы", url=HAPP_IOS_GLOBAL),
         ]],
         "windows": [[InlineKeyboardButton(text="Скачать Happ для Windows", url=HAPP_WINDOWS)]],
         "macos": [
             [
-                InlineKeyboardButton(text="App Store · Россия", url=HAPP_MACOS_RU),
+                InlineKeyboardButton(text="Официальная страница Happ", url=HAPP_SITE),
                 InlineKeyboardButton(text="App Store · другие регионы", url=HAPP_MACOS_GLOBAL),
             ],
             [InlineKeyboardButton(text="Скачать Happ для Mac", url=HAPP_MACOS_DMG)],
@@ -186,11 +241,11 @@ async def _send_platform_guide(callback: CallbackQuery, bot: Bot, platform: str,
         # Compatibility for already-sent device buttons.
         "ios_mac": [
             [
-                InlineKeyboardButton(text="iPhone · App Store РФ", url=HAPP_IOS_RU),
+                InlineKeyboardButton(text="iPhone · официальная страница", url=HAPP_SITE),
                 InlineKeyboardButton(text="iPhone · другие регионы", url=HAPP_IOS_GLOBAL),
             ],
             [
-                InlineKeyboardButton(text="Mac · App Store РФ", url=HAPP_MACOS_RU),
+                InlineKeyboardButton(text="Mac · официальная страница", url=HAPP_SITE),
                 InlineKeyboardButton(text="Mac · другие регионы", url=HAPP_MACOS_GLOBAL),
             ],
             [InlineKeyboardButton(text="Установщик для Mac", url=HAPP_MACOS_DMG)],

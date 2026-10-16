@@ -33,13 +33,15 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
     def test_main_menu_uses_compact_rows_and_limited_semantic_colors(self):
         for markup in (main_menu_new_user(), main_menu_existing(), main_menu_with_keys()):
             rows = markup.inline_keyboard
-            self.assertEqual(len(rows[-1]), 1)  # support stays separate
-            self.assertEqual(rows[-1][0].text, "Поддержка")
+            self.assertEqual(rows[-1][0].text, "О сервисе")
+            self.assertEqual(rows[-1][1].text, "Поддержка")
+            self.assertEqual(rows[-1][1].callback_data, "trouble")
             self.assertLessEqual(sum(button.style is not None for row in rows for button in row), 2)
         menu = main_menu_with_keys()
-        self.assertEqual([len(row) for row in menu.inline_keyboard], [2, 2, 2, 1])
+        self.assertEqual([len(row) for row in menu.inline_keyboard], [1, 1, 1, 1, 2])
         self.assertEqual(menu.inline_keyboard[0][0].style, "success")
-        self.assertEqual(menu.inline_keyboard[0][1].style, "primary")
+        self.assertEqual(menu.inline_keyboard[1][0].callback_data, "my_keys")
+        self.assertEqual(menu.inline_keyboard[1][0].style, "primary")
         used_trial = main_menu_existing(trial_used=True)
         self.assertNotIn("trial_1r", callbacks(used_trial))
 
@@ -47,15 +49,75 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         actions = callbacks(main_menu_with_keys(trial_used=True))
         self.assertNotIn("connection_guide", actions)
         self.assertNotIn("auth_existing_client", actions)
-        self.assertIn("ad_program", actions)
+        self.assertIn("free_vpn", actions)
+        self.assertNotIn("ad_program", actions)
+
+    async def test_free_vpn_hub_keeps_referrals_and_ads_separate(self):
+        from types import SimpleNamespace
+        from handlers.start import cb_free_vpn
+        callback = SimpleNamespace(from_user=SimpleNamespace(id=123))
+        with (
+            patch("handlers.start.safe_answer", new=AsyncMock()),
+            patch("handlers.start.send_with_photo", new=AsyncMock()) as send,
+        ):
+            await cb_free_vpn(callback, None)
+        actions = callbacks(send.call_args.args[3])
+        self.assertEqual(actions, ["partner", "ad_program", "back_to_menu"])
+
+    async def test_ad_bonus_retry_uses_same_idempotent_grant_and_keeps_application_open(self):
+        from types import SimpleNamespace
+        from handlers.ad_program import cb_ad_admin_approve
+
+        app = {
+            "id": 71,
+            "user_id": 123,
+            "status": "post_submitted",
+            "bonus_months": 2,
+        }
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=1),
+            data="ad_admin_approve:71",
+            message=SimpleNamespace(edit_text=AsyncMock(), answer=AsyncMock()),
+        )
+        bot = SimpleNamespace()
+        with (
+            patch("handlers.ad_program._is_admin", return_value=True),
+            patch("handlers.ad_program.safe_answer", new=AsyncMock()),
+            patch("handlers.ad_program.get_ad_application_by_id", new=AsyncMock(side_effect=[app, {**app, "status": "grant_pending"}])),
+            patch("handlers.ad_program.update_ad_application", new=AsyncMock(return_value=True)) as update,
+            patch("handlers.ad_program.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("subscription.deliver_key", new=AsyncMock(side_effect=[False, True])) as deliver,
+            patch("handlers.ad_program.log_ad_audit", new=AsyncMock()),
+            patch("handlers.ad_program.log_ad_analytics_event", new=AsyncMock()),
+        ):
+            await cb_ad_admin_approve(callback, bot)
+            self.assertIn("пока не выдан", callback.message.edit_text.await_args.args[0])
+            await cb_ad_admin_approve(callback, bot)
+
+        self.assertEqual(deliver.await_count, 2)
+        for call in deliver.await_args_list:
+            self.assertEqual(call.kwargs["payload"], "ad_bonus_71")
+            self.assertEqual(call.kwargs["method"], "ad_bonus")
+            self.assertEqual(call.kwargs["amount"], 0)
+            self.assertEqual(call.kwargs["days"], 60)
+        self.assertEqual(update.await_args_list[0].kwargs["status"], "grant_pending")
+        self.assertEqual(update.await_args_list[-1].kwargs["status"], "approved")
 
     def test_guide_device_selector_uses_compact_two_column_rows(self):
         markup = connection_guide_kb()
         self.assertEqual([len(row) for row in markup.inline_keyboard[:2]], [2, 2])
         actions = callbacks(markup)
-        self.assertIn("guide_android_tv", actions)
         self.assertIn("guide_ios", actions)
-        self.assertIn("guide_macos", actions)
+        self.assertIn("guide_android", actions)
+        self.assertIn("guide_linux", actions)
+        self.assertIn("guide_more", actions)
+
+    def test_additional_platforms_keep_mac_and_tv_accessible(self):
+        from keyboards import additional_platforms_kb
+        actions = callbacks(additional_platforms_kb(9))
+        self.assertIn("guide_macos:9", actions)
+        self.assertIn("guide_android_tv:9", actions)
+        self.assertIn("connection_guide:9", actions)
 
     def test_back_is_full_width_and_support_is_not_mixed_into_navigation(self):
         back = back_to_menu().inline_keyboard
