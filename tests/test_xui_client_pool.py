@@ -2,6 +2,7 @@
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 
@@ -83,6 +84,31 @@ class TestXuiClientPool(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(result)
         api_call.assert_not_awaited()
+
+    async def test_client_lookup_fallback_scans_configured_inbounds(self):
+        client = SimpleNamespace(get_by_email=AsyncMock(return_value=None))
+        inbound = SimpleNamespace(
+            get_by_id=AsyncMock(side_effect=[
+                SimpleNamespace(client_stats=[]),
+                SimpleNamespace(client_stats=[SimpleNamespace(email="123", uuid="stable-uuid")]),
+            ])
+        )
+        api = SimpleNamespace(client=client, inbound=inbound)
+
+        async def passthrough(method, *args, **kwargs):
+            return await method(*args, **kwargs)
+
+        with (
+            patch("xui_client.XUI_INBOUND_IDS", [12, 15]),
+            patch("xui_client._api_call_with_retry", new=passthrough),
+        ):
+            found = await xui_client._find_client_uuid(api, "123")
+
+        self.assertEqual(found, "stable-uuid")
+        self.assertEqual(
+            [call.args[0] for call in inbound.get_by_id.await_args_list],
+            [12, 15],
+        )
 
 
 if __name__ == "__main__":

@@ -196,8 +196,6 @@ async def _find_client_uuid(api: AsyncApi, email: str) -> Optional[str]:
     Ищет UUID клиента по email через все возможные методы (parallel).
     Возвращает UUID или None.
     """
-    inbound_id = 2  # Только VLESS
-    
     # Run both methods in parallel for speed
     tasks = []
     
@@ -212,17 +210,18 @@ async def _find_client_uuid(api: AsyncApi, email: str) -> Optional[str]:
             logger.debug("get_by_email failed for %s: %s", email, e)
         return None
     
-    # Метод 2: Поиск в client_stats инбаунда 2
+    # Method 2: search only configured inbounds. A hard-coded inbound can
+    # silently miss an existing client after a panel migration.
     async def method2():
-        try:
-            inbound = await _api_call_with_retry(api.inbound.get_by_id, inbound_id)
-            if inbound and inbound.client_stats:
-                for c in inbound.client_stats:
+        for inbound_id in XUI_INBOUND_IDS:
+            try:
+                inbound = await _api_call_with_retry(api.inbound.get_by_id, inbound_id)
+                for c in (inbound.client_stats or []) if inbound else []:
                     if c.email == email and c.uuid:
-                        logger.info("Found client %s in inbound %d client_stats: uuid=%s", email, inbound_id, c.uuid)
+                        logger.info("Found client %s in configured inbound %d", email, inbound_id)
                         return c.uuid
-        except Exception as e:
-            logger.debug("Failed to search inbound %d for %s: %s", inbound_id, email, e)
+            except Exception as e:
+                logger.debug("Failed to search configured inbound %d for %s: %s", inbound_id, email, e)
         return None
     
     tasks = [method1(), method2()]
@@ -242,8 +241,6 @@ async def _find_client_sub_id(api: AsyncApi, email: str) -> Optional[str]:
     Ищет sub_id клиента по email через все возможные методы (parallel).
     Возвращает sub_id или None.
     """
-    inbound_id = 2  # Только VLESS
-    
     # Run methods in parallel for speed
     async def method1():
         try:
@@ -256,15 +253,15 @@ async def _find_client_sub_id(api: AsyncApi, email: str) -> Optional[str]:
         return None
     
     async def method2():
-        try:
-            inbound = await _api_call_with_retry(api.inbound.get_by_id, inbound_id)
-            if inbound and inbound.client_stats:
-                for c in inbound.client_stats:
+        for inbound_id in XUI_INBOUND_IDS:
+            try:
+                inbound = await _api_call_with_retry(api.inbound.get_by_id, inbound_id)
+                for c in (inbound.client_stats or []) if inbound else []:
                     if c.email == email and c.sub_id:
-                        logger.info("Found client %s sub_id in inbound %d client_stats: sub_id=%s", email, inbound_id, c.sub_id)
+                        logger.info("Found client %s sub_id in configured inbound %d", email, inbound_id)
                         return c.sub_id
-        except Exception as e:
-            logger.debug("Failed to search inbound %d for %s: %s", inbound_id, email, e)
+            except Exception as e:
+                logger.debug("Failed to search configured inbound %d for %s: %s", inbound_id, email, e)
         return None
     
     tasks = [method1(), method2()]
@@ -295,6 +292,7 @@ async def create_xui_user(
     days: int,
     data_limit_gb: int = 0,
     limit_ip: int = 0,
+    new_expiry_ms: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Создать клиента в инбаундах через py3xui HTTP API.
@@ -307,7 +305,11 @@ async def create_xui_user(
     email = str(user_id)
     # Clamp days to prevent "date value out of range" (max ~10 years)
     days = max(1, min(days, 3650))
-    expiry_ms = int((datetime.now() + timedelta(days=days)).timestamp() * 1000)
+    expiry_ms = (
+        int(new_expiry_ms)
+        if new_expiry_ms is not None
+        else int((datetime.now() + timedelta(days=days)).timestamp() * 1000)
+    )
     total_gb_limit = data_limit_gb  # 0 = безлимит
     inbound_ids = XUI_INBOUND_IDS  # Use configured inbound IDs
 
@@ -325,7 +327,12 @@ async def create_xui_user(
         if existing_uuid:
             logger.info("Client %s already exists in 3x-ui (uuid=%s) - PRESERVING UUID and updating", email, existing_uuid)
             existing_sub_id = await _find_client_sub_id(api, email) or existing_uuid.replace("-", "")[:16]
-            update_res = await update_xui_user(user_id, days=days, limit_ip=limit_ip)
+            update_res = await update_xui_user(
+                user_id,
+                days=days if new_expiry_ms is None else 0,
+                new_expiry_ms=new_expiry_ms,
+                limit_ip=limit_ip,
+            )
             if update_res:
                 return update_res
             # Never fall through to client.add after finding a live account.
@@ -800,7 +807,6 @@ async def get_xui_client_details(user_id: int) -> Optional[Dict[str, Any]]:
 
 async def get_user_subscription_links(user_id: int) -> Optional[List[str]]:
     email = str(user_id)
-    inbound_id = 2  # Только VLESS
     try:
         api = await _get_api()
 
@@ -813,16 +819,18 @@ async def get_user_subscription_links(user_id: int) -> Optional[List[str]]:
             logger.debug("get_user_subscription_links: get_by_email failed for %s: %s", email, e)
 
         if not sub_id:
-            # Пробуем найти через client_stats инбаунда 2
-            try:
-                inbound = await _api_call_with_retry(api.inbound.get_by_id, inbound_id)
-                if inbound and inbound.client_stats:
-                    for c in inbound.client_stats:
+            # Fallback across exactly the inbounds used to build subscriptions.
+            for inbound_id in XUI_INBOUND_IDS:
+                try:
+                    inbound = await _api_call_with_retry(api.inbound.get_by_id, inbound_id)
+                    for c in (inbound.client_stats or []) if inbound else []:
                         if c.email == email and c.sub_id:
                             sub_id = c.sub_id
                             break
-            except Exception as e:
-                logger.debug("get_user_subscription_links: failed to search inbound %d for %s: %s", inbound_id, email, e)
+                except Exception as e:
+                    logger.debug("get_user_subscription_links: configured inbound %d failed for %s: %s", inbound_id, email, e)
+                if sub_id:
+                    break
 
         if not sub_id:
             logger.warning("get_user_subscription_links: client %s has no sub_id", email)

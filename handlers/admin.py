@@ -51,6 +51,27 @@ def _is_admin(uid: int) -> bool:
     return uid in ADMIN_IDS
 
 
+async def _fill_missing_usernames(bot: Bot, users: list[dict]) -> None:
+    """Backfill usernames for older rows when Telegram still exposes the chat."""
+    from database import ensure_user
+
+    async def refresh(user: dict) -> None:
+        if user.get("username"):
+            return
+        try:
+            chat = await bot.get_chat(user["user_id"])
+            username = getattr(chat, "username", None)
+            if username:
+                user["username"] = username
+                await ensure_user(user["user_id"], username)
+        except Exception:
+            # Some users have no public username or Telegram no longer exposes
+            # the private chat; the numeric ID remains the reliable identifier.
+            return
+
+    await asyncio.gather(*(refresh(user) for user in users))
+
+
 # ── keyboards ─────────────────────────────────────────────────────────────
 
 def _main_kb() -> InlineKeyboardMarkup:
@@ -99,6 +120,16 @@ def _format_refund_breakdown(stats: dict, key: str) -> str:
     return "; ".join(
         f"{escape(str(currency))}: {item.get('sum', 0)} ({item.get('count', 0)} шт.)"
         for currency, item in sorted(values.items())
+    )
+
+
+def _format_currency_totals(values: dict) -> str:
+    values = values or {}
+    if not values:
+        return "нет данных"
+    return "; ".join(
+        f"{amount} {'₽' if currency == 'RUB' else 'звёзд' if currency == 'XTR' else escape(str(currency))}"
+        for currency, amount in sorted(values.items())
     )
 
 
@@ -463,6 +494,7 @@ async def cb_user_list(callback: CallbackQuery):
         offset = page * per_page
         total = await get_users_count()
         users = await get_all_users_paginated(limit=per_page, offset=offset)
+        await _fill_missing_usernames(callback.bot, users)
 
         if not users:
             await callback.message.edit_text(
@@ -474,6 +506,7 @@ async def cb_user_list(callback: CallbackQuery):
             reg = fmt_date(u["created"]) if u["created"] else "?"
             lines.append(
                 f"• <code>{u['user_id']}</code> — "
+                f"@{escape(u['username']) if u.get('username') else 'нет username'} — "
                 f"{'✅' if u.get('active_keys', 0) > 0 else '❌'} "
                 f"ключей: {u.get('total_keys', 0)}, рег: {reg}"
             )
@@ -487,7 +520,7 @@ async def cb_user_list(callback: CallbackQuery):
 
         user_rows = [
             [InlineKeyboardButton(
-                text=f"👤 {u['user_id']}",
+                text=f"👤 @{u['username']}" if u.get('username') else f"👤 {u['user_id']}",
                 callback_data=f"admin_user:{u['user_id']}"
             )]
             for u in users
@@ -525,6 +558,7 @@ async def cb_user_list_ext(callback: CallbackQuery):
     offset = page * per_page
     total = await get_users_count()
     users = await get_all_users_paginated(limit=per_page, offset=offset)
+    await _fill_missing_usernames(callback.bot, users)
 
     if not users:
         await callback.message.edit_text(
@@ -542,7 +576,8 @@ async def cb_user_list_ext(callback: CallbackQuery):
         # User header
         reg = fmt_date(u["created"]) if u["created"] else "?"
         lines.append(
-            f"\n👤 <code>{uid}</code> | {'✅' if u.get('active_keys', 0) > 0 else '❌'} "
+            f"\n👤 <code>{uid}</code> | @{escape(u['username']) if u.get('username') else 'нет username'} | "
+            f"{'✅' if u.get('active_keys', 0) > 0 else '❌'} "
             f"Ключей: {len(keys)} | Рег: {reg}"
         )
 
@@ -697,6 +732,9 @@ async def _show_user(target, user_id: int):
             await target.message.edit_text(text, parse_mode="HTML", reply_markup=_back_kb())
         return
 
+    if not user.get("username"):
+        await _fill_missing_usernames(target.bot if isinstance(target, CallbackQuery) else target.bot, [user])
+
     reg = fmt_date(user["created"]) if user["created"] else "?"
     
     # Get refund info
@@ -710,7 +748,9 @@ async def _show_user(target, user_id: int):
     ) or "0"
     
     text = (
-        f"👤 <b>Пользователь {user_id}</b>\n\n"
+        f"👤 <b>Пользователь</b>\n"
+        f"🆔 <code>{user_id}</code>\n"
+        f"🔗 <b>Username:</b> @{escape(user['username']) if user.get('username') else 'не указан'}\n\n"
         f"📅 <b>Регистрация:</b> {reg}\n"
         f"🔑 <b>Ключи:</b> {user.get('total_keys', 0)} (активных: {user.get('active_keys', 0)})\n"
         f"🆓 <b>Пробник:</b> {'✅ Использован' if user['trial_used'] else '❌ Не использован'}\n"
@@ -1511,7 +1551,10 @@ async def cb_payments_main(callback: CallbackQuery):
     method_stats = stats.get("by_method", {})
     if method_stats:
         for method, data in method_stats.items():
-            text += f"• {method}: {data.get('count', 0)} платежей, {data.get('sum', 0)} ₽\n"
+            text += (
+                f"• {escape(str(method))}: {data.get('count', 0)} платежей, "
+                f"{_format_currency_totals(data.get('by_currency'))}\n"
+            )
     else:
         text += "• Пока нет данных\n"
     
@@ -1520,9 +1563,9 @@ async def cb_payments_main(callback: CallbackQuery):
     today_stats = stats.get('today', {})
     month_stats = stats.get('month', {})
     
-    text += f"• Всего: {total_stats.get('count', 0)} платежей, {total_stats.get('sum', 0)} ₽\n"
-    text += f"• Сегодня: {today_stats.get('count', 0)} платежей, {today_stats.get('sum', 0)} ₽\n"
-    text += f"• Месяц: {month_stats.get('count', 0)} платежей, {month_stats.get('sum', 0)} ₽\n"
+    text += f"• Всего: {total_stats.get('count', 0)} платежей, {_format_currency_totals(total_stats.get('by_currency'))}\n"
+    text += f"• Сегодня: {today_stats.get('count', 0)} платежей, {_format_currency_totals(today_stats.get('by_currency'))}\n"
+    text += f"• 30 дней: {month_stats.get('count', 0)} платежей, {_format_currency_totals(month_stats.get('by_currency'))}\n"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -1549,7 +1592,7 @@ async def cb_payment_recovery(callback: CallbackQuery):
 
     db = await get_db()
     cur = await db.execute(
-        "SELECT id, user_id, amount, currency, method, days, created, status, provider_payment_id "
+        "SELECT id, user_id, amount, currency, method, days, created, status, provider_payment_id, provider "
         "FROM payments WHERE status IN ('processing', 'failed', 'recovery_required') "
         "ORDER BY created ASC LIMIT 12"
     )
@@ -1574,7 +1617,7 @@ async def cb_payment_recovery(callback: CallbackQuery):
     lines = ["⚠️ <b>Проблемные платежи</b>\n"]
     buttons = []
     for row in rows:
-        payment_id, user_id, amount, currency, method, days, created, status, provider_id = row
+        payment_id, user_id, amount, currency, method, days, created, status, provider_id, provider = row
         lines.append(
             f"#{payment_id} · <code>{user_id}</code> · {amount} {escape(str(currency))}\n"
             f"  {escape(str(method))}, {days} дн. · {fmt_date(created)}\n"
@@ -1585,6 +1628,11 @@ async def cb_payment_recovery(callback: CallbackQuery):
             text=f"👤 Клиент {user_id}",
             callback_data=f"admin_user:{user_id}",
         )])
+        if status == "failed" and (provider or method) in {"yookassa", "stars"} and provider_id:
+            buttons.append([InlineKeyboardButton(
+                text=f"🔄 Повторить выдачу #{payment_id}",
+                callback_data=f"admin_payment_retry:{payment_id}",
+            )])
     if len(rows) == 12:
         lines.append("\nПоказаны первые 12 записей. Очередь отсортирована от старых к новым.")
     buttons.extend([
@@ -1595,6 +1643,71 @@ async def cb_payment_recovery(callback: CallbackQuery):
         "\n".join(lines),
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
+
+
+@router.callback_query(F.data.startswith("admin_payment_retry:"))
+async def cb_admin_retry_payment(callback: CallbackQuery):
+    """Retry a failed fulfillment with provider checks appropriate to its payment type."""
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback, "Проверяю платёж и выдачу…")
+    try:
+        payment_id = int(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await safe_answer(callback, "Неверный ID платежа.", alert=True)
+        return
+
+    payment = await get_payment_by_id(payment_id)
+    if not payment or payment.get("status") != "failed":
+        await safe_answer(callback, "Повтор доступен только для платежа со статусом failed.", alert=True)
+        return
+    provider = payment.get("provider") or payment.get("method")
+    provider_payment_id = payment.get("provider_payment_id")
+    if provider not in {"yookassa", "stars"} or not provider_payment_id:
+        await safe_answer(callback, "Для этого провайдера повтор из админки пока недоступен.", alert=True)
+        return
+
+    await log_admin_action(
+        admin_id=callback.from_user.id,
+        action_type="payment_fulfillment_retry",
+        action_details=f"payment_id={payment_id}; provider={provider}; provider_payment_id={provider_payment_id}",
+    )
+    if provider == "yookassa":
+        # Re-fetch and validate the payment with the provider before delivery.
+        from webhook import _process_payment
+        await _process_payment(callback.bot, str(provider_payment_id))
+        result_text = "Проверка завершена у YooKassa. Сверьте статус в очереди и профиль клиента."
+    else:
+        # Telegram's successful_payment update was already verified and
+        # persisted. Retry only fulfillment; never initiate a new charge.
+        from database import update_payment_status
+        from subscription import deliver_key
+        await update_payment_status(payment_id, "processing")
+        success = await deliver_key(
+            bot=callback.bot,
+            user_id=payment["user_id"],
+            chat_id=payment["user_id"],
+            config_name=f"ByMeVPN_{payment['user_id']}",
+            days=payment["days"],
+            limit_ip=payment.get("devices") or 2,
+            is_paid=True,
+            amount=payment["amount"],
+            currency=payment["currency"],
+            method="stars",
+            payload=str(provider_payment_id),
+            extend_existing=True,
+        )
+        await update_payment_status(payment_id, "success" if success else "failed")
+        if success:
+            from referral_system_new import award_referral_for_payment
+            await award_referral_for_payment(
+                payment["user_id"], str(provider_payment_id), is_trial=False, bot=callback.bot
+            )
+        result_text = "Повторная выдача завершена. Проверьте статус платежа и ключ пользователя."
+    await callback.message.answer(
+        result_text
     )
 
 
@@ -3256,11 +3369,13 @@ async def cb_admin_finance(callback: CallbackQuery, bot: Bot):
     stats = await get_admin_stats()
     payment_stats = await get_payment_stats()
     refund_stats = await get_refund_stats()
+    received_by_currency = payment_stats.get("total", {}).get("by_currency", {})
 
     text = (
         "💰 <b>Финансовая статистика</b>\n\n"
         f"📊 <b>Общая выручка:</b> {stats['total_revenue']} ₽\n"
         f"📅 <b>Выручка за сегодня:</b> {stats['today_revenue']} ₽\n"
+        f"⭐ <b>Получено Stars:</b> {received_by_currency.get('XTR', 0)} звёзд\n"
         f"💳 <b>Всего платежей:</b> {stats['total_payments']}\n"
         f"👥 <b>Всего пользователей:</b> {stats['total_users']}\n"
         f"✅ <b>Активных пользователей:</b> {stats['active_users']}\n"

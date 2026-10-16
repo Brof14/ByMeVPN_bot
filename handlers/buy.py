@@ -22,7 +22,7 @@ from config import PRICE_1_MONTH, DAYS_1M
 from states import BuyFlow
 from keyboards import tariff_selection_kb, payment_kb
 from payments import create_yookassa_payment, create_crypto_payment
-from subscription import deliver_key, ask_config_name
+from subscription import deliver_key
 from database import (
     ensure_user,
     record_payment_idempotent, update_payment_status,
@@ -385,7 +385,7 @@ async def pre_checkout(pre: PreCheckoutQuery):
 @router.message(F.successful_payment)
 async def on_successful_payment(message: Message, bot: Bot, state: FSMContext):
     user_id = message.from_user.id
-    await ensure_user(user_id)
+    await ensure_user(user_id, message.from_user.username)
 
     payment = message.successful_payment
     charge_id = payment.telegram_payment_charge_id or payment.invoice_payload
@@ -534,92 +534,6 @@ async def _process_successful_stars_payment(
             )
         except Exception:
             pass
-
-
-# ---------------------------------------------------------------------------
-# Handle config name input after YooKassa payment
-# ---------------------------------------------------------------------------
-
-@router.message(F.text, BuyFlow.waiting_for_config_name)
-async def handle_yookassa_config_name(message: Message, bot: Bot, state: FSMContext):
-    """Handle config name input after a YooKassa or Crypto Bot payment.
-
-    Both payment methods put the user into this same state after a
-    successful (verified) payment; we look up whichever pending record
-    exists for this user and deliver the key. YooKassa is checked first
-    since it existed originally; Crypto Bot pending is checked as a
-    fallback (a user can only have one pending purchase at a time in
-    practice, so this is safe and avoids adding a second FSM state).
-    """
-    user_id = message.from_user.id
-    config_name = message.text.strip()
-
-    if not config_name:
-        await message.answer("❌ Пожалуйста, введите имя конфига.")
-        return
-
-    # Get pending payment data — check YooKassa first, then Crypto Bot
-    from database import get_yookassa_pending_by_user, get_crypto_pending_by_user
-    pending = await get_yookassa_pending_by_user(user_id)
-    method = "yookassa"
-    payment_id = None
-
-    if pending:
-        payment_id = pending.get("payment_id", "")
-    else:
-        pending = await get_crypto_pending_by_user(user_id)
-        if pending:
-            method = "cryptobot"
-            payment_id = pending.get("invoice_id", "")
-
-    if not pending:
-        await message.answer("❌ Платеж не найден. Пожалуйста, свяжитесь с поддержкой.")
-        await state.clear()
-        return
-
-    # Extract data from pending payment
-    days = pending.get("days", 30)
-    devices = validate_device_limit(pending.get("devices", DEFAULT_DEVICE_LIMIT))
-    amount_rub = pending.get("amount_rub", 0)
-
-    # Clear state before delivery
-    await state.clear()
-
-    # Deliver key
-    from subscription import deliver_key
-    # Extend existing key for paid renewals, create new for trials
-    extend_existing = (method != "trial")
-    success = await deliver_key(
-        bot=bot,
-        user_id=user_id,
-        chat_id=message.chat.id,
-        config_name=config_name,
-        days=days,
-        limit_ip=devices,
-        is_paid=True,
-        amount=amount_rub,
-        currency="RUB",
-        method=method,
-        payload=str(payment_id),
-        extend_existing=extend_existing,
-    )
-
-    if success:
-        # Delete pending record
-        if method == "yookassa":
-            from database import delete_yookassa_pending
-            try:
-                await delete_yookassa_pending(payment_id)
-            except Exception as e:
-                logger.error("Could not delete pending yk payment %s: %s", payment_id, e)
-        else:
-            from database import delete_crypto_pending
-            try:
-                await delete_crypto_pending(payment_id)
-            except Exception as e:
-                logger.error("Could not delete pending crypto payment %s: %s", payment_id, e)
-    else:
-        await message.answer("❌ Ошибка при выдаче ключа. Пожалуйста, свяжитесь с поддержкой.")
 
 
 # ---------------------------------------------------------------------------

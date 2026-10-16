@@ -55,13 +55,10 @@ async def _user_state(user_id: int) -> str:
     
     active, ever_had, trial_used = await asyncio.gather(*tasks, return_exceptions=True)
     
-    # Обрабатываем возможные исключения
-    if isinstance(active, Exception):
-        active = False
-    if isinstance(ever_had, Exception):
-        ever_had = False
-    if isinstance(trial_used, Exception):
-        trial_used = False
+    # A database outage must not turn a paying customer into a "new" user.
+    if any(isinstance(value, Exception) for value in (active, ever_had, trial_used)):
+        logger.error("Could not determine account state for user %d", user_id)
+        return "unknown"
     
     if active:
         return "active"
@@ -115,14 +112,29 @@ async def _send_main_menu(
     """
     state = await _user_state(user_id)
 
+    if state == "unknown":
+        text = (
+            "Не удалось загрузить состояние подписки. Это временный сбой, "
+            "ваш доступ и платежи не изменились. Попробуйте ещё раз через минуту."
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Повторить", callback_data="back_to_menu")],
+            [InlineKeyboardButton(text="Поддержка", url="https://t.me/ByMeVPN_support_bot")],
+        ])
+        if isinstance(target, Message):
+            await bot.send_message(chat_id=user_id, text=text, reply_markup=kb)
+        else:
+            await send_with_photo(bot, target, text, kb)
+        return
+
     if is_new_referral and state == "new":
         # Referral landing - fire bonus text (when someone clicks referral link)
         text = (
             "🔥 Нормальный VPN сейчас найти сложно — либо дорогой, либо не работает.\n\n"
             "🎁 <b>3 дня ByMeVPN — за 1 ₽</b>\n\n"
             "Что получите сразу:\n"
-            "• Telegram и YouTube работают без ограничений\n"
-            "• Instagram, TikTok, сайты — открываются\n"
+            "• VPN-подключение для приложений и сайтов\n"
+            "• Короткая инструкция под ваше устройство\n"
             "• Подключение за пару минут, без сложных настроек\n\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
             "💳 Сегодня — 1 ₽\n"
@@ -135,9 +147,9 @@ async def _send_main_menu(
     elif state == "new":
         # Main menu - standard welcome text
         text = (
-            "<b>ByMeVPN — VPN, который просто работает.</b>\n\n"
-            "Не грузятся YouTube, Telegram, Instagram или сайты? Подключите ByMeVPN — "
-            "это займёт пару минут и не потребует сложных настроек.\n\n"
+            "<b>ByMeVPN — VPN с простым подключением.</b>\n\n"
+            "Если приложения или сайты не открываются, ByMeVPN поможет подключиться через VPN. "
+            "Настройка займёт пару минут.\n\n"
             "🎁 <b>3 дня за 1 ₽</b> — попробуйте прежде чем платить полную цену.\n"
             "💳 Дальше — 89 ₽/мес (или выгоднее при оплате за 3–12 месяцев).\n\n"
             "После оплаты бот пришлёт ключ и откроет короткую инструкцию для вашего устройства."
@@ -147,8 +159,7 @@ async def _send_main_menu(
         text = (
             f"<b>Здравствуйте, {user_name}!</b>\n\n"
             "Ваша подписка закончилась.\n\n"
-            "Вы можете продлить VPN и дальше пользоваться сервисом без ограничений.\n\n"
-            "Любой из наших тарифов даёт полный доступ к интернету на всех ваших устройствах.\n\n"
+            "Продлите подписку, чтобы снова подключаться к VPN. Перед оплатой выберите нужное число устройств.\n\n"
             "Чем дольше срок, тем больше вы экономите!"
         )
         # Check if user has keys to show appropriate menu (use direct DB check, not cache)
@@ -157,11 +168,24 @@ async def _send_main_menu(
         trial_used = await has_trial_used(user_id)
         kb = main_menu_with_keys(trial_used=trial_used) if has_keys else main_menu_existing()
     else:  # active
-        text = f"<b>Здравствуйте, {user_name}!</b>"
         # Check if user has keys to show appropriate menu (use direct DB check, not cache)
         user_keys = await get_user_keys(user_id)
         has_keys = len(user_keys) > 0
         trial_used = await has_trial_used(user_id)
+        active_keys = [k for k in user_keys if k.get("expiry", 0) > int(time.time())]
+        if active_keys:
+            active_key = max(active_keys, key=lambda k: k.get("expiry", 0))
+            from constants import format_timestamp
+            expires = format_timestamp(active_key["expiry"])[:10]
+            device_count = active_key.get("limit_ip", 2)
+            text = (
+                f"<b>Здравствуйте, {user_name}!</b>\n\n"
+                f"✅ VPN активен до <b>{expires}</b>\n"
+                f"📱 Устройств: <b>{device_count}</b>\n\n"
+                "Откройте «Мои ключи», чтобы скопировать ссылку, продлить подписку или управлять автопродлением."
+            )
+        else:
+            text = f"<b>Здравствуйте, {user_name}!</b>"
         kb = main_menu_with_keys(trial_used=trial_used) if has_keys else main_menu_existing()
 
     if isinstance(target, Message):
@@ -180,17 +204,15 @@ async def _send_main_menu(
 @router.message(F.text == "/proxy")
 @monitor_performance("proxy_command")
 async def cmd_proxy(message: Message, bot: Bot) -> None:
-    """Show proxy connection button."""
+    """Do not route users through an unverified third-party proxy."""
     text = (
-        "🔗 <b>Подключение к прокси</b>\n\n"
-        "Нажмите кнопку ниже, чтобы подключиться к прокси в Telegram.\n\n"
-        "Это поможет обойти блокировки и использовать Telegram без ограничений."
+        "Раздел Telegram-прокси временно недоступен. "
+        "Мы не подключаем клиентов к сторонним прокси."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔌 Подключить прокси", url="tg://proxy?server=hi.notmescat.net&port=7443&secret=ee4b9ba5fcb813d00ef6f7c5a0302f182f68692e6e6f746d65736361742e6e6574")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu")]
     ])
-    await message.answer(text, parse_mode="HTML", reply_markup=kb)
+    await message.answer(text, reply_markup=kb)
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +230,7 @@ async def cmd_start(message: Message, bot: Bot) -> None:
     user_name = message.from_user.full_name or message.from_user.first_name or "Друг"
 
     # Register user (idempotent)
-    await ensure_user(user_id)
+    await ensure_user(user_id, message.from_user.username)
 
     # Process start parameters if provided
     args = message.text.split()

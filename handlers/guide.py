@@ -10,7 +10,7 @@ from utils import send_with_photo, safe_answer
 logger = logging.getLogger(__name__)
 router = Router()
 
-HAPP_SITE = "https://www.happ.su/main/ru"
+HAPP_SITE = "https://happ.info/"
 HAPP_IOS_RU = "https://apps.apple.com/ru/app/happ-lite/id6799917773"
 HAPP_IOS_GLOBAL = "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215"
 HAPP_ANDROID = "https://play.google.com/store/apps/details?id=com.happproxy"
@@ -19,27 +19,30 @@ HAPP_WINDOWS = "https://github.com/Happ-proxy/happ-desktop/releases/latest/downl
 HAPP_MACOS_RU = "https://apps.apple.com/ru/app/happ-proxy-utility/id6783623643"
 HAPP_MACOS_GLOBAL = "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215"
 HAPP_MACOS_DMG = "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/Happ.macOS.universal.dmg"
-HAPP_LINUX = "https://github.com/Happ-proxy/happ-desktop/releases/latest"
+HAPP_LINUX_DEB = "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/Happ.linux.x64.deb"
+HAPP_LINUX_RPM = "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/Happ.linux.x64.rpm"
+HAPP_LINUX_ARCH = "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/Happ.linux.x64.pkg.tar.zst"
 
 
 @router.callback_query(F.data == "connection_guide")
 async def cb_guide_menu(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
-        "<b>Подключение ByMeVPN</b>\n\n"
-        "1. Выберите устройство.\n"
-        "2. Установите Happ по официальной ссылке.\n"
-        "3. В боте откройте «Мои ключи» → ваш ключ → «Скопировать ссылку».\n"
-        "4. Вернитесь в Happ, нажмите «Вставить из буфера», затем «Подключить».\n\n"
-        "Если Happ не находится в российском App Store, ниже есть официальное приложение для российского каталога. "
-        "Не скачивайте VPN-клиенты с неизвестных сайтов."
+        "<b>Подключение — три шага</b>\n\n"
+        "1. Выберите устройство и установите Happ по официальной ссылке.\n"
+        "2. Нажмите «Открыть мои ключи» и скопируйте ссылку подписки.\n"
+        "3. Вернитесь в Happ, добавьте ссылку и нажмите «Подключить».\n\n"
+        "Доступность приложения на iPhone зависит от региона App Store. "
+        "Не устанавливайте VPN-клиенты с неофициальных сайтов."
     )
+    await _track_guide_event(callback.from_user.id, "connection_guide_open")
     await send_with_photo(bot, callback, text, connection_guide_kb())
 
 
 @router.callback_query(F.data == "trouble")
 async def cb_trouble(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
+    await _track_guide_event(callback.from_user.id, "connection_help_open")
     text = (
         "⚠️ <b>Не получается подключиться?</b>\n\n"
         "1. Отключите другие VPN и прокси.\n"
@@ -61,40 +64,40 @@ async def cb_trouble(callback: CallbackQuery, bot: Bot):
 _GUIDES = {
     "ios": (
         "🍏 <b>iPhone и iPad</b>\n\n"
-        f"1. Установите Happ из российского App Store: <a href=\"{HAPP_IOS_RU}\">Happ для России</a>.\n"
-        f"Если у вашего Apple ID другой регион, откройте <a href=\"{HAPP_IOS_GLOBAL}\">глобальную версию</a>.\n\n"
-        "2. В боте: «Мои ключи» → ключ → «Скопировать ссылку».\n"
-        "3. Откройте Happ и разрешите добавление VPN-конфигурации, когда iPhone спросит.\n"
-        "4. Нажмите «Вставить из буфера», затем «Подключить»."
+        f"1. Установите <a href=\"{HAPP_IOS_RU}\">Happ Lite для российского App Store</a>.\n"
+        f"Для другого региона используйте <a href=\"{HAPP_IOS_GLOBAL}\">Happ в App Store</a>.\n\n"
+        "2. Нажмите «Открыть мои ключи» под инструкцией и скопируйте ссылку.\n"
+        "3. Откройте Happ и подтвердите добавление VPN-конфигурации.\n"
+        "4. Нажмите кнопку подключения."
     ),
     "android": (
         "🤖 <b>Android</b>\n\n"
         f"1. Установите <a href=\"{HAPP_ANDROID}\">Happ из Google Play</a>. "
         f"Если Play недоступен, скачайте APK только с <a href=\"{HAPP_ANDROID_APK}\">официальной страницы Happ на GitHub</a>.\n\n"
-        "2. Скопируйте ссылку: бот → «Мои ключи» → ключ → «Скопировать ссылку».\n"
-        "3. Откройте Happ и нажмите «Вставить из буфера».\n"
-        "4. Нажмите кнопку подключения и подтвердите запрос Android."
+        "2. Откройте «Мои ключи» под инструкцией и скопируйте ссылку.\n"
+        "3. Вернитесь в Happ и добавьте ссылку из буфера обмена.\n"
+        "4. Нажмите подключение и подтвердите запрос Android."
     ),
     "windows": (
         "💻 <b>Windows</b>\n\n"
-        f"1. <a href=\"{HAPP_WINDOWS}\">Скачайте Happ для Windows x64</a> с официального GitHub Happ.\n"
+        f"1. <a href=\"{HAPP_WINDOWS}\">Скачайте Happ для Windows</a> с официального GitHub Happ.\n"
         "2. Установите и откройте приложение.\n"
-        "3. Скопируйте ссылку в боте: «Мои ключи» → ключ → «Скопировать ссылку».\n"
-        "4. В Happ нажмите «Вставить из буфера», затем кнопку подключения."
+        "3. Откройте «Мои ключи» под инструкцией и скопируйте ссылку.\n"
+        "4. Вернитесь в Happ, добавьте ссылку и нажмите подключение."
     ),
     "macos": (
         "🍎 <b>macOS</b>\n\n"
         f"1. Для российского Apple ID установите <a href=\"{HAPP_MACOS_RU}\">Happ из российского App Store</a>. "
         f"Для другого региона — <a href=\"{HAPP_MACOS_GLOBAL}\">глобальная версия</a>. "
         f"Можно также скачать <a href=\"{HAPP_MACOS_DMG}\">официальный универсальный установщик</a>.\n\n"
-        "2. Скопируйте ссылку в боте: «Мои ключи» → ключ → «Скопировать ссылку».\n"
-        "3. Откройте Happ, вставьте ссылку и нажмите кнопку подключения."
+        "2. Откройте «Мои ключи» под инструкцией и скопируйте ссылку.\n"
+        "3. В Happ добавьте ссылку и нажмите кнопку подключения."
     ),
     "linux": (
         "🐧 <b>Linux</b>\n\n"
-        f"1. Откройте <a href=\"{HAPP_LINUX}\">официальные релизы Happ</a> и скачайте пакет для своей системы (.deb, .rpm или Arch).\n"
+        f"1. Ubuntu/Debian: <a href=\"{HAPP_LINUX_DEB}\">.deb</a>; Fedora: <a href=\"{HAPP_LINUX_RPM}\">.rpm</a>; Arch: <a href=\"{HAPP_LINUX_ARCH}\">пакет Arch</a>.\n"
         "2. Установите пакет средствами своей системы и откройте Happ.\n"
-        "3. Скопируйте ссылку в боте: «Мои ключи» → ключ → «Скопировать ссылку».\n"
+        "3. Откройте «Мои ключи» под инструкцией и скопируйте ссылку.\n"
         "4. В Happ вставьте ссылку и нажмите кнопку подключения."
     ),
 }
@@ -118,13 +121,20 @@ async def cb_platform_guide(callback: CallbackQuery, bot: Bot):
 
 async def _send_platform_guide(callback: CallbackQuery, bot: Bot, platform: str):
     await safe_answer(callback)
+    await _track_guide_event(callback.from_user.id, "connection_guide_platform", platform)
     text = _GUIDES.get(platform)
     if text is None:
-        text = f"Инструкция не найдена. Откройте официальный сайт Happ: <a href=\"{HAPP_SITE}\">happ.su</a>."
+        text = f"Инструкция не найдена. Откройте официальный сайт Happ: <a href=\"{HAPP_SITE}\">happ.info</a>."
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔑 Открыть мои ключи", callback_data="my_keys")],
         [InlineKeyboardButton(text="◀️ Выбрать устройство", callback_data="connection_guide")],
         [InlineKeyboardButton(text="⚠️ Не получается?", callback_data="trouble")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu"),
          InlineKeyboardButton(text="Поддержка", url="https://t.me/ByMeVPN_support_bot")],
     ])
     await send_with_photo(bot, callback, text, kb)
+
+
+async def _track_guide_event(user_id: int, event_type: str, platform: str | None = None) -> None:
+    from database import log_analytics_event
+    await log_analytics_event(user_id=user_id, event_type=event_type, details=platform)

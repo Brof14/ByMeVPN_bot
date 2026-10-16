@@ -40,6 +40,7 @@ load_dotenv()
 # Telegram Bot Configuration
 # ============================================================================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@ByMeVPN_support_bot")
 MENU_PHOTO = os.getenv("MENU_PHOTO", "")
 # DB_FILE is NOT defined independently here anymore — database.py is the single

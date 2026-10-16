@@ -41,6 +41,21 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(docs_url=None, redoc_url=None)  # disable docs in production
 
+
+@app.get("/healthz")
+async def health_check():
+    """Container liveness/readiness endpoint; returns 503 if SQLite is unavailable."""
+    from database import get_db
+    from fastapi import HTTPException
+
+    try:
+        db = await get_db()
+        await db.execute("SELECT 1")
+    except Exception as exc:
+        logger.error("Healthcheck failed: database unavailable: %s", exc)
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    return {"status": "ok"}
+
 # Global dispatcher for Telegram webhook handling
 dispatcher: Optional[Dispatcher] = None
 
@@ -505,11 +520,9 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
     Process a Crypto Bot (@send) invoice reported as paid by CryptoPaymentMonitor.
     Fully idempotent — safe to call multiple times for the same invoice_id.
 
-    Mirrors _process_payment() above for YooKassa: verify status, dedupe,
-    store pending delivery keyed by invoice_id, prompt the user for a
-    config name, and put them into the same waiting_for_config_name FSM
-    state that handle_yookassa_config_name() (handlers/buy.py) already
-    handles for both payment methods.
+    Mirrors _process_payment() for YooKassa: verify status, deduplicate,
+    and provision the paid subscription immediately without a post-payment
+    input step.
     """
     from database import (
         is_crypto_processed, mark_crypto_processed,

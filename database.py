@@ -64,6 +64,15 @@ CREATE TABLE IF NOT EXISTS keys (
 CREATE INDEX IF NOT EXISTS idx_keys_user   ON keys(user_id);
 CREATE INDEX IF NOT EXISTS idx_keys_expiry ON keys(expiry);
 
+CREATE TABLE IF NOT EXISTS provisioning_intents (
+    provider TEXT NOT NULL,
+    provider_payment_id TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    target_expiry INTEGER NOT NULL,
+    created INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    PRIMARY KEY(provider, provider_payment_id)
+);
+
 CREATE TABLE IF NOT EXISTS payments (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id  INTEGER NOT NULL,
@@ -311,6 +320,18 @@ async def get_db() -> aiosqlite.Connection:
 
 async def _run_migrations(db: aiosqlite.Connection) -> None:
     """Run database migrations."""
+    # Provisioning intents make paid-key retries idempotent across restarts.
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS provisioning_intents (
+            provider TEXT NOT NULL,
+            provider_payment_id TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            target_expiry INTEGER NOT NULL,
+            created INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+            PRIMARY KEY(provider, provider_payment_id)
+        )"""
+    )
+
     # Migration: add limit_ip column for existing databases
     try:
         await db.execute("ALTER TABLE keys ADD COLUMN limit_ip INTEGER NOT NULL DEFAULT 1")
@@ -876,12 +897,13 @@ async def init_db() -> None:
 # Users
 # ---------------------------------------------------------------------------
 
-async def ensure_user(user_id: int) -> None:
-    """Create user record if it does not exist."""
+async def ensure_user(user_id: int, username: Optional[str] = None) -> None:
+    """Create/update a Telegram user record and keep its latest username."""
     db = await get_db()
     await db.execute(
-        "INSERT OR IGNORE INTO users(user_id) VALUES(?)",
-        (user_id,)
+        "INSERT INTO users(user_id, username) VALUES(?, ?) "
+        "ON CONFLICT(user_id) DO UPDATE SET username=excluded.username",
+        (user_id, username),
     )
     await db.commit()
 
@@ -1068,6 +1090,30 @@ async def add_key(
     invalidate_user_cache(user_id)
     invalidate_subscription_cache(user_id)
     return cur.lastrowid
+
+
+async def get_or_create_provisioning_intent(
+    provider: str, provider_payment_id: str, user_id: int, target_expiry: int,
+) -> int:
+    """Persist one immutable target expiry per paid order for safe retries."""
+    if not provider or not provider_payment_id or user_id <= 0 or target_expiry <= 0:
+        raise ValueError("invalid provisioning intent")
+    db = await get_db()
+    async with _db_semaphore:
+        await db.execute(
+            "INSERT OR IGNORE INTO provisioning_intents(provider, provider_payment_id, user_id, target_expiry) "
+            "VALUES(?,?,?,?)",
+            (provider, str(provider_payment_id), user_id, int(target_expiry)),
+        )
+        cur = await db.execute(
+            "SELECT user_id, target_expiry FROM provisioning_intents WHERE provider=? AND provider_payment_id=?",
+            (provider, str(provider_payment_id)),
+        )
+        row = await cur.fetchone()
+        await db.commit()
+    if not row or row[0] != user_id:
+        raise ValueError("payment provisioning intent belongs to another user")
+    return int(row[1])
 
 
 async def get_user_keys(user_id: int) -> list[dict]:
@@ -1892,6 +1938,24 @@ async def update_auto_renew_charge_failure(sub_id: int, error_message: str, max_
     return is_disabled
 
 
+async def defer_auto_renew_charge_retry(sub_id: int, reason: str, delay_seconds: int = 300) -> None:
+    """Retry an uncertain provider request with the same idempotency key.
+
+    Do not increment fail_count here: a timeout can happen after YooKassa has
+    accepted the charge, so changing the business key could charge twice.
+    """
+    db = await get_db()
+    await db.execute(
+        """UPDATE auto_renew_subscriptions
+           SET last_charge_status = ?,
+               next_retry_at = ?,
+               updated_at = strftime('%s','now')
+           WHERE id = ? AND status = 'active'""",
+        (f"uncertain: {reason[:100]}", int(time.time()) + max(30, delay_seconds), sub_id),
+    )
+    await db.commit()
+
+
 async def get_expiring_auto_renew_subscriptions(now: Optional[int] = None) -> list[dict]:
     """
     Find active auto-renew subscriptions where the associated key has expired or reached expiry time.
@@ -2636,27 +2700,31 @@ async def get_admin_stats() -> dict:
     cur = await db.execute("SELECT COUNT(*) FROM keys WHERE expiry > ?", (current_time,))
     active_keys = (await cur.fetchone())[0]
     
-    # Get total payments
-    cur = await db.execute("SELECT COUNT(*) FROM payments WHERE method!='trial'")
+    # Keep payment volume separate from recognized revenue: failed/recovery
+    # entries are not revenue and Stars must never be labelled as rubles.
+    cur = await db.execute("SELECT COUNT(*) FROM payments WHERE status='success' AND method!='trial'")
     total_payments = (await cur.fetchone())[0]
     
-    # Get total revenue
-    cur = await db.execute("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE method!='trial'")
+    # Ruble revenue only; non-RUB currencies are shown separately in payment stats.
+    cur = await db.execute(
+        "SELECT COALESCE(SUM(amount), 0) FROM payments "
+        "WHERE status='success' AND currency='RUB' AND method!='trial'"
+    )
     total_revenue = (await cur.fetchone())[0]
     
     # Today's revenue
     today_start = current_time - (current_time % 86400)
-    cur = await db.execute("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE method!='trial' AND created >= ?", (today_start,))
+    cur = await db.execute("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status='success' AND currency='RUB' AND method!='trial' AND created >= ?", (today_start,))
     today_revenue = (await cur.fetchone())[0]
     
     # Week revenue
     week_start = current_time - ((current_time // 86400) % 7) * 86400
-    cur = await db.execute("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE method!='trial' AND created >= ?", (week_start,))
+    cur = await db.execute("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status='success' AND currency='RUB' AND method!='trial' AND created >= ?", (week_start,))
     week_revenue = (await cur.fetchone())[0]
     
     # Month revenue
     month_start = current_time - ((current_time // 86400) % 30) * 86400
-    cur = await db.execute("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE method!='trial' AND created >= ?", (month_start,))
+    cur = await db.execute("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status='success' AND currency='RUB' AND method!='trial' AND created >= ?", (month_start,))
     month_revenue = (await cur.fetchone())[0]
     
     # Total referrals
@@ -2823,7 +2891,7 @@ async def find_user_by_id(user_id: int) -> Optional[dict]:
     """Find user by ID"""
     db = await get_db()
     cur = await db.execute(
-        "SELECT user_id, referrer_id, trial_used, total_paid, created FROM users WHERE user_id=?",
+        "SELECT user_id, referrer_id, trial_used, total_paid, created, username FROM users WHERE user_id=?",
         (user_id,)
     )
     row = await cur.fetchone()
@@ -2834,7 +2902,8 @@ async def find_user_by_id(user_id: int) -> Optional[dict]:
         "referrer_id": row[1],
         "trial_used": bool(row[2]),
         "total_paid": row[3] or 0,
-        "created": row[4]
+        "created": row[4],
+        "username": row[5],
     }
 
 
@@ -2921,6 +2990,7 @@ async def get_all_users_paginated(limit: int = 50, offset: int = 0) -> list[dict
             u.trial_used, 
             u.total_paid, 
             u.created,
+            u.username,
             COUNT(k.id) as total_keys,
             SUM(CASE WHEN k.expiry > ? THEN 1 ELSE 0 END) as active_keys
         FROM users u
@@ -2938,53 +3008,68 @@ async def get_all_users_paginated(limit: int = 50, offset: int = 0) -> list[dict
             "trial_used": bool(row[1]),
             "total_paid": row[2] or 0,
             "created": row[3],
-            "total_keys": row[4] or 0,
-            "active_keys": row[5] or 0
+            "username": row[4],
+            "total_keys": row[5] or 0,
+            "active_keys": row[6] or 0,
         }
         for row in rows
     ]
 
 
 async def get_payment_stats() -> dict:
-    """Get payment statistics"""
+    """Get payment statistics without adding incompatible currencies together."""
     db = await get_db()
     current_time = int(time.time())
-    
-    # Total payments
-    cur = await db.execute("SELECT COUNT(*), SUM(amount) FROM payments WHERE status='success'")
-    total_count, total_sum = await cur.fetchone()
-    
-    # Today's payments
+
+    async def totals(where: str = "", params: tuple = ()) -> tuple[int, dict[str, int]]:
+        suffix = f" AND {where}" if where else ""
+        cur = await db.execute(
+            "SELECT currency, COUNT(*), COALESCE(SUM(amount), 0) FROM payments "
+            f"WHERE status='success'{suffix} GROUP BY currency",
+            params,
+        )
+        rows = await cur.fetchall()
+        by_currency = {str(row[0]): int(row[2] or 0) for row in rows}
+        return sum(int(row[1] or 0) for row in rows), by_currency
+
+    total_count, total_by_currency = await totals()
     today_start = current_time - (current_time % 86400)
-    cur = await db.execute("SELECT COUNT(*), SUM(amount) FROM payments WHERE status='success' AND created >= ?", (today_start,))
-    today_count, today_sum = await cur.fetchone()
-    
-    # This month payments
+    today_count, today_by_currency = await totals("created >= ?", (today_start,))
     month_start = current_time - ((current_time // 86400) % 30) * 86400
-    cur = await db.execute("SELECT COUNT(*), SUM(amount) FROM payments WHERE status='success' AND created >= ?", (month_start,))
-    month_count, month_sum = await cur.fetchone()
-    
-    # By method
-    cur = await db.execute("SELECT method, COUNT(*), SUM(amount) FROM payments WHERE status='success' GROUP BY method")
+    month_count, month_by_currency = await totals("created >= ?", (month_start,))
+
+    cur = await db.execute(
+        "SELECT method, currency, COUNT(*), COALESCE(SUM(amount), 0) "
+        "FROM payments WHERE status='success' GROUP BY method, currency"
+    )
     by_method = {}
     for row in await cur.fetchall():
-        by_method[row[0]] = {
-            "count": row[1],
-            "sum": row[2] or 0
-        }
+        method, currency, count, amount = row
+        item = by_method.setdefault(method, {"count": 0, "by_currency": {}})
+        item["count"] += int(count or 0)
+        item["by_currency"][str(currency)] = int(amount or 0)
+
+    # Legacy sum aliases are deliberately RUB-only; the detailed map carries
+    # Stars/XTR and any future currencies in their native units.
+    total_sum = total_by_currency.get("RUB", 0)
+    today_sum = today_by_currency.get("RUB", 0)
+    month_sum = month_by_currency.get("RUB", 0)
     
     return {
         "total": {
             "count": total_count or 0,
-            "sum": total_sum or 0
+            "sum": total_sum,
+            "by_currency": total_by_currency,
         },
         "today": {
             "count": today_count or 0,
-            "sum": today_sum or 0
+            "sum": today_sum,
+            "by_currency": today_by_currency,
         },
         "month": {
             "count": month_count or 0,
-            "sum": month_sum or 0
+            "sum": month_sum,
+            "by_currency": month_by_currency,
         },
         "by_method": by_method
     }

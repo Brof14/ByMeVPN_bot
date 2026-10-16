@@ -19,12 +19,13 @@ import sys
 import traceback
 
 from aiogram import Bot, Dispatcher
+from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import ErrorEvent
 
-from config import BOT_TOKEN, ADMIN_ID
+from config import BOT_TOKEN, ADMIN_ID, REDIS_URL
 from database import init_db, close_db
 from notifications import start_notification_scheduler
 from xui_client import get_api_client  # stub for 3x-ui (no pre-init needed)
@@ -50,6 +51,20 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("aiogram").setLevel(logging.INFO)
 
 logger = logging.getLogger(__name__)
+
+
+class UserProfileMiddleware(BaseMiddleware):
+    """Keep Telegram usernames fresh for every user who interacts with the bot."""
+
+    async def __call__(self, handler, event, data):
+        user = getattr(event, "from_user", None)
+        if user is not None:
+            try:
+                from database import ensure_user
+                await ensure_user(user.id, user.username)
+            except Exception:
+                logger.exception("Could not sync Telegram profile for user %s", user.id)
+        return await handler(event, data)
 
 
 def format_error_messages(exc: BaseException, update=None) -> list[str]:
@@ -173,7 +188,9 @@ async def main() -> None:
 
     # Create bot instance with HTML parse mode
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    dp = Dispatcher(storage=MemoryStorage())
+    dp = Dispatcher(storage=RedisStorage.from_url(REDIS_URL))
+    dp.message.outer_middleware(UserProfileMiddleware())
+    dp.callback_query.outer_middleware(UserProfileMiddleware())
 
     # Register global error handler
     dp.error.register(error_handler)
@@ -220,6 +237,7 @@ async def main() -> None:
         scheduler_task.cancel()
         webhook_task.cancel()
         autorenew_task.cancel()
+        await dp.storage.close()
         await bot.session.close()
         await close_db()
         logger.info("Bot stopped")

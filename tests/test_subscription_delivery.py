@@ -3,7 +3,7 @@ import os
 import sys
 import time
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -31,6 +31,7 @@ class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
             patch("subscription.get_user_keys", new=AsyncMock(return_value=[])),
             patch("xui_client.get_xui_client_details", new=AsyncMock(return_value=panel_client)),
             patch("xui_client.update_xui_user", new=AsyncMock(return_value=None)),
+            patch("subscription.database.get_or_create_provisioning_intent", new=AsyncMock(return_value=int(time.time()) + 30 * 86400)),
             patch("subscription.add_key", new=AsyncMock()) as add_key,
             patch("subscription.log_key_error", new=AsyncMock()) as log_error,
         ):
@@ -126,6 +127,7 @@ class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
             "test-client-uuid",
             30,
             5,
+            expiry=ANY,
         )
         bot.send_photo.assert_awaited_once()
         bot.send_message.assert_not_awaited()
@@ -149,7 +151,8 @@ class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("subscription.get_user_keys", new=AsyncMock(return_value=[existing_key])),
-            patch("subscription.extend_key", new=AsyncMock(return_value=True)),
+            patch("subscription.set_key_expiry", new=AsyncMock(return_value=True)) as set_expiry,
+            patch("subscription.database.get_or_create_provisioning_intent", new=AsyncMock(return_value=xui_update["expiry_time"] // 1000)),
             patch("xui_client.update_xui_user", new=AsyncMock(return_value=xui_update)),
             patch(
                 "xui_client.get_user_subscription_links",
@@ -175,6 +178,7 @@ class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertTrue(result)
+        set_expiry.assert_awaited_once_with(7, xui_update["expiry_time"] // 1000, limit_ip=5)
         record_payment.assert_awaited_once()
         bot.send_photo.assert_awaited_once()
         bot.send_message.assert_not_awaited()
