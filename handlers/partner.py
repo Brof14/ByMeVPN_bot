@@ -18,7 +18,7 @@ def partner_main_kb(link: str) -> InlineKeyboardMarkup:
         f"Ссылка: {link}"
     )
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Поделиться ссылкой", url=f"https://t.me/share/url?url={quote_plus(link)}&text={share_text}")],
+        [InlineKeyboardButton(text="Поделиться ссылкой", url=f"https://t.me/share/url?url={quote_plus(link)}&text={share_text}", style="primary")],
         [InlineKeyboardButton(text="👥 Мои приглашения", callback_data="partner_referrals_list")],
         [InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu")],
     ])
@@ -34,21 +34,23 @@ async def cb_partner(callback: CallbackQuery, bot: Bot):
     pending_rewards = await retry_pending_signup_bonuses(bot, user_id)
     stats = await get_referral_stats_enhanced(user_id)
     pending_note = (
-        f"\n\nНе удалось начислить бонус за регистрацию {pending_rewards} приглашённого. "
-        "Заявка сохранена; попробуйте открыть этот раздел позже или напишите в поддержку."
+        f"\n\n⚠️ Не удалось начислить бонус за регистрацию {pending_rewards} приглашённого. "
+        "Начисление сохранено — откройте этот раздел позже, чтобы повторить попытку."
         if pending_rewards else ""
     )
     text = (
-        "<b>VPN за приглашения</b>\n\n"
-        "Поделитесь ссылкой — бонусные дни начисляются автоматически:\n"
-        "• <b>+15 дней</b> за регистрацию нового пользователя.\n"
-        "• Ещё <b>+30 дней</b> после его первой платной подписки. Бот пришлёт кнопку, чтобы получить бонус.\n\n"
-        "Бонусы начисляются на ваш ключ или отдельный бонусный ключ. "
-        "Оплачивать подписку и привязывать карту для этого не нужно.\n\n"
-        "<b>Ваша ссылка</b>\n"
+        "<b>👥 VPN за приглашения</b>\n\n"
+        "Делитесь ссылкой и получайте бонусные дни VPN.\n\n"
+        "<b>Ваши бонусы</b>\n"
+        "• <b>+15 дней</b> — за регистрацию нового пользователя.\n"
+        "• <b>Ещё +30 дней</b> — после его первой платной подписки. Бот пришлёт отдельную кнопку для получения бонуса.\n\n"
+        "Бонусы продлевают ваш ключ или активируются на отдельном. Карта и оплата не нужны.\n\n"
+        "<b>🔗 Ваша ссылка для приглашений</b>\n"
         f"<code>{link}</code>\n\n"
-        f"Приглашений: {stats['total_registrations']} · Переходов: {stats['total_clicks']} · "
-        f"Бонусных дней: {stats['total_bonus_days']}"
+        "<b>Ваша статистика</b>\n"
+        f"👥 Приглашено: <b>{stats['total_registrations']}</b>\n"
+        f"🔗 Переходов: <b>{stats['total_clicks']}</b>\n"
+        f"🎁 Начислено: <b>{stats['total_bonus_days']} дней</b>"
         f"{pending_note}"
     )
     await send_with_photo(bot, callback, text, partner_main_kb(link))

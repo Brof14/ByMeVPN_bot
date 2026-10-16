@@ -13,7 +13,7 @@ from xui_client import delete_xui_user, get_xui_user, format_traffic
 from keyboards import (
     my_keys_kb, my_keys_list_kb, key_detail_kb, confirm_delete_kb,
     payment_kb, back_to_menu, connection_guide_kb, tariff_selection_kb,
-    autorenew_cancel_confirm_kb, manage_payment_methods_kb, key_settings_kb, support_url,
+    autorenew_cancel_confirm_kb, manage_payment_methods_kb, key_settings_kb,
 )
 from utils import send_with_photo, send_or_edit, safe_answer
 from constants import format_timestamp as fmt_date, format_days_left as fmt_days_left
@@ -535,40 +535,6 @@ async def cb_key_delete_confirm(callback: CallbackQuery, bot: Bot):
             "Выберите ключ, чтобы открыть его настройки."
         )
         await send_with_photo(bot, callback, text, my_keys_list_kb(keys))
-
-# ---------------------------------------------------------------------------
-# RF apps bypass guide
-# ---------------------------------------------------------------------------
-
-@router.callback_query(F.data.startswith("rf_apps_guide"))
-async def cb_rf_apps_guide(callback: CallbackQuery, bot: Bot):
-    """Show instruction for using VPN with RF apps simultaneously."""
-    await safe_answer(callback)
-    parts = callback.data.split(":", 1)
-    key_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
-    if key_id:
-        key = await get_key_by_id(key_id)
-        if not key or key["user_id"] != callback.from_user.id:
-            await safe_answer(callback, "Ключ не найден.", alert=True)
-            return
-    
-    text = (
-        "<b>Российские приложения без отключения VPN</b>\n\n"
-        "На устройствах с поддержкой обхода можно направить выбранные приложения напрямую. "
-        "Остальные продолжат работать через VPN. Доступность и название настройки зависят от устройства и версии Happ.\n\n"
-        "<b>Android · Happ</b>\n"
-        "Откройте настройки туннеля → «Прокси для выбранных приложений» → режим «Обход» и отметьте нужные приложения.\n\n"
-        "Для других устройств откройте настройки маршрутизации Happ. Если такой настройки нет или приложение всё ещё не работает, напишите нам — подскажем для вашей платформы."
-    )
-    
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-    back_button = (
-        InlineKeyboardButton(text="← Настройки ключа", callback_data=f"key_settings:{key_id}")
-        if key_id else InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu")
-    )
-    kb_rows = [[InlineKeyboardButton(text="Написать в поддержку", url=support_url())], [back_button]]
-    await send_or_edit(bot, callback, text, InlineKeyboardMarkup(inline_keyboard=kb_rows))
-
 
 # ---------------------------------------------------------------------------
 # Referral bonus activation

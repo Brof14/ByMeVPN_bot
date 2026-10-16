@@ -7,6 +7,7 @@ from keyboards import (
     main_menu_existing,
     main_menu_with_keys,
     manage_payment_methods_kb,
+    key_settings_kb,
     connection_guide_kb,
     back_to_menu,
     tariff_selection_kb,
@@ -118,6 +119,38 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         self.assertIn("guide_macos:9", actions)
         self.assertIn("guide_android_tv:9", actions)
         self.assertIn("connection_guide:9", actions)
+
+    def test_key_settings_remove_rf_routing_and_highlight_only_destructive_action(self):
+        markup = key_settings_kb(9)
+        actions = callbacks(markup)
+        self.assertNotIn("rf_apps_guide:9", actions)
+        self.assertIn("key_delete:9", actions)
+        self.assertEqual(next(b for row in markup.inline_keyboard for b in row if b.callback_data == "key_delete:9").style, "danger")
+
+    async def test_referral_offer_separates_rewards_link_and_statistics(self):
+        from types import SimpleNamespace
+        from handlers.partner import cb_partner
+
+        callback = SimpleNamespace(from_user=SimpleNamespace(id=123))
+        bot = SimpleNamespace(get_me=AsyncMock(return_value=SimpleNamespace(username="ByMeVPNbot")))
+        with (
+            patch("handlers.partner.safe_answer", new=AsyncMock()),
+            patch("handlers.partner.get_referral_stats_enhanced", new=AsyncMock(return_value={
+                "total_registrations": 1, "total_clicks": 1, "total_bonus_days": 15,
+            })),
+            patch("referral_system_new.retry_pending_signup_bonuses", new=AsyncMock(return_value=0)),
+            patch("handlers.partner.send_with_photo", new=AsyncMock()) as send,
+        ):
+            await cb_partner(callback, bot)
+
+        text = send.call_args.args[2]
+        self.assertIn("<b>Ваши бонусы</b>", text)
+        self.assertIn("+15 дней", text)
+        self.assertIn("Ещё +30 дней", text)
+        self.assertIn("<b>🔗 Ваша ссылка для приглашений</b>", text)
+        self.assertIn("<b>Ваша статистика</b>", text)
+        self.assertIn("Приглашено: <b>1</b>", text)
+        self.assertIn("Начислено: <b>15 дней</b>", text)
 
     def test_back_is_full_width_and_support_is_not_mixed_into_navigation(self):
         back = back_to_menu().inline_keyboard

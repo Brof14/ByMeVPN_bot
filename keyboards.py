@@ -17,7 +17,7 @@ _SUPPORT_URL = (
 def main_menu_new_user() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
-    kb.row(InlineKeyboardButton(text="Выбрать тариф", callback_data="buy_vpn"))
+    kb.row(InlineKeyboardButton(text="Выбрать тариф", callback_data="buy_vpn", style="primary"))
     kb.row(InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
@@ -30,7 +30,7 @@ def main_menu_existing(trial_used: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     if not trial_used:
         kb.row(InlineKeyboardButton(text="Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
-    kb.row(InlineKeyboardButton(text="Выбрать тариф", callback_data="buy_vpn"))
+    kb.row(InlineKeyboardButton(text="Выбрать тариф", callback_data="buy_vpn", style="primary"))
     kb.row(InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
@@ -205,10 +205,7 @@ def key_detail_kb(key_id: int, has_autorenew: bool = False, autorenew_active: bo
 def key_settings_kb(key_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="💳 Автопродление и оплата", callback_data=f"manage_payment_methods:{key_id}"))
-    kb.row(
-        InlineKeyboardButton(text="🌐 РФ-приложения", callback_data=f"rf_apps_guide:{key_id}"),
-        InlineKeyboardButton(text="🗑 Удалить", callback_data=f"key_delete:{key_id}"),
-    )
+    kb.row(InlineKeyboardButton(text="🗑 Удалить ключ", callback_data=f"key_delete:{key_id}", style="danger"))
     kb.row(InlineKeyboardButton(text="← К ключу", callback_data=f"key_info:{key_id}"))
     return kb.as_markup()
 
