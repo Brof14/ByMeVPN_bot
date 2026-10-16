@@ -30,6 +30,24 @@ async def _remember_yookassa_checkout(
         logger.exception("Could not persist YooKassa checkout %s for recovery", payment_id)
 
 
+async def _remember_yookassa_trial_checkout(
+    payment_id: Optional[str], user_id: int, confirmation_url: str,
+    extra_metadata: Optional[dict],
+) -> None:
+    """Reuse a live intro-trial checkout instead of creating duplicate 1 ₽ payments."""
+    if not extra_metadata or str(extra_metadata.get("trial")) != "1":
+        return
+    if not payment_id:
+        logger.error("Intro-trial checkout has no YooKassa payment ID (user=%d)", user_id)
+        return
+    try:
+        from database import save_yookassa_trial_pending
+
+        await save_yookassa_trial_pending(user_id, payment_id, confirmation_url)
+    except Exception:
+        logger.exception("Could not persist intro-trial checkout for user %d", user_id)
+
+
 def is_yookassa_recurring_supported() -> bool:
     """Check if YooKassa store supports recurring payments."""
     global _yookassa_recurring_supported
@@ -103,6 +121,7 @@ async def create_yookassa_payment(
             data = r.json()
             url = data["confirmation"]["confirmation_url"]
             await _remember_yookassa_checkout(data.get("id"), user_id, days, devices, amount_rub)
+            await _remember_yookassa_trial_checkout(data.get("id"), user_id, url, extra_metadata)
             logger.info("YooKassa payment created for user %d: %s", user_id, data.get("id"))
             return url
             
@@ -125,6 +144,7 @@ async def create_yookassa_payment(
                     data = r2.json()
                     url = data["confirmation"]["confirmation_url"]
                     await _remember_yookassa_checkout(data.get("id"), user_id, days, devices, amount_rub)
+                    await _remember_yookassa_trial_checkout(data.get("id"), user_id, url, extra_metadata)
                     logger.info("YooKassa fallback standard payment created for user %d: %s", user_id, data.get("id"))
                     return url
             except Exception as retry_e:

@@ -112,22 +112,18 @@ async def cb_ad_program(callback: CallbackQuery, bot: Bot, state: FSMContext):
 
     text = (
         "📣 <b>VPN за рекламу</b>\n\n"
-        "Разместите рекламный пост ByMeVPN\n"
-        "в своём Telegram-канале на 30 дней —\n"
-        "и получите VPN в подарок:\n\n"
+        "Опубликуйте готовый пост ByMeVPN в своём Telegram-канале на 30 дней и получите бонусные месяцы.\n"
+        "Размер бонуса зависит от числа подписчиков:\n\n"
         f"{BONUS_TIERS}\n\n"
-        "<b>Как это работает:</b>\n"
-        "1. Отправьте ссылку на ваш канал\n"
-        "2. Получите готовый рекламный пост\n"
-        "3. Опубликуйте его и отправьте ссылку на пост\n"
-        "4. Через 30 дней мы проверим размещение и начислим бонус\n\n"
-        "• Публичные каналы проверяются автоматически\n"
-        "• Приватные каналы — по ссылке-приглашению, вручную\n"
-        "• Один канал может участвовать только один раз"
+        "<b>Как получить бонус</b>\n"
+        "1. Отправьте канал на проверку.\n"
+        "2. Разместите готовый пост и пришлите ссылку.\n"
+        "3. Если пост останется в канале 30 дней, мы проверим размещение и начислим бонус.\n\n"
+        "Публичные каналы проверяются автоматически, приватные — вручную. Один канал участвует один раз."
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📣 Проверить мой канал", callback_data="ad_check_channel")],
+        [InlineKeyboardButton(text="Проверить канал", callback_data="ad_check_channel", style="primary")],
         [InlineKeyboardButton(text="📋 Мои заявки", callback_data="ad_my_applications")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_menu")]
     ])
@@ -323,7 +319,7 @@ async def _create_application_and_reply(
             "4. Пост должен находиться в канале 30 дней — после этого бонус начислят"
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📋 Получить рекламный пост", callback_data=f"ad_get_post:{app_id}")],
+            [InlineKeyboardButton(text="Получить рекламный пост", callback_data=f"ad_get_post:{app_id}", style="primary")],
             [InlineKeyboardButton(text="📋 Мои заявки", callback_data="ad_my_applications")],
             [InlineKeyboardButton(text="◀️ Назад", callback_data="ad_program")]
         ])
@@ -376,8 +372,7 @@ async def msg_ad_channel_input(message: Message, bot: Bot, state: FSMContext):
     except Exception as e:
         logger.info("get_chat failed for @%s: %s", public_username, e)
         await message.answer(
-            "❌ Не удалось найти канал. Проверьте @username или ссылку и попробуйте снова.\n\n"
-            "Если канал приватный — отправьте ссылку-приглашение (https://t.me/+...).",
+            "Не нашли канал по этой ссылке. Проверьте @username или отправьте ссылку-приглашение, если канал приватный.\n\n",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="◀️ Отмена", callback_data="ad_program")]
             ])
@@ -437,22 +432,15 @@ async def cb_ad_get_post(callback: CallbackQuery, bot: Bot):
     text = (
         "📋 <b>Рекламный пост</b>\n\n"
         "Скопируйте текст ниже и разместите в своём канале:\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "🔥 Не грузится YouTube, Telegram, Instagram или сайты?\n\n"
-        "ByMeVPN — VPN, который просто работает.\n\n"
-        "✅ Подключение за пару минут, без сложных настроек\n"
-        "✅ Telegram, YouTube, сайты — всё открывается\n"
-        "✅ Стабильная связь для видео и игр\n"
-        "✅ Работает на iPhone, Android, Windows, macOS, Linux\n\n"
-        "🎁 3 дня — за 1 ₽\n"
-        "💳 Дальше — 89 ₽/мес, отключить автопродление можно в любой момент\n\n"
+        "ByMeVPN помогает открыть сайты и приложения через VPN. Подключение — через Happ, а бот покажет шаги для вашего устройства.\n\n"
+        "Тарифы для 2, 5 или 10 устройств.\n"
+        "🎁 Новым пользователям — 3 дня за 1 ₽. Если способ оплаты сохранён, затем — 89 ₽ за каждые 30 дней; автопродление можно отключить.\n\n"
         "👇 Попробовать: https://t.me/ByMeVPN_bot\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n\n"
         "После размещения отправьте ссылку на пост."
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📤 Отправить ссылку на пост", callback_data=f"ad_submit_post:{app_id}")],
+        [InlineKeyboardButton(text="Отправить ссылку на пост", callback_data=f"ad_submit_post:{app_id}", style="primary")],
         [InlineKeyboardButton(text="📋 Мои заявки", callback_data="ad_my_applications")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="ad_program")]
     ])
@@ -555,7 +543,7 @@ async def cb_ad_my_applications(callback: CallbackQuery, bot: Bot, state: FSMCon
             "Нажмите «Проверить мой канал», чтобы начать."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📣 Проверить мой канал", callback_data="ad_check_channel")],
+            [InlineKeyboardButton(text="Проверить канал", callback_data="ad_check_channel", style="primary")],
             [InlineKeyboardButton(text="◀️ Назад", callback_data="ad_program")]
         ])
         await send_with_photo(bot, callback, text, kb)
@@ -588,6 +576,7 @@ async def cb_ad_my_applications(callback: CallbackQuery, bot: Bot, state: FSMCon
             rows.append([InlineKeyboardButton(
                 text=f"🗑 Удалить заявку #{app['id']}",
                 callback_data=f"ad_cancel_confirm:{app['id']}",
+                style="danger",
             )])
     rows.extend([
         [InlineKeyboardButton(text="📣 Проверить новый канал", callback_data="ad_check_channel")],
@@ -616,7 +605,7 @@ async def cb_ad_cancel_confirm(callback: CallbackQuery, bot: Bot):
         "Если захотите участвовать снова, можно будет отправить новую заявку."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🗑 Да, удалить заявку", callback_data=f"ad_cancel:{app_id}")],
+        [InlineKeyboardButton(text="Удалить заявку", callback_data=f"ad_cancel:{app_id}", style="danger")],
         [InlineKeyboardButton(text="◀️ Оставить заявку", callback_data="ad_my_applications")],
     ])
     await send_with_photo(bot, callback, text, kb)
@@ -757,9 +746,9 @@ async def cb_ad_admin_view(callback: CallbackQuery, bot: Bot):
     kb = InlineKeyboardBuilder()
     if app["status"] in ("post_submitted", "active_30_days", "channel_pending"):
         kb.row(
-            InlineKeyboardButton(text="✅ Одобрить и выдать бонус", callback_data=f"ad_admin_approve:{app_id}"),
+            InlineKeyboardButton(text="Одобрить и выдать бонус", callback_data=f"ad_admin_approve:{app_id}", style="success"),
         )
-        kb.row(InlineKeyboardButton(text="❌ Отклонить", callback_data=f"ad_admin_reject:{app_id}"))
+        kb.row(InlineKeyboardButton(text="Отклонить", callback_data=f"ad_admin_reject:{app_id}", style="danger"))
     else:
         text += f"\n\nСтатус финальный — действие недоступно."
     kb.row(InlineKeyboardButton(text="◀️ К списку", callback_data="ad_admin_list"))

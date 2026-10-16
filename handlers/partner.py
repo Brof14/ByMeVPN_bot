@@ -13,12 +13,13 @@ router = Router()
 
 def partner_main_kb(link: str) -> InlineKeyboardMarkup:
     share_text = quote_plus(
-        "Попробуй ByMeVPN — подключение через приложение, без сложных настроек.\n\n"
-        "🎁 3 дня за 1 ₽\n"
+        "Попробуй ByMeVPN — бот подскажет, как подключиться через Happ.\n\n"
+        "🎁 Новым пользователям — 3 дня за 1 ₽; если способ оплаты сохранён, затем 89 ₽ за 30 дней. Автопродление можно отключить.\n"
+        "📱 Тарифы на 2, 5 или 10 устройств.\n"
         f"Ссылка: {link}"
     )
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Поделиться ссылкой", url=f"https://t.me/share/url?url={quote_plus(link)}&text={share_text}")],
+        [InlineKeyboardButton(text="Поделиться ссылкой", url=f"https://t.me/share/url?url={quote_plus(link)}&text={share_text}", style="primary")],
         [InlineKeyboardButton(text="👥 Мои приглашения", callback_data="partner_referrals_list")],
         [InlineKeyboardButton(text="📣 VPN за рекламу", callback_data="ad_program")],
         [InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu")],
@@ -33,18 +34,15 @@ async def cb_partner(callback: CallbackQuery, bot: Bot):
     link = f"https://t.me/{bot_info.username}?start={user_id}"
     stats = await get_referral_stats_enhanced(user_id)
     text = (
-        "🤝 <b>Партнёрская программа</b>\n\n"
-        "Приглашайте друзей по своей ссылке и получайте VPN-дни:\n"
-        "• <b>+15 дней</b> за нового пользователя — бот начислит их на ваш ключ или выдаст бонусный ключ.\n"
-        "• <b>+30 дней</b> после первой платной подписки приглашённого.\n\n"
-        "Так можно пользоваться VPN бесплатно, приглашая друзей. Для получения бонусных дней карта и её привязка не нужны.\n\n"
-        "Денежных выплат и денежного баланса в программе нет.\n\n"
-        "<b>Статистика</b>\n"
-        f"🔗 Переходов: {stats['total_clicks']}\n"
-        f"👤 Зарегистрировалось: {stats['total_registrations']}\n"
-        f"✅ Сейчас с активной подпиской: {stats['active_clients']}\n"
-        f"💳 Оплатили: {stats['paid_clients']}\n"
-        f"🎁 Всего бонусных дней: {stats['total_bonus_days']}\n\n"
+        "🎁 <b>Бесплатные дни за приглашения</b>\n\n"
+        "Поделитесь ссылкой и получите:\n"
+        "• <b>15 дней</b> за регистрацию нового пользователя;\n"
+        "• ещё <b>30 дней</b>, когда он впервые оплатит подписку.\n\n"
+        "Бонус добавится к вашему ключу; если ключа ещё нет, бот создаст отдельный бонусный. "
+        "Дни можно накапливать и пользоваться VPN без оплаты. "
+        "Для получения бонусов карта и её привязка не нужны.\n\n"
+        f"<b>Ваша статистика:</b> переходы — {stats['total_clicks']} · регистрации — {stats['total_registrations']} · "
+        f"оплатили — {stats['paid_clients']} · начислено — {stats['total_bonus_days']} дн.\n\n"
         "<b>Ваша ссылка:</b>\n"
         f"<code>{link}</code>"
     )

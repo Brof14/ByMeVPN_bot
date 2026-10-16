@@ -54,11 +54,10 @@ async def cb_buy_vpn(callback: CallbackQuery, bot: Bot, state: FSMContext):
     
     dev_info = DEVICE_CONFIG.get(devices, DEVICE_CONFIG[DEFAULT_DEVICE_LIMIT])
     text = (
-        f"<b>Тариф: {dev_info['name']} ({dev_info['badge']})</b>\n"
-        f"<i>{dev_info['description']}</i>\n\n"
-        "Выберите удобный срок: чем он дольше, тем ниже цена за месяц.\n"
-        "Бонусные месяцы уже учтены; итоговая сумма покажется следующим шагом.\n\n"
-        "<b>Тарифы:</b>"
+        f"<b>Тариф на {dev_info['name'].lower()}</b>\n"
+        f"{dev_info['description']}.\n\n"
+        "Выберите срок. На кнопках указана цена за месяц; бонусные месяцы идут сверху.\n"
+        "Полную сумму к оплате покажу перед выбором способа оплаты."
     )
     await send_with_photo(
         bot, callback,
@@ -86,17 +85,15 @@ async def cb_select_devtier(callback: CallbackQuery, bot: Bot, state: FSMContext
     if renew_key_id:
         text = (
             f"🔄 <b>Продление ключа</b>\n\n"
-            f"<b>Тариф: {dev_info['name']} ({dev_info['badge']})</b>\n"
-            f"<i>{dev_info['description']}</i>\n\n"
-            "<b>Выберите срок подписки:</b>"
+            f"Тариф на {dev_info['name'].lower()} · {dev_info['description']}.\n\n"
+            "Выберите срок — бонусные месяцы добавятся к доступу. Полная сумма будет показана перед оплатой."
         )
     else:
         text = (
-            f"<b>Тариф: {dev_info['name']} ({dev_info['badge']})</b>\n"
-            f"<i>{dev_info['description']}</i>\n\n"
-            "Выберите удобный срок: чем он дольше, тем ниже цена за месяц.\n"
-            "Бонусные месяцы уже учтены; итоговая сумма покажется следующим шагом.\n\n"
-            "<b>Тарифы:</b>"
+            f"<b>Тариф на {dev_info['name'].lower()}</b>\n"
+            f"{dev_info['description']}.\n\n"
+            "Выберите срок. На кнопках указана цена за месяц; бонусные месяцы идут сверху.\n"
+            "Полную сумму к оплате покажу перед выбором способа оплаты."
         )
     await send_with_photo(
         bot, callback,
@@ -152,22 +149,20 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
     dev_name = DEVICE_CONFIG.get(devices, {}).get("name", f"{devices} устройств")
 
     text = (
-        f"<b>Доступ на {days} дней</b>\n\n"
-        f"📱 Устройств: <b>{dev_name}</b>\n"
-        f"💰 Стоимость: <b>{price_rub} ₽</b>{promo_text}\n"
+        f"<b>Ваш тариф</b>\n\n"
+        f"📅 Доступ: <b>{days} дней</b>\n"
+        f"📱 Устройства: <b>{dev_name}</b>\n"
+        f"К оплате: <b>{price_rub} ₽</b>{promo_text}\n"
     )
 
     if promo_info and promo_info.get("promo_type") in ["percent", "fixed_rub"]:
         text += f"<s>Без скидки: {original_price} ₽</s>\n"
 
     text += (
-        "\nПродолжая, вы принимаете <a href='https://telegra.ph/DOGOVOR-PUBLICHNOJ-OFERTY-ByMyVPN-03-12'>оферту</a>, "
+        "\nДоступ включится сразу после оплаты. ЮKassa может сохранить способ оплаты для автопродления; Stars и CryptoBot — разовая оплата.\n\n"
+        "Продолжая, вы принимаете <a href='https://telegra.ph/DOGOVOR-PUBLICHNOJ-OFERTY-ByMeVPN-03-12'>оферту</a>, "
         "<a href='https://telegra.ph/POLITIKA-KONFIDENCIALNOSTI-ByMeVPN-03-12'>политику конфиденциальности</a> и "
-        "<a href='https://telegra.ph/SOGLASHENIE-O-REGULYARNYH-REKURRENTNYH-PLATEZHAH-ByMeVPN-03-12'>условия автоплатежей</a>.\n\n"
-        "Доступ включится сразу после оплаты. При оплате через ЮKassa автопродление включится, если способ оплаты будет сохранён: "
-        f"через {days} дней спишется {price_rub} ₽ за следующий такой же период. Его можно отключить в «Мои ключи».\n"
-        "Stars и CryptoBot — разовая оплата.\n\n"
-        "<b>Выберите способ оплаты:</b>"
+        "<a href='https://telegra.ph/SOGLASHENIE-O-REGULYARNYH-REKURRENTNYH-PLATEZHAH-ByMeVPN-03-12'>условия автоплатежей</a>."
     )
 
     await send_with_photo(bot, callback, text, payment_kb(price_rub, days, devices=devices))
@@ -294,22 +289,26 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
         return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"💳 Оплатить {price_rub} ₽", url=url)],
+        [InlineKeyboardButton(text=f"Оплатить {price_rub} ₽", url=url, style="success")],
         [InlineKeyboardButton(text="Назад", callback_data=f"devtier_{devices}")]
     ])
     
     from payments import is_yookassa_recurring_supported
     ar_note = ""
     if is_yookassa_recurring_supported():
-        ar_note = "🔄 <b>Автопродление:</b> включено (по истечении срока подписка продлится автоматически, можно отключить в любой момент в меню ключа).\n\n"
+        ar_note = (
+            f"Если ЮKassa сохранит способ оплаты, через {days} дней автоматически спишется "
+            f"{price_rub} ₽ за такой же период. Автопродление можно отключить в настройках ключа.\n\n"
+        )
+    else:
+        ar_note = "Автопродление через ЮKassa сейчас недоступно — этот тариф можно будет продлить вручную.\n\n"
 
     await send_with_photo(
         bot, callback,
         f"💳 <b>Оплата через ЮKassa</b>\n\n"
-        f"Нажмите кнопку ниже для перехода на страницу оплаты.\n\n"
-        f"Сумма: <b>{price_rub} ₽</b>\n"
-        f"Срок: {days} дней\n"
-        f"Устройств: до {devices} одновременно\n\n"
+        f"Перейдите на страницу оплаты.\n\n"
+        f"К оплате: <b>{price_rub} ₽</b> · доступ: {days} дней\n"
+        f"Устройств: до {devices}\n\n"
         f"{ar_note}"
         f"После оплаты подписка будет активирована автоматически.",
         kb,
@@ -352,18 +351,17 @@ async def cb_pay_crypto(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await add_crypto_pending(invoice_id, user_id, days, devices, price_rub)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"₿ Оплатить {price_rub} ₽", url=url)],
+        [InlineKeyboardButton(text=f"Оплатить {price_rub} ₽", url=url)],
         [InlineKeyboardButton(text="Назад", callback_data=f"devtier_{devices}")]
     ])
     
     await send_with_photo(
         bot, callback,
         f"₿ <b>Оплата через Crypto Pay</b>\n\n"
-        f"Нажмите кнопку ниже для перехода на страницу оплаты.\n\n"
-        f"Сумма: <b>{price_rub} ₽</b>\n"
-        f"Срок: {days} дней\n"
-        f"Устройств: до {devices} одновременно\n\n"
-        f"После оплаты подписка будет активирована автоматически.",
+        f"Перейдите на страницу оплаты.\n\n"
+        f"К оплате: <b>{price_rub} ₽</b> · доступ: {days} дней\n"
+        f"Устройств: до {devices}\n\n"
+        "Это разовая оплата. Доступ включится автоматически после подтверждения платежа.",
         kb,
     )
 
@@ -552,12 +550,8 @@ async def cb_activate_promo(callback: CallbackQuery, state: FSMContext):
     promo = await validate_promo_code(code)
     if not promo:
         await callback.message.edit_text(
-            "❌ <b>Промокод не действителен</b>\n\n"
-            "Возможные причины:\n"
-            "• Код истёк\n"
-            "• Достигнут лимит использований\n"
-            "• Код не существует\n"
-            "• Код не начался ещё",
+            "<b>Не удалось активировать промокод</b>\n\n"
+            "Проверьте код и срок действия. Возможно, лимит использований уже достигнут.",
             parse_mode="HTML"
         )
         return
@@ -565,8 +559,8 @@ async def cb_activate_promo(callback: CallbackQuery, state: FSMContext):
     # Check if user already used this promo code
     if await has_user_used_promo(code, user_id):
         await callback.message.edit_text(
-            "❌ <b>Вы уже использовали этот промокод</b>\n\n"
-            "Каждый промокод можно использовать только один раз.",
+            "Этот промокод уже использован в вашем аккаунте.\n\n"
+            "Каждый код действует один раз.",
             parse_mode="HTML"
         )
         return
@@ -593,14 +587,13 @@ async def cb_activate_promo(callback: CallbackQuery, state: FSMContext):
     logger.info(f"Promo code {code} activated via button for user {user_id} with type {promo_type} value {discount_value}")
 
     await callback.message.edit_text(
-        f"✅ <b>Промокод активирован!</b>\n\n"
+        f"<b>Промокод активирован</b>\n\n"
         f"🎁 Код: <code>{code}</code>\n"
         f"💰 Бонус: <b>{discount_text}</b>\n\n"
-        f"При следующей покупке VPN бонус будет автоматически применён.\n\n"
-        f"👉 Нажмите кнопку ниже для покупки VPN!",
+        f"При выборе тарифа бонус применится автоматически.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🛒 Купить VPN", callback_data="buy_vpn")]
+            [InlineKeyboardButton(text="Выбрать тариф", callback_data="buy_vpn", style="primary")]
         ])
     )
 
@@ -631,12 +624,8 @@ async def cmd_promo(message: Message, state: FSMContext):
         promo = await validate_promo_code(code)
         if not promo:
             await message.answer(
-                "❌ <b>Промокод не действителен</b>\n\n"
-                "Возможные причины:\n"
-                "• Код истёк\n"
-                "• Достигнут лимит использований\n"
-                "• Код не существует\n"
-                "• Код не начался ещё",
+                "<b>Не удалось активировать промокод</b>\n\n"
+                "Проверьте код и срок действия. Возможно, лимит использований уже достигнут.",
                 parse_mode="HTML"
             )
             return
@@ -644,8 +633,8 @@ async def cmd_promo(message: Message, state: FSMContext):
         # Check if user already used this promo code
         if await has_user_used_promo(code, user_id):
             await message.answer(
-                "❌ <b>Вы уже использовали этот промокод</b>\n\n"
-                "Каждый промокод можно использовать только один раз.",
+                "Этот промокод уже использован в вашем аккаунте.\n\n"
+                "Каждый код действует один раз.",
                 parse_mode="HTML"
             )
             return
@@ -672,14 +661,16 @@ async def cmd_promo(message: Message, state: FSMContext):
         logger.info(f"Promo code {code} activated for user {user_id} with type {promo_type} value {discount_value}")
 
         await message.answer(
-            f"✅ <b>Промокод активирован!</b>\n\n"
+            f"<b>Промокод активирован</b>\n\n"
             f"🎁 Код: <code>{code}</code>\n"
             f"💰 Бонус: <b>{discount_text}</b>\n\n"
-            f"При следующей покупке VPN бонус будет автоматически применён.\n\n"
-            f"👉 Нажмите /buy чтобы купить VPN!",
-            parse_mode="HTML"
+            f"При выборе тарифа бонус применится автоматически.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="Выбрать тариф", callback_data="buy_vpn", style="primary")
+            ]]),
         )
 
     except Exception as e:
         logger.error("Promo code error: %s", e)
-        await message.answer("❌ Произошла ошибка. Попробуйте позже.")
+        await message.answer("Не удалось обработать промокод. Попробуйте позже.")

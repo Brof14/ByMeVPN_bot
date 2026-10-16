@@ -30,8 +30,8 @@ async def cb_guide_menu(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
         "📲 <b>Подключение ByMeVPN</b>\n\n"
-        "Выберите устройство — покажу приложение и короткую инструкцию. "
-        "Ссылка на подписку находится в разделе «Мои ключи»."
+        "Выберите устройство — появятся кнопка загрузки Happ и короткая инструкция. "
+        "Ссылка для подключения находится в разделе «Мои ключи»."
     )
     await _track_guide_event(callback.from_user.id, "connection_guide_open")
     await send_or_edit(bot, callback, text, connection_guide_kb())
@@ -62,9 +62,9 @@ async def cb_trouble(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     await _track_guide_event(callback.from_user.id, "connection_help_open")
     text = (
-        "🛠 <b>Поможем подключиться</b>\n\n"
-        "Обновите подписку в Happ и проверьте, что активен только один VPN.\n\n"
-        "Если нужна помощь, напишите в поддержку и укажите модель устройства и приложение."
+        "🛠 <b>Давайте проверим подключение</b>\n\n"
+        "Обновите подписку в Happ и убедитесь, что на устройстве включён только один VPN-клиент.\n\n"
+        "Если не помогло, напишите нам и укажите модель устройства и что именно не работает."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Написать в поддержку", url="https://t.me/ByMeVPNSupportBot")],

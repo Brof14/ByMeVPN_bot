@@ -158,7 +158,7 @@ DEVICE_CONFIG = {
     2: {
         "name": "2 устройства",
         "badge": "Базовый",
-        "description": "Смартфон + Ноутбук",
+        "description": "Для телефона и компьютера",
         "prices": {
             1: (get_total_price(1, 2), TARIFF_DAYS[1]),    # (89, 30)
             3: (get_total_price(3, 2), TARIFF_DAYS[3]),    # (237, 120)
@@ -175,7 +175,7 @@ DEVICE_CONFIG = {
     5: {
         "name": "5 устройств",
         "badge": "Оптимальный",
-        "description": "Для всей семьи или нескольких гаджетов",
+        "description": "Для семьи и нескольких гаджетов",
         "prices": {
             1: (get_total_price(1, 5), TARIFF_DAYS[1]),    # (109, 30)
             3: (get_total_price(3, 5), TARIFF_DAYS[3]),    # (297, 120)
@@ -192,7 +192,7 @@ DEVICE_CONFIG = {
     10: {
         "name": "10 устройств",
         "badge": "Семейный",
-        "description": "Максимальный доступ для всех устройств и друзей",
+        "description": "Для большой семьи или личных и рабочих устройств",
         "prices": {
             1: (get_total_price(1, 10), TARIFF_DAYS[1]),    # (129, 30)
             3: (get_total_price(3, 10), TARIFF_DAYS[3]),    # (357, 120)
