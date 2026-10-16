@@ -815,7 +815,8 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
                 automation_key TEXT UNIQUE,
                 drawn_at INTEGER,
                 results_notified_at INTEGER,
-                period_start INTEGER
+                period_start INTEGER,
+                announcement_version INTEGER DEFAULT 0
             )
         """)
         await db.execute("""
@@ -843,6 +844,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
             ("giveaways", "drawn_at INTEGER"),
             ("giveaways", "results_notified_at INTEGER"),
             ("giveaways", "period_start INTEGER"),
+            ("giveaways", "announcement_version INTEGER DEFAULT 0"),
             ("giveaway_participants", "rewarded_at INTEGER"),
             ("giveaway_participants", "reward_attempts INTEGER DEFAULT 0"),
             ("giveaway_participants", "last_reward_attempt_at INTEGER"),
@@ -4029,6 +4031,7 @@ async def create_giveaway(
     created_by: int | None = None,
     automation_key: str | None = None,
     period_start: int | None = None,
+    announcement_version: int = 0,
 ) -> int:
     """Create a giveaway, optionally with an idempotency key for automation."""
     db = await get_db()
@@ -4037,9 +4040,9 @@ async def create_giveaway(
             cur = await db.execute(
                 """INSERT OR IGNORE INTO giveaways
                 (title, description, prize_days, winners_count, end_date, is_active,
-                 created_at, created_by, automation_key, period_start)
-                VALUES(?,?,?,?,?,1,strftime('%s','now'),?,?,?)""",
-                (title, description, prize_days, winners_count, end_date, created_by, automation_key, period_start),
+                 created_at, created_by, automation_key, period_start, announcement_version)
+                VALUES(?,?,?,?,?,1,strftime('%s','now'),?,?,?,?)""",
+                (title, description, prize_days, winners_count, end_date, created_by, automation_key, period_start, announcement_version),
             )
             if cur.rowcount == 0:
                 cur = await db.execute("SELECT id FROM giveaways WHERE automation_key=?", (automation_key,))
@@ -4050,9 +4053,9 @@ async def create_giveaway(
             cur = await db.execute(
                 """INSERT INTO giveaways
                 (title, description, prize_days, winners_count, end_date, is_active,
-                 created_at, created_by, period_start)
-                VALUES(?,?,?,?,?,1,strftime('%s','now'),?,?)""",
-                (title, description, prize_days, winners_count, end_date, created_by, period_start),
+                 created_at, created_by, period_start, announcement_version)
+                VALUES(?,?,?,?,?,1,strftime('%s','now'),?,?,?)""",
+                (title, description, prize_days, winners_count, end_date, created_by, period_start, announcement_version),
             )
         await db.commit()
         return cur.lastrowid
@@ -4081,23 +4084,25 @@ async def get_active_automated_giveaway(now: int | None = None) -> dict | None:
 async def update_automated_monthly_giveaway(
     giveaway_id: int, title: str, end_date: int, period_start: int,
     winners_count: int = 3, prize_days: int = 30,
+    announcement_version: int = 1,
 ) -> bool:
     """Update an existing monthly campaign; return whether its public terms changed."""
     db = await get_db()
     cur = await db.execute(
-        "SELECT title, end_date, period_start, winners_count, prize_days "
+        "SELECT title, end_date, period_start, winners_count, prize_days, announcement_version "
         "FROM giveaways WHERE id=? AND automation_key LIKE 'auto-monthly-%'",
         (giveaway_id,),
     )
     row = await cur.fetchone()
     if not row:
         return False
-    values = (title, int(end_date), int(period_start), int(winners_count), int(prize_days))
+    values = (title, int(end_date), int(period_start), int(winners_count), int(prize_days), int(announcement_version))
     if tuple(row) == values:
         return False
     async with _db_semaphore:
         await db.execute(
-            "UPDATE giveaways SET title=?, end_date=?, period_start=?, winners_count=?, prize_days=? WHERE id=?",
+            "UPDATE giveaways SET title=?, end_date=?, period_start=?, winners_count=?, prize_days=?, "
+            "announcement_version=? WHERE id=?",
             (*values, giveaway_id),
         )
         await db.commit()

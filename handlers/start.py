@@ -245,38 +245,43 @@ async def cmd_start(message: Message, bot: Bot) -> None:
                 referral_link = f"https://t.me/{bot_info.username}?start={user_id}"
                 share_url = "https://t.me/share/url?" + urlencode({
                     "url": referral_link,
-                    "text": "Попробуй ByMeVPN — подключение к YouTube, Telegram, Instagram и сайтам за минуту.",
+                    "text": "Участвуй в ежемесячном конкурсе ByMeVPN: пригласи друзей и выиграй дни VPN.",
                 })
                 invite_kb = InlineKeyboardMarkup(inline_keyboard=[[
                     InlineKeyboardButton(text="🤝 Пригласить друга", url=share_url, style="primary")
                 ]])
 
                 referral_count = status["referral_count"]
+                results_line = ""
+                if contest.get("end_date"):
+                    from giveaway_automation import _moscow_date
+                    results_line = f"\n\nИтоги и начисление призов: <b>{_moscow_date(contest['end_date'])}</b>."
                 if status["qualified"]:
                     entry_text = (
-                        "✅ <b>Участие засчитано</b>" if not already_joined
-                        else "✅ <b>Вы уже участвуете</b>"
+                        "✅ <b>Участие подтверждено</b>" if not already_joined
+                        else "✅ <b>Вы участвуете</b>"
                     )
                     text = (
-                        f"{entry_text} в ежемесячном конкурсе ByMeVPN.\n\n"
-                        f"В зачёт уже идут приглашённые в этом месяце: <b>{referral_count}</b>.\n"
-                        "В конце месяца будут 3 призовых места по числу приглашённых; "
-                        "если подходящих участников меньше трёх, приз получит каждый. "
-                        f"Награда за место — <b>+{contest['prize_days']} дней VPN</b>. "
-                        "При равном числе приглашённых место определит жребий."
+                        f"{entry_text} в ежемесячном конкурсе.\n\n"
+                        f"В зачёте: <b>{referral_count}</b> новых приглашённых в этом месяце. "
+                        "Учитываются люди, которые впервые запустили бота по вашей ссылке.\n\n"
+                        f"Три участника с наибольшим числом приглашённых получат по <b>+{contest['prize_days']} дней VPN</b>. "
+                        "Если участников с приглашениями меньше трёх, приз получит каждый; при равном счёте место определит жребий."
+                        f"{results_line}"
                     )
                 else:
                     pending_intro = (
-                        "📝 <b>Заявка уже сохранена — осталось выполнить условие</b>\n\n"
+                        "📝 <b>Заявка уже сохранена</b>\n\n"
                         if already_joined else
-                        "📝 <b>Заявка сохранена — осталось выполнить условие</b>\n\n"
+                        "📝 <b>Заявка сохранена</b>\n\n"
                     )
                     text = pending_intro + (
-                        "Пригласите хотя бы одного нового пользователя по своей ссылке в этом месяце. "
-                        "После регистрации приглашённого участие будет засчитано автоматически.\n\n"
-                        "В конце месяца будут 3 призовых места по числу приглашённых; "
-                        "если подходящих участников меньше трёх, приз получит каждый. "
-                        f"Награда за место — <b>+{contest['prize_days']} дней VPN</b>."
+                        "Чтобы попасть в рейтинг, нужен минимум один новый приглашённый в этом месяце. "
+                        "Он засчитается, когда впервые запустит бота по вашей ссылке; одного перехода недостаточно. "
+                        "После регистрации друга условие выполнится автоматически.\n\n"
+                        f"Три участника с наибольшим числом приглашённых получат по <b>+{contest['prize_days']} дней VPN</b>. "
+                        "Если участников с приглашениями меньше трёх, приз получит каждый."
+                        f"{results_line}"
                     )
                 await message.answer(text, parse_mode="HTML", reply_markup=invite_kb)
                 return

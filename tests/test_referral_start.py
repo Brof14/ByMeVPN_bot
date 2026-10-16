@@ -73,6 +73,6 @@ class TestReferralStart(unittest.IsolatedAsyncioTestCase):
         menu.assert_not_awaited()
         sent_text = message.answer.await_args.args[0]
         self.assertIn("Заявка сохранена", sent_text)
-        self.assertIn("хотя бы одного", sent_text)
+        self.assertIn("минимум один новый приглашённый", sent_text)
         self.assertIn("+30 дней VPN", sent_text)
         self.assertEqual(message.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0].text, "🤝 Пригласить друга")

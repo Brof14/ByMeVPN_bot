@@ -1,4 +1,4 @@
-"""Conservative monthly giveaway: one winner, a capped 30-day prize, retry-safe delivery."""
+"""Monthly referral leaderboard with retry-safe prize delivery."""
 from __future__ import annotations
 
 import asyncio
@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 MONTHLY_PRIZE_DAYS = 30
 MONTHLY_WINNERS = 3
+MONTHLY_ANNOUNCEMENT_VERSION = 2
 ANNOUNCEMENT_BATCH = 50
 REWARD_RETRY_SECONDS = 15 * 60
 
@@ -82,6 +83,7 @@ async def ensure_monthly_giveaway(bot: Bot) -> dict:
         changed = await update_automated_monthly_giveaway(
             existing["id"], f"Конкурс ByMeVPN · {month_label}", period_end,
             period_start, winners_count=MONTHLY_WINNERS, prize_days=MONTHLY_PRIZE_DAYS,
+            announcement_version=MONTHLY_ANNOUNCEMENT_VERSION,
         )
         if changed:
             await requeue_giveaway_announcements(existing["id"])
@@ -104,6 +106,7 @@ async def ensure_monthly_giveaway(bot: Bot) -> dict:
         created_by=0,
         automation_key=key,
         period_start=period_start,
+        announcement_version=MONTHLY_ANNOUNCEMENT_VERSION,
     )
     giveaway = await get_giveaway_by_id(giveaway_id)
     if not giveaway:
@@ -128,19 +131,15 @@ async def _send_campaign_announcements(bot: Bot, giveaway: dict) -> None:
     info = await bot.get_me()
     link = f"https://t.me/{info.username}?start=gw_{giveaway['id']}"
     text = (
-        "🏆 <b>Ежемесячный конкурс ByMeVPN</b>\n\n"
-        "Если не грузят:\n"
-        "• 🎥 YouTube\n• ✈️ Telegram\n• 📸 Instagram\n• 🌐 сайты\n"
-        "— ByMeVPN поможет подключиться за минуту.\n\n"
-        "<b>Как участвовать</b>\n"
-        "1. Пригласи хотя бы одного нового пользователя по своей ссылке в этом месяце.\n"
-        "2. Нажми «Участвовать» — бот проверит приглашение.\n\n"
-        "В конце месяца определим <b>3 призовых места</b> по числу приглашённых. "
-        "Если подходящих участников будет меньше трёх, приз получит каждый из них. "
-        "При равном числе приглашённых место определит жребий. "
-        f"Награда за место — <b>+{giveaway['prize_days']} дней VPN</b>. Итоги подведём автоматически; "
-        f"победителей и бонусы объявим <b>{_moscow_date(giveaway['end_date'])}</b>.\n\n"
-        f"Приглашения принимаются до <b>{_moscow_date(giveaway['end_date'] - 1)}</b>."
+        "🏆 <b>Ежемесячный конкурс приглашений</b>\n\n"
+        "<b>Как попасть в рейтинг</b>\n"
+        "1. Нажмите «Участвовать» — бот сохранит заявку и покажет кнопку для приглашения.\n"
+        "2. Чтобы попасть в рейтинг, нужен минимум один новый приглашённый. Он должен впервые запустить бота по вашей ссылке; одного перехода недостаточно.\n\n"
+        f"<b>Призы:</b> 3 призовых места, по <b>+{giveaway['prize_days']} дней VPN</b> каждому. "
+        "Выше место у того, кто пригласил больше новых пользователей в этом месяце. "
+        "При равном результате место определит жребий. Если участников с приглашениями меньше трёх, приз получит каждый.\n\n"
+        f"Приглашайте до <b>{_moscow_date(giveaway['end_date'] - 1)}</b>. "
+        f"Итоги и начисление призов — <b>{_moscow_date(giveaway['end_date'])}</b>."
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎉 Участвовать", url=link, style="primary")],

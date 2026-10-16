@@ -57,8 +57,10 @@ class TestGiveawayAutomation(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot.send_message.await_count, 1)
         self.assertEqual(bot.send_message.await_args.args[0], 501)
         self.assertIn("Участвовать", bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard[0][0].text)
-        self.assertIn("YouTube", bot.send_message.await_args.args[1])
-        self.assertIn("Instagram", bot.send_message.await_args.args[1])
+        self.assertNotIn("YouTube", bot.send_message.await_args.args[1])
+        self.assertNotIn("Instagram", bot.send_message.await_args.args[1])
+        self.assertIn("Нажмите «Участвовать»", bot.send_message.await_args.args[1])
+        self.assertIn("одного перехода недостаточно", bot.send_message.await_args.args[1])
         self.assertIn("3 призовых места", bot.send_message.await_args.args[1])
 
     async def test_old_monthly_campaign_is_updated_and_sent_users_are_queued_for_correction(self):
