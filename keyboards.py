@@ -321,6 +321,7 @@ def connection_guide_kb() -> InlineKeyboardMarkup:
         ("Linux", "guide_linux"),
     ]:
         kb.row(InlineKeyboardButton(text=name, callback_data=cb))
+    kb.row(InlineKeyboardButton(text="🔑 Открыть мои ключи", callback_data="my_keys"))
     kb.row(InlineKeyboardButton(text="Не получается?", callback_data="trouble"))
     kb.row(
         InlineKeyboardButton(text="Назад", callback_data="back_to_menu"),

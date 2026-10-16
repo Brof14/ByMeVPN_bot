@@ -8,20 +8,17 @@ from datetime import datetime
 
 from aiogram import Bot, Router
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
-from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery
 
 from config import ADMIN_ID
 from utils import LOGO_URL, send_with_photo, safe_answer
 import database
 from database import (
     add_key, get_referrer, add_payment, set_trial_used, log_key_error,
-    get_user_keys, extend_key, log_analytics_event, record_payment_idempotent,
-    update_key_uuid, delete_yookassa_pending, set_key_expiry,
+    get_user_keys, log_analytics_event, record_payment_idempotent,
+    update_key_uuid, set_key_expiry,
 )
 from xui_client import create_xui_user, get_xui_user, format_traffic
 from keyboards import after_key_kb, cancel_kb
-from states import BuyFlow
 
 logger = logging.getLogger(__name__)
 
@@ -68,263 +65,6 @@ async def _log_notification_failure(user_id: int, context: dict) -> None:
 REF_BONUS_DAYS = 30
 
 
-async def ask_config_name(
-    bot: Bot,
-    target: "Message | CallbackQuery",
-    state: FSMContext,
-    context: dict,
-) -> None:
-    """Deliver key or extend existing one without asking user for config name."""
-    user_id = target.from_user.id if hasattr(target, 'from_user') else target.message.from_user.id
-    chat_id = target.message.chat.id if hasattr(target, 'message') else target.chat.id
-    
-    days = context.get("days", 30)
-    is_paid = context.get("is_paid", False)
-    from constants import validate_device_limit, format_timestamp
-    limit_ip = validate_device_limit(context.get("devices", context.get("limit_ip", 2)))
-    amount = context.get("amount", 0)
-    currency = context.get("currency", "RUB")
-    method = context.get("method", "unknown")
-    payload = context.get("payload", "")
-    
-    await state.clear()
-    
-    import time
-    
-    existing_keys = await get_user_keys(user_id)
-    current_time = int(time.time())
-    
-    # Find active or expired keys (extend even expired keys within 7 days grace period)
-    extendable_keys = [k for k in existing_keys if k.get("expiry", 0) > current_time - 7*86400]
-    
-    if extendable_keys:
-        # Sort by expiry (most recent first) and extend the first one
-        extendable_keys.sort(key=lambda k: k.get("expiry", 0), reverse=True)
-        key_to_extend = extendable_keys[0]
-        key_id = key_to_extend["id"]
-        old_expiry = key_to_extend["expiry"]
-        old_limit = key_to_extend.get("limit_ip", 2)
-        
-        base_time = max(old_expiry or 0, current_time)
-        new_expiry = base_time + days * 86400
-        
-        # Extend the key in database with device limit update
-        success = await extend_key(key_id, days, limit_ip=limit_ip)
-        
-        if success:
-            # Update expiry and limit_ip in 3x-ui
-            from xui_client import update_xui_user
-            xui_res = await update_xui_user(user_id, days=days, limit_ip=limit_ip)
-
-            if not xui_res:
-                # The DB was extended first. Compensate it before reporting failure,
-                # otherwise a retry after a transient 3x-ui outage would add days twice.
-                rollback_ok = await set_key_expiry(key_id, int(old_expiry or 0), old_limit)
-                error_context = {
-                    "branch": "ask_config_name.extend",
-                    "days": days,
-                    "limit_ip": limit_ip,
-                    "rollback_ok": rollback_ok,
-                }
-                await log_key_error(
-                    user_id=user_id,
-                    error_type="subscription_extension_failed",
-                    error_message="3x-ui did not confirm subscription extension",
-                    context=error_context,
-                )
-                logger.error(
-                    "3x-ui extension failed for user %d; DB rollback %s",
-                    user_id, "succeeded" if rollback_ok else "FAILED",
-                )
-                try:
-                    await bot.send_message(
-                        ADMIN_ID,
-                        f"⚠️ Не удалось подтвердить продление в 3x-ui. Пользователь: <code>{user_id}</code>; "
-                        f"платёж: <code>{payload}</code>; откат БД: {'OK' if rollback_ok else 'ОШИБКА'}. "
-                        "Требуется сверка; не выдавать дни повторно вслепую.",
-                        parse_mode="HTML",
-                    )
-                except Exception:
-                    pass
-                try:
-                    await bot.send_message(
-                        chat_id,
-                        "⚠️ Платёж получен, но сервер не подтвердил продление подписки. "
-                        "Не оплачивайте повторно — мы проверим операцию и восстановим доступ.",
-                    )
-                except Exception:
-                    pass
-                if not rollback_ok:
-                    raise RuntimeError(
-                        f"3x-ui extension failed and DB rollback failed for user {user_id}, key {key_id}"
-                    )
-                return
-
-            # Add payment record (idempotent — duplicate provider payment ids
-            # must never create a second payment row)
-            if is_paid and amount > 0:
-                tariff_name = f"Продление {days} дней ({limit_ip} устр.)"
-                await record_payment_idempotent(
-                    user_id, amount, currency, method, days, payload,
-                    status="success", tariff=tariff_name, devices=limit_ip,
-                    provider=method, provider_payment_id=payload,
-                )
-                await log_analytics_event(
-                    user_id=user_id, event_type="subscription_renewed",
-                    tariff=tariff_name, devices=limit_ip, amount=amount,
-                    payment_provider=method,
-                )
-                if limit_ip != old_limit:
-                    await log_analytics_event(
-                        user_id=user_id, event_type="device_limit_changed",
-                        devices=limit_ip, details=f"From {old_limit} to {limit_ip}",
-                    )
-
-            # Get subscription URL from existing key
-            existing_key = key_to_extend.get("key", "")
-
-            # Always get fresh subscription URL from 3x-ui to ensure correct format
-            try:
-                from xui_client import get_user_subscription_links
-                subscription_links = await get_user_subscription_links(user_id)
-                if subscription_links:
-                    key_to_show = subscription_links[0]
-                    from database import update_key_uuid
-                    await update_key_uuid(key_id, key_to_show)
-                    logger.info("Updated subscription URL for user %d during extension", user_id)
-                else:
-                    key_to_show = existing_key
-            except Exception as e:
-                logger.exception("Failed to get fresh subscription URL for user %d: %s", user_id, e)
-                key_to_show = existing_key
-
-            text = (
-                f"✅ <b>Подписка продлена!</b>\n\n"
-                f"🔑 <b>Ключ #{key_id}</b> продлен на <b>{days} дней</b>\n"
-                f"📱 Доступно устройств: <b>{limit_ip}</b>\n"
-                f"📅 Новый срок: до <b>{format_timestamp(new_expiry)[:10]}</b>\n\n"
-                f"🔑 <b>Ваша подписка:</b>\n"
-                f"<code>{key_to_show}</code>\n\n"
-                f"Ключ остался прежним — всё работает автоматически!\n\n"
-                f"Нажмите «Инструкция подключения» если нужна помощь."
-            )
-            
-            delivered = await _send_delivery_message(bot, chat_id, text)
-            if not delivered:
-                await _log_notification_failure(
-                    user_id, {"branch": "ask_config_name.extend", "days": days, "limit_ip": limit_ip}
-                )
-
-            # NOTE: referral rewards are intentionally NOT processed here.
-            # One qualifying payment = exactly one reward, awarded in a single
-            # place — the payment-processing level (webhook.py / Stars handler
-            # → referral_system_new.award_referral_for_payment). Awarding here
-            # too caused double rewards (30 days AND 50 ₽ for the same payment).
-
-            return
-    
-    # Check if user already exists in 3x-ui (e.g. created manually or pre-migration)
-    from xui_client import get_xui_client_details, update_xui_user
-    xui_client = await get_xui_client_details(user_id)
-    if xui_client:
-        logger.info("User %d has no DB key, but exists in 3x-ui - importing and extending safely", user_id)
-        xui_res = await update_xui_user(user_id, days=days, limit_ip=limit_ip)
-        sub_url = (xui_res.get("subscription_url") if xui_res else None) or xui_client.get("subscription_url", "")
-        uuid = xui_client.get("uuid", "")
-        new_expiry = (xui_res.get("expiry_time", 0) // 1000) if xui_res else (int(time.time()) + days * 86400)
-
-        key_id = await add_key(user_id, sub_url, f"ByMeVPN_{user_id}", uuid, days, limit_ip)
-
-        if is_paid and amount > 0:
-            tariff_name = f"Подписка {days} дней ({limit_ip} устр.)"
-            await record_payment_idempotent(
-                user_id, amount, currency, method, days, payload,
-                status="success", tariff=tariff_name, devices=limit_ip,
-                provider=method, provider_payment_id=payload,
-            )
-            await log_analytics_event(
-                user_id=user_id, event_type="subscription_renewed",
-                tariff=tariff_name, devices=limit_ip, amount=amount,
-                payment_provider=method,
-            )
-
-        text = (
-            f"✅ <b>Подписка успешно активирована!</b>\n\n"
-            f"🔑 <b>Ключ #{key_id}</b> активирован на <b>{days} дней</b>\n"
-            f"📱 Доступно устройств: <b>{limit_ip}</b>\n"
-            f"📅 Срок действия: до <b>{format_timestamp(new_expiry)[:10]}</b>\n\n"
-            f"🔑 <b>Ваша подписка:</b>\n"
-            f"<code>{sub_url}</code>\n\n"
-            f"Ваш VPN-ключ сохранён и готов к работе!"
-        )
-        delivered = await _send_delivery_message(bot, chat_id, text)
-        if not delivered:
-            await _log_notification_failure(
-                user_id, {"branch": "ask_config_name.import_xui", "days": days, "limit_ip": limit_ip}
-            )
-        return
-
-    # No existing keys anywhere - create new one
-    prefix = context.get("prefix", "vpn")
-    config_name = f"{prefix}_user_{user_id}"
-    
-    await deliver_key_with_generated_name(
-        bot=bot,
-        target=target,
-        state=state,
-        context=context,
-        config_name=config_name,
-    )
-
-
-async def deliver_key_with_generated_name(
-    bot: Bot,
-    target: "Message | CallbackQuery",
-    state: FSMContext,
-    context: dict,
-    config_name: str,
-) -> None:
-    """Deliver key using automatically generated name."""
-    user_id = target.from_user.id if hasattr(target, 'from_user') else target.message.from_user.id
-    chat_id = target.message.chat.id if hasattr(target, 'message') else target.chat.id
-    
-    days = context.get("days", 30)
-    is_paid = context.get("is_paid", False)
-    from constants import validate_device_limit, DEFAULT_DEVICE_LIMIT
-    limit_ip = validate_device_limit(context.get("devices", context.get("limit_ip", DEFAULT_DEVICE_LIMIT)))
-    amount = context.get("amount", 0)
-    currency = context.get("currency", "RUB")
-    method = context.get("method", "unknown")
-    payload = context.get("payload", "")
-    trial_uid = context.get("_trial_user_id")
-    yk_payment_id = context.get("_yk_payment_id")
-
-    await state.clear()
-
-    success = await deliver_key(
-        bot=bot, user_id=user_id, chat_id=chat_id,
-        config_name=config_name, days=days, limit_ip=limit_ip,
-        is_paid=is_paid, amount=amount, currency=currency,
-        method=method, payload=payload,
-        extend_existing=False,  # Always create new key for generated names
-    )
-
-    # Clean up YooKassa pending record after successful delivery
-    if success and yk_payment_id:
-        try:
-            await delete_yookassa_pending(yk_payment_id)
-        except Exception as e:
-            logger.error("Could not delete pending yk payment %s: %s", yk_payment_id, e)
-
-    # Unmark trial if delivery failed (allow user to retry)
-    if not success and trial_uid:
-        try:
-            # Trial was already marked as used, we can't reset it for security
-            logger.warning("Trial delivery failed for user %d, trial remains used", trial_uid)
-        except Exception as e:
-            logger.error("Could not handle trial reset for %d: %s", trial_uid, e)
-
-
 async def deliver_key(
     bot: Bot,
     user_id: int,
@@ -364,14 +104,23 @@ async def deliver_key(
             
             base_time = max(old_expiry or 0, current_time)
             new_expiry = base_time + days * 86400
+            if is_paid and payload:
+                new_expiry = await database.get_or_create_provisioning_intent(
+                    method, payload, user_id, new_expiry
+                )
 
-            # Extend the key in database with device limit update
-            success = await extend_key(key_id, days, limit_ip=limit_ip)
+            # Set the immutable target, rather than applying relative days.
+            success = await set_key_expiry(key_id, new_expiry, limit_ip=limit_ip)
             
             if success:
                 # Update expiry and limit_ip in 3x-ui
                 from xui_client import update_xui_user
-                xui_res = await update_xui_user(user_id, days=days, limit_ip=limit_ip)
+                # Apply the exact target expiry. If 3x-ui applied the update
+                # but its response timed out, retrying this same order remains
+                # idempotent instead of adding the days twice.
+                xui_res = await update_xui_user(
+                    user_id, new_expiry_ms=new_expiry * 1000, limit_ip=limit_ip
+                )
 
                 if not xui_res:
                     # Compensate the DB extension. This keeps a failed provisioning
@@ -472,12 +221,57 @@ async def deliver_key(
         xui_client = await get_xui_client_details(user_id)
         if xui_client:
             logger.info("User %d exists in 3x-ui but not in DB keys - updating safely", user_id)
-            xui_res = await update_xui_user(user_id, days=days, limit_ip=limit_ip)
-            sub_url = (xui_res.get("subscription_url") if xui_res else None) or xui_client.get("subscription_url", "")
-            uuid = xui_client.get("uuid", "")
-            new_expiry = (xui_res.get("expiry_time", 0) // 1000) if xui_res else (int(time.time()) + days * 86400)
+            target_expiry = max(
+                int(xui_client.get("expiry_time") or 0) // 1000,
+                int(time.time()),
+            ) + days * 86400
+            if is_paid and payload:
+                target_expiry = await database.get_or_create_provisioning_intent(
+                    method, payload, user_id, target_expiry
+                )
+            xui_res = await update_xui_user(
+                user_id, new_expiry_ms=target_expiry * 1000, limit_ip=limit_ip
+            )
+            if not xui_res:
+                # Do not import a stale panel snapshot as a newly provisioned
+                # key: the renewal/upgrade may not have reached 3x-ui.
+                await log_key_error(
+                    user_id=user_id,
+                    error_type="subscription_import_update_failed",
+                    error_message="Existing 3x-ui client could not be safely updated; key import aborted",
+                    context={"branch": "deliver_key.import_xui", "days": days, "limit_ip": limit_ip, "payment_id": payload},
+                )
+                try:
+                    await bot.send_message(
+                        ADMIN_ID,
+                        f"⚠️ Не удалось безопасно обновить клиента 3x-ui перед восстановлением ключа. "
+                        f"Пользователь: <code>{user_id}</code>; платёж: <code>{payload}</code>. Нужна сверка.",
+                        parse_mode="HTML",
+                    )
+                    await bot.send_message(
+                        chat_id,
+                        "Платёж получен, но сервер пока не подтвердил обновление доступа. "
+                        "Не оплачивайте повторно — мы проверим операцию и восстановим подписку.",
+                    )
+                except Exception:
+                    pass
+                return False
 
-            key_id = await add_key(user_id, sub_url, config_name or f"ByMeVPN_{user_id}", uuid, days, limit_ip)
+            sub_url = xui_res.get("subscription_url") or xui_client.get("subscription_url", "")
+            uuid = xui_client.get("uuid", "")
+            new_expiry = xui_res.get("expiry_time", 0) // 1000
+
+            if not sub_url or new_expiry <= 0:
+                logger.error(
+                    "3x-ui update for user %d returned incomplete subscription data; key import aborted",
+                    user_id,
+                )
+                return False
+
+            key_id = await add_key(
+                user_id, sub_url, config_name or f"ByMeVPN_{user_id}", uuid,
+                days, limit_ip, expiry=new_expiry,
+            )
 
             if is_paid and amount > 0:
                 tariff_name = f"Подписка {days} дней ({limit_ip} устр.)"
@@ -511,8 +305,17 @@ async def deliver_key(
     try:
         logger.info("deliver_key: user=%d name='%s' days=%d limit_ip=%d method=%s", user_id, config_name, days, limit_ip, method)
 
+        target_expiry = int(time.time()) + days * 86400
+        if is_paid and payload:
+            target_expiry = await database.get_or_create_provisioning_intent(
+                method, payload, user_id, target_expiry
+            )
+
         # Создаем клиента в 3x-ui (безлимитный трафик, лимит по числу устройств = limit_ip)
-        user_result = await create_xui_user(user_id, days, data_limit_gb=0, limit_ip=limit_ip)
+        user_result = await create_xui_user(
+            user_id, days, data_limit_gb=0, limit_ip=limit_ip,
+            new_expiry_ms=target_expiry * 1000,
+        )
         if not user_result:
             await bot.send_message(
                 chat_id,
@@ -549,7 +352,10 @@ async def deliver_key(
 
         # Сохраняем ссылку на подписку и настоящий UUID клиента в БД
         client_uuid = user_result.get("uuid") or subscription_url
-        key_id = await add_key(user_id, subscription_url, config_name, client_uuid, days, limit_ip)
+        key_id = await add_key(
+            user_id, subscription_url, config_name, client_uuid, days, limit_ip,
+            expiry=target_expiry,
+        )
 
         # Сохраняем запись о платеже (идемпотентно)
         if is_paid and amount > 0:
@@ -665,7 +471,7 @@ async def _notify_referral_bonus(bot: Bot, referrer_id: int, new_user_id: int) -
             referrer_id,
             f"🎁 <b>Ваш реферал оформил подписку!</b>\n\n"
             f"Вам начислено <b>+{REF_BONUS_DAYS} дней</b> бесплатно.\n\n"
-            "Для активации нажмите кнопку ниже и введите название конфига:",
+            "Нажмите кнопку ниже — бот автоматически добавит бонус к вашему доступу.",
             parse_mode="HTML",
             reply_markup=kb,
         )

@@ -58,7 +58,7 @@ async def cmd_partner_program(message: Message):
     user_id = message.from_user.id
     
     # Ensure user exists
-    await ensure_user(user_id)
+    await ensure_user(user_id, message.from_user.username)
     
     # Get referral statistics
     stats = await get_referral_stats_with_free_days(user_id)
@@ -68,21 +68,18 @@ async def cmd_partner_program(message: Message):
     referral_link = await get_referral_link(user_id, "ByMeVPN_bot")  # Update with actual bot username
     
     text = (
-        "Приглашайте друзей и получайте бонусы:\n\n"
-        "🎁 +15 дней за переход по вашей ссылке\n"
-        "💰 +30 дней за каждого, кто оформит платную подписку\n"
-        "Минимальная сумма вывода — 200 рублей.\n\n"
+        "Приглашайте друзей и получайте только бонусные дни VPN:\n\n"
+        "🎁 +15 дней — за регистрацию друга по вашей ссылке\n"
+        "🎁 +30 дней — после его первой платной подписки\n\n"
         f"<b>📊 Ваша статистика:</b>\n"
         f"🔗 Переходов по ссылке: {stats.get('clicks', 0)}\n"
         f"👤 Зарегистрировалось: {stats['total']} человек\n"
-        f"✅ Активных клиентов: {stats['total']}\n"
         f"💳 Оплативших: {stats['paid']} человек\n"
         f"🎁 Бонусных дней: {stats.get('free_days', 0)}\n"
-        f"💰 Заработано (₽): {stats.get('total_earned', 0)}\n"
-        f"💵 Текущий баланс: {stats.get('balance', 0)} ₽\n\n"
+        "Денежных начислений и вывода средств нет.\n\n"
         f"<b>Ваша реферальная ссылка:</b>\n"
         f"<code>{referral_link}</code>\n\n"
-        "Бонус +15 дней начисляется сразу при переходе по ссылке. Бонус +30 дней - за первую оплату."
+        "Бонусные дни можно использовать для продления доступа."
     )
     
     # Create keyboard
@@ -90,12 +87,9 @@ async def cmd_partner_program(message: Message):
     from urllib.parse import quote_plus
     
     share_text = quote_plus(
-        "Если у тебя не работает YouTube / Telegram — вот решение.\n\n"
-        "Сам пользуюсь — реально норм VPN.\n\n"
+        "Попробуй ByMeVPN — бот поможет подключиться шаг за шагом.\n\n"
         "🎁 3 дня за 1 ₽\n"
-        "📱 До 10 устройств\n"
-        "⚡ Всё открывается без лагов\n\n"
-        "💳 Дальше — 89 ₽/мес (от 59 ₽/мес при оплате за год)\n\n"
+        "📱 Подключение для нескольких устройств\n\n"
         f"Попробуй:\n{referral_link}"
     )
     

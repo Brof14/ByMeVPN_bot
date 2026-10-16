@@ -11,8 +11,8 @@ from typing import Optional
 from aiogram import Bot
 from database import (
     get_expiring_auto_renew_subscriptions,
-    update_auto_renew_charge_success,
     update_auto_renew_charge_failure,
+    defer_auto_renew_charge_retry,
 )
 from payments import charge_yookassa_recurrent
 
@@ -88,11 +88,9 @@ async def process_auto_renewals(bot: Bot) -> None:
             user_id, sub_id, key_id, days, devices, amount_rub,
         )
 
-        # DETERMINISTIC business idempotence key: subscription + the billing
-        # period being renewed + attempt number. If the worker restarts (or a
-        # duplicate run happens) before the charge result is recorded, YooKassa
-        # returns the SAME payment for the same key — no double charge.
-        idempotence_key = f"autorenew_{sub_id}_{key_id or 0}_{sub['expiry']}_{sub['fail_count']}"
+        # One stable key per billing period. In particular, uncertain network
+        # failures must retry this same request and never start a second charge.
+        idempotence_key = f"autorenew_{sub_id}_{key_id or 0}_{sub['expiry']}"
 
         description = f"Автопродление ByMeVPN ({devices} устр., {days} дн.)"
         payment_res = await charge_yookassa_recurrent(
@@ -108,8 +106,11 @@ async def process_auto_renewals(bot: Bot) -> None:
         )
 
         if not payment_res:
-            disabled = await update_auto_renew_charge_failure(sub_id, "API request failed")
-            await _notify_autorenew_failed(bot, user_id, amount_rub, pm_title, key_id=key_id, disabled=disabled)
+            await defer_auto_renew_charge_retry(sub_id, "provider response was not confirmed")
+            logger.warning(
+                "Auto-renew payment result is uncertain for subscription %d; retrying with same idempotency key",
+                sub_id,
+            )
             continue
 
         p_status = payment_res.get("status")
@@ -117,8 +118,10 @@ async def process_auto_renewals(bot: Bot) -> None:
 
         if p_status == "succeeded":
             logger.info("Auto-renew payment %s succeeded immediately for user %d", payment_id, user_id)
-            await update_auto_renew_charge_success(sub_id, new_days=days, new_amount=amount_rub)
-            # Fulfill key extension and analytics through standard webhook logic
+            # Fulfillment in _process_payment is the source of truth for the
+            # successful renewal marker. If provisioning fails, keep this
+            # subscription eligible and let the same deterministic YooKassa
+            # idempotency key return the existing charge for a safe retry.
             from webhook import _process_payment
             await _process_payment(bot, payment_id)
 

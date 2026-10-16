@@ -3,7 +3,7 @@ import os
 import sys
 import time
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -17,6 +17,80 @@ import subscription
 
 
 class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
+    async def test_existing_panel_client_is_not_imported_when_update_fails(self):
+        """Never claim delivery or persist a key from a stale panel snapshot."""
+        bot = MagicMock()
+        bot.send_photo = AsyncMock()
+        bot.send_message = AsyncMock()
+        panel_client = {
+            "subscription_url": "https://panel.example/sub/existing-sub-id",
+            "uuid": "existing-uuid",
+        }
+
+        with (
+            patch("subscription.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value=panel_client)),
+            patch("xui_client.update_xui_user", new=AsyncMock(return_value=None)),
+            patch("subscription.database.get_or_create_provisioning_intent", new=AsyncMock(return_value=int(time.time()) + 30 * 86400)),
+            patch("subscription.add_key", new=AsyncMock()) as add_key,
+            patch("subscription.log_key_error", new=AsyncMock()) as log_error,
+        ):
+            result = await subscription.deliver_key(
+                bot=bot,
+                user_id=5283200584,
+                chat_id=5283200584,
+                config_name="Recovered-Key",
+                days=30,
+                limit_ip=5,
+                is_paid=True,
+                amount=199,
+                method="yookassa",
+                payload="payment-recovery-test",
+            )
+
+        self.assertFalse(result)
+        add_key.assert_not_awaited()
+        log_error.assert_awaited_once()
+        bot.send_photo.assert_not_awaited()
+
+    async def test_imported_key_uses_authoritative_xui_expiry(self):
+        """SQLite must mirror the extended expiry returned by 3x-ui."""
+        bot = MagicMock()
+        bot.send_photo = AsyncMock()
+        bot.send_message = AsyncMock()
+        panel_client = {
+            "subscription_url": "https://panel.example/sub/existing-sub-id",
+            "uuid": "existing-uuid",
+        }
+        expected_expiry = int(time.time()) + 120 * 86400
+        xui_result = {
+            "subscription_url": "https://panel.example/sub/existing-sub-id",
+            "uuid": "existing-uuid",
+            "expiry_time": expected_expiry * 1000,
+        }
+
+        with (
+            patch("subscription.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value=panel_client)),
+            patch("xui_client.update_xui_user", new=AsyncMock(return_value=xui_result)),
+            patch("subscription.add_key", new=AsyncMock(return_value=43)) as add_key,
+            patch("subscription.record_payment_idempotent", new=AsyncMock()),
+            patch("subscription.log_analytics_event", new=AsyncMock()),
+        ):
+            result = await subscription.deliver_key(
+                bot=bot,
+                user_id=5283200584,
+                chat_id=5283200584,
+                config_name="Recovered-Key",
+                days=30,
+                limit_ip=5,
+                is_paid=False,
+                method="admin_grant",
+            )
+
+        self.assertTrue(result)
+        self.assertEqual(add_key.await_args.kwargs["expiry"], expected_expiry)
+
     async def test_new_admin_key_is_saved_after_3xui_creation(self):
         """A successful 3x-ui response must reach add_key without a local-import shadow."""
         bot = MagicMock()
@@ -53,6 +127,7 @@ class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
             "test-client-uuid",
             30,
             5,
+            expiry=ANY,
         )
         bot.send_photo.assert_awaited_once()
         bot.send_message.assert_not_awaited()
@@ -76,7 +151,8 @@ class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("subscription.get_user_keys", new=AsyncMock(return_value=[existing_key])),
-            patch("subscription.extend_key", new=AsyncMock(return_value=True)),
+            patch("subscription.set_key_expiry", new=AsyncMock(return_value=True)) as set_expiry,
+            patch("subscription.database.get_or_create_provisioning_intent", new=AsyncMock(return_value=xui_update["expiry_time"] // 1000)),
             patch("xui_client.update_xui_user", new=AsyncMock(return_value=xui_update)),
             patch(
                 "xui_client.get_user_subscription_links",
@@ -102,6 +178,7 @@ class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertTrue(result)
+        set_expiry.assert_awaited_once_with(7, xui_update["expiry_time"] // 1000, limit_ip=5)
         record_payment.assert_awaited_once()
         bot.send_photo.assert_awaited_once()
         bot.send_message.assert_not_awaited()

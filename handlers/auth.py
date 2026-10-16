@@ -162,7 +162,7 @@ async def process_email(message: Message, state: FSMContext):
         return
 
     # Ensure user exists in database
-    await ensure_user(message.from_user.id)
+    await ensure_user(message.from_user.id, message.from_user.username)
 
     # Check if email exists in database
     existing_user = await get_user_by_email(email)

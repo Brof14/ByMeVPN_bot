@@ -5,7 +5,6 @@ class BuyFlow(StatesGroup):
     choosing_type = State()
     choosing_period = State()
     waiting_name = State()
-    waiting_for_config_name = State()
 
 
 class AdminFlow(StatesGroup):

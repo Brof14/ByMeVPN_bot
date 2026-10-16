@@ -432,7 +432,10 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
             connection_guide_kb, linux_distro_kb,
             linux_guide_back_kb, guide_back_kb,
         )
-        from handlers.guide import _GUIDES, HAPP_ANDROID_APK, HAPP_IOS_RU, HAPP_LINUX
+        from handlers.guide import (
+            _GUIDES, HAPP_ANDROID_APK, HAPP_IOS_RU,
+            HAPP_LINUX_ARCH, HAPP_LINUX_DEB, HAPP_LINUX_RPM,
+        )
 
         # 1. Connection guide keyboard has Linux button
         conn_kb = connection_guide_kb()
@@ -468,7 +471,8 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Streisand", ios_text, "Streisand must be removed from iOS guide")
 
         # 6. Linux and Android downloads are from Happ's official releases
-        self.assertIn(HAPP_LINUX, _GUIDES["linux"])
+        for linux_download in (HAPP_LINUX_DEB, HAPP_LINUX_RPM, HAPP_LINUX_ARCH):
+            self.assertIn(linux_download, _GUIDES["linux"])
         self.assertIn(HAPP_ANDROID_APK, _GUIDES["android"])
 
     # ------------------------------------------------------------------------
@@ -527,6 +531,44 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
             bot.send_photo.assert_not_called()
 
         asyncio.run(run_test())
+
+    async def test_provisioning_intent_and_username_are_stable(self):
+        user_id = 919001
+        await database.ensure_user(user_id, "arseniy_test")
+
+        first_target = int(time.time()) + 30 * 86400
+        persisted = await database.get_or_create_provisioning_intent(
+            "yookassa", "yk_intent_test", user_id, first_target
+        )
+        replayed = await database.get_or_create_provisioning_intent(
+            "yookassa", "yk_intent_test", user_id, first_target + 86400
+        )
+        self.assertEqual(persisted, first_target)
+        self.assertEqual(replayed, persisted)
+
+        profile = await database.find_user_by_id(user_id)
+        self.assertEqual(profile["username"], "arseniy_test")
+        paginated = await database.get_all_users_paginated(limit=20, offset=0)
+        listed = next(user for user in paginated if user["user_id"] == user_id)
+        self.assertEqual(listed["username"], "arseniy_test")
+
+    async def test_payment_stats_keep_stars_separate_from_rubles(self):
+        user_id = 919002
+        await database.ensure_user(user_id)
+        await database.record_payment_idempotent(
+            user_id=user_id, amount=89, currency="RUB", method="yookassa",
+            days=30, payload="rub-payment", status="success", provider="yookassa",
+            provider_payment_id="rub-payment",
+        )
+        await database.record_payment_idempotent(
+            user_id=user_id, amount=100, currency="XTR", method="stars",
+            days=30, payload="stars-payment", status="success", provider="stars",
+            provider_payment_id="stars-payment",
+        )
+        stats = await database.get_payment_stats()
+        self.assertEqual(stats["total"]["by_currency"]["RUB"], 89)
+        self.assertEqual(stats["total"]["by_currency"]["XTR"], 100)
+        self.assertEqual(stats["total"]["sum"], 89)
 
     # ------------------------------------------------------------------------
     # Test 12: Auto-renew database lifecycle, status toggling, and expiry worker
@@ -896,7 +938,7 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(matching)
             sub = matching[0]
 
-            expected_key = f"autorenew_{sub['sub_id']}_{sub['key_id'] or 0}_{sub['expiry']}_{sub['fail_count']}"
+            expected_key = f"autorenew_{sub['sub_id']}_{sub['key_id'] or 0}_{sub['expiry']}"
 
             captured = {}
 
