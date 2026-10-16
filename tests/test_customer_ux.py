@@ -30,6 +30,19 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("connection_guide", actions)
             self.assertNotIn("auth_existing_client", actions)
 
+    def test_main_menu_uses_compact_rows_and_limited_semantic_colors(self):
+        for markup in (main_menu_new_user(), main_menu_existing(), main_menu_with_keys()):
+            rows = markup.inline_keyboard
+            self.assertEqual(len(rows[-1]), 1)  # support stays separate
+            self.assertEqual(rows[-1][0].text, "Поддержка")
+            self.assertLessEqual(sum(button.style is not None for row in rows for button in row), 2)
+        menu = main_menu_with_keys()
+        self.assertEqual([len(row) for row in menu.inline_keyboard], [2, 2, 2, 1])
+        self.assertEqual(menu.inline_keyboard[0][0].style, "success")
+        self.assertEqual(menu.inline_keyboard[0][1].style, "primary")
+        used_trial = main_menu_existing(trial_used=True)
+        self.assertNotIn("trial_1r", callbacks(used_trial))
+
     def test_expired_or_active_key_menu_keeps_guide_inside_key_flow(self):
         actions = callbacks(main_menu_with_keys(trial_used=True))
         self.assertNotIn("connection_guide", actions)
@@ -54,11 +67,16 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             for row in markup.inline_keyboard:
                 self.assertFalse(any(button.url for button in row))
 
-    def test_tariff_grid_restores_bonus_marketing_without_color_styles(self):
+    def test_tariff_grid_restores_bonus_marketing_with_one_highlight(self):
         markup = tariff_selection_kb()
-        labels = [button.text for row in markup.inline_keyboard for button in row]
-        self.assertTrue(any("3 мес. + 1 мес. 🎁 — 79 ₽ / мес." in label for label in labels))
-        self.assertTrue(all(button.style is None for row in markup.inline_keyboard for button in row))
+        tariff_buttons = [
+            button for row in markup.inline_keyboard for button in row
+            if button.callback_data and button.callback_data.startswith("tariff_")
+        ]
+        three_months = next(button for button in tariff_buttons if button.callback_data == "tariff_3_2")
+        self.assertIn("3 мес. + 1 мес. 🎁 — 79 ₽ / мес.", three_months.text)
+        self.assertEqual(three_months.style, "success")
+        self.assertTrue(all(button.style is None for button in tariff_buttons if button is not three_months))
 
     async def test_saved_sbp_method_without_title_is_still_manageable(self):
         sub = {

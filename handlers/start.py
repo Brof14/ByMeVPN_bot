@@ -166,7 +166,7 @@ async def _send_main_menu(
         user_keys = await get_user_keys(user_id)
         has_keys = len(user_keys) > 0
         trial_used = await has_trial_used(user_id)
-        kb = main_menu_with_keys(trial_used=trial_used) if has_keys else main_menu_existing()
+        kb = main_menu_with_keys(trial_used=trial_used) if has_keys else main_menu_existing(trial_used=trial_used)
     else:  # active
         # Check if user has keys to show appropriate menu (use direct DB check, not cache)
         user_keys = await get_user_keys(user_id)
@@ -186,7 +186,7 @@ async def _send_main_menu(
             )
         else:
             text = f"<b>Здравствуйте, {user_name}!</b>"
-        kb = main_menu_with_keys(trial_used=trial_used) if has_keys else main_menu_existing()
+        kb = main_menu_with_keys(trial_used=trial_used) if has_keys else main_menu_existing(trial_used=trial_used)
 
     if isinstance(target, Message):
         await bot.send_photo(
@@ -479,6 +479,8 @@ async def cb_about(callback: CallbackQuery, bot: Bot):
         "<b>ByMeVPN — простой способ подключить VPN на своих устройствах.</b>\n\n"
         "Одна подписка — доступ к привычным сайтам и приложениям через удобный VPN-клиент. Выберите число устройств, получите личную ссылку и подключитесь за несколько шагов.\n\n"
         "🎁 Попробуйте 3 дня за 1 ₽, затем выберите подходящий тариф.\n"
+        "🎁 Бесплатные дни можно получать, приглашая друзей — без карты и её привязки.\n"
+        "🌐 Российские приложения можно оставить в обходе: VPN остаётся включённым для остальных.\n"
         "📱 Инструкции и управление подпиской — прямо в боте.\n"
         "🤝 Можно получить VPN за размещение рекламы ByMeVPN в Telegram-канале.\n\n"
         "При оплате через ЮKassa сохранённый способ оплаты используется для автопродления выбранного тарифа; отключить его можно в «Мои ключи» → «Управление автопродлением». Stars и CryptoBot автоматически не продлеваются."
