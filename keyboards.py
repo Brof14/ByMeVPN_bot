@@ -16,34 +16,28 @@ _SUPPORT_URL = (
 
 def main_menu_new_user() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="🎁 Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
+    kb.row(InlineKeyboardButton(text="💳 Выбрать тариф", callback_data="buy_vpn", style="primary"))
+    kb.row(InlineKeyboardButton(text="📣 VPN за рекламу", callback_data="ad_program", style="primary"))
+    kb.row(InlineKeyboardButton(text="Партнёрская программа", callback_data="partner"))
     kb.row(
-        InlineKeyboardButton(text="🎁 Попробовать за 1 ₽", callback_data="trial_1r", style="success"),
-        InlineKeyboardButton(text="💳 Тарифы", callback_data="buy_vpn", style="primary"),
-    )
-    kb.row(InlineKeyboardButton(text="📣 VPN за рекламу", callback_data="ad_program"))
-    kb.row(
-        InlineKeyboardButton(text="🎁 VPN за друзей", callback_data="partner"),
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
+        InlineKeyboardButton(text="Поддержка", url=_SUPPORT_URL),
     )
-    kb.row(InlineKeyboardButton(text="Поддержка", url=_SUPPORT_URL))
     return kb.as_markup()
 
 
 def main_menu_existing(trial_used: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     if not trial_used:
-        kb.row(
-            InlineKeyboardButton(text="🎁 Попробовать за 1 ₽", callback_data="trial_1r", style="success"),
-            InlineKeyboardButton(text="💳 Тарифы", callback_data="buy_vpn", style="primary"),
-        )
-    else:
-        kb.row(InlineKeyboardButton(text="💳 Выбрать тариф", callback_data="buy_vpn", style="primary"))
-    kb.row(InlineKeyboardButton(text="📣 VPN за рекламу", callback_data="ad_program"))
+        kb.row(InlineKeyboardButton(text="🎁 Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
+    kb.row(InlineKeyboardButton(text="💳 Выбрать тариф", callback_data="buy_vpn", style="primary"))
+    kb.row(InlineKeyboardButton(text="📣 VPN за рекламу", callback_data="ad_program", style="primary"))
+    kb.row(InlineKeyboardButton(text="Партнёрская программа", callback_data="partner"))
     kb.row(
-        InlineKeyboardButton(text="🎁 VPN за друзей", callback_data="partner"),
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
+        InlineKeyboardButton(text="Поддержка", url=_SUPPORT_URL),
     )
-    kb.row(InlineKeyboardButton(text="Поддержка", url=_SUPPORT_URL))
     return kb.as_markup()
 
 
@@ -56,24 +50,18 @@ def main_menu_with_keys(trial_used: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     # Show intro-trial button only if user hasn't used it yet
     if not trial_used:
-        kb.row(
-            InlineKeyboardButton(text="🎁 Попробовать за 1 ₽", callback_data="trial_1r", style="success"),
-            InlineKeyboardButton(text="💳 Тарифы", callback_data="buy_vpn", style="primary"),
-        )
-    else:
-        kb.row(InlineKeyboardButton(text="💳 Выбрать тариф", callback_data="buy_vpn", style="primary"))
-    kb.row(
-        InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys"),
-        InlineKeyboardButton(text="📣 VPN за рекламу", callback_data="ad_program"),
-    )
+        kb.row(InlineKeyboardButton(text="🎁 Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
+    kb.row(InlineKeyboardButton(text="💳 Выбрать тариф", callback_data="buy_vpn", style="primary"))
+    kb.row(InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys", style="primary"))
+    kb.row(InlineKeyboardButton(text="📣 VPN за рекламу", callback_data="ad_program", style="primary"))
     # «Войти в другой аккаунт» скрыт (§24): функционал не готов, callback
     # auth_existing_client остаётся в handlers/auth.py — вернём, когда будет
     # рабочий account switching.
+    kb.row(InlineKeyboardButton(text="Партнёрская программа", callback_data="partner"))
     kb.row(
-        InlineKeyboardButton(text="🎁 VPN за друзей", callback_data="partner"),
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
+        InlineKeyboardButton(text="Поддержка", url=_SUPPORT_URL),
     )
-    kb.row(InlineKeyboardButton(text="Поддержка", url=_SUPPORT_URL))
     return kb.as_markup()
 
 
