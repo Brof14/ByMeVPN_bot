@@ -24,7 +24,7 @@ Environment Variables (.env file):
     SMTP_PASSWORD: SMTP password
     WEBHOOK_HOST: Webhook server host (default: 0.0.0.0)
     WEBHOOK_PORT: Webhook server port (default: 8080)
-    REF_BONUS_DAYS: Referral bonus days (default: 3)
+    YOOKASSA_WEBHOOK_ALLOWED_IPS: Comma-separated YooKassa webhook IP ranges
 """
 
 import os
@@ -105,6 +105,14 @@ if (
 # Значение из .env намеренно игнорируется, чтобы состав подписки не менялся случайно.
 XUI_INBOUND_IDS: list[int] = [12, 13, 14, 15]
 XUI_INBOUND_ID = XUI_INBOUND_IDS[0]  # primary (обратная совместимость)
+# Current panel remarks, verified against the live inbounds on 2026-10-17.
+# The panel remark is preferred at runtime; these labels are a safe fallback.
+XUI_INBOUND_NAMES = {
+    12: "🇩🇪Germany-1",
+    13: "🇩🇪Germany-2",
+    14: "🇩🇪Germany-3",
+    15: "🇩🇪Germany-4",
+}
 XUI_SUB_PATH = os.getenv("XUI_SUB_PATH", "sub")
 
 # ============================================================================
@@ -131,6 +139,13 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 # ============================================================================
 WEBHOOK_HOST = os.getenv("WEBHOOK_HOST") or "0.0.0.0"
 WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT") or "8080")
+# YooKassa documents these source ranges for incoming HTTP notifications.
+# Keep this overrideable so the allowlist can be updated without code changes.
+YOOKASSA_WEBHOOK_ALLOWED_IPS = os.getenv(
+    "YOOKASSA_WEBHOOK_ALLOWED_IPS",
+    "185.71.76.0/27,185.71.77.0/27,77.75.153.0/25,77.75.156.11,"
+    "77.75.156.35,77.75.154.128/25,2a02:5180::/32",
+)
 WEBHOOK_URL = (
     os.getenv("WEBHOOK_URL") or "https://bymevpn.duckdns.org:8443/webhook/telegram"
 )
@@ -140,7 +155,6 @@ WEBHOOK_URL = (
 # ============================================================================
 TRIAL_DAYS = 3
 TRIAL_PRICE = 0
-REF_BONUS_DAYS = int(os.getenv("REF_BONUS_DAYS", "3"))
 
 # ============================================================================
 # Pricing Configuration

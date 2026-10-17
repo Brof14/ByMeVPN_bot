@@ -15,6 +15,7 @@ from py3xui import AsyncApi, Client
 from config import (
     XUI_API_URL,
     XUI_INBOUND_IDS,
+    XUI_INBOUND_NAMES,
     XUI_PASSWORD,
     XUI_SUB_PATH,
     XUI_TLS_VERIFY,
@@ -23,6 +24,18 @@ from config import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _inbound_name(inbound_id: int, inbound=None) -> str:
+    """Prefer the live panel remark; use the verified map for safe fallback."""
+    remark = getattr(inbound, "remark", None) if inbound is not None else None
+    if isinstance(remark, str) and remark.strip():
+        return remark.strip()
+    return XUI_INBOUND_NAMES.get(inbound_id, f"ByMeVPN · {inbound_id}")
+
+
+def _is_vless_inbound(inbound) -> bool:
+    return str(getattr(inbound, "protocol", "")).strip().lower() == "vless"
 
 # Connection pool for 3x-ui API
 _api_pool: Optional[AsyncApi] = None
@@ -342,16 +355,6 @@ async def create_xui_user(
         # Шаг 2: Создаем клиента в инбаундах (parallel)
         logger.info("Adding client %s in inbounds %s", email, inbound_ids)
 
-        # Названия для инбаундов (используем при создании клиентов и генерации ссылок)
-        inbound_names = {
-            2: "🇳🇱Netherlands",
-            3: "🇳🇱Netherlands-2",
-            7: "🇩🇪Germany",
-            8: "🇩🇪Germany-2",
-            10: "🇫🇮Finland",
-            11: "🇫🇮Finland-2",
-        }
-
         success_count = 0
         create_tasks = []
         
@@ -361,7 +364,7 @@ async def create_xui_user(
                 logger.info("=== Starting creation for inbound %d ===", iid)
                 try:
                     # Устанавливаем remark для каждого инбаунда отдельно
-                    inbound_name = inbound_names.get(iid, "🇳🇱Netherlands")
+                    inbound_name = _inbound_name(iid)
                     logger.info("Inbound %d: name=%s, email=%s", iid, inbound_name, email)
                     
                     # Create client dict directly to avoid py3xui Client model issues
@@ -523,7 +526,12 @@ async def create_xui_user(
                 # Получаем inbound конфигурацию
                 inbound = await _api_call_with_retry(api.inbound.get_by_id, iid)
                 if inbound:
-                    logger.info("Inbound %d data: %s", iid, inbound)
+                    if not _is_vless_inbound(inbound):
+                        logger.info(
+                            "Skipping manual VLESS fallback for inbound %d (protocol=%s)",
+                            iid, getattr(inbound, "protocol", "unknown"),
+                        )
+                        return None
                     
                     # Генерируем линк для клиента на основе данных inbound
                     try:
@@ -532,7 +540,7 @@ async def create_xui_user(
                         port = getattr(inbound, 'port', 443)
                         
                         # Генерируем VLESS линк с названием для конкретного инбаунда
-                        inbound_name = inbound_names.get(iid, "🇳🇱Netherlands")
+                        inbound_name = _inbound_name(iid, inbound)
                         vless_link = (
                             f"vless://{client_uuid}@{address}:{port}"
                             f"?encryption=none"
@@ -551,29 +559,10 @@ async def create_xui_user(
                         return vless_link
                     except Exception as gen_err:
                         logger.warning("Failed to generate VLESS link for inbound %d: %s", iid, gen_err)
-                        
-                        # Простой fallback
-                        inbound_name = inbound_names.get(iid, "🇳🇱Netherlands")
-                        vless_link = (
-                            f"vless://{client_uuid}@bymevpn.duckdns.org:443"
-                            f"?encryption=none&security=tls&type=tcp&flow=xtls-rprx-vision"
-                            f"&sni=bymevpn.duckdns.org&alpn=h3,h2,http/1.1&fp=chrome"
-                            f"&mux=4&allowInsecure=0#{inbound_name}"
-                        )
-                        logger.info("Generated simple fallback VLESS link for inbound %d", iid)
-                        return vless_link
+                        return None
             except Exception as e:
                 logger.warning("Failed to get inbound %d: %s", iid, e)
-                # Ultimate fallback
-                inbound_name = inbound_names.get(iid, "🇳🇱Netherlands")
-                vless_link = (
-                    f"vless://{client_uuid}@bymevpn.duckdns.org:443"
-                    f"?encryption=none&security=tls&type=tcp&flow=xtls-rprx-vision"
-                    f"&sni=bymevpn.duckdns.org&alpn=h3,h2,http/1.1&fp=chrome"
-                    f"&mux=4&allowInsecure=0#{inbound_name}"
-                )
-                logger.info("Generated ultimate fallback VLESS link for inbound %d", iid)
-                return vless_link
+                return None
         
         # Generate all links in parallel
         link_tasks = [generate_link_for_inbound(iid) for iid in inbound_ids]

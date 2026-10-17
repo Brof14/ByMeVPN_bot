@@ -36,6 +36,7 @@ async def award_referral_signup_bonus(bot, referrer_id: int, referred_id: int) -
     from database import get_referrer, get_referral_events, get_user_keys, add_referral_event
     from subscription import deliver_key
     from constants import DEFAULT_DEVICE_LIMIT
+    from constants import REFERRAL_SIGNUP_BONUS_DAYS
 
     if await get_referrer(referred_id) != referrer_id:
         return False
@@ -48,7 +49,7 @@ async def award_referral_signup_bonus(bot, referrer_id: int, referred_id: int) -
     devices = latest_key.get("limit_ip", DEFAULT_DEVICE_LIMIT) if latest_key else DEFAULT_DEVICE_LIMIT
     delivered = await deliver_key(
         bot=bot, user_id=referrer_id, chat_id=referrer_id,
-        config_name=f"ByMeVPN_{referrer_id}", days=15, limit_ip=devices,
+        config_name=f"ByMeVPN_{referrer_id}", days=REFERRAL_SIGNUP_BONUS_DAYS, limit_ip=devices,
         # amount=0 prevents a payment record; the deterministic intent makes
         # retries safe if the panel succeeded but the DB/event response timed out.
         is_paid=True, amount=0, method="ref_signup_bonus",
@@ -58,7 +59,7 @@ async def award_referral_signup_bonus(bot, referrer_id: int, referred_id: int) -
         return False
     return bool(await add_referral_event(
         referrer_id=referrer_id, referred_id=referred_id,
-        event_type="registration_bonus", days_awarded=15,
+        event_type="registration_bonus", days_awarded=REFERRAL_SIGNUP_BONUS_DAYS,
         description="New user registered via referral link",
     )) or any(e["referred_id"] == referred_id and e["event_type"] == "registration_bonus" for e in events)
 
@@ -184,6 +185,7 @@ async def process_payment_referral_bonus(user_id: int, amount: int, bot) -> bool
     """
     try:
         from database import get_referrer, get_referral_events, get_user_keys, extend_key
+        from constants import REFERRAL_FIRST_PAYMENT_BONUS_DAYS
         import time
         
         # Get referrer for this user
@@ -199,8 +201,7 @@ async def process_payment_referral_bonus(user_id: int, amount: int, bot) -> bool
                 logger.info(f"Payment bonus already claimed for referrer {referrer_id}, referred {user_id}")
                 return False
         
-        # Award 30 days to referrer's key
-        bonus_days = 30
+        bonus_days = REFERRAL_FIRST_PAYMENT_BONUS_DAYS
         referrer_keys = await get_user_keys(referrer_id)
         current_time = int(time.time())
         
@@ -283,6 +284,7 @@ async def award_referral_for_payment(
 
     try:
         from database import get_referrer, record_referral_payment_reward
+        from constants import REFERRAL_FIRST_PAYMENT_BONUS_DAYS
 
         referrer_id = await get_referrer(user_id)
         if not referrer_id:
@@ -303,12 +305,12 @@ async def award_referral_for_payment(
             referrer_id=referrer_id,
             referred_id=user_id,
             event_type="payment_bonus",
-            days_awarded=30,
+            days_awarded=REFERRAL_FIRST_PAYMENT_BONUS_DAYS,
             description=f"First paid subscription; payment={payment_ref}",
         )
         logger.info(
-            "Referral reward +30 days awarded: referrer=%d, referred=%d, payment=%s",
-            referrer_id, user_id, payment_ref,
+            "Referral reward +%d days awarded: referrer=%d, referred=%d, payment=%s",
+            REFERRAL_FIRST_PAYMENT_BONUS_DAYS, referrer_id, user_id, payment_ref,
         )
 
         if bot is not None:
@@ -325,7 +327,7 @@ async def process_pending_referral_payment_rewards(bot, limit: int = 100) -> int
         get_pending_referral_payment_rewards, get_user_keys, mark_ref_bonus_claimed,
     )
     from subscription import deliver_key
-    from constants import DEFAULT_DEVICE_LIMIT
+    from constants import DEFAULT_DEVICE_LIMIT, REFERRAL_FIRST_PAYMENT_BONUS_DAYS
 
     delivered_count = 0
     for reward in await get_pending_referral_payment_rewards(limit=limit):
@@ -336,7 +338,7 @@ async def process_pending_referral_payment_rewards(bot, limit: int = 100) -> int
         try:
             success = await deliver_key(
                 bot=bot, user_id=referrer_id, chat_id=referrer_id,
-                config_name=f"ByMeVPN_{referrer_id}", days=30,
+                config_name=f"ByMeVPN_{referrer_id}", days=REFERRAL_FIRST_PAYMENT_BONUS_DAYS,
                 limit_ip=latest.get("limit_ip", DEFAULT_DEVICE_LIMIT) if latest else DEFAULT_DEVICE_LIMIT,
                 is_paid=False, amount=0, method="ref_bonus",
                 payload=f"ref_bonus_{referrer_id}_{referred_id}", extend_existing=True,
@@ -350,7 +352,7 @@ async def process_pending_referral_payment_rewards(bot, limit: int = 100) -> int
                 await bot.send_message(
                     referrer_id,
                     "🎉 <b>Ваш друг оформил первую платную подписку!</b>\n\n"
-                    "Бонус <b>+30 дней ByMeVPN</b> уже автоматически начислен на ваш ключ.",
+                    f"Бонус <b>+{REFERRAL_FIRST_PAYMENT_BONUS_DAYS} дней ByMeVPN</b> уже автоматически начислен на ваш ключ.",
                     parse_mode="HTML",
                 )
             except Exception:

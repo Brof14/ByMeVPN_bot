@@ -42,6 +42,18 @@ class TestXuiClientPool(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         xui_client._api_pool = None
 
+    def test_inbound_labels_use_live_remarks_and_verified_fallbacks(self):
+        self.assertEqual(xui_client._inbound_name(12), "🇩🇪Germany-1")
+        self.assertEqual(
+            xui_client._inbound_name(12, SimpleNamespace(remark="🇩🇪Germany-1 live")),
+            "🇩🇪Germany-1 live",
+        )
+        self.assertEqual(xui_client._inbound_name(999), "ByMeVPN · 999")
+
+    def test_manual_fallback_links_are_generated_only_for_vless(self):
+        self.assertTrue(xui_client._is_vless_inbound(SimpleNamespace(protocol="vless")))
+        self.assertFalse(xui_client._is_vless_inbound(SimpleNamespace(protocol="hysteria")))
+
     async def test_failed_login_is_not_published_and_next_login_recovers(self):
         failed = _FakeApi(RuntimeError("temporary login failure"))
         recovered = _FakeApi()

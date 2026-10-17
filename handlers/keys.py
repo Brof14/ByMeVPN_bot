@@ -542,8 +542,8 @@ async def cb_key_delete_confirm(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith("ref_bonus_activate:"))
 async def cb_ref_bonus_activate(callback: CallbackQuery, bot: Bot, state: FSMContext):
-    REF_BONUS_DAYS = 30
     referrer_id = callback.from_user.id
+    from constants import REFERRAL_FIRST_PAYMENT_BONUS_DAYS
 
     # Parse the referred_id this bonus is tied to
     try:
@@ -579,7 +579,7 @@ async def cb_ref_bonus_activate(callback: CallbackQuery, bot: Bot, state: FSMCon
             user_id=referrer_id,
             chat_id=referrer_id,
             config_name=f"ByMeVPN_{referrer_id}",
-            days=REF_BONUS_DAYS,
+            days=REFERRAL_FIRST_PAYMENT_BONUS_DAYS,
             limit_ip=devices,
             is_paid=False,
             amount=0,
@@ -595,4 +595,4 @@ async def cb_ref_bonus_activate(callback: CallbackQuery, bot: Bot, state: FSMCon
         await release_ref_bonus_claim(referrer_id, referred_id)
         await safe_answer(callback, "Не получилось начислить бонус. Попробуйте позже или напишите в поддержку.", alert=True)
         return
-    await safe_answer(callback, f"Готово: начислено +{REF_BONUS_DAYS} дней.", alert=True)
+    await safe_answer(callback, f"Готово: начислено +{REFERRAL_FIRST_PAYMENT_BONUS_DAYS} дней.", alert=True)

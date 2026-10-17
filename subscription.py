@@ -10,6 +10,7 @@ from aiogram import Bot, Router
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 
 from config import ADMIN_ID
+from constants import REFERRAL_FIRST_PAYMENT_BONUS_DAYS
 from utils import LOGO_URL, send_with_photo, safe_answer
 import database
 from database import (
@@ -60,10 +61,6 @@ async def _log_notification_failure(user_id: int, context: dict) -> None:
         )
     except Exception as e:
         logger.error("Failed to log notification failure for %s: %s", user_id, e)
-
-# Referral bonus: 30 days for referrer when referred makes first paid purchase
-REF_BONUS_DAYS = 30
-
 
 async def deliver_key(
     bot: Bot,
@@ -508,14 +505,14 @@ async def _notify_referral_bonus(bot: Bot, referrer_id: int, new_user_id: int) -
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
         kb = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(
-                text=f"🎁 Активировать +{REF_BONUS_DAYS} дней",
+                text=f"🎁 Активировать +{REFERRAL_FIRST_PAYMENT_BONUS_DAYS} дней",
                 callback_data=f"ref_bonus_activate:{new_user_id}",
             )
         ]])
         await bot.send_message(
             referrer_id,
             f"🎁 <b>Ваш реферал оформил подписку!</b>\n\n"
-            f"Вам начислено <b>+{REF_BONUS_DAYS} дней</b> бесплатно.\n\n"
+            f"Вам начислено <b>+{REFERRAL_FIRST_PAYMENT_BONUS_DAYS} дней</b> бесплатно.\n\n"
             "Нажмите кнопку ниже — бот автоматически добавит бонус к вашему доступу.",
             parse_mode="HTML",
             reply_markup=kb,

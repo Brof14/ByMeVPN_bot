@@ -6,20 +6,24 @@ Handles:
   2. POST /webhook/yookassa - YooKassa payment notifications
 
 YooKassa Security model:
-  1. Receive POST /webhook/yookassa
-  2. NEVER trust the incoming body alone — always re-fetch the payment from
+  1. Accept notifications only from YooKassa's documented source networks.
+  2. Bound request size and validate the event envelope before scheduling work.
+  3. NEVER trust the incoming body alone — always re-fetch the payment from
      YooKassa API using the payment_id from the body (prevents spoofing).
-  3. Check payment status == "succeeded" on the verified response.
-  4. Idempotency: mark payment_id as processed in DB before delivering key,
+  4. Check payment status == "succeeded" on the verified response.
+  5. Idempotency: mark payment_id as processed in DB before delivering key,
      so a duplicate webhook never gives a second key.
-  5. Validate devices value from metadata — only 1, 2, 5 are legal.
+  6. Validate device counts against the current supported tiers.
 
 Requires: fastapi, uvicorn[standard]  (added to requirements.txt)
 Config:   WEBHOOK_HOST, WEBHOOK_PORT in .env
 """
 import asyncio
 import base64
+import ipaddress
+import json
 import logging
+import re
 import traceback
 from decimal import Decimal, InvalidOperation
 from typing import Optional
@@ -32,12 +36,33 @@ from fastapi import FastAPI, Request, Response
 
 from config import (
     YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY,
-    WEBHOOK_HOST, WEBHOOK_PORT, ADMIN_ID,
+    WEBHOOK_HOST, WEBHOOK_PORT, ADMIN_ID, YOOKASSA_WEBHOOK_ALLOWED_IPS,
 )
 from database import init_db, is_yookassa_processed, mark_yookassa_processed
 from subscription import deliver_key
 
 logger = logging.getLogger(__name__)
+
+MAX_YOOKASSA_WEBHOOK_BYTES = 64 * 1024
+YOOKASSA_PAYMENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+YOOKASSA_ALLOWED_NETWORKS = tuple(
+    ipaddress.ip_network(value.strip(), strict=False)
+    for value in YOOKASSA_WEBHOOK_ALLOWED_IPS.split(",")
+    if value.strip()
+)
+
+
+def _is_allowed_yookassa_source(source_ip: str | None) -> bool:
+    """Accept only source addresses documented by YooKassa."""
+    if not source_ip:
+        return False
+    try:
+        address = ipaddress.ip_address(source_ip)
+    except ValueError:
+        return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    return any(address in network for network in YOOKASSA_ALLOWED_NETWORKS)
 
 app = FastAPI(docs_url=None, redoc_url=None)  # disable docs in production
 
@@ -127,18 +152,44 @@ async def yookassa_webhook(request: Request) -> Response:
     Receive YooKassa payment notification.
     Always responds 200 quickly — heavy work runs as background task.
     """
+    source_ip = request.client.host if request.client else None
+    if not _is_allowed_yookassa_source(source_ip):
+        logger.warning("YooKassa webhook rejected from non-allowlisted source %s", source_ip or "unknown")
+        return Response(status_code=403)
+
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_YOOKASSA_WEBHOOK_BYTES:
+                return Response(status_code=413)
+        except ValueError:
+            return Response(status_code=400)
+
+    body_bytes = bytearray()
+    async for chunk in request.stream():
+        body_bytes.extend(chunk)
+        if len(body_bytes) > MAX_YOOKASSA_WEBHOOK_BYTES:
+            return Response(status_code=413)
+
     try:
-        body = await request.json()
-        logger.info("Webhook received: %s", str(body)[:500])  # Log incoming webhook
-    except Exception as e:
-        logger.warning("Webhook: invalid JSON body - %s", str(e))
+        body = json.loads(body_bytes)
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+        logger.warning("YooKassa webhook rejected: invalid JSON")
+        return Response(status_code=400)
+
+    if not isinstance(body, dict):
         return Response(status_code=400)
 
     event = body.get("event", "")
     obj = body.get("object", {})
+    if not isinstance(event, str) or not isinstance(obj, dict):
+        return Response(status_code=400)
     payment_id = obj.get("id", "")
+    if payment_id and (not isinstance(payment_id, str) or not YOOKASSA_PAYMENT_ID_RE.fullmatch(payment_id)):
+        logger.warning("YooKassa webhook rejected: invalid payment id format")
+        return Response(status_code=400)
 
-    logger.info("Webhook parsed: event='%s', payment_id='%s'", event, payment_id)
+    logger.info("YooKassa webhook received: event=%s payment_id=%s", event, payment_id or "-")
 
     # We only care about succeeded payments
     if event != "payment.succeeded" or not payment_id:
