@@ -91,47 +91,40 @@ async def cb_key_info(callback: CallbackQuery, bot: Bot):
         return
 
     now = int(time.time())
-    status = "✅ Активен" if k["expiry"] > now else "Срок завершён"
+    status = "Активен" if k["expiry"] > now else "Срок завершён"
     devices = k.get("limit_ip", 2)
     device_label = f"{devices} устройств" if devices in (5, 6, 7, 8, 9, 10, 0) else (f"{devices} устройства" if devices in (2, 3, 4) else f"{devices} устройство")
-    
-    # Получаем ссылку на подписку из БД
-    subscription_url = k.get('key', '')
-    
-    # Получаем информацию о трафике из 3x-ui
+    subscription_url = k.get("key", "")
+
+    # Show only confirmed connection data. VPN tunnel state is not known to the bot.
     traffic_info = ""
     try:
-        user_id = callback.from_user.id
-        xui_user = await get_xui_user(user_id)
-        if xui_user:
-            used_traffic = xui_user.get("used_traffic", 0)
-            traffic_info = f"📊 Использовано трафика: {format_traffic(used_traffic)}\n"
+        xui_user = await get_xui_user(callback.from_user.id)
+        if xui_user and xui_user.get("used_traffic") is not None:
+            used_traffic = xui_user["used_traffic"]
+            traffic_info = f"Трафик: {format_traffic(used_traffic)}\n"
     except Exception as e:
         logger.error("Failed to get traffic info: %s", e)
-    
+
     from database import get_auto_renew_subscription
     sub = await get_auto_renew_subscription(callback.from_user.id, key_id)
     has_autorenew = sub is not None
     autorenew_active = sub is not None and sub.get("status") == "active"
-
-    if has_autorenew:
+    ar_line = ""
+    if sub:
         if autorenew_active:
-            pm_title = sub.get("payment_method_title") or _payment_method_label(sub.get("payment_method_type"))
-            ar_line = f"🔄 Автопродление: <b>✅ Включено</b> ({pm_title})\n"
+            ar_line = "Автопродление: включено\n"
         elif sub.get("status") == "failed":
-            ar_line = "🔄 Автопродление: <b>⚠️ Ошибка списания</b>\n"
+            ar_line = "Автопродление: ошибка списания\n"
         else:
-            ar_line = "🔄 Автопродление: <b>⏹ Отключено</b>\n"
-    else:
-        ar_line = ""
+            ar_line = "Автопродление: отключено\n"
 
     text = (
-        f"<b>{escape(k.get('remark') or 'Мой VPN')}</b>\n"
+        "<b>Мой VPN</b>\n\n"
         f"{status} · {device_label}\n"
-        f"📅 До {fmt_date(k['expiry'])} · {fmt_days_left(k['expiry'])}\n"
-        f"{ar_line}"
-        f"{traffic_info}"
-        f"\n<b>Ссылка для подключения</b>\n"
+        f"Действует до: <b>{fmt_date(k['expiry'])}</b>\n"
+        f"{ar_line}{traffic_info}\n"
+        "<b>Ссылка для подключения</b>\n"
         f"<code>{escape(subscription_url)}</code>"
     )
 
