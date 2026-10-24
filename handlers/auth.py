@@ -125,7 +125,7 @@ async def cb_existing_client(callback: CallbackQuery, state: FSMContext):
     await state.set_state(EmailAuth.waiting_email)
 
     text = (
-        "Введите email, который вы указывали при оплате или регистрации на сайте.\n\n"
+        "Укажите email, связанный с вашим аккаунтом ByMeVPN.\n\n"
         "Для отмены напишите /cancel"
     )
     try:
@@ -147,7 +147,7 @@ async def process_email(message: Message, state: FSMContext):
     # Check for cancel command
     if email.lower() == '/cancel':
         await state.clear()
-        await message.answer("Отменено. Возвращаю в главное меню.")
+        await message.answer("Действие отменено. Вы вернулись в главное меню.")
         # Return to main menu
         from handlers.start import _send_main_menu
         await _send_main_menu(message.bot, message, message.from_user.id, message.from_user.first_name or "друг")
@@ -169,7 +169,7 @@ async def process_email(message: Message, state: FSMContext):
 
     if not existing_user:
         await message.answer(
-            f"Пользователь с таким email не найден. Проверьте правильность ввода или обратитесь в поддержку {SUPPORT_USERNAME}",
+            f"Аккаунт с таким email не найден. Проверьте адрес или обратитесь в поддержку {SUPPORT_USERNAME}",
             reply_markup=back_to_menu()
         )
         await state.clear()
@@ -187,7 +187,7 @@ async def process_email(message: Message, state: FSMContext):
 
     if not email_sent:
         await message.answer(
-            "Ошибка при отправке письма. Пожалуйста, попробуйте позже или обратитесь в поддержку.",
+            "Не удалось отправить письмо. Попробуйте позже или обратитесь в поддержку.",
             reply_markup=back_to_menu()
         )
         await state.clear()
@@ -204,7 +204,7 @@ async def process_email(message: Message, state: FSMContext):
 
     # Send confirmation message with exact text as specified
     await message.answer(
-        f"🔑 На почту {email} был отправлен одноразовый код для входа, пожалуйста напишите его, для отмены напишите /cancel"
+        f"Мы отправили код входа на {email}. Введите его одним сообщением. Для отмены отправьте /cancel."
     )
 
 
@@ -220,7 +220,7 @@ async def process_code(message: Message, state: FSMContext):
     # Check for cancel command
     if code_input.lower() == '/cancel':
         await state.clear()
-        await message.answer("Отменено. Возвращаю в главное меню.")
+        await message.answer("Действие отменено. Вы вернулись в главное меню.")
         # Return to main menu
         from handlers.start import _send_main_menu
         await _send_main_menu(message.bot, message, message.from_user.id, message.from_user.first_name or "друг")
@@ -245,7 +245,7 @@ async def process_code(message: Message, state: FSMContext):
 
     if not is_valid:
         await message.answer(
-            "Неверный или просроченный код. Попробуйте снова или запросите новый код, написав /cancel и начав заново.\n\n"
+            "Код неверный или срок его действия истёк. Попробуйте снова либо отправьте /cancel, чтобы запросить новый.\n\n"
             "Для отмены напишите /cancel"
         )
         return
@@ -268,7 +268,7 @@ async def process_code(message: Message, state: FSMContext):
 
     # Show success message and authorized user menu
     await message.answer(
-        "✅ Авторизация успешно завершена!\n\n"
+        "<b>Вы вошли в аккаунт</b>\n\n"
         "Добро пожаловать в ByMeVPN!",
         reply_markup=authorized_user_menu()
     )
@@ -284,7 +284,7 @@ async def cmd_cancel(message: Message, state: FSMContext):
     current_state = await state.get_state()
     if current_state and current_state.startswith("EmailAuth"):
         await state.clear()
-        await message.answer("Отменено. Возвращаю в главное меню.")
+        await message.answer("Действие отменено. Вы вернулись в главное меню.")
         # Return to main menu
         from handlers.start import _send_main_menu
         await _send_main_menu(message.bot, message, message.from_user.id, message.from_user.first_name or "друг")
