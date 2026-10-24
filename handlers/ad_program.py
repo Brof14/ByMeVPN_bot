@@ -116,11 +116,11 @@ async def cb_ad_program(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await log_ad_analytics_event(user_id, "ad_offer_view")
 
     text = (
-        "📣 <b>VPN за рекламу</b>\n\n"
-        "Опубликуйте рекламный пост ByMeVPN в своём Telegram-канале.\n"
-        "После проверки получите VPN-бонус; пост нужно сохранить на 30 дней.\n\n"
+        "<b>VPN за рекламу</b>\n\n"
+        "Разместите рекламу ByMeVPN в своём Telegram-канале и получите VPN-бонус.\n"
+        "Бонус начислим после проверки публикации. Пост должен оставаться в канале 30 дней.\n\n"
         f"{BONUS_TIERS}\n\n"
-        "<b>Как это работает:</b>\n"
+        "<b>Как участвовать</b>\n"
         "1. Отправьте ссылку на ваш канал\n"
         "2. Получите готовый рекламный пост\n"
         "3. Опубликуйте его и отправьте ссылку на пост\n"
@@ -166,7 +166,7 @@ async def cb_ad_check_channel(callback: CallbackQuery, bot: Bot, state: FSMConte
         return
 
     text = (
-        "📣 <b>Проверка Telegram-канала</b>\n\n"
+        "<b>Проверка канала</b>\n\n"
         "Отправьте ссылку на ваш канал:\n\n"
         "• Публичный: <code>@mychannel</code> или <code>https://t.me/mychannel</code>\n"
         "• Приватный: ссылка-приглашение <code>https://t.me/+abc123...</code>\n\n"
@@ -306,10 +306,10 @@ async def _create_application_and_reply(
 
     if needs_review:
         text = (
-            f"📣 <b>Заявка #{app_id} принята!</b>\n\n"
+            f"<b>Заявка #{app_id} принята</b>\n\n"
             f"Канал: <b>{escape(str(chat_title))}</b>\n"
             f"👥 Подписчиков: <b>{subscriber_count}</b>{' (указано вами)' if manual_count else ''}\n"
-            f"🎁 Потенциальный бонус: <b>{bonus_months} мес.</b>\n\n"
+            f"Возможный бонус: <b>{bonus_months} мес.</b>\n\n"
             "Заявку проверит администратор. После подтверждения вы получите рекламный пост."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -318,9 +318,9 @@ async def _create_application_and_reply(
         ])
     else:
         text = (
-            f"📣 <b>Канал найден: {escape(str(chat_title))}</b>\n\n"
+            f"<b>Канал найден: {escape(str(chat_title))}</b>\n\n"
             f"👥 Подписчиков: <b>{subscriber_count}</b>\n"
-            f"🎁 Ваш бонус: <b>{bonus_months} мес.</b>\n\n"
+            f"Ваш бонус: <b>{bonus_months} мес.</b>\n\n"
             "<b>Что дальше:</b>\n"
             "1. Получите рекламный пост\n"
             "2. Опубликуйте его в канале\n"
@@ -346,7 +346,7 @@ async def msg_ad_channel_input(message: Message, bot: Bot, state: FSMContext):
 
     if not public_username and not private_ref:
         await message.answer(
-            "❌ Неверный формат ссылки. Пожалуйста, отправьте @username, "
+            "Неверная ссылка. Отправьте @username, "
             "ссылку вида https://t.me/mychannel или ссылку-приглашение https://t.me/+...",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="◀️ Отмена", callback_data="ad_program")]
@@ -405,7 +405,7 @@ async def msg_ad_channel_input(message: Message, bot: Bot, state: FSMContext):
         await _ask_subscriber_count(
             bot, message, state,
             prompt=(
-                f"📣 <b>Канал найден: {chat.title or '@' + public_username}</b>\n\n"
+                f"<b>Канал найден: {chat.title or '@' + public_username}</b>\n\n"
                 "Telegram не даёт боту увидеть число подписчиков (бот не участник канала).\n\n"
                 "Отправьте <b>текущее число подписчиков</b> одним числом, "
                 "например: <code>1284</code>\n"
@@ -440,7 +440,7 @@ async def cb_ad_get_post(callback: CallbackQuery, bot: Bot):
         return
 
     text = (
-        "📋 <b>Рекламный пост</b>\n\n"
+        "<b>Рекламный пост</b>\n\n"
         "Скопируйте текст ниже и разместите в своём канале:\n\n"
         "━━━━━━━━━━━━━━━━━━━━━\n\n"
         "Нужен доступ к привычным сайтам и приложениям?\n\n"
@@ -476,7 +476,7 @@ async def cb_ad_submit_post(callback: CallbackQuery, bot: Bot, state: FSMContext
         return
 
     text = (
-        "📤 <b>Отправьте ссылку на рекламный пост</b>\n\n"
+        "<b>Ссылка на публикацию</b>\n\n"
         "Ссылку на пост в вашем канале.\n\n"
         "Примеры:\n"
         "• <code>https://t.me/mychannel/123</code>\n"
@@ -531,9 +531,9 @@ async def msg_ad_post_url(message: Message, bot: Bot, state: FSMContext):
     await log_ad_audit(user_id, "ad_post_submitted", f"app={app_id} url={post_url}")
 
     text = (
-        "✅ <b>Ссылка на пост получена!</b>\n\n"
-        "Мы проверим публикацию. После подтверждения бонус будет начислен сразу.\n\n"
-        "Пожалуйста, оставьте пост в канале на <b>30 дней</b> — после этого мы проверим его сохранность."
+        "<b>Ссылка на пост получена</b>\n\n"
+        "После проверки публикации бонус будет начислен сразу.\n\n"
+        "Не удаляйте пост в течение <b>30 дней</b> — затем мы проверим его сохранность."
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -556,7 +556,7 @@ async def cb_ad_my_applications(callback: CallbackQuery, bot: Bot, state: FSMCon
 
     if not applications:
         text = (
-            "📋 <b>Мои заявки</b>\n\n"
+            "<b>Мои заявки</b>\n\n"
             "У вас пока нет заявок на участие в программе.\n\n"
             "Нажмите «Проверить мой канал», чтобы начать."
         )
@@ -567,7 +567,7 @@ async def cb_ad_my_applications(callback: CallbackQuery, bot: Bot, state: FSMCon
         await send_with_photo(bot, callback, text, kb)
         return
 
-    text = "📋 <b>Мои заявки</b>\n\n"
+    text = "<b>Мои заявки</b>\n\n"
 
     for app in applications:
         status_emoji = STATUS_EMOJI.get(app["status"], "❓")
