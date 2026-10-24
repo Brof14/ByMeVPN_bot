@@ -60,10 +60,10 @@ class TestGiveawayAutomation(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("YouTube", bot.send_message.await_args.args[1])
         self.assertNotIn("Instagram", bot.send_message.await_args.args[1])
         self.assertIn("Нажмите «Участвовать»", bot.send_message.await_args.args[1])
-        self.assertIn("одного перехода недостаточно", bot.send_message.await_args.args[1])
-        self.assertIn("3 призовых места", bot.send_message.await_args.args[1])
+        self.assertIn("Сам переход по ссылке не засчитывается", bot.send_message.await_args.args[1])
+        self.assertIn("Призы — 3 места", bot.send_message.await_args.args[1])
 
-    async def test_old_monthly_campaign_is_updated_and_sent_users_are_queued_for_correction(self):
+    async def test_old_monthly_campaign_is_updated_without_resending_to_users(self):
         from giveaway_automation import _month_period, ensure_monthly_giveaway
 
         month, label, period_start, period_end = _month_period()
@@ -83,7 +83,7 @@ class TestGiveawayAutomation(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updated["prize_days"], 30)
         self.assertEqual(updated["period_start"], period_start)
         self.assertEqual(updated["end_date"], period_end)
-        self.assertEqual(await database.get_pending_giveaway_notifications(giveaway_id), [550])
+        self.assertEqual(await database.get_pending_giveaway_notifications(giveaway_id), [])
 
     async def test_due_draw_grants_winner_once_and_reports_results(self):
         from giveaway_automation import process_due_giveaways

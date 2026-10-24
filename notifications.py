@@ -11,7 +11,7 @@ import secrets
 import string
 import time
 import zipfile
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from aiogram import Bot
@@ -111,7 +111,7 @@ async def _send_autorenew_upcoming(bot: Bot, item: dict, sub: dict) -> None:
     text = (
         f"🔁 <b>Подписка продлится автоматически</b>\n\n"
         f"📅 Дата списания: <b>{date_str}</b> (через {days_left} {get_day_word(days_left)})\n"
-        f"💳 Сумма: <b>{amount} ₽</b> за следующие 30 дней ({devices} устр.)\n"
+        f"💳 Сумма: <b>{amount} ₽</b> за следующие {sub.get('days') or 30} дней ({devices} устр.)\n"
         f"Способ оплаты: {pm_title}\n\n"
         f"✅ Ничего делать не нужно — доступ продолжится без перерывов.\n"
         f"🔓 Не хотите продлевать? Отключите автопродление в меню ключа — "
@@ -349,6 +349,17 @@ async def _wait_until_03_00() -> None:
     await asyncio.sleep(seconds_until_target)
 
 
+async def _wait_until_10_00_moscow() -> None:
+    """Run expiry reminders at 10:00 Moscow time, not immediately on restart."""
+    now = datetime.now(timezone.utc) + timedelta(hours=3)
+    target = now.replace(hour=10, minute=0, second=0, microsecond=0)
+    if now >= target:
+        target += timedelta(days=1)
+    seconds_until_target = (target - now).total_seconds()
+    logger.info("Waiting until 10:00 Moscow time (%d seconds)", int(seconds_until_target))
+    await asyncio.sleep(seconds_until_target)
+
+
 async def start_notification_scheduler(bot: Bot) -> None:
     """Run expiry notifications once per day at ~10:00 and backup at 03:00."""
     logger.info("Notification scheduler started")
@@ -379,6 +390,10 @@ async def start_notification_scheduler(bot: Bot) -> None:
             await asyncio.sleep(86400)
 
     asyncio.create_task(backup_scheduler())
+
+    # Do not send renewal reminders as a side effect of every container restart.
+    # The daily cadence is anchored to 10:00 Moscow time.
+    await _wait_until_10_00_moscow()
 
     # Main notification scheduler
     while True:

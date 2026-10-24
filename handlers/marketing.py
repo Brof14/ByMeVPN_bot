@@ -14,9 +14,9 @@ async def cb_marketing_optout(callback: CallbackQuery):
     await safe_answer(callback)
     await set_promotional_opt_out(callback.from_user.id, True)
     await callback.message.edit_text(
-        "Промоуведомления отключены. Сообщения о ключе, оплате и безопасности останутся включены.",
+        "Акции и приглашения в конкурсы отключены. Сообщения о ключе, оплате и безопасности останутся включены.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="Включить акции снова", callback_data="marketing_optin")
+            InlineKeyboardButton(text="Включить промоуведомления", callback_data="marketing_optin")
         ]]),
     )
 
@@ -25,4 +25,4 @@ async def cb_marketing_optout(callback: CallbackQuery):
 async def cb_marketing_optin(callback: CallbackQuery):
     await safe_answer(callback)
     await set_promotional_opt_out(callback.from_user.id, False)
-    await callback.message.edit_text("Промоуведомления снова включены.")
+    await callback.message.edit_text("Акции и приглашения в конкурсы снова включены.")

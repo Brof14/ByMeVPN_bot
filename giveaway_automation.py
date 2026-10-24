@@ -26,7 +26,7 @@ from database import (
     mark_giveaway_reward_attempt,
     mark_giveaway_winner_rewarded,
     pick_giveaway_winners,
-    requeue_giveaway_announcements,
+    claim_giveaway_notification,
     set_giveaway_notification_status,
     get_user_keys,
     update_automated_monthly_giveaway,
@@ -86,11 +86,10 @@ async def ensure_monthly_giveaway(bot: Bot) -> dict:
             announcement_version=MONTHLY_ANNOUNCEMENT_VERSION,
         )
         if changed:
-            await requeue_giveaway_announcements(existing["id"])
             await _notify_admins(
                 bot,
                 f"📣 Обновлены условия конкурса <b>#{existing['id']}</b>: "
-                "теперь в зачёт идут приглашённые за месяц, победителей — 3, приз каждому — +30 дней.",
+                "обновлённые условия применяются к новым уведомлениям. Уже отправленные объявления повторно не рассылаются.",
             )
         return await get_giveaway_by_id(existing["id"])
 
@@ -132,20 +131,24 @@ async def _send_campaign_announcements(bot: Bot, giveaway: dict) -> None:
     link = f"https://t.me/{info.username}?start=gw_{giveaway['id']}"
     text = (
         "🏆 <b>Ежемесячный конкурс приглашений</b>\n\n"
-        "<b>Как попасть в рейтинг</b>\n"
-        "1. Нажмите «Участвовать» — бот сохранит заявку и покажет кнопку для приглашения.\n"
-        "2. Чтобы попасть в рейтинг, нужен минимум один новый приглашённый. Он должен впервые запустить бота по вашей ссылке; одного перехода недостаточно.\n\n"
-        f"<b>Призы:</b> 3 призовых места, по <b>+{giveaway['prize_days']} дней VPN</b> каждому. "
-        "Выше место у того, кто пригласил больше новых пользователей в этом месяце. "
-        "При равном результате место определит жребий. Если участников с приглашениями меньше трёх, приз получит каждый.\n\n"
-        f"Приглашайте до <b>{_moscow_date(giveaway['end_date'] - 1)}</b>. "
-        f"Итоги и начисление призов — <b>{_moscow_date(giveaway['end_date'])}</b>."
+        "<b>Как участвовать</b>\n"
+        "1. Нажмите «Участвовать» — бот зарегистрирует вас в конкурсе.\n"
+        "2. Пригласите хотя бы одного нового пользователя по своей ссылке. Сам переход по ссылке не засчитывается — друг должен впервые запустить бота.\n\n"
+        f"<b>Призы — 3 места:</b> каждый из трёх участников, пригласивших больше всех, получит <b>+{giveaway['prize_days']} дней VPN</b>.\n"
+        "При равном числе приглашённых победителя определит жребий. Если участников, выполнивших условие, меньше трёх — приз получит каждый.\n\n"
+        f"Приглашения засчитываются до <b>{_moscow_date(giveaway['end_date'] - 1)}</b>. "
+        f"Победителей объявим и призы начислим <b>{_moscow_date(giveaway['end_date'])}</b>."
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎉 Участвовать", url=link, style="primary")],
         [InlineKeyboardButton(text="Не присылать акции", callback_data="marketing_optout")],
     ])
     for user_id in users:
+        # Claim durably before contacting Telegram. If the request times out
+        # after Telegram accepted it, this recipient must not be sent the same
+        # campaign again on the next scheduler pass.
+        if not await claim_giveaway_notification(giveaway["id"], user_id):
+            continue
         try:
             await bot.send_message(user_id, text, parse_mode="HTML", reply_markup=keyboard)
             await set_giveaway_notification_status(giveaway["id"], user_id, "sent")
@@ -153,7 +156,9 @@ async def _send_campaign_announcements(bot: Bot, giveaway: dict) -> None:
         except TelegramForbiddenError:
             await set_giveaway_notification_status(giveaway["id"], user_id, "blocked")
         except Exception:
-            # Keep transient failures pending for a later scheduler pass.
+            # Delivery may have succeeded even when the response was lost.
+            # Keep this record terminal to avoid duplicate campaign messages.
+            await set_giveaway_notification_status(giveaway["id"], user_id, "uncertain")
             logger.exception("Giveaway announcement failed for user %s", user_id)
             break
 

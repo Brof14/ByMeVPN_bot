@@ -30,6 +30,7 @@ from keyboards import main_menu_new_user, main_menu_existing, main_menu_with_key
 from utils import send_with_photo, safe_answer, LOGO_URL
 from async_utils import monitor_performance
 from cache import cache_subscription_data
+from constants import RECURRING_MONTHLY_PRICE, RECURRING_DAYS
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -120,23 +121,26 @@ async def _send_main_menu(
         if is_new_referral:
             text = (
                 "<b>Добро пожаловать в ByMeVPN!</b>\n\n"
-                "Приглашение учтено. Подключение займёт несколько шагов — бот подскажет, как установить приложение и добавить ключ.\n"
-                "🇷🇺 Российские сайты и приложения работают с VPN — отключать его не нужно.\n\n"
-                "Попробуйте 3 дня за 1 ₽ или выберите тариф. Бесплатный доступ за приглашения — в отдельном разделе."
+                "Приглашение друга учтено. Бот поможет установить приложение и добавить ключ — подключение займёт всего несколько шагов.\n"
+                "🇷🇺 Российские сайты и приложения работают с включённым VPN.\n\n"
+                f"🎁 3 дня за 1 ₽, затем {RECURRING_MONTHLY_PRICE} ₽ за {RECURRING_DAYS} дней при сохранённом способе оплаты; автопродление можно отключить.\n"
+                "Бонусные дни за приглашения друзей бесплатны — без карты."
             )
         else:
             text = (
-                "<b>ByMeVPN — VPN для сайтов и приложений, которыми вы пользуетесь каждый день.</b>\n\n"
-                "Подключение займёт несколько шагов — бот подскажет, как установить приложение и добавить ключ.\n"
-                "🇷🇺 Российские сайты и приложения доступны без отключения VPN и дополнительных настроек.\n\n"
-                "Попробуйте 3 дня за 1 ₽ или выберите тариф. Получать VPN бесплатно можно за приглашения друзей."
+                "<b>ByMeVPN — быстрый доступ к привычным сайтам и приложениям.</b>\n\n"
+                "Установите Happ и добавьте ключ из раздела «Мои ключи» — бот проведёт вас по шагам.\n"
+                "🇷🇺 Российские сайты и приложения работают с включённым VPN.\n\n"
+                f"🎁 Попробуйте 3 дня за 1 ₽, затем — {RECURRING_MONTHLY_PRICE} ₽ за {RECURRING_DAYS} дней при сохранённом способе оплаты. Автопродление можно отключить в любой момент.\n"
+                "Бесплатные бонусные дни можно получать за приглашения — для этого карта не нужна.\n"
+                "🎙 С подпиской ByMeVPN доступен и @ByMeAudiobot — расшифровка голосовых сообщений в текст."
             )
         kb = main_menu_new_user()
     elif state == "expired":
         text = (
             f"<b>Здравствуйте, {user_name}!</b>\n\n"
             "Срок подписки закончился, но ваши ключи и настройки сохранены.\n\n"
-            "Продлите доступ или получите бонусные дни за приглашения. Всё для подключения и управления ключами — в «Моих ключах»."
+            "Продлите доступ или получайте бонусные дни за приглашения — без привязки карты. Подключение и управление ключами — в «Моих ключах»."
         )
         # Check if user has keys to show appropriate menu (use direct DB check, not cache)
         user_keys = await get_user_keys(user_id)
@@ -159,7 +163,8 @@ async def _send_main_menu(
                 f"✅ VPN активен до <b>{expires}</b>\n"
                 f"📱 Устройств: <b>{device_count}</b>\n"
                 "🇷🇺 Российские сайты и приложения доступны без отключения VPN.\n\n"
-                "В «Моих ключах» — подключение и настройки подписки. Бонусные дни можно получать за приглашения."
+                "В «Моих ключах» — подключение и настройки подписки. Бонусные дни можно получать за приглашения.\n\n"
+                "🎙 По вашей подписке доступен и @ByMeAudiobot — бот для расшифровки голосовых сообщений."
             )
         else:
             text = f"<b>Здравствуйте, {user_name}!</b>"
@@ -313,7 +318,18 @@ async def cmd_start(message: Message, bot: Bot) -> None:
                         
                             try:
                                 from referral_system_new import award_referral_signup_bonus
-                                await award_referral_signup_bonus(bot, ref_id, user_id)
+                                bonus_awarded = await award_referral_signup_bonus(bot, ref_id, user_id)
+                                if bonus_awarded:
+                                    try:
+                                        from constants import REFERRAL_SIGNUP_BONUS_DAYS
+                                        await bot.send_message(
+                                            ref_id,
+                                            "🎉 <b>По вашей ссылке зарегистрировался новый пользователь!</b>\n\n"
+                                            f"Бонус <b>+{REFERRAL_SIGNUP_BONUS_DAYS} дней VPN</b> уже начислен автоматически.",
+                                            parse_mode="HTML",
+                                        )
+                                    except Exception:
+                                        logger.info("Could not send signup referral confirmation to %s", ref_id)
                             except Exception as bonus_error:
                                 logger.exception("Could not grant referral signup bonus to %d: %s", ref_id, bonus_error)
                         
@@ -481,8 +497,8 @@ async def cb_about(callback: CallbackQuery, bot: Bot):
     text = (
         "<b>ByMeVPN — VPN для привычных сайтов и приложений.</b>\n\n"
         "Подключите телефон или компьютер за несколько шагов: бот поможет установить приложение и добавить ключ.\n"
-        "🇷🇺 Российские сайты и приложения доступны с включённым VPN — без дополнительных настроек.\n\n"
-        "Можно начать с пробных 3 дней за 1 ₽ или получать бонусные дни за приглашения — без привязки карты. "
+        "🇷🇺 Российские сайты и приложения работают с включённым VPN.\n\n"
+        "Начните с 3 дней за 1 ₽ или получайте бонусные дни за приглашения — без привязки карты. "
         "Для владельцев Telegram-каналов есть программа VPN за рекламу.\n\n"
         "Управление ключами и автопродлением — в разделе «Мои ключи». Условия оплаты бот показывает до покупки."
     )

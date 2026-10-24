@@ -503,9 +503,24 @@ async def cb_key_delete_confirm(callback: CallbackQuery, bot: Bot):
     existing_keys = await get_user_keys(user_id)
     other_keys = [item for item in existing_keys if item.get("id") != key_id]
 
+    # Stop billing before removing its key. If remote deletion fails, restore
+    # the previous auto-renew state so the user's subscription is unchanged.
+    from database import get_auto_renew_subscription, cancel_auto_renew, resume_auto_renew
+    auto_renew = await get_auto_renew_subscription(user_id, key_id)
+    renew_was_active = bool(auto_renew and auto_renew.get("status") == "active")
+    if renew_was_active:
+        cancelled = await cancel_auto_renew(user_id, key_id)
+        if not cancelled.get("cancelled"):
+            await callback.message.answer(
+                "⚠️ Не удалось отключить автопродление. Ключ не удалён; попробуйте ещё раз или напишите в поддержку."
+            )
+            return
+
     if not other_keys:
         ok = await delete_xui_user(user_id)
         if not ok:
+            if renew_was_active:
+                await resume_auto_renew(user_id, key_id)
             logger.error("Could not delete user %d from 3x-ui (key_id=%d); DB row retained", user_id, key_id)
             await callback.message.answer(
                 "⚠️ Не удалось подтвердить удаление на VPN-сервере. Запись сохранена; "
@@ -515,6 +530,8 @@ async def cb_key_delete_confirm(callback: CallbackQuery, bot: Bot):
 
     deleted = await delete_key_by_id(key_id)
     if not deleted:
+        if renew_was_active:
+            await resume_auto_renew(user_id, key_id)
         logger.error("Could not delete key row %d for user %d", key_id, user_id)
         await callback.message.answer("⚠️ Не удалось удалить запись. Попробуйте позже.")
         return

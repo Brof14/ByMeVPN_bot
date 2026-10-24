@@ -164,8 +164,9 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
         "\nПродолжая, вы принимаете <a href='https://telegra.ph/DOGOVOR-PUBLICHNOJ-OFERTY-ByMyVPN-03-12'>оферту</a>, "
         "<a href='https://telegra.ph/POLITIKA-KONFIDENCIALNOSTI-ByMeVPN-03-12'>политику конфиденциальности</a> и "
         "<a href='https://telegra.ph/SOGLASHENIE-O-REGULYARNYH-REKURRENTNYH-PLATEZHAH-ByMeVPN-03-12'>условия автоплатежей</a>.\n\n"
-        "Доступ включится сразу после оплаты. При оплате через ЮKassa автопродление включится, если способ оплаты будет сохранён: "
-        f"через {days} дней спишется {price_rub} ₽ за следующий такой же период. Его можно отключить в «Мои ключи».\n"
+        "Доступ включится сразу после оплаты.\n"
+        f"ЮKassa: если при платеже сохранится способ оплаты, по окончании срока спишется {price_rub} ₽, а доступ продлится ещё на {days} дней. "
+        "Автопродление можно отключить в «Моих ключах».\n"
         "Stars и CryptoBot — разовая оплата.\n\n"
         "<b>Выберите способ оплаты:</b>"
     )

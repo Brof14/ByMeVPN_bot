@@ -133,7 +133,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             await _send_main_menu(SimpleNamespace(), SimpleNamespace(), 123, "Алексей", is_new_referral=True)
         welcome = send.call_args.args[2]
         self.assertIn("Добро пожаловать в ByMeVPN", welcome)
-        self.assertIn("Приглашение учтено", welcome)
+        self.assertIn("Приглашение друга учтено", welcome)
         self.assertIn("3 дня за 1 ₽", welcome)
 
     def test_key_settings_remove_rf_routing_and_highlight_only_destructive_action(self):
@@ -153,6 +153,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             patch("handlers.partner.safe_answer", new=AsyncMock()),
             patch("handlers.partner.get_referral_stats_enhanced", new=AsyncMock(return_value={
                 "total_registrations": 1, "total_clicks": 1, "total_bonus_days": 15,
+                "active_clients": 1, "paid_clients": 1,
             })),
             patch("referral_system_new.retry_pending_signup_bonuses", new=AsyncMock(return_value=0)),
             patch("handlers.partner.send_with_photo", new=AsyncMock()) as send,
@@ -160,12 +161,12 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             await cb_partner(callback, bot)
 
         text = send.call_args.args[2]
-        self.assertIn("<b>Ваши бонусы</b>", text)
+        self.assertIn("<b>За каждого друга</b>", text)
         self.assertIn("+15 дней", text)
-        self.assertIn("Ещё +30 дней", text)
+        self.assertIn("ещё +30 дней", text)
         self.assertIn("<b>🔗 Ваша ссылка для приглашений</b>", text)
         self.assertIn("<b>Ваша статистика</b>", text)
-        self.assertIn("Приглашено: <b>1</b>", text)
+        self.assertIn("Зарегистрировались по ссылке: <b>1</b>", text)
         self.assertIn("Начислено: <b>15 дней</b>", text)
 
     def test_back_is_full_width_and_support_is_not_mixed_into_navigation(self):

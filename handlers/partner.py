@@ -6,15 +6,15 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardBut
 
 from database import get_referral_stats_enhanced, get_referred_users_list
 from utils import send_with_photo, safe_answer
-from constants import format_timestamp
+from constants import format_timestamp, INTRO_TRIAL_DAYS, INTRO_TRIAL_PRICE_RUB, RECURRING_MONTHLY_PRICE, RECURRING_DAYS
 
 router = Router()
 
 
 def partner_main_kb(link: str) -> InlineKeyboardMarkup:
     share_text = quote_plus(
-        "Попробуй ByMeVPN — подключение через приложение и короткую инструкцию.\n\n"
-        "3 дня за 1 ₽, затем 89 ₽ за 30 дней при включённом автопродлении. Условия видны до оплаты.\n"
+        "Попробуй ByMeVPN — VPN с простой настройкой и короткой инструкцией.\n\n"
+        f"{INTRO_TRIAL_DAYS} дня за {INTRO_TRIAL_PRICE_RUB} ₽, затем {RECURRING_MONTHLY_PRICE} ₽ за {RECURRING_DAYS} дней, если включено автопродление. Условия видны до оплаты.\n"
         f"Ссылка: {link}"
     )
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -40,17 +40,18 @@ async def cb_partner(callback: CallbackQuery, bot: Bot):
     )
     text = (
         "<b>👥 VPN за приглашения</b>\n\n"
-        "Делитесь ссылкой и получайте бонусные дни VPN.\n\n"
-        "<b>Ваши бонусы</b>\n"
-        "• <b>+15 дней</b> — за регистрацию нового пользователя.\n"
-        "• <b>Ещё +30 дней</b> — после его первой платной подписки. Бот пришлёт отдельную кнопку для получения бонуса.\n\n"
-        "Бонусы продлевают ваш ключ или активируются на отдельном. Карта и оплата не нужны.\n\n"
+        "Приглашайте друзей и получайте дополнительные дни VPN.\n\n"
+        "<b>За каждого друга</b>\n"
+        "👋 Друг впервые запускает бота по вашей ссылке — <b>вам +15 дней</b>.\n"
+        "💳 Друг впервые оплачивает подписку — <b>ещё +30 дней</b>.\n\n"
+        "Бонус за регистрацию бесплатный: вам не нужно покупать подписку или привязывать карту. Дни автоматически добавятся к вашему ключу; если ключа пока нет, бот создаст бонусный.\n\n"
         "<b>🔗 Ваша ссылка для приглашений</b>\n"
         f"<code>{link}</code>\n\n"
         "<b>Ваша статистика</b>\n"
-        f"👥 Приглашено: <b>{stats['total_registrations']}</b>\n"
-        f"🔗 Переходов: <b>{stats['total_clicks']}</b>\n"
-        f"🎁 Начислено: <b>{stats['total_bonus_days']} дней</b>"
+        f"👥 Зарегистрировались по ссылке: <b>{stats['total_registrations']}</b>\n"
+        f"✅ С активной подпиской: <b>{stats['active_clients']}</b>\n"
+        f"🎁 Начислено: <b>{stats['total_bonus_days']} дней</b>\n"
+        "Перешлите ссылку другу — бот сам засчитает регистрацию и начислит бонус."
         f"{pending_note}"
     )
     await send_with_photo(bot, callback, text, partner_main_kb(link))

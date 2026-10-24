@@ -941,6 +941,48 @@ async def init_db() -> None:
     # Run migrations
     await _run_migrations(db)
 
+    # Older key replacement flows could leave an active recurring-payment
+    # record pointing at a deleted key. Reattach only when the user has one
+    # unambiguous current key; never guess when multiple keys exist.
+    cur = await db.execute(
+        """SELECT s.id, s.user_id
+           FROM auto_renew_subscriptions s
+           LEFT JOIN keys old_key ON old_key.id = s.key_id AND old_key.user_id = s.user_id
+           WHERE s.status = 'active' AND s.key_id IS NOT NULL AND old_key.id IS NULL"""
+    )
+    orphaned = await cur.fetchall()
+    for sub_id, user_id in orphaned:
+        cur = await db.execute(
+            "SELECT id FROM keys WHERE user_id = ? ORDER BY expiry DESC, id DESC",
+            (user_id,),
+        )
+        user_keys = await cur.fetchall()
+        if len(user_keys) != 1:
+            logger.error(
+                "Auto-renew subscription %d has an orphaned key link; found %d current keys for user %d, leaving unchanged",
+                sub_id, len(user_keys), user_id,
+            )
+            continue
+        new_key_id = user_keys[0][0]
+        cur = await db.execute(
+            "SELECT 1 FROM auto_renew_subscriptions WHERE user_id = ? AND key_id = ? AND id != ?",
+            (user_id, new_key_id, sub_id),
+        )
+        if await cur.fetchone():
+            logger.error(
+                "Auto-renew subscription %d cannot be reattached to key %d for user %d: another record exists",
+                sub_id, new_key_id, user_id,
+            )
+            continue
+        await db.execute(
+            "UPDATE auto_renew_subscriptions SET key_id = ?, updated_at = strftime('%s','now') WHERE id = ?",
+            (new_key_id, sub_id),
+        )
+        logger.warning(
+            "Reattached auto-renew subscription %d to the user's only current key %d (user %d)",
+            sub_id, new_key_id, user_id,
+        )
+
     await db.commit()
     logger.info("Database initialized: %s", DB_FILE)
 
@@ -4109,18 +4151,6 @@ async def update_automated_monthly_giveaway(
     return True
 
 
-async def requeue_giveaway_announcements(giveaway_id: int) -> None:
-    """Re-send a correction when an active campaign's advertised terms change."""
-    db = await get_db()
-    async with _db_semaphore:
-        await db.execute(
-            "UPDATE giveaway_notifications SET status='pending', sent_at=NULL "
-            "WHERE giveaway_id=? AND status='sent'",
-            (giveaway_id,),
-        )
-        await db.commit()
-
-
 async def get_all_giveaways() -> list[dict]:
     """Get all giveaways."""
     db = await get_db()
@@ -4612,6 +4642,17 @@ async def create_giveaway_notification_snapshot(giveaway_id: int) -> int:
 
 async def get_pending_giveaway_notifications(giveaway_id: int, limit: int = 50) -> list[int]:
     db = await get_db()
+    # A process may stop after reserving a delivery but before recording its
+    # outcome. Preserve at-most-once behavior and make the ambiguous attempt
+    # visible instead of silently retrying it to the user.
+    cutoff = int(time.time()) - 30 * 60
+    async with _db_semaphore:
+        await db.execute(
+            """UPDATE giveaway_notifications SET status='uncertain'
+            WHERE giveaway_id=? AND status='sending' AND sent_at<?""",
+            (giveaway_id, cutoff),
+        )
+        await db.commit()
     cur = await db.execute(
         """SELECT n.user_id FROM giveaway_notifications n
         LEFT JOIN marketing_preferences p ON p.user_id=n.user_id
@@ -4623,14 +4664,31 @@ async def get_pending_giveaway_notifications(giveaway_id: int, limit: int = 50) 
     return [int(r[0]) for r in await cur.fetchall()]
 
 
+async def claim_giveaway_notification(giveaway_id: int, user_id: int) -> bool:
+    """Atomically reserve one campaign delivery; claimed users are never requeued."""
+    db = await get_db()
+    async with _db_semaphore:
+        cur = await db.execute(
+            """UPDATE giveaway_notifications SET status='sending', sent_at=?
+            WHERE giveaway_id=? AND user_id=? AND status='pending'
+              AND COALESCE((SELECT promotional_opt_out FROM marketing_preferences
+                            WHERE user_id=?), 0)=0""",
+            (int(time.time()), giveaway_id, user_id, user_id),
+        )
+        await db.commit()
+        return cur.rowcount == 1
+
+
 async def set_giveaway_notification_status(giveaway_id: int, user_id: int, status: str) -> bool:
-    if status not in {"sent", "blocked", "opted_out"}:
+    if status not in {"sent", "blocked", "opted_out", "uncertain"}:
         raise ValueError("Unsupported giveaway notification status")
     db = await get_db()
     async with _db_semaphore:
         cur = await db.execute(
-            "UPDATE giveaway_notifications SET status=?, sent_at=? WHERE giveaway_id=? AND user_id=?",
-            (status, int(time.time()) if status == "sent" else None, giveaway_id, user_id),
+            """UPDATE giveaway_notifications SET status=?,
+            sent_at=CASE WHEN ?='opted_out' THEN NULL ELSE COALESCE(sent_at, ?) END
+            WHERE giveaway_id=? AND user_id=? AND status IN ('sending','pending')""",
+            (status, status, int(time.time()), giveaway_id, user_id),
         )
         await db.commit()
         return cur.rowcount > 0
