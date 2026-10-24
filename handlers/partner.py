@@ -19,7 +19,7 @@ def partner_main_kb(link: str) -> InlineKeyboardMarkup:
     )
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Поделиться ссылкой", url=f"https://t.me/share/url?url={quote_plus(link)}&text={share_text}", style="primary")],
-        [InlineKeyboardButton(text="👥 Мои приглашения", callback_data="partner_referrals_list")],
+        [InlineKeyboardButton(text="Мои приглашения", callback_data="partner_referrals_list")],
         [InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu")],
     ])
 
@@ -39,19 +39,19 @@ async def cb_partner(callback: CallbackQuery, bot: Bot):
         if pending_rewards else ""
     )
     text = (
-        "<b>👥 VPN за приглашения</b>\n\n"
-        "Приглашайте друзей и получайте дополнительные дни VPN.\n\n"
-        "<b>За каждого друга</b>\n"
-        "👋 Друг впервые запускает бота по вашей ссылке — <b>вам +15 дней</b>.\n"
-        "💳 Друг впервые оплачивает подписку — <b>ещё +30 дней</b>.\n\n"
-        "Бонус за регистрацию бесплатный: вам не нужно покупать подписку или привязывать карту. Дни автоматически добавятся к вашему ключу; если ключа пока нет, бот создаст бонусный.\n\n"
-        "<b>🔗 Ваша ссылка для приглашений</b>\n"
+        "<b>VPN бесплатно за друзей</b>\n\n"
+        "Приглашайте друзей и пользуйтесь VPN без оплаты и привязки карты.\n\n"
+        "<b>Ваши бонусы</b>\n"
+        "+15 дней — за регистрацию друга по вашей ссылке.\n"
+        "+30 дней — после его первой подходящей платной подписки.\n\n"
+        "Дни добавляются к вашему ключу. Если ключа нет, бот создаст его автоматически. Для бонуса за регистрацию карта не нужна.\n\n"
+        "<b>Ваша ссылка для приглашений</b>\n"
         f"<code>{link}</code>\n\n"
-        "<b>Ваша статистика</b>\n"
-        f"👥 Зарегистрировались по ссылке: <b>{stats['total_registrations']}</b>\n"
-        f"✅ С активной подпиской: <b>{stats['active_clients']}</b>\n"
-        f"🎁 Начислено: <b>{stats['total_bonus_days']} дней</b>\n"
-        "Перешлите ссылку другу — бот сам засчитает регистрацию и начислит бонус."
+        "<b>Ваши приглашения</b>\n"
+        f"Зарегистрировались: <b>{stats['total_registrations']}</b>\n"
+        f"Активных подписок: <b>{stats['active_clients']}</b>\n"
+        f"Начислено: <b>{stats['total_bonus_days']} дней</b>\n"
+        "Поделитесь ссылкой, чтобы получить первые бонусные дни."
         f"{pending_note}"
     )
     await send_with_photo(bot, callback, text, partner_main_kb(link))
@@ -62,9 +62,9 @@ async def cb_partner_referrals_list(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     referred_users = await get_referred_users_list(callback.from_user.id)
     if not referred_users:
-        text = "<b>👥 Мои приглашения</b>\n\nПока никто не зарегистрировался по вашей ссылке."
+        text = "<b>Мои приглашения</b>\n\nПока никто не зарегистрировался по вашей ссылке."
     else:
-        lines = ["<b>👥 Мои приглашения</b>"]
+        lines = ["<b>Мои приглашения</b>"]
         for i, user in enumerate(referred_users[:20], 1):
             status = "активна подписка" if user["is_active"] else "подписки нет или она закончилась"
             paid = "оплатил" if user["has_paid"] else "ещё не оплатил"
@@ -78,7 +78,7 @@ async def cb_partner_referrals_list(callback: CallbackQuery, bot: Bot):
         text = "\n".join(lines)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="◀️ К партнёрской программе", callback_data="partner")],
+        [InlineKeyboardButton(text="← К приглашениям", callback_data="partner")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu")],
     ])
     await send_with_photo(bot, callback, text, kb)

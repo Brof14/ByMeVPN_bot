@@ -68,18 +68,18 @@ async def cmd_partner_program(message: Message):
     referral_link = await get_referral_link(user_id, "ByMeVPN_bot")  # Update with actual bot username
     
     text = (
-        "Приглашайте друзей и получайте только бонусные дни VPN:\n\n"
-        "🎁 +15 дней — за регистрацию друга по вашей ссылке\n"
-        "🎁 +30 дней — после его первой платной подписки\n\n"
-        f"<b>📊 Ваша статистика:</b>\n"
+        "Приглашайте друзей и получайте бесплатные дни VPN:\n\n"
+        "+15 дней — за регистрацию друга по вашей ссылке\n"
+        "+30 дней — после первой подходящей платной подписки друга\n\n"
+        f"<b>Ваши приглашения</b>\n"
         f"🔗 Переходов по ссылке: {stats.get('clicks', 0)}\n"
         f"👤 Зарегистрировалось: {stats['total']} человек\n"
         f"💳 Оплативших: {stats['paid']} человек\n"
         f"🎁 Бонусных дней: {stats.get('free_days', 0)}\n"
         "Денежных начислений и вывода средств нет.\n\n"
-        f"<b>Ваша реферальная ссылка:</b>\n"
+        f"<b>Ваша ссылка</b>\n"
         f"<code>{referral_link}</code>\n\n"
-        "Бонусные дни можно использовать для продления доступа."
+        "Бонусные дни продлевают ваш VPN. Для получения бонуса за регистрацию карта не нужна."
     )
     
     # Create keyboard
@@ -123,14 +123,14 @@ async def cb_my_referrals_list(callback: CallbackQuery):
     events = await get_referral_events(user_id, limit=20)
     
     if not events:
-        text = "<b>Мои рефералы</b>\n\nУ вас пока нет рефералов."
+        text = "<b>Мои приглашения</b>\n\nПока никто не зарегистрировался по вашей ссылке."
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Назад", callback_data="partner_program")]
         ])
         await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
         return
     
-    text = "<b>Мои рефералы</b>\n\n"
+    text = "<b>Мои приглашения</b>\n\n"
     
     from constants import format_timestamp
     for event in events:

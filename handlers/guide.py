@@ -27,8 +27,8 @@ HAPP_LINUX_ARCH = "https://github.com/Happ-proxy/happ-desktop/releases/latest/do
 async def cb_guide_menu(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
-        "📲 <b>Подключение ByMeVPN</b>\n\n"
-        "Выберите устройство — покажу приложение и короткую инструкцию. "
+        "<b>Подключить ByMeVPN</b>\n\n"
+        "Выберите устройство. Мы покажем, как установить Happ и включить VPN. "
         "Ссылка на подписку находится в разделе «Мои ключи»."
     )
     await _track_guide_event(callback.from_user.id, "connection_guide_open")
@@ -49,8 +49,8 @@ async def cb_guide_for_key(callback: CallbackQuery, bot: Bot):
         await safe_answer(callback, "Ключ не найден.", alert=True)
         return
     text = (
-        f"📲 <b>Подключение · {escape(key.get('remark') or f'Ключ #{key_id}')}</b>\n\n"
-        "Выберите устройство для короткой инструкции."
+        f"<b>Подключение · {escape(key.get('remark') or f'Ключ #{key_id}')}</b>\n\n"
+        "Выберите устройство — подключение займёт всего несколько шагов."
     )
     await send_or_edit(bot, callback, text, connection_guide_kb(key_id))
 
@@ -60,8 +60,8 @@ async def cb_trouble(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     await _track_guide_event(callback.from_user.id, "connection_help_open")
     text = (
-        "<b>С чем помочь?</b>\n\n"
-        "Выберите проблему. Если подсказка не поможет, можно сразу написать в поддержку."
+        "<b>Помощь с подключением</b>\n\n"
+        "Выберите проблему. Если не получится решить её самостоятельно, поможем в поддержке."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="VPN не подключается", callback_data="support_topic:no_connection")],
@@ -89,7 +89,7 @@ async def cb_support_topic(callback: CallbackQuery, bot: Bot):
         ),
         "app": (
             "<b>Не работает приложение</b>\n\n"
-            "Сначала обновите подписку в Happ и перезапустите приложение. Российские приложения работают с включённым VPN без дополнительных настроек. "
+            "Сначала обновите подписку в Happ и перезапустите приложение. Для российских приложений может потребоваться настройка обхода. "
             "Если проблема остаётся, напишите в поддержку и укажите название приложения."
         ),
         "import": (
@@ -124,7 +124,7 @@ async def cb_guide_more(callback: CallbackQuery, bot: Bot):
         if not key or key["user_id"] != callback.from_user.id:
             await safe_answer(callback, "Ключ не найден.", alert=True)
             return
-    text = "<b>Другие устройства</b>\n\nВыберите инструкцию."
+    text = "<b>Другие устройства</b>\n\nВыберите подходящую платформу."
     await send_or_edit(bot, callback, text, additional_platforms_kb(key_id))
 
 

@@ -35,17 +35,17 @@ async def cmd_keys(message: Message, bot: Bot):
 
     if not keys:
         await message.answer(
-            "🔑 <b>У вас пока нет ключей.</b>\n\n"
-            "Оформите подписку, чтобы получить доступ к VPN.",
+            "<b>У вас пока нет VPN-ключей</b>\n\n"
+            "Выберите тариф или получите бесплатные дни за приглашения друзей.",
             parse_mode="HTML",
             reply_markup=back_to_menu()
         )
         return
 
     text = (
-        "🔑 <b>Мои ключи</b>\n\n"
-        "✅ — подписка активна · ⌛ — срок завершён\n"
-        "Выберите ключ, чтобы открыть подключение и настройки."
+        "<b>Мои ключи</b>\n\n"
+        "Активные и завершённые подписки отображаются ниже.\n"
+        "Выберите ключ для подключения или управления подпиской."
     )
     await message.answer(text, parse_mode="HTML", reply_markup=my_keys_list_kb(keys))
 
@@ -63,15 +63,15 @@ async def cb_my_keys(callback: CallbackQuery, bot: Bot):
     if not keys:
         text = (
             "У вас пока нет ключей.\n\n"
-            "Оформите подписку, чтобы получить доступ к VPN."
+            "Выберите тариф или получите бесплатные дни за приглашения друзей."
         )
         await send_with_photo(bot, callback, text, back_to_menu())
         return
 
     text = (
-        "🔑 <b>Мои ключи</b>\n\n"
-        "✅ — подписка активна · ⌛ — срок завершён\n"
-        "Выберите ключ, чтобы открыть подключение и настройки."
+        "<b>Мои ключи</b>\n\n"
+        "Активные и завершённые подписки отображаются ниже.\n"
+        "Выберите ключ для подключения или управления подпиской."
     )
     await send_with_photo(bot, callback, text, my_keys_list_kb(keys))
 
@@ -126,12 +126,12 @@ async def cb_key_info(callback: CallbackQuery, bot: Bot):
         ar_line = ""
 
     text = (
-        f"🔑 <b>{escape(k.get('remark') or 'Ключ #' + str(k['id']))}</b>\n"
+        f"<b>{escape(k.get('remark') or 'Мой VPN')}</b>\n"
         f"{status} · {device_label}\n"
         f"📅 До {fmt_date(k['expiry'])} · {fmt_days_left(k['expiry'])}\n"
         f"{ar_line}"
         f"{traffic_info}"
-        f"\n🔗 <b>Ссылка для подключения</b>\n"
+        f"\n<b>Ссылка для подключения</b>\n"
         f"<code>{escape(subscription_url)}</code>"
     )
 
@@ -153,8 +153,8 @@ async def cb_key_settings(callback: CallbackQuery, bot: Bot):
         return
 
     text = (
-        f"⚙️ <b>Подписка «{escape(key.get('remark') or f'Ключ #{key_id}')}»</b>\n\n"
-        "Настройки продления и дополнительные возможности."
+        f"<b>Управление подпиской «{escape(key.get('remark') or f'Ключ #{key_id}')}»</b>\n\n"
+        "Здесь можно управлять автопродлением и ключом."
     )
     await send_or_edit(bot, callback, text, key_settings_kb(key_id))
 
@@ -187,7 +187,7 @@ def _get_payment_methods_text(
     """Short, calm auto-renew summary based on the saved payment record."""
     if not card_title:
         return (
-            "💳 <b>Автопродление</b>\n\n"
+            "<b>Автопродление</b>\n\n"
             "Автопродление пока не подключено. Оплатите продление через ЮKassa, чтобы включить его.\n\n"
             "Telegram Stars и CryptoBot продлевают подписку вручную."
         )
@@ -207,11 +207,11 @@ def _get_payment_methods_text(
             next_charge += f" Доступ действует до <b>{expiry_str}</b>."
 
     return (
-        "💳 <b>Автопродление</b>\n\n"
+        "<b>Автопродление</b>\n\n"
         f"Способ оплаты: <b>{escape(card_title)}</b>\n"
         f"{status}\n"
         f"{next_charge}\n\n"
-        "Отключить продление можно в любой момент. Текущий оплаченный срок сохранится."
+        "Отключить автопродление можно в любой момент. Оплаченный срок сохранится."
     )
 
 
@@ -281,7 +281,7 @@ async def cb_autorenew_unbind_prompt(callback: CallbackQuery, bot: Bot):
         warning += f" Доступ сохранится до <b>{expiry_str}</b>."
 
     text = (
-        "🔕 <b>Отключить автопродление?</b>\n\n"
+        "<b>Отключить автопродление?</b>\n\n"
         f"💳 Способ оплаты: <b>{escape(card_title)}</b>\n\n"
         f"{warning}\n\n"
         "Доступ сохранится до конца оплаченного срока. Автопродление можно подключить снова при следующей оплате через ЮKassa."
@@ -316,7 +316,7 @@ async def cb_autorenew_unbind_confirm(callback: CallbackQuery, bot: Bot):
         text = "Сохранённый способ оплаты не найден. Новых списаний не будет."
     else:
         text = (
-            "✅ <b>Автопродление отключено, способ оплаты отвязан</b>\n\n"
+            "<b>Автопродление отключено</b>\n\n"
             "Новых списаний не будет.\n"
             f"{keep_line}\n\n"
             "Автопродление можно подключить снова при следующей оплате через ЮKassa."
@@ -426,7 +426,7 @@ async def cb_key_instructions(callback: CallbackQuery, bot: Bot):
     from keyboards import connection_guide_kb
 
     text = (
-        f"📲 <b>Подключение VPN</b> · {escape(key.get('remark') or f'Ключ #{key_id}')}\n\n"
+        f"<b>Подключение VPN</b> · {escape(key.get('remark') or f'Ключ #{key_id}')}\n\n"
         f"Скопируйте ссылку и выберите устройство:\n<code>{escape(subscription_url)}</code>"
     )
     await send_or_edit(bot, callback, text, connection_guide_kb(key_id))
@@ -452,7 +452,7 @@ async def cb_key_renew(callback: CallbackQuery, bot: Bot, state: FSMContext):
 
     await send_with_photo(
         bot, callback,
-        f"🔄 <b>Продление ключа «{escape(k.get('remark') or str(k['id']))}»</b>\n\n"
+        f"<b>Продление подписки «{escape(k.get('remark') or str(k['id']))}»</b>\n\n"
         "Выберите тариф:",
         tariff_selection_kb(devices=key_devices),
     )
@@ -542,12 +542,12 @@ async def cb_key_delete_confirm(callback: CallbackQuery, bot: Bot):
     if not keys:
         await send_with_photo(
             bot, callback,
-            f"✅ Ключ «{remark}» удалён. Подключение по нему отключено.",
+            f"Ключ «{remark}» удалён. Подключение по нему отключено.",
             back_to_menu(),
         )
     else:
         text = (
-            f"✅ Ключ «{remark}» удалён.\n\n"
+            f"Ключ «{remark}» удалён.\n\n"
             "Остальные подписки и подключение по ним работают как прежде.\n"
             "Выберите ключ, чтобы открыть его настройки."
         )
