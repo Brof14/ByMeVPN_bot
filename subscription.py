@@ -192,12 +192,12 @@ async def deliver_key(
                     key_to_show = existing_key
 
                 title = (
-                    "🎉 <b>Друг присоединился по вашей ссылке!</b>"
+                    "<b>Друг зарегистрировался по вашей ссылке</b>"
                     if method == "ref_signup_bonus"
-                    else "🎉 <b>Бонус за приглашённого начислен!</b>" if method == "ref_bonus"
-                    else "🎉 <b>Вы выиграли в розыгрыше ByMeVPN!</b>" if method == "giveaway_prize"
-                    else "🎉 Бонус за рекламу начислен!" if method == "ad_bonus"
-                    else "✅ <b>Подписка продлена!</b>"
+                    else "<b>Бонус за друга начислен</b>" if method == "ref_bonus"
+                    else "<b>Ваш приз ByMeVPN начислен</b>" if method == "giveaway_prize"
+                    else "Бонус за рекламу начислен" if method == "ad_bonus"
+                    else "<b>Подписка продлена</b>"
                 )
                 bonus_note = (
                     f"За регистрацию приглашённого начислено <b>+{days} дней</b>.\n\n"
@@ -210,12 +210,12 @@ async def deliver_key(
                 text = (
                     f"{title}\n\n"
                     f"{bonus_note}"
-                    f"🔑 <b>Ключ #{key_id}</b> продлен на <b>{days} дней</b>\n"
-                    f"📱 Доступно устройств: <b>{limit_ip}</b>\n"
-                    f"📅 Новый срок: до <b>{format_timestamp(new_expiry)[:10]}</b>\n\n"
-                    f"🔑 <b>Ваша подписка:</b>\n"
+                    f"<b>Ключ #{key_id}</b> продлён на <b>{days} дней</b>\n"
+                    f"Устройства: <b>{limit_ip}</b>\n"
+                    f"Действует до: <b>{format_timestamp(new_expiry)[:10]}</b>\n\n"
+                    f"<b>Ссылка для подключения</b>\n"
                     f"<code>{key_to_show}</code>\n\n"
-                    f"Ключ остался прежним — всё работает автоматически!"
+                    f"Ссылка на VPN не изменилась. Повторно подключать устройства не нужно."
                 )
                 
                 delivered = await _send_delivery_message(bot, chat_id, text)
@@ -264,8 +264,8 @@ async def deliver_key(
                     )
                     await bot.send_message(
                         chat_id,
-                        "Платёж получен, но сервер пока не подтвердил обновление доступа. "
-                        "Не оплачивайте повторно — мы проверим операцию и восстановим подписку.",
+                        "Оплата получена, но активация VPN пока не завершена. "
+                        "Не оплачивайте повторно. Мы проверим операцию и восстановим доступ.",
                     )
                 except Exception:
                     pass
@@ -301,11 +301,11 @@ async def deliver_key(
                 )
 
             title = (
-                "🎉 <b>Друг присоединился по вашей ссылке!</b>"
+                "<b>Друг зарегистрировался по вашей ссылке</b>"
                 if method == "ref_signup_bonus"
-                else "🎉 <b>Вы выиграли в розыгрыше ByMeVPN!</b>" if method == "giveaway_prize"
-                else "🎉 VPN-бонус за рекламу активирован!" if method == "ad_bonus"
-                else "✅ <b>Подписка успешно активирована!</b>"
+                else "<b>Ваш приз ByMeVPN начислен</b>" if method == "giveaway_prize"
+                else "Бонус за рекламу активирован" if method == "ad_bonus"
+                else "<b>Подписка активирована</b>"
             )
             bonus_note = (
                 f"За регистрацию приглашённого начислено <b>+{days} дней</b>.\n\n"
@@ -317,11 +317,11 @@ async def deliver_key(
                 f"{title}\n\n"
                 f"{bonus_note}"
                 f"🔑 <b>Ключ #{key_id}</b> активирован на <b>{days} дней</b>\n"
-                f"📱 Доступно устройств: <b>{limit_ip}</b>\n"
-                f"📅 Срок действия: до <b>{format_timestamp(new_expiry)[:10]}</b>\n\n"
-                f"🔑 <b>Ваша подписка:</b>\n"
+                f"Устройства: <b>{limit_ip}</b>\n"
+                f"Действует до: <b>{format_timestamp(new_expiry)[:10]}</b>\n\n"
+                f"<b>Ссылка для подключения</b>\n"
                 f"<code>{sub_url}</code>\n\n"
-                f"Ваш VPN-ключ сохранён и готов к работе!"
+                f"Ваш VPN готов к подключению."
             )
             delivered = await _send_delivery_message(bot, chat_id, text)
             if not delivered:
@@ -396,11 +396,11 @@ async def deliver_key(
 
         device_word = "устройство" if limit_ip == 1 else ("устройства" if limit_ip in (2, 3, 4) else "устройств")
         title = (
-            "🎉 <b>Друг присоединился по вашей ссылке!</b>"
+            "<b>Друг зарегистрировался по вашей ссылке</b>"
             if method == "ref_signup_bonus"
-            else "🎉 <b>Вы выиграли в розыгрыше ByMeVPN!</b>" if method == "giveaway_prize"
-            else "🎉 VPN-бонус за рекламу активирован!" if method == "ad_bonus"
-            else "✅ <b>VPN подключён!</b>"
+            else "<b>Ваш приз ByMeVPN начислен</b>" if method == "giveaway_prize"
+            else "Бонус за рекламу активирован" if method == "ad_bonus"
+            else "<b>VPN готов к подключению</b>"
         )
         bonus_note = (
             f"За регистрацию приглашённого начислено <b>+{days} дней</b>.\n\n"
@@ -411,16 +411,16 @@ async def deliver_key(
         text = (
             f"{title}\n\n"
             f"{bonus_note}"
-            f"🔑 <b>Ваша подписка:</b>\n"
+            f"<b>Ссылка для подключения</b>\n"
             f"<code>{subscription_url}</code>\n\n"
-            f"📱 Доступно устройств: <b>{limit_ip}</b>\n"
-            f"📅 Срок действия: <b>{days} дней</b>\n\n"
-            f"<b>Что делать дальше:</b>\n"
+            f"Устройства: <b>{limit_ip}</b>\n"
+            f"Срок доступа: <b>{days} дней</b>\n\n"
+            f"<b>Как подключиться</b>\n"
             f"1. Нажмите «Инструкция подключения» ниже\n"
             f"2. Выберите вашу платформу\n"
             f"3. Установите приложение и импортируйте ссылку\n"
             f"4. Подключитесь к VPN\n\n"
-            f"💡 В меню есть «Партнёрская программа»: делитесь своей ссылкой и получайте бонусные дни VPN."
+            f"Бесплатные дни за приглашения доступны в разделе «Получить VPN бесплатно»."
         )
         
         delivered = await _send_delivery_message(bot, chat_id, text)
