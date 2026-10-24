@@ -316,7 +316,7 @@ async def deliver_key(
             text = (
                 f"{title}\n\n"
                 f"{bonus_note}"
-                f"Ваш ByMeVPN готов к использованию.\n\nДоступ: <b>{days} дней</b>\n"
+                f"Доступ: <b>{days} дней</b>\n"
                 f"Устройства: <b>{limit_ip}</b>\n"
                 f"Действует до: <b>{format_timestamp(new_expiry)[:10]}</b>\n\n"
                 f"<b>Ссылка для подключения</b>\n"
@@ -400,7 +400,7 @@ async def deliver_key(
             if method == "ref_signup_bonus"
             else "<b>Ваш приз ByMeVPN начислен</b>" if method == "giveaway_prize"
             else "Бонус за рекламу активирован" if method == "ad_bonus"
-            else "<b>VPN готов к подключению</b>"
+            else "<b>Подписка активирована</b>"
         )
         bonus_note = (
             f"За регистрацию приглашённого начислено <b>+{days} дней</b>.\n\n"
@@ -411,16 +411,15 @@ async def deliver_key(
         text = (
             f"{title}\n\n"
             f"{bonus_note}"
-            f"<b>Ссылка для подключения</b>\n"
-            f"<code>{subscription_url}</code>\n\n"
+            f"Ваш ByMeVPN готов к использованию.\n\n"
+            f"Доступ: <b>{days} дней</b>\n"
             f"Устройства: <b>{limit_ip}</b>\n"
-            f"Срок доступа: <b>{days} дней</b>\n\n"
+            f"Ссылка для подключения:\n<code>{subscription_url}</code>\n\n"
             f"<b>Как подключиться</b>\n"
             f"1. Нажмите «Подключить VPN» ниже\n"
             f"2. Выберите устройство\n"
             f"3. Установите Happ и добавьте подписку\n"
-            f"4. Включите VPN\n"
-            f"Бесплатные дни за приглашения доступны в разделе «Получить VPN бесплатно»."
+            f"4. Включите VPN."
         )
         
         delivered = await _send_delivery_message(bot, chat_id, text)
