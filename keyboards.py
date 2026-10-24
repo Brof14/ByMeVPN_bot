@@ -245,9 +245,9 @@ def manage_payment_methods_kb(
 def trial_pay_kb(confirmation_url: str) -> InlineKeyboardMarkup:
     """Intro trial checkout: 1 ₽ now → 3 days → 89 ₽/мес recurring."""
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="💳 Оплатить 1 ₽", url=confirmation_url, style="success"))
+    kb.row(InlineKeyboardButton(text="Оплатить 1 ₽", url=confirmation_url, style="success"))
     kb.row(
-        InlineKeyboardButton(text="💳 Тарифы", callback_data="buy_vpn"),
+        InlineKeyboardButton(text="Другие тарифы", callback_data="buy_vpn"),
         InlineKeyboardButton(text="🏠 Меню", callback_data="back_to_menu"),
     )
     return kb.as_markup()
@@ -269,8 +269,8 @@ def confirm_delete_kb(key_id: int) -> InlineKeyboardMarkup:
 def after_key_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(
-        InlineKeyboardButton(text="Подключить VPN", callback_data="connection_guide"),
-        InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys"),
+        InlineKeyboardButton(text="Подключить VPN", style="success", callback_data="connection_guide"),
+        InlineKeyboardButton(text="Мои ключи", callback_data="my_keys"),
     )
     kb.row(InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu"))
     return kb.as_markup()
@@ -309,12 +309,12 @@ def connection_guide_kb(key_id: int | None = None) -> InlineKeyboardMarkup:
         return f"guide_{name}:{key_id}" if key_id else f"guide_{name}"
 
     kb.row(
-        InlineKeyboardButton(text="📱 iPhone / iPad", callback_data=platform_callback("ios")),
-        InlineKeyboardButton(text="🤖 Android", callback_data=platform_callback("android")),
+        InlineKeyboardButton(text="iPhone / iPad", callback_data=platform_callback("ios")),
+        InlineKeyboardButton(text="Android", callback_data=platform_callback("android")),
     )
     kb.row(
-        InlineKeyboardButton(text="💻 Windows", callback_data=platform_callback("windows")),
-        InlineKeyboardButton(text="🐧 Linux", callback_data=platform_callback("linux")),
+        InlineKeyboardButton(text="Windows", callback_data=platform_callback("windows")),
+        InlineKeyboardButton(text="Linux", callback_data=platform_callback("linux")),
     )
     back_callback = f"key_info:{key_id}" if key_id else "back_to_menu"
     back_text = "← Назад" if key_id else "← Назад в меню"
