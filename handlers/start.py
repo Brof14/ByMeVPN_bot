@@ -120,20 +120,17 @@ async def _send_main_menu(
     if state == "new":
         if is_new_referral:
             text = (
-                "<b>Добро пожаловать в ByMeVPN</b>\n\n"
-                "Приглашение учтено. Подключить VPN можно за несколько шагов.\n"
-                "Российские приложения могут работать без отключения VPN.\n\n"
-                f"Попробуйте 3 дня за 1 ₽. Далее — {RECURRING_MONTHLY_PRICE} ₽ за {RECURRING_DAYS} дней при активном автопродлении.\n"
-                "Получать бонусные дни за приглашения можно без карты и оплаты."
+                "<b>Добро пожаловать в ByMeVPN!</b>\n\n"
+                "Приглашение учтено. Подключиться можно за несколько шагов.\n\n"
+                "Российские сервисы могут работать без отключения VPN.\n\n"
+                "3 дня за 1 ₽ или бесплатный доступ за приглашения друзей."
             )
         else:
             text = (
                 "<b>ByMeVPN — VPN, который просто работает.</b>\n\n"
-                "Доступ к любимым сайтам и приложениям без сложных настроек.\n"
-                "Российские приложения могут работать без отключения VPN.\n\n"
-                f"🎁 Попробуйте 3 дня за 1 ₽, затем — {RECURRING_MONTHLY_PRICE} ₽ за {RECURRING_DAYS} дней при сохранённом способе оплаты. Автопродление можно отключить в любой момент.\n"
-                "Бесплатные бонусные дни можно получать за приглашения — для этого карта не нужна.\n"
-                "Также с подпиской доступен @ByMeAudiobot для расшифровки голосовых сообщений."
+                "Доступ к любимым сайтам и приложениям без сложных настроек.\n\n"
+                "Российские сервисы могут работать без отключения VPN.\n\n"
+                "3 дня за 1 ₽ или бесплатный доступ за приглашения друзей."
             )
         kb = main_menu_new_user()
     elif state == "expired":
@@ -346,6 +343,23 @@ async def cmd_start(message: Message, bot: Bot) -> None:
     # Не удаляем сообщения после /start, чтобы избежать бесконечной кнопки Старт
 
 
+def _intro_trial_offer_text() -> str:
+    """Single customer-facing offer for new and resumed 1 ₽ checkouts."""
+    from constants import (
+        INTRO_TRIAL_DAYS, INTRO_TRIAL_DEVICES, INTRO_TRIAL_PRICE_RUB,
+        RECURRING_MONTHLY_PRICE, RECURRING_DAYS,
+    )
+    return (
+        "<b>Попробуйте ByMeVPN за 1 ₽</b>\n\n"
+        f"Полный доступ на {INTRO_TRIAL_DAYS} дня. Подключите до {INTRO_TRIAL_DEVICES} устройств и оцените сервис.\n\n"
+        f"Сегодня: <b>{INTRO_TRIAL_PRICE_RUB} ₽</b>\n"
+        f"Первые {INTRO_TRIAL_DAYS} дня: <b>пробный период</b>\n"
+        f"Далее: <b>{RECURRING_MONTHLY_PRICE} ₽ / {RECURRING_DAYS} дней</b>\n\n"
+        "Если способ оплаты сохранён, подписка продлевается автоматически каждые 30 дней. "
+        "Отменить автопродление можно в любой момент — оплаченный срок сохранится."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Intro trial — 1 ₽ → 3 days of access → 89 ₽/мес recurring
 # ---------------------------------------------------------------------------
@@ -382,15 +396,7 @@ async def _start_intro_trial(bot: Bot, callback: CallbackQuery, ref_id: int | No
     # Reuse a recent pending checkout to avoid duplicate 1 ₽ invoices
     pending = await get_yookassa_trial_pending(user_id)
     if pending and pending.get("confirmation_url") and int(time.time()) - (pending.get("created") or 0) < 1800:
-        text = (
-            "<b>Попробуйте ByMeVPN за 1 ₽</b>\n\n"
-            f"Сегодня: <b>1 ₽</b> · доступ на 3 дня\n"
-            f"Если способ оплаты сохранится: через {INTRO_TRIAL_DAYS} дня — "
-            f"<b>{RECURRING_MONTHLY_PRICE} ₽ за следующие 30 дней</b>, затем каждые 30 дней, пока автопродление не отключено.\n"
-            "Если способ оплаты не сохранится, автосписаний не будет — доступ можно продлить вручную.\n\n"
-            "Отключить автопродление можно в любой момент — "
-            "доступ сохранится до конца оплаченного периода."
-        )
+        text = _intro_trial_offer_text()
         await send_with_photo(bot, callback, text, trial_pay_kb(pending["confirmation_url"]))
         return
 
@@ -419,16 +425,7 @@ async def _start_intro_trial(bot: Bot, callback: CallbackQuery, ref_id: int | No
         )
         return
 
-    text = (
-        "<b>Попробуйте ByMeVPN за 1 ₽</b>\n\n"
-        f"Сегодня: <b>1 ₽</b> · доступ на 3 дня\n"
-        f"Если способ оплаты сохранится: через {INTRO_TRIAL_DAYS} дня — "
-        f"<b>{RECURRING_MONTHLY_PRICE} ₽ за следующие 30 дней</b>, затем каждые 30 дней, пока автопродление не отключено.\n"
-        "Если способ оплаты не сохранится, автосписаний не будет — доступ можно продлить вручную.\n\n"
-        "Отключить автопродление можно в любой момент — "
-        "доступ сохранится до конца оплаченного периода.\n\n"
-        "После оплаты ключ появится автоматически."
-    )
+    text = _intro_trial_offer_text()
     await send_with_photo(bot, callback, text, trial_pay_kb(confirmation_url))
 
 
@@ -496,11 +493,14 @@ async def cb_about(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
         "<b>ByMeVPN — VPN, который просто работает.</b>\n\n"
-        "Подключение на телефоне или компьютере — за несколько шагов.\n"
-        "Российские приложения могут работать без отключения VPN.\n\n"
-        "Начните с 3 дней за 1 ₽ или получайте бонусные дни за приглашения — без привязки карты. "
-        "Для владельцев Telegram-каналов есть программа VPN за рекламу.\n\n"
-        "Управление ключами и автопродлением — в разделе «Мои ключи». Условия оплаты бот показывает до покупки."
+        "Подключайтесь за несколько шагов и пользуйтесь привычными сайтами и приложениями.\n\n"
+        "<b>Возможности:</b>\n"
+        "• Подключение на телефоне и компьютере.\n"
+        "• До 10 устройств — в зависимости от тарифа.\n"
+        "• Российские приложения могут работать без отключения VPN при поддерживаемой настройке обхода.\n"
+        "• Бесплатные дни за приглашение друзей.\n"
+        "• Управление подпиской прямо в Telegram.\n\n"
+        "<b>3 дня за 1 ₽</b> или тарифы от <b>59 ₽/мес.</b> при оплате за год."
     )
     # Keep the menu navigation in a fixed, full-width bottom row.
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton

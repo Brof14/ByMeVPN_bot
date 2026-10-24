@@ -28,8 +28,7 @@ async def cb_guide_menu(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
         "<b>Подключить ByMeVPN</b>\n\n"
-        "Выберите устройство. Мы покажем, как установить Happ и включить VPN. "
-        "Ссылка на подписку находится в разделе «Мои ключи»."
+        "Выберите устройство. Покажем, как установить приложение и включить VPN за несколько шагов."
     )
     await _track_guide_event(callback.from_user.id, "connection_guide_open")
     await send_or_edit(bot, callback, text, connection_guide_kb())
@@ -50,7 +49,7 @@ async def cb_guide_for_key(callback: CallbackQuery, bot: Bot):
         return
     text = (
         f"<b>Подключение · {escape(key.get('remark') or f'Ключ #{key_id}')}</b>\n\n"
-        "Выберите устройство — подключение займёт всего несколько шагов."
+        "Выберите устройство. Покажем, как установить приложение и включить VPN за несколько шагов."
     )
     await send_or_edit(bot, callback, text, connection_guide_kb(key_id))
 
@@ -137,9 +136,10 @@ _GUIDES = {
     ),
     "android": (
         "<b>Android</b>\n\n"
-        "1. Установите Happ из Google Play или скачайте APK по кнопкам ниже.\n"
-        "2. В «Моих ключах» скопируйте ссылку подписки.\n"
-        "3. Добавьте ссылку в Happ и нажмите «Подключить»."
+        "1. Установите Happ.\n"
+        "2. Скопируйте ссылку из «Моих ключей».\n"
+        "3. Добавьте подписку в Happ и включите VPN.\n\n"
+        "Готово. Теперь можно пользоваться ByMeVPN."
     ),
     "android_tv": (
         "<b>Android TV</b>\n\n"
