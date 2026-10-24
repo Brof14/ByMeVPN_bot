@@ -109,16 +109,16 @@ async def _send_autorenew_upcoming(bot: Bot, item: dict, sub: dict) -> None:
     }.get((sub.get("payment_method_type") or "").lower(), "сохранённый способ оплаты")
 
     text = (
-        f"🔁 <b>Подписка продлится автоматически</b>\n\n"
-        f"📅 Дата списания: <b>{date_str}</b> (через {days_left} {get_day_word(days_left)})\n"
-        f"💳 Сумма: <b>{amount} ₽</b> за следующие {sub.get('days') or 30} дней ({devices} устр.)\n"
+        f"<b>Скоро автоматическое продление</b>\n\n"
+        f"Дата списания: <b>{date_str}</b> (через {days_left} {get_day_word(days_left)})\n"
+        f"Сумма: <b>{amount} ₽</b> за следующие {sub.get('days') or 30} дней ({devices} устр.)\n"
         f"Способ оплаты: {pm_title}\n\n"
-        f"✅ Ничего делать не нужно — доступ продолжится без перерывов.\n"
-        f"🔓 Не хотите продлевать? Отключите автопродление в меню ключа — "
+        f"Ничего делать не нужно — доступ продлится автоматически.\n"
+        f"Если продление не нужно, отключите его в настройках ключа — "
         f"доступ сохранится до конца оплаченного периода."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys")],
+        [InlineKeyboardButton(text="Мои ключи", callback_data="my_keys")],
         [InlineKeyboardButton(text="🆘 Поддержка", url="https://t.me/ByMeVPNSupportBot")],
     ])
     await bot.send_message(item["user_id"], text, parse_mode="HTML", reply_markup=kb)
@@ -141,7 +141,7 @@ async def _send_urgent_notification(bot: Bot, item: dict) -> None:
     promo = await validate_promo_code(promo_code) if promo_code else None
     promo_expiry = datetime.fromtimestamp(promo["expires_at"]).strftime("%d.%m.%Y") if promo else None
     text = (
-        f"⏳ <b>До окончания подписки — {days_left} {get_day_word(days_left)}</b>\n\n"
+        f"<b>До окончания подписки — {days_left} {get_day_word(days_left)}</b>\n\n"
         f"Доступ активен до <b>{date_str}</b>. Продлите подписку, чтобы пользоваться VPN и дальше.\n\n"
         + (f"🎁 Промокод <code>{promo_code}</code> даёт <b>30% скидки</b> до {promo_expiry}.\n\n" if promo_expiry else "")
         + "На длительном тарифе ниже цена за месяц: 12 месяцев — 708 ₽ (≈59 ₽/мес)."
@@ -173,8 +173,8 @@ async def _send_warning_notification(bot: Bot, item: dict) -> None:
     promo = await validate_promo_code(promo_code) if promo_code else None
     promo_expiry = datetime.fromtimestamp(promo["expires_at"]).strftime("%d.%m.%Y") if promo else None
     text = (
-        f"📅 <b>Подписка активна до {date_str}</b>\n"
-        f"Осталось {days_left} {get_day_word(days_left)}. Продлить можно заранее — ваши ключи и настройки сохранятся.\n\n"
+        f"<b>Подписка активна до {date_str}</b>\n"
+        f"Осталось {days_left} {get_day_word(days_left)}. Продлите заранее, чтобы сохранить непрерывный доступ. Ключи и настройки останутся прежними.\n\n"
         + (f"🎁 Промокод <code>{promo_code}</code> — <b>30% скидки</b> до {promo_expiry}.\n\n" if promo_expiry else "")
         + "На длительном тарифе ниже цена за месяц: 12 месяцев — 708 ₽ (≈59 ₽/мес)."
     )
@@ -199,7 +199,7 @@ async def _send_early_notification(bot: Bot, item: dict) -> None:
     days_left = max(1, int((item["expiry"] - int(time.time())) / 86400))
 
     text = (
-        f"✅ <b>Подписка активна ещё {days_left} {get_day_word(days_left)}</b>\n\n"
+        f"<b>Подписка активна ещё {days_left} {get_day_word(days_left)}</b>\n\n"
         f"Доступ завершится {date_str}. На тарифе на 12 месяцев месяц стоит около 59 ₽."
     )
 
