@@ -113,7 +113,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         self.assertIn("guide_linux", actions)
         self.assertNotIn("guide_more", actions)
         labels = [button.text for row in markup.inline_keyboard for button in row]
-        self.assertEqual(labels[:4], ["📱 iPhone / iPad", "🤖 Android", "💻 Windows", "🐧 Linux"])
+        self.assertEqual(labels[:4], ["iPhone / iPad", "Android", "Windows", "Linux"])
 
     def test_additional_platforms_keep_mac_and_tv_accessible(self):
         from keyboards import additional_platforms_kb
@@ -161,13 +161,13 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             await cb_partner(callback, bot)
 
         text = send.call_args.args[2]
-        self.assertIn("<b>Ваши бонусы</b>", text)
+        self.assertIn("<b>VPN бесплатно за друзей</b>", text)
         self.assertIn("+15 дней", text)
         self.assertIn("+30 дней", text)
-        self.assertIn("<b>Ваша ссылка для приглашений</b>", text)
-        self.assertIn("<b>Ваши приглашения</b>", text)
-        self.assertIn("Зарегистрировались: <b>1</b>", text)
-        self.assertIn("Начислено: <b>15 дней</b>", text)
+        self.assertIn("<b>Ваша ссылка</b>", text)
+        self.assertIn("Бонусные дни добавляются к вашему VPN", text)
+        self.assertNotIn("Зарегистрировались: <b>1</b>", text)
+        self.assertIn("бот создаст его автоматически", text)
 
     def test_back_is_full_width_and_support_is_not_mixed_into_navigation(self):
         back = back_to_menu().inline_keyboard
