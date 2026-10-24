@@ -194,11 +194,11 @@ def my_keys_list_kb(keys: list) -> InlineKeyboardMarkup:
 def key_detail_kb(key_id: int, has_autorenew: bool = False, autorenew_active: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(
-        InlineKeyboardButton(text="📲 Подключить", callback_data=f"key_instructions:{key_id}"),
-        InlineKeyboardButton(text="🔄 Продлить", callback_data=f"key_renew:{key_id}"),
+        InlineKeyboardButton(text="Подключить", style="success", callback_data=f"key_instructions:{key_id}"),
+        InlineKeyboardButton(text="Продлить", callback_data=f"key_renew:{key_id}"),
     )
-    kb.row(InlineKeyboardButton(text="⚙️ Ещё о подписке", callback_data=f"key_settings:{key_id}"))
-    kb.row(InlineKeyboardButton(text="← Все ключи", callback_data="my_keys"))
+    kb.row(InlineKeyboardButton(text="Управление подпиской", callback_data=f"key_settings:{key_id}"))
+    kb.row(InlineKeyboardButton(text="← Мои ключи", callback_data="my_keys"))
     return kb.as_markup()
 
 
@@ -269,7 +269,7 @@ def confirm_delete_kb(key_id: int) -> InlineKeyboardMarkup:
 def after_key_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(
-        InlineKeyboardButton(text="📲 Подключить VPN", callback_data="connection_guide"),
+        InlineKeyboardButton(text="Подключить VPN", callback_data="connection_guide"),
         InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys"),
     )
     kb.row(InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu"))
