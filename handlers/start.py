@@ -350,11 +350,11 @@ def _intro_trial_offer_text() -> str:
         RECURRING_MONTHLY_PRICE, RECURRING_DAYS,
     )
     return (
-        "<b>Попробуйте ByMeVPN за 1 ₽</b>\\n\\n"
-        f"Полный доступ на {INTRO_TRIAL_DAYS} дня. Подключите до {INTRO_TRIAL_DEVICES} устройств и оцените сервис.\\n\\n"
-        f"Сегодня: <b>{INTRO_TRIAL_PRICE_RUB} ₽</b>\\n"
-        f"Первые {INTRO_TRIAL_DAYS} дня: <b>пробный период</b>\\n"
-        f"Далее: <b>{RECURRING_MONTHLY_PRICE} ₽ / {RECURRING_DAYS} дней</b>\\n\\n"
+        "<b>Попробуйте ByMeVPN за 1 ₽</b>\n\n"
+        f"Полный доступ на {INTRO_TRIAL_DAYS} дня. Подключите до {INTRO_TRIAL_DEVICES} устройств и оцените сервис.\n\n"
+        f"Сегодня: <b>{INTRO_TRIAL_PRICE_RUB} ₽</b>\n"
+        f"Первые {INTRO_TRIAL_DAYS} дня: <b>пробный период</b>\n"
+        f"Далее: <b>{RECURRING_MONTHLY_PRICE} ₽ / {RECURRING_DAYS} дней</b>\n\n"
         "Если способ оплаты сохранён, подписка продлевается автоматически каждые 30 дней. "
         "Отменить автопродление можно в любой момент — оплаченный срок сохранится."
     )
