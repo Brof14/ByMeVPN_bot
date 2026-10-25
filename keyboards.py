@@ -368,9 +368,9 @@ def guide_back_kb() -> InlineKeyboardMarkup:
 def legal_kb() -> InlineKeyboardMarkup:
     """Legal information keyboard - matches screenshot exactly."""
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="Договор публичной оферты", url="https://telegra.ph/DOGOVOR-PUBLICHNOJ-OFERTY-ByMyVPN-03-12"))
-    kb.row(InlineKeyboardButton(text="Политика конфиденциальности", url="https://telegra.ph/POLITIKA-KONFIDENCIALNOSTI-ByMeVPN-03-12"))
-    kb.row(InlineKeyboardButton(text="Соглашение о регулярных платежах", url="https://telegra.ph/SOGLASHENIE-O-REGULYARNYH-REKURRENTNYH-PLATEZHAH-ByMeVPN-03-12"))
+    kb.row(InlineKeyboardButton(text="Договор публичной оферты", url="https://telegra.ph/Publichnaya-oferta-na-okazanie-uslug-ByMeVPN-10-25"))
+    kb.row(InlineKeyboardButton(text="Политика конфиденциальности", url="https://telegra.ph/Politika-v-otnoshenii-obrabotki-personalnyh-dannyh-ByMeVPN-10-25"))
+    kb.row(InlineKeyboardButton(text="Соглашение об автопродлении", url="https://telegra.ph/Soglashenie-ob-avtomaticheskom-prodlenii-podpiski-ByMeVPN-10-25"))
     kb.row(InlineKeyboardButton(text="💳 Автопродление и карта", callback_data="manage_payment_methods"))
     kb.row(InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu"))
     return kb.as_markup()

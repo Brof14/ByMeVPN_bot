@@ -161,9 +161,9 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
         text += f"<s>Без скидки: {original_price} ₽</s>\n"
 
     text += (
-        "\nПродолжая, вы принимаете <a href='https://telegra.ph/DOGOVOR-PUBLICHNOJ-OFERTY-ByMyVPN-03-12'>оферту</a>, "
-        "<a href='https://telegra.ph/POLITIKA-KONFIDENCIALNOSTI-ByMeVPN-03-12'>политику конфиденциальности</a> и "
-        "<a href='https://telegra.ph/SOGLASHENIE-O-REGULYARNYH-REKURRENTNYH-PLATEZHAH-ByMeVPN-03-12'>условия автоплатежей</a>.\n\n"
+        "\nПродолжая, вы принимаете <a href='https://telegra.ph/Publichnaya-oferta-na-okazanie-uslug-ByMeVPN-10-25'>оферту</a>, "
+        "<a href='https://telegra.ph/Politika-v-otnoshenii-obrabotki-personalnyh-dannyh-ByMeVPN-10-25'>политику конфиденциальности</a> и "
+        "<a href='https://telegra.ph/Soglashenie-ob-avtomaticheskom-prodlenii-podpiski-ByMeVPN-10-25'>условия автопродления</a>.\n\n"
         "Доступ будет активирован после подтверждения оплаты.\n"
         f"ЮKassa: если при платеже сохранится способ оплаты, по окончании срока спишется {price_rub} ₽, а доступ продлится ещё на {days} дней. "
         "Автопродление можно отключить в «Моих ключах».\n"
