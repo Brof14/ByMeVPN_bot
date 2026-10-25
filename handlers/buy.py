@@ -304,7 +304,7 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
     if is_yookassa_recurring_supported():
         ar_note = (
             "<b>Автопродление</b> если при оплате сохранится способ оплаты, "
-            f"{price_rub} ₽ будут списываться за выбранный срок ({months} мес.) по его окончании. "
+            f"{price_rub} ₽ будут списываться за выбранный срок ({days // 30} мес.) по его окончании. "
             "Отключить автопродление можно в любой момент в настройках ключа; оплаченный срок сохранится.\n\n"
         )
     else:

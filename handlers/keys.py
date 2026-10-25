@@ -156,7 +156,7 @@ def _pm_tariff_line(sub: dict | None) -> str:
     """Real tariff line from the auto-renew subscription row (no hardcoded data)."""
     if not sub:
         return ""
-    months = sub.get("months") or 1
+    months = (sub.get("days") or (sub.get("months") or 1) * 30) // 30
     devices = sub.get("devices") or 2
     amount = sub.get("amount_rub") or 0
     return f"└ Тариф: {devices} устр., {months} мес. ({amount} ₽ за период)\n"

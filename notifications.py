@@ -144,7 +144,7 @@ async def _send_urgent_notification(bot: Bot, item: dict) -> None:
         f"<b>До окончания подписки — {days_left} {get_day_word(days_left)}</b>\n\n"
         f"Доступ активен до <b>{date_str}</b>. Продлите подписку, чтобы пользоваться VPN и дальше.\n\n"
         + (f"🎁 Промокод <code>{promo_code}</code> даёт <b>30% скидки</b> до {promo_expiry}.\n\n" if promo_expiry else "")
-        + "На длительном тарифе ниже цена за месяц: 12 месяцев — 708 ₽ (≈59 ₽/мес)."
+        + "На длительном тарифе ниже цена за месяц: 15 месяцев — 885 ₽ (≈59 ₽/мес)."
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -176,7 +176,7 @@ async def _send_warning_notification(bot: Bot, item: dict) -> None:
         f"<b>Подписка активна до {date_str}</b>\n"
         f"Осталось {days_left} {get_day_word(days_left)}. Продлите заранее, чтобы сохранить непрерывный доступ. Ключи и настройки останутся прежними.\n\n"
         + (f"🎁 Промокод <code>{promo_code}</code> — <b>30% скидки</b> до {promo_expiry}.\n\n" if promo_expiry else "")
-        + "На длительном тарифе ниже цена за месяц: 12 месяцев — 708 ₽ (≈59 ₽/мес)."
+        + "На длительном тарифе ниже цена за месяц: 15 месяцев — 885 ₽ (≈59 ₽/мес)."
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
