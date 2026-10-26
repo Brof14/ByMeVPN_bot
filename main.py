@@ -29,6 +29,7 @@ from aiogram.types import ErrorEvent
 from config import BOT_TOKEN, ADMIN_ID, REDIS_URL
 from database import init_db, close_db
 from notifications import start_notification_scheduler
+from device_monitor import start_device_monitor
 from xui_client import get_api_client  # stub for 3x-ui (no pre-init needed)
 from async_utils import preload_static_data
 
@@ -217,6 +218,7 @@ async def main() -> None:
 
     # Start background tasks
     scheduler_task = asyncio.create_task(start_notification_scheduler(bot))
+    device_monitor_task = asyncio.create_task(start_device_monitor(bot))
 
     # Start the YooKassa webhook HTTP server in the background.
     # FIX: this used to be imported but never called, so YooKassa's
@@ -243,6 +245,7 @@ async def main() -> None:
     finally:
         # Graceful shutdown
         scheduler_task.cancel()
+        device_monitor_task.cancel()
         webhook_task.cancel()
         autorenew_task.cancel()
         await dp.storage.close()

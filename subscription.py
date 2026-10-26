@@ -384,6 +384,8 @@ async def deliver_key(
             user_id, subscription_url, config_name, client_uuid, days, limit_ip,
             expiry=target_expiry,
         )
+        if user_result.get("created_new_client"):
+            await database.schedule_connection_reminder(key_id, traffic_baseline=0)
 
         # Сохраняем запись о платеже (идемпотентно)
         if is_paid and amount > 0:

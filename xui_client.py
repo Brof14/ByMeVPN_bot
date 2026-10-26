@@ -7,7 +7,8 @@ import logging
 import uuid as uuid_lib
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
+from ipaddress import ip_address
 import asyncio
 
 from py3xui import AsyncApi, Client
@@ -24,6 +25,10 @@ from config import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class CredentialRotationRollbackError(RuntimeError):
+    """The panel changed VPN credentials but did not confirm rollback."""
 
 
 def _inbound_name(inbound_id: int, inbound=None) -> str:
@@ -338,6 +343,7 @@ async def create_xui_user(
                 limit_ip=limit_ip,
             )
             if update_res:
+                update_res["created_new_client"] = False
                 return update_res
             # Never fall through to client.add after finding a live account.
             # A partial add can leave inbounds with mixed expiry/device limits,
@@ -584,6 +590,7 @@ async def create_xui_user(
             "vless_links": vless_links,
             "uuid": client_uuid,
             "sub_id": sub_id,
+            "created_new_client": True,
         }
 
     except Exception as e:
@@ -621,6 +628,297 @@ async def get_xui_user(user_id: int) -> Optional[Dict[str, Any]]:
     except Exception as e:
         logger.error("get_xui_user FAILED for user=%d: %s", user_id, e)
         return None
+
+
+async def get_xui_connection_info(user_id: int) -> Dict[str, Any]:
+    """Return the profile-level online state and remembered source IPs.
+
+    3x-ui exposes online state per VPN profile, not per IP/device. Its IP API
+    returns source addresses with last-seen timestamps, so callers must not
+    present individual IPs as currently online devices.
+    """
+    api = await _get_api()
+    client_api = api.client
+    email = str(user_id)
+
+    async def post_json(path: str) -> dict:
+        url = client_api._url(path)
+        response = await client_api._post(url, {"Accept": "application/json"}, {})
+        payload = response.json()
+        if not isinstance(payload, dict) or not payload.get("success"):
+            raise RuntimeError("3x-ui returned an unsuccessful response")
+        return payload
+
+    encoded_email = quote(email, safe="")
+    ip_payload, online_payload = await asyncio.gather(
+        _api_call_with_retry(post_json, f"panel/api/clients/ips/{encoded_email}"),
+        _api_call_with_retry(post_json, "panel/api/clients/onlines"),
+    )
+
+    raw_ips = ip_payload.get("obj")
+    if isinstance(raw_ips, str):
+        import json
+        try:
+            raw_ips = json.loads(raw_ips)
+        except (TypeError, ValueError):
+            raw_ips = [raw_ips]
+    if isinstance(raw_ips, dict):
+        raw_ips = [raw_ips]
+    if not isinstance(raw_ips, list):
+        raw_ips = []
+
+    ips = []
+    for item in raw_ips:
+        raw_ip = ""
+        timestamp = 0
+        if isinstance(item, dict):
+            raw_ip = str(item.get("ip") or item.get("address") or "").strip()
+            try:
+                timestamp = int(item.get("timestamp") or item.get("lastSeen") or 0)
+            except (TypeError, ValueError):
+                timestamp = 0
+        elif isinstance(item, str):
+            # Current 3x-ui API format: "address (unix timestamp)".
+            value = item.strip()
+            if value.endswith(")") and " (" in value:
+                raw_ip, raw_time = value.rsplit(" (", 1)
+                try:
+                    timestamp = int(raw_time[:-1])
+                except ValueError:
+                    timestamp = 0
+            else:
+                raw_ip = value
+        try:
+            normalized_ip = str(ip_address(raw_ip))
+        except ValueError:
+            continue
+        ips.append({"ip": normalized_ip, "last_seen": timestamp})
+
+    raw_online = online_payload.get("obj")
+    is_online = isinstance(raw_online, list) and email in {str(value) for value in raw_online}
+    ips.sort(key=lambda row: row["last_seen"], reverse=True)
+    return {"is_online": is_online, "ips": ips}
+
+
+async def clear_xui_client_ips(user_id: int) -> bool:
+    """Clear all remembered source IPs for this user's shared VPN profile."""
+    api = await _get_api()
+    client_api = api.client
+    email = quote(str(user_id), safe="")
+    url = client_api._url(f"panel/api/clients/clearIps/{email}")
+
+    async def clear() -> bool:
+        response = await client_api._post(url, {"Accept": "application/json"}, {})
+        payload = response.json()
+        if not isinstance(payload, dict) or not payload.get("success"):
+            raise RuntimeError("3x-ui could not clear the IP list")
+        return True
+
+    return await _api_call_with_retry(clear)
+
+
+async def get_xui_devices(user_id: int) -> Dict[str, Any]:
+    """Read the registered Happ HWID devices and actual device limits."""
+    api = await _get_api()
+    client_api = api.client
+    email = quote(str(user_id), safe="")
+
+    async def request_json(method: str, path: str, payload: Optional[dict] = None) -> dict:
+        url = client_api._url(path)
+        if method == "POST":
+            response = await client_api._post(url, {"Accept": "application/json"}, payload or {})
+        else:
+            response = await client_api._get(url, {"Accept": "application/json"})
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict) or not data.get("success"):
+            raise RuntimeError("3x-ui device API returned an unsuccessful response")
+        return data
+
+    client_data, hwid_data = await asyncio.gather(
+        _api_call_with_retry(request_json, "GET", f"panel/api/clients/get/{email}"),
+        _api_call_with_retry(request_json, "POST", f"panel/api/clients/hwids/{email}", {}),
+    )
+    client_obj = client_data.get("obj") or {}
+    client_obj = client_obj.get("client") if isinstance(client_obj, dict) else None
+    if not isinstance(client_obj, dict):
+        raise RuntimeError("3x-ui client details are unavailable")
+
+    raw_devices = hwid_data.get("obj")
+    if not isinstance(raw_devices, list):
+        raw_devices = []
+    devices = []
+    for item in raw_devices:
+        if not isinstance(item, dict):
+            continue
+        try:
+            device_id = int(item.get("id"))
+            first_seen = max(0, int(item.get("firstSeen") or 0) // 1000)
+            last_seen = max(0, int(item.get("lastSeen") or 0) // 1000)
+        except (TypeError, ValueError):
+            continue
+        devices.append({
+            "id": device_id,
+            "first_seen": first_seen,
+            "last_seen": last_seen,
+            "model": str(item.get("deviceModel") or "").strip()[:120],
+            "os": str(item.get("deviceOs") or "").strip()[:80],
+            "os_version": str(item.get("osVersion") or "").strip()[:80],
+            "user_agent": str(item.get("userAgent") or "").strip()[:160],
+        })
+    devices.sort(key=lambda item: item["last_seen"], reverse=True)
+    return {
+        "devices": devices,
+        "limit_hwid": max(0, int(client_obj.get("limitHwid") or 0)),
+        "limit_ip": max(0, int(client_obj.get("limitIp") or 0)),
+    }
+
+
+async def get_xui_online_user_ids() -> set[int]:
+    """Return numeric Telegram IDs with an active VPN connection."""
+    api = await _get_api()
+    client_api = api.client
+
+    async def request() -> set[int]:
+        response = await client_api._post(
+            client_api._url("panel/api/clients/onlines"), {"Accept": "application/json"}, {},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or not payload.get("success"):
+            raise RuntimeError("3x-ui online-clients API returned an unsuccessful response")
+        raw = payload.get("obj")
+        result = set()
+        if isinstance(raw, list):
+            for value in raw:
+                try:
+                    result.add(int(value))
+                except (TypeError, ValueError):
+                    continue
+        return result
+
+    return await _api_call_with_retry(request)
+
+
+async def delete_xui_hwid_device(user_id: int, device_id: int) -> bool:
+    """Remove one registered Happ device; this does not revoke its existing config."""
+    api = await _get_api()
+    client_api = api.client
+    email = quote(str(user_id), safe="")
+    device_id = int(device_id)
+
+    async def remove() -> bool:
+        url = client_api._url(f"panel/api/clients/hwids/{email}/{device_id}")
+        response = await client_api._request_with_retry(
+            "DELETE", url, {"Accept": "application/json"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or not payload.get("success"):
+            raise RuntimeError("3x-ui could not remove the device")
+        return True
+
+    return await _api_call_with_retry(remove)
+
+
+async def rotate_xui_client_credentials(user_id: int) -> Optional[Dict[str, str]]:
+    """Rotate subscription id and UUID while preserving all other panel settings."""
+    api = await _get_api()
+    client_api = api.client
+    email = str(user_id)
+    encoded_email = quote(email, safe="")
+    old_response = await _api_call_with_retry(
+        client_api._get, client_api._url(f"panel/api/clients/get/{encoded_email}"),
+        {"Accept": "application/json"},
+    )
+    old_response.raise_for_status()
+    old_data = old_response.json()
+    current = ((old_data.get("obj") or {}).get("client") or {}) if isinstance(old_data, dict) else {}
+    if not isinstance(current, dict) or not current.get("uuid") or not current.get("subId"):
+        raise RuntimeError("Current VPN credentials are unavailable")
+
+    old_uuid = str(current["uuid"])
+    old_sub_id = str(current["subId"])
+    new_uuid = str(uuid_lib.uuid4())
+    new_sub_id = uuid_lib.uuid4().hex[:16]
+    updated = dict(current)
+    updated["uuid"] = new_uuid
+    updated["subId"] = new_sub_id
+    url = client_api._url(f"panel/api/clients/update/{encoded_email}")
+
+    async def update(payload: dict) -> None:
+        response = await client_api._post(url, {"Accept": "application/json"}, payload)
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict) or not data.get("success"):
+            raise RuntimeError("3x-ui rejected credential rotation")
+
+    await _api_call_with_retry(update, updated)
+
+    # Verify the panel committed both credentials before changing the bot DB.
+    try:
+        verify = await _api_call_with_retry(
+            client_api._get, client_api._url(f"panel/api/clients/get/{encoded_email}"),
+            {"Accept": "application/json"},
+        )
+        verify.raise_for_status()
+        verify_obj = ((verify.json().get("obj") or {}).get("client") or {})
+    except Exception:
+        verify_obj = {}
+    if verify_obj.get("uuid") != new_uuid or verify_obj.get("subId") != new_sub_id:
+        # Best-effort rollback, preserving the same full client payload.
+        rollback = dict(updated)
+        rollback["uuid"] = old_uuid
+        rollback["subId"] = old_sub_id
+        try:
+            await _api_call_with_retry(update, rollback)
+        except Exception:
+            logger.critical("Credential rotation rollback failed for user %s", email)
+            raise CredentialRotationRollbackError("credential rotation rollback failed")
+        raise RuntimeError("3x-ui did not confirm credential rotation")
+
+    return {
+        "uuid": new_uuid,
+        "subscription_url": _build_sub_url(new_sub_id),
+        "previous_uuid": old_uuid,
+        "previous_sub_id": old_sub_id,
+    }
+
+
+async def restore_xui_client_credentials(user_id: int, previous_uuid: str, previous_sub_id: str) -> bool:
+    """Compensating rollback used if the bot DB cannot save a successful rotation."""
+    api = await _get_api()
+    client_api = api.client
+    email = quote(str(user_id), safe="")
+    response = await _api_call_with_retry(
+        client_api._get, client_api._url(f"panel/api/clients/get/{email}"),
+        {"Accept": "application/json"},
+    )
+    response.raise_for_status()
+    obj = response.json().get("obj") or {}
+    current = obj.get("client") if isinstance(obj, dict) else None
+    if not isinstance(current, dict):
+        return False
+    current = dict(current)
+    current["uuid"] = previous_uuid
+    current["subId"] = previous_sub_id
+    url = client_api._url(f"panel/api/clients/update/{email}")
+
+    async def update() -> None:
+        result = await client_api._post(url, {"Accept": "application/json"}, current)
+        result.raise_for_status()
+        data = result.json()
+        if not isinstance(data, dict) or not data.get("success"):
+            raise RuntimeError("3x-ui rejected credential rollback")
+
+    await _api_call_with_retry(update)
+    verify = await _api_call_with_retry(
+        client_api._get, client_api._url(f"panel/api/clients/get/{email}"),
+        {"Accept": "application/json"},
+    )
+    verify.raise_for_status()
+    restored = ((verify.json().get("obj") or {}).get("client") or {})
+    return restored.get("uuid") == previous_uuid and restored.get("subId") == previous_sub_id
 
 
 async def delete_xui_user(user_id: int) -> bool:

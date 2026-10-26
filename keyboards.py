@@ -197,14 +197,72 @@ def key_detail_kb(key_id: int, has_autorenew: bool = False, autorenew_active: bo
         InlineKeyboardButton(text="Подключить", style="success", callback_data=f"key_instructions:{key_id}"),
         InlineKeyboardButton(text="Продлить", callback_data=f"key_renew:{key_id}"),
     )
+    kb.row(InlineKeyboardButton(text="📱 Мои устройства", callback_data=f"key_devices:{key_id}"))
     kb.row(InlineKeyboardButton(text="Управление подпиской", callback_data=f"key_settings:{key_id}"))
     kb.row(InlineKeyboardButton(text="← Мои ключи", callback_data="my_keys"))
+    return kb.as_markup()
+
+
+def key_devices_kb(key_id: int, devices: list[dict] | None = None, page: int = 0) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    devices = devices or []
+    page_size = 10
+    page = max(0, min(int(page), max(0, (len(devices) - 1) // page_size)))
+    start = page * page_size
+    for device in devices[start:start + page_size]:
+        label = device.get("model") or device.get("user_agent") or device.get("os") or "Устройство"
+        label = label[:34]
+        kb.row(InlineKeyboardButton(
+            text=f"🔗 {label} · {device.get('last_seen_label', '—')}"[:64],
+            callback_data=f"key_device:{key_id}:{device['id']}",
+        ))
+    pages = max(1, (len(devices) + page_size - 1) // page_size)
+    if pages > 1:
+        row = []
+        if page > 0:
+            row.append(InlineKeyboardButton(text="←", callback_data=f"key_devices:{key_id}:{page - 1}"))
+        row.append(InlineKeyboardButton(text=f"{page + 1}/{pages}", callback_data=f"key_devices:{key_id}:{page}"))
+        if page + 1 < pages:
+            row.append(InlineKeyboardButton(text="→", callback_data=f"key_devices:{key_id}:{page + 1}"))
+        kb.row(*row)
+    kb.row(InlineKeyboardButton(text="↻ Обновить список", callback_data=f"key_devices:{key_id}"))
+    kb.row(InlineKeyboardButton(text="💎 Изменить тариф", callback_data=f"key_renew:{key_id}"))
+    kb.row(InlineKeyboardButton(text="← К ключу", callback_data=f"key_info:{key_id}"))
+    return kb.as_markup()
+
+
+def key_device_detail_kb(key_id: int, device_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(
+        text="Удалить устройство", callback_data=f"key_device_delete_prompt:{key_id}:{device_id}", style="danger",
+    ))
+    kb.row(InlineKeyboardButton(text="Перевыпустить ссылку", callback_data=f"key_reissue_prompt:{key_id}"))
+    kb.row(InlineKeyboardButton(text="← К устройствам", callback_data=f"key_devices:{key_id}"))
+    return kb.as_markup()
+
+
+def confirm_delete_device_kb(key_id: int, device_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(
+        text="Да, удалить устройство", callback_data=f"key_device_delete:{key_id}:{device_id}", style="danger",
+    ))
+    kb.row(InlineKeyboardButton(text="Отмена", callback_data=f"key_device:{key_id}:{device_id}"))
+    return kb.as_markup()
+
+
+def confirm_reissue_key_kb(key_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(
+        text="Да, перевыпустить ссылку", callback_data=f"key_reissue_confirm:{key_id}", style="danger",
+    ))
+    kb.row(InlineKeyboardButton(text="Отмена", callback_data=f"key_info:{key_id}"))
     return kb.as_markup()
 
 
 def key_settings_kb(key_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="💳 Автопродление и оплата", callback_data=f"manage_payment_methods:{key_id}"))
+    kb.row(InlineKeyboardButton(text="🔄 Перевыпустить ссылку", callback_data=f"key_reissue_prompt:{key_id}", style="danger"))
     kb.row(InlineKeyboardButton(text="🗑 Удалить ключ", callback_data=f"key_delete:{key_id}", style="danger"))
     kb.row(InlineKeyboardButton(text="← К ключу", callback_data=f"key_info:{key_id}"))
     return kb.as_markup()

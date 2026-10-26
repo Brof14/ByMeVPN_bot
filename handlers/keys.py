@@ -1,5 +1,6 @@
 """My Keys: list, info, renew, delete. (Fix: guide button, photos)"""
 import time
+import asyncio
 import logging
 from html import escape
 
@@ -8,12 +9,20 @@ from aiogram.fsm.context import FSMContext
 from aiogram.filters import StateFilter
 from aiogram.types import CallbackQuery, Message
 
-from database import get_user_keys, get_key_by_id, delete_key_by_id
-from xui_client import delete_xui_user, get_xui_user, format_traffic
+from database import (
+    get_user_keys, get_key_by_id, delete_key_by_id, update_user_key_credentials,
+)
+from xui_client import (
+    delete_xui_user, get_xui_user, format_traffic,
+    get_xui_devices, delete_xui_hwid_device, rotate_xui_client_credentials,
+    restore_xui_client_credentials, CredentialRotationRollbackError,
+)
 from keyboards import (
     my_keys_kb, my_keys_list_kb, key_detail_kb, confirm_delete_kb,
     payment_kb, back_to_menu, connection_guide_kb, tariff_selection_kb,
     autorenew_cancel_confirm_kb, manage_payment_methods_kb, key_settings_kb,
+    key_devices_kb, key_device_detail_kb, confirm_delete_device_kb,
+    confirm_reissue_key_kb,
 )
 from utils import send_with_photo, send_or_edit, safe_answer
 from constants import format_timestamp as fmt_date, format_days_left as fmt_days_left
@@ -21,6 +30,7 @@ from states import BuyFlow
 
 logger = logging.getLogger(__name__)
 router = Router()
+_credential_rotation_lock = asyncio.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +139,229 @@ async def cb_key_info(callback: CallbackQuery, bot: Bot):
     )
 
     await send_or_edit(bot, callback, text, key_detail_kb(key_id, has_autorenew=has_autorenew, autorenew_active=autorenew_active))
+
+
+def _time_ago(timestamp: int) -> str:
+    seconds = max(0, int(time.time()) - int(timestamp))
+    if seconds < 60:
+        return "только что"
+    if seconds < 3600:
+        return f"{seconds // 60} мин назад"
+    if seconds < 86400:
+        return f"{seconds // 3600} ч назад"
+    days = seconds // 86400
+    last_two = days % 100
+    last = days % 10
+    word = "день" if last == 1 and last_two != 11 else (
+        "дня" if last in (2, 3, 4) and last_two not in (12, 13, 14) else "дней"
+    )
+    return f"{days} {word} назад"
+
+
+async def _key_devices_view(user_id: int, key: dict, page: int = 0) -> tuple[str, object]:
+    info = await get_xui_devices(user_id)
+    devices = info["devices"]
+    for device in devices:
+        device["last_seen_label"] = _time_ago(device["last_seen"]) if device["last_seen"] else "давно"
+    if info["limit_hwid"]:
+        usage_line = f"Занято мест: <b>{len(devices)} из {info['limit_hwid']}</b>"
+    else:
+        usage_line = f"Сохранено устройств: <b>{len(devices)}</b>"
+    lines = [
+        "<b>📱 Устройства</b>",
+        usage_line,
+        f"Одновременных подключений: <b>{info['limit_ip'] or 'без лимита'}</b>",
+        "Трафик общий для всех устройств.",
+    ]
+    if devices:
+        lines.extend(["", "Выберите устройство, чтобы посмотреть сведения или удалить его."])
+        pages = max(1, (len(devices) + 9) // 10)
+        if pages > 1:
+            lines.append(f"Страница {min(page + 1, pages)} из {pages}")
+        lines.append("Тариф с другим лимитом можно выбрать при продлении; сумму бот покажет до оплаты.")
+    else:
+        lines.extend(["", "Список заполнится после подключения через Happ. Другие приложения могут не передавать название устройства и систему."])
+    return "\n".join(lines), key_devices_kb(key["id"], devices, page)
+
+
+@router.callback_query(F.data.startswith("key_devices:"))
+async def cb_key_devices(callback: CallbackQuery, bot: Bot):
+    try:
+        parts = callback.data.split(":")
+        key_id = int(parts[1])
+        page = max(0, int(parts[2])) if len(parts) > 2 else 0
+    except (IndexError, ValueError):
+        await safe_answer(callback, "Не удалось открыть устройства.", alert=True)
+        return
+    key = await get_key_by_id(key_id)
+    if not key or key["user_id"] != callback.from_user.id:
+        await safe_answer(callback, "Ключ не найден.", alert=True)
+        return
+    await safe_answer(callback)
+    try:
+        text, keyboard = await _key_devices_view(callback.from_user.id, key, page)
+    except Exception:
+        logger.exception("Could not load connection details for user %s", callback.from_user.id)
+        await send_or_edit(bot, callback,
+                           "<b>Не удалось загрузить устройства</b>\n\nПопробуйте обновить список чуть позже.",
+                           key_devices_kb(key_id))
+        return
+    await send_or_edit(bot, callback, text, keyboard)
+
+
+@router.callback_query(F.data.startswith("key_device:"))
+async def cb_key_device(callback: CallbackQuery, bot: Bot):
+    try:
+        _, raw_key_id, raw_device_id = callback.data.split(":", 2)
+        key_id, device_id = int(raw_key_id), int(raw_device_id)
+    except (IndexError, ValueError):
+        await safe_answer(callback, "Устройство не найдено.", alert=True)
+        return
+    key = await get_key_by_id(key_id)
+    if not key or key["user_id"] != callback.from_user.id:
+        await safe_answer(callback, "Ключ не найден.", alert=True)
+        return
+    await safe_answer(callback)
+    try:
+        info = await get_xui_devices(callback.from_user.id)
+        device = next((item for item in info["devices"] if item["id"] == device_id), None)
+        if not device:
+            await send_or_edit(bot, callback, "Это устройство уже удалено.", key_devices_kb(key_id, info["devices"]))
+            return
+        name = escape(device["model"] or device["user_agent"] or "Устройство")
+        system = " ".join(part for part in (device["os"], device["os_version"]) if part)
+        last_seen = _time_ago(device["last_seen"]) if device["last_seen"] else "неизвестно"
+        text = (
+            "<b>📱 Устройство</b>\n"
+            f"🔗 {name}\n"
+            f"⚙️ Система: {escape(system or 'не определена')}\n"
+            f"🕒 Последняя активность: {last_seen}\n\n"
+            "Удаление освободит место, если для подписки задан лимит. Если устройство снова обновит подписку, "
+            "оно может зарегистрироваться повторно. Чтобы прекратить доступ, перевыпустите ссылку."
+        )
+        await send_or_edit(bot, callback, text, key_device_detail_kb(key_id, device_id))
+    except Exception:
+        logger.exception("Could not load device %s for user %s", device_id, callback.from_user.id)
+        await send_or_edit(bot, callback, "Не удалось загрузить устройство. Обновите список чуть позже.", key_devices_kb(key_id))
+
+
+@router.callback_query(F.data.startswith("key_device_delete_prompt:"))
+async def cb_key_device_delete_prompt(callback: CallbackQuery, bot: Bot):
+    try:
+        _, raw_key_id, raw_device_id = callback.data.split(":", 2)
+        key_id, device_id = int(raw_key_id), int(raw_device_id)
+    except (IndexError, ValueError):
+        await safe_answer(callback, "Не удалось выполнить действие.", alert=True)
+        return
+    key = await get_key_by_id(key_id)
+    if not key or key["user_id"] != callback.from_user.id:
+        await safe_answer(callback, "Ключ не найден.", alert=True)
+        return
+    await safe_answer(callback)
+    text = (
+        "<b>Удалить это устройство?</b>\n\n"
+        "Оно освободит место, если включён лимит устройств. Если на нём останется ссылка, устройство может "
+        "зарегистрироваться снова. Для прекращения доступа перевыпустите ссылку подписки."
+    )
+    await send_or_edit(bot, callback, text, confirm_delete_device_kb(key_id, device_id))
+
+
+@router.callback_query(F.data.startswith("key_device_delete:"))
+async def cb_key_device_delete(callback: CallbackQuery, bot: Bot):
+    try:
+        _, raw_key_id, raw_device_id = callback.data.split(":", 2)
+        key_id, device_id = int(raw_key_id), int(raw_device_id)
+    except (IndexError, ValueError):
+        await safe_answer(callback, "Не удалось выполнить действие.", alert=True)
+        return
+    key = await get_key_by_id(key_id)
+    if not key or key["user_id"] != callback.from_user.id:
+        await safe_answer(callback, "Ключ не найден.", alert=True)
+        return
+    try:
+        await delete_xui_hwid_device(callback.from_user.id, device_id)
+    except Exception:
+        logger.exception("Could not remove device %s for user %s", device_id, callback.from_user.id)
+        await safe_answer(callback, "Не удалось удалить устройство. Попробуйте позже.", alert=True)
+        return
+    await safe_answer(callback, "Устройство удалено")
+    try:
+        text, keyboard = await _key_devices_view(callback.from_user.id, key)
+        await send_or_edit(bot, callback, text, keyboard)
+    except Exception:
+        logger.exception("Could not refresh device list after deleting for user %s", callback.from_user.id)
+        await send_or_edit(bot, callback, "Устройство удалено.", key_devices_kb(key_id))
+
+
+@router.callback_query(F.data.startswith("key_reissue_prompt:"))
+async def cb_key_reissue_prompt(callback: CallbackQuery, bot: Bot):
+    try:
+        key_id = int(callback.data.split(":", 1)[1])
+    except (IndexError, ValueError):
+        await safe_answer(callback, "Ключ не найден.", alert=True)
+        return
+    key = await get_key_by_id(key_id)
+    if not key or key["user_id"] != callback.from_user.id:
+        await safe_answer(callback, "Ключ не найден.", alert=True)
+        return
+    await safe_answer(callback)
+    text = (
+        "<b>Перевыпустить ссылку и ключ доступа?</b>\n\n"
+        "Текущие подключения сразу отключатся. На каждом устройстве нужно будет добавить новую ссылку.\n"
+        "Доступ обновится для всех ключей аккаунта. Срок, тариф и трафик сохранятся."
+    )
+    await send_or_edit(bot, callback, text, confirm_reissue_key_kb(key_id))
+
+
+@router.callback_query(F.data.startswith("key_reissue_confirm:"))
+async def cb_key_reissue_confirm(callback: CallbackQuery, bot: Bot):
+    try:
+        key_id = int(callback.data.split(":", 1)[1])
+    except (IndexError, ValueError):
+        await safe_answer(callback, "Ключ не найден.", alert=True)
+        return
+    key = await get_key_by_id(key_id)
+    if not key or key["user_id"] != callback.from_user.id:
+        await safe_answer(callback, "Ключ не найден.", alert=True)
+        return
+    await safe_answer(callback, "Обновляю ссылку…")
+    try:
+        async with _credential_rotation_lock:
+            rotated = await rotate_xui_client_credentials(callback.from_user.id)
+            if not rotated:
+                raise RuntimeError("VPN credentials were not rotated")
+            saved = await update_user_key_credentials(
+                callback.from_user.id, rotated["uuid"], rotated["subscription_url"],
+            )
+            if not saved:
+                try:
+                    restored = await restore_xui_client_credentials(
+                        callback.from_user.id, rotated["previous_uuid"], rotated["previous_sub_id"],
+                    )
+                except Exception:
+                    restored = False
+                    logger.exception("Credential rollback failed for user %s", callback.from_user.id)
+                if not restored:
+                    logger.critical("VPN credentials rotated in panel but DB update and rollback failed for user %s", callback.from_user.id)
+                await send_or_edit(bot, callback,
+                                   "Не удалось завершить перевыпуск. " + (
+                                       "Текущий доступ восстановлен." if restored else
+                                       "Панель не подтвердила восстановление доступа. Напишите в поддержку, поможем восстановить подключение."
+                                   ), back_to_menu())
+                return
+        await send_or_edit(bot, callback,
+                           "Ссылка перевыпущена. Старые подключения отключены. Откройте ключ и добавьте новую ссылку на устройствах.",
+                           key_devices_kb(key_id))
+    except CredentialRotationRollbackError:
+        logger.exception("Credential rotation rollback failed for user %s", callback.from_user.id)
+        await send_or_edit(bot, callback,
+                           "Не удалось подтвердить восстановление доступа. Напишите в поддержку — поможем вернуть подключение.",
+                           back_to_menu())
+    except Exception:
+        logger.exception("Could not reissue VPN link for user %s", callback.from_user.id)
+        await send_or_edit(bot, callback,
+                           "Не удалось перевыпустить ссылку. Изменения не применены; попробуйте позже.",
+                           confirm_reissue_key_kb(key_id))
 
 
 @router.callback_query(F.data.startswith("key_settings:"))

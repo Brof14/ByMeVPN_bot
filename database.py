@@ -59,10 +59,25 @@ CREATE TABLE IF NOT EXISTS keys (
     created  INTEGER NOT NULL,
     expiry   INTEGER NOT NULL,
     last_notification_at INTEGER DEFAULT 0,
+    connect_reminder_status TEXT NOT NULL DEFAULT 'disabled',
+    connect_reminder_due INTEGER NOT NULL DEFAULT 0,
+    connect_traffic_baseline INTEGER NOT NULL DEFAULT 0,
+    connect_reminder_attempts INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (user_id) REFERENCES users(user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_keys_user   ON keys(user_id);
 CREATE INDEX IF NOT EXISTS idx_keys_expiry ON keys(expiry);
+
+CREATE TABLE IF NOT EXISTS known_hwid_devices (
+    user_id INTEGER NOT NULL,
+    device_id INTEGER NOT NULL,
+    first_seen INTEGER NOT NULL DEFAULT 0,
+    last_seen INTEGER NOT NULL DEFAULT 0,
+    notified_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, device_id)
+);
+CREATE INDEX IF NOT EXISTS idx_known_hwid_devices_pending
+    ON known_hwid_devices(notified_at, user_id);
 
 CREATE TABLE IF NOT EXISTS provisioning_intents (
     provider TEXT NOT NULL,
@@ -427,6 +442,23 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         logger.info("Migration: added last_notification_at column to keys table")
     except Exception:
         pass  # Column already exists
+
+    # One-time onboarding reminder for newly issued keys that have no VPN traffic.
+    for column, definition in (
+        ("connect_reminder_status", "TEXT NOT NULL DEFAULT 'disabled'"),
+        ("connect_reminder_due", "INTEGER NOT NULL DEFAULT 0"),
+        ("connect_traffic_baseline", "INTEGER NOT NULL DEFAULT 0"),
+        ("connect_reminder_attempts", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        try:
+            await db.execute(f"ALTER TABLE keys ADD COLUMN {column} {definition}")
+            logger.info("Migration: added %s to keys table", column)
+        except Exception:
+            pass  # Column already exists
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_keys_connect_reminder "
+        "ON keys(connect_reminder_status, connect_reminder_due)"
+    )
 
     # Migration: add email column for existing databases
     try:
@@ -1186,6 +1218,66 @@ async def add_key(
     return cur.lastrowid
 
 
+async def schedule_connection_reminder(
+    key_id: int, traffic_baseline: int = 0, delay_seconds: int = 7200,
+) -> bool:
+    """Schedule one connection nudge for a newly issued key."""
+    db = await get_db()
+    now = int(time.time())
+    cur = await db.execute(
+        "UPDATE keys SET connect_reminder_status='pending', connect_reminder_due=?, "
+        "connect_traffic_baseline=?, connect_reminder_attempts=0 "
+        "WHERE id=? AND connect_reminder_status='disabled'",
+        (now + max(0, int(delay_seconds)), max(0, int(traffic_baseline)), key_id),
+    )
+    await db.commit()
+    return cur.rowcount == 1
+
+
+async def get_due_connection_reminders(limit: int = 25) -> list[dict]:
+    db = await get_db()
+    now = int(time.time())
+    cur = await db.execute(
+        "SELECT id, user_id, created, expiry, connect_traffic_baseline, "
+        "connect_reminder_attempts FROM keys "
+        "WHERE connect_reminder_status='pending' AND connect_reminder_due<=? "
+        "ORDER BY connect_reminder_due ASC LIMIT ?",
+        (now, max(1, min(int(limit), 100))),
+    )
+    return [
+        {
+            "key_id": row[0], "user_id": row[1], "created": row[2],
+            "expiry": row[3], "traffic_baseline": row[4], "attempts": row[5],
+        }
+        for row in await cur.fetchall()
+    ]
+
+
+async def update_connection_reminder(key_id: int, status: str) -> None:
+    if status not in {"sent", "connected", "expired", "failed"}:
+        raise ValueError("invalid connection reminder status")
+    db = await get_db()
+    await db.execute(
+        "UPDATE keys SET connect_reminder_status=? WHERE id=? AND connect_reminder_status='pending'",
+        (status, key_id),
+    )
+    await db.commit()
+
+
+async def retry_connection_reminder(key_id: int, attempts: int) -> None:
+    """Back off failed Telegram sends and stop after three attempts."""
+    db = await get_db()
+    attempts = int(attempts) + 1
+    status = "failed" if attempts >= 3 else "pending"
+    next_try = int(time.time()) + 900
+    await db.execute(
+        "UPDATE keys SET connect_reminder_status=?, connect_reminder_attempts=?, "
+        "connect_reminder_due=? WHERE id=? AND connect_reminder_status='pending'",
+        (status, attempts, next_try, key_id),
+    )
+    await db.commit()
+
+
 async def get_or_create_provisioning_intent(
     provider: str, provider_payment_id: str, user_id: int, target_expiry: int,
 ) -> int:
@@ -1262,6 +1354,68 @@ async def update_key_uuid(key_id: int, new_uuid: str) -> bool:
     except Exception as e:
         logger.error("Failed to update key uuid: %s", e)
         return False
+
+
+async def update_user_key_credentials(user_id: int, new_uuid: str, new_subscription_url: str) -> bool:
+    """Update every saved link for this user's shared panel client atomically."""
+    db = await get_db()
+    try:
+        async with _db_semaphore:
+            await db.execute("BEGIN IMMEDIATE")
+            cur = await db.execute(
+                "UPDATE keys SET uuid=?, key=? WHERE user_id=?",
+                (new_uuid, new_subscription_url, user_id),
+            )
+            await db.commit()
+        return cur.rowcount > 0
+    except Exception as e:
+        async with _db_semaphore:
+            await db.rollback()
+        logger.error("Failed to rotate saved VPN credentials for user %s: %s", user_id, e)
+        return False
+
+
+async def remember_hwid_devices(user_id: int, devices: list[dict], monitor_started_at: int) -> list[dict]:
+    """Record observed panel device IDs and return newly registered devices to notify about."""
+    db = await get_db()
+    now = int(time.time())
+    pending = []
+    async with _db_semaphore:
+        for device in devices:
+            device_id = int(device["id"])
+            first_seen = max(0, int(device.get("first_seen") or 0))
+            last_seen = max(0, int(device.get("last_seen") or 0))
+            # Existing devices discovered after a bot restart are silently seeded;
+            # registrations created since this monitor started trigger a notice.
+            muted = now if first_seen <= monitor_started_at else 0
+            await db.execute(
+                "INSERT OR IGNORE INTO known_hwid_devices(user_id,device_id,first_seen,last_seen,notified_at) "
+                "VALUES(?,?,?,?,?)",
+                (user_id, device_id, first_seen, last_seen, muted),
+            )
+            await db.execute(
+                "UPDATE known_hwid_devices SET last_seen=MAX(last_seen,?) WHERE user_id=? AND device_id=?",
+                (last_seen, user_id, device_id),
+            )
+            cur = await db.execute(
+                "SELECT notified_at FROM known_hwid_devices WHERE user_id=? AND device_id=?",
+                (user_id, device_id),
+            )
+            row = await cur.fetchone()
+            if row and not row[0] and first_seen > monitor_started_at:
+                pending.append(device)
+        await db.commit()
+    return pending
+
+
+async def mark_hwid_device_notified(user_id: int, device_id: int) -> None:
+    db = await get_db()
+    async with _db_semaphore:
+        await db.execute(
+            "UPDATE known_hwid_devices SET notified_at=? WHERE user_id=? AND device_id=? AND notified_at=0",
+            (int(time.time()), user_id, int(device_id)),
+        )
+        await db.commit()
 
 
 async def get_key_by_uuid(uuid: str) -> Optional[dict]:

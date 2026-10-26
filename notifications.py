@@ -22,6 +22,8 @@ from config import ADMIN_ID, DB_FILE
 from database import (
     get_keys_nearing_expiry, create_promo_code, validate_promo_code,
     update_key_last_notification, is_promotional_opted_out,
+    get_due_connection_reminders, update_connection_reminder,
+    retry_connection_reminder,
 )
 
 logger = logging.getLogger(__name__)
@@ -360,6 +362,64 @@ async def _wait_until_10_00_moscow() -> None:
     await asyncio.sleep(seconds_until_target)
 
 
+async def _connection_reminder_pass(bot: Bot) -> None:
+    """Process due one-time first-connection nudges without false positives."""
+    from xui_client import get_xui_user, get_xui_connection_info
+
+    for item in await get_due_connection_reminders(limit=25):
+        key_id = item["key_id"]
+        if item["expiry"] <= int(time.time()):
+            await update_connection_reminder(key_id, "expired")
+            continue
+
+        # A missing response can mean an API outage or a missing panel client.
+        # Keep the reminder pending and retry on a later scheduler pass.
+        panel_user = await get_xui_user(item["user_id"])
+        if panel_user is None or panel_user.get("used_traffic") is None:
+            logger.warning("Deferring first-connection reminder: 3x-ui stats unavailable for key %s", key_id)
+            continue
+
+        if int(panel_user["used_traffic"]) > int(item["traffic_baseline"]):
+            await update_connection_reminder(key_id, "connected")
+            continue
+
+        # A client can establish a tunnel before any payload traffic is counted.
+        # Check the profile-level online signal as well before nudging.
+        try:
+            connection_info = await get_xui_connection_info(item["user_id"])
+        except Exception as exc:
+            logger.warning("Deferring first-connection reminder: online status unavailable for key %s: %s", key_id, exc)
+            continue
+        if connection_info.get("is_online"):
+            await update_connection_reminder(key_id, "connected")
+            continue
+
+        try:
+            await bot.send_message(
+                item["user_id"],
+                "<b>Помочь подключить VPN?</b>\n\n"
+                "По статистике ключ пока не использовался. Нажмите кнопку — подскажем, как добавить его в приложение.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Подключить VPN", callback_data=f"key_instructions:{key_id}")],
+                ]),
+            )
+            await update_connection_reminder(key_id, "sent")
+        except Exception as exc:
+            logger.warning("Could not send first-connection reminder for key %s: %s", key_id, exc)
+            await retry_connection_reminder(key_id, item["attempts"])
+
+
+async def _connection_reminder_scheduler(bot: Bot) -> None:
+    """Check due keys every five minutes; pending items survive restarts."""
+    while True:
+        try:
+            await _connection_reminder_pass(bot)
+        except Exception:
+            logger.exception("First-connection reminder pass failed")
+        await asyncio.sleep(300)
+
+
 async def start_notification_scheduler(bot: Bot) -> None:
     """Run expiry notifications once per day at ~10:00 and backup at 03:00."""
     logger.info("Notification scheduler started")
@@ -374,6 +434,7 @@ async def start_notification_scheduler(bot: Bot) -> None:
             await asyncio.sleep(60)
 
     asyncio.create_task(giveaway_scheduler())
+    asyncio.create_task(_connection_reminder_scheduler(bot))
 
     # Start backup scheduler as separate task
     async def backup_scheduler():
