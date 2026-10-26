@@ -225,7 +225,7 @@ def key_devices_kb(key_id: int, devices: list[dict] | None = None, page: int = 0
         if page + 1 < pages:
             row.append(InlineKeyboardButton(text="→", callback_data=f"key_devices:{key_id}:{page + 1}"))
         kb.row(*row)
-    kb.row(InlineKeyboardButton(text="↻ Обновить список", callback_data=f"key_devices:{key_id}"))
+    kb.row(InlineKeyboardButton(text="↻ Обновить список", callback_data=f"key_devices:{key_id}:{page}"))
     kb.row(InlineKeyboardButton(text="💎 Изменить тариф", callback_data=f"key_renew:{key_id}"))
     kb.row(InlineKeyboardButton(text="← К ключу", callback_data=f"key_info:{key_id}"))
     return kb.as_markup()

@@ -34,13 +34,13 @@ async def _check_user(bot: Bot, user_id: int, semaphore: asyncio.Semaphore) -> N
             for device in pending:
                 name = html.escape(device.get("model") or device.get("user_agent") or "Устройство")
                 system = " ".join(part for part in (device.get("os"), device.get("os_version")) if part)
-                system_line = f"\n⚙️ {html.escape(system)}" if system else ""
+                system_label = f" ({html.escape(system)})" if system else ""
                 try:
                     await bot.send_message(
                         user_id,
                         "📱 <b>Новое устройство</b>\n"
-                        f"🔗 {name}{system_line}\n\n"
-                        "Не вы? Перевыпустите ссылку в разделе ключа — старый доступ отключится.",
+                        f"🔗 {name}{system_label}\n\n"
+                        "⚠️ Не вы? Перевыпустите ссылку в разделе подписки — старая перестанет работать.",
                         reply_markup=markup,
                     )
                     await mark_hwid_device_notified(user_id, device["id"])

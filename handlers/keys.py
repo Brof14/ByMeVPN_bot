@@ -106,15 +106,33 @@ async def cb_key_info(callback: CallbackQuery, bot: Bot):
     device_label = f"{devices} устройств" if devices in (5, 6, 7, 8, 9, 10, 0) else (f"{devices} устройства" if devices in (2, 3, 4) else f"{devices} устройство")
     subscription_url = k.get("key", "")
 
-    # Show only confirmed connection data. VPN tunnel state is not known to the bot.
+    # These are independent panel reads; run together to keep the key screen quick.
     traffic_info = ""
-    try:
-        xui_user = await get_xui_user(callback.from_user.id)
-        if xui_user and xui_user.get("used_traffic") is not None:
-            used_traffic = xui_user["used_traffic"]
-            traffic_info = f"Трафик: {format_traffic(used_traffic)}\n"
-    except Exception as e:
-        logger.error("Failed to get traffic info: %s", e)
+    devices_info = ""
+    xui_user, device_state = await asyncio.gather(
+        get_xui_user(callback.from_user.id),
+        get_xui_devices(callback.from_user.id),
+        return_exceptions=True,
+    )
+    if isinstance(xui_user, Exception):
+        logger.warning("Failed to get traffic info for user %s: %s", callback.from_user.id, xui_user)
+    elif xui_user and xui_user.get("used_traffic") is not None:
+        traffic_info = f"Трафик: {format_traffic(xui_user['used_traffic'])}\n"
+    if isinstance(device_state, Exception):
+        logger.warning("Failed to get device count for user %s: %s", callback.from_user.id, device_state)
+    elif isinstance(device_state, dict):
+        registered = len(device_state.get("devices") or [])
+        device_limit = int(device_state.get("limit_hwid") or 0)
+        if device_limit:
+            device_label = (
+                f"{device_limit} устройств" if device_limit in (5, 6, 7, 8, 9, 10)
+                else f"{device_limit} устройства" if device_limit in (2, 3, 4)
+                else f"{device_limit} устройство"
+            )
+        devices_info = (
+            f"Устройств в подписке: <b>{registered} из {device_limit}</b>\n"
+            if device_limit else f"Устройств в подписке: <b>{registered}</b>\n"
+        )
 
     from database import get_auto_renew_subscription
     sub = await get_auto_renew_subscription(callback.from_user.id, key_id)
@@ -133,7 +151,7 @@ async def cb_key_info(callback: CallbackQuery, bot: Bot):
         "<b>Мой VPN</b>\n\n"
         f"{status} · {device_label}\n"
         f"Действует до: <b>{fmt_date(k['expiry'])}</b>\n"
-        f"{ar_line}{traffic_info}\n"
+        f"{ar_line}{devices_info}{traffic_info}\n"
         "<b>Ссылка для подключения</b>\n"
         f"<code>{escape(subscription_url)}</code>"
     )
