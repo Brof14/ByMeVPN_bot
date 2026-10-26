@@ -148,24 +148,22 @@ async def _send_main_menu(
         # Check if user has keys to show appropriate menu (use direct DB check, not cache)
         user_keys = await get_user_keys(user_id)
         has_keys = len(user_keys) > 0
-        trial_used = await has_trial_used(user_id)
         active_keys = [k for k in user_keys if k.get("expiry", 0) > int(time.time())]
         if active_keys:
             active_key = max(active_keys, key=lambda k: k.get("expiry", 0))
             from constants import format_timestamp
             expires = format_timestamp(active_key["expiry"])[:10]
             device_count = active_key.get("limit_ip", 2)
+            device_word = "устройство" if device_count == 1 else "устройства" if 2 <= device_count <= 4 else "устройств"
             text = (
                 f"<b>ByMeVPN</b>\n\n"
-                f"✅ VPN активен до <b>{expires}</b>\n"
-                f"📱 Устройств: <b>{device_count}</b>\n"
-                "🇷🇺 Российские сайты и приложения доступны без отключения VPN.\n\n"
-                "Подключение и управление подпиской — в разделе «Мой VPN».\n\n"
-                "Также вам доступен @ByMeAudiobot для расшифровки голосовых сообщений."
+                f"✅ Подписка активна до <b>{expires}</b>\n"
+                f"📱 В тарифе: <b>{device_count} {device_word}</b>"
             )
         else:
-            text = f"<b>ByMeVPN</b>"
-        kb = main_menu_with_keys(trial_used=trial_used) if has_keys else main_menu_existing(trial_used=trial_used)
+            text = "<b>ByMeVPN</b>\n\n✅ Подписка активна"
+        # Active customers are never shown the one-time trial offer.
+        kb = main_menu_with_keys(trial_used=True) if has_keys else main_menu_existing(trial_used=True)
 
     if isinstance(target, Message):
         await bot.send_photo(
@@ -499,7 +497,8 @@ async def cb_about(callback: CallbackQuery, bot: Bot):
         "• До 10 устройств — в зависимости от тарифа.\n"
         "• Российские приложения могут работать без отключения VPN при поддерживаемой настройке обхода.\n"
         "• Бесплатные дни за приглашение друзей.\n"
-        "• Управление подпиской прямо в Telegram.\n\n"
+        "• Управление подпиской прямо в Telegram.\n"
+        "• Подписчикам доступен @ByMeAudiobot для расшифровки голосовых сообщений.\n\n"
         "<b>3 дня за 1 ₽</b> или тарифы от <b>59 ₽/мес.</b> при оплате за год."
     )
     # Keep the menu navigation in a fixed, full-width bottom row.
