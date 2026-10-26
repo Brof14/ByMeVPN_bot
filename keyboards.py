@@ -49,7 +49,7 @@ def main_menu_with_keys(trial_used: bool = False) -> InlineKeyboardMarkup:
     # Show intro-trial button only if user hasn't used it yet
     if not trial_used:
         kb.row(InlineKeyboardButton(text="Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
-    kb.row(InlineKeyboardButton(text="Мои ключи", callback_data="my_keys", style="primary"))
+    kb.row(InlineKeyboardButton(text="🔑 Мой VPN", callback_data="my_keys", style="primary"))
     kb.row(InlineKeyboardButton(text="Выбрать тариф", callback_data="buy_vpn"))
     kb.row(InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn"))
     # «Войти в другой аккаунт» скрыт (§24): функционал не готов, callback
@@ -76,7 +76,7 @@ def authorized_user_menu() -> InlineKeyboardMarkup:
     """Menu for authorized existing clients (4 buttons in strict order)."""
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="Продление подписки", callback_data="buy_vpn"))
-    kb.row(InlineKeyboardButton(text="Мои ключи", callback_data="my_keys"))
+    kb.row(InlineKeyboardButton(text="🔑 Мой VPN", callback_data="my_keys"))
     kb.row(InlineKeyboardButton(text="Партнёрская программа", callback_data="partner"))
     kb.row(InlineKeyboardButton(text="Поддержка", callback_data="trouble"))
     return kb.as_markup()
@@ -199,7 +199,7 @@ def key_detail_kb(key_id: int, has_autorenew: bool = False, autorenew_active: bo
     )
     kb.row(InlineKeyboardButton(text="📱 Мои устройства", callback_data=f"key_devices:{key_id}"))
     kb.row(InlineKeyboardButton(text="Управление подпиской", callback_data=f"key_settings:{key_id}"))
-    kb.row(InlineKeyboardButton(text="← Мои ключи", callback_data="my_keys"))
+    kb.row(InlineKeyboardButton(text="← В главное меню", callback_data="back_to_menu"))
     return kb.as_markup()
 
 
@@ -328,7 +328,7 @@ def after_key_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(
         InlineKeyboardButton(text="Подключить VPN", style="success", callback_data="connection_guide"),
-        InlineKeyboardButton(text="Мои ключи", callback_data="my_keys"),
+        InlineKeyboardButton(text="🔑 Мой VPN", callback_data="my_keys"),
     )
     kb.row(InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu"))
     return kb.as_markup()

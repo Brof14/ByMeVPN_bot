@@ -120,7 +120,7 @@ async def _send_autorenew_upcoming(bot: Bot, item: dict, sub: dict) -> None:
         f"доступ сохранится до конца оплаченного периода."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Мои ключи", callback_data="my_keys")],
+        [InlineKeyboardButton(text="🔑 Мой VPN", callback_data="my_keys")],
         [InlineKeyboardButton(text="🆘 Поддержка", url="https://t.me/ByMeVPNSupportBot")],
     ])
     await bot.send_message(item["user_id"], text, parse_mode="HTML", reply_markup=kb)

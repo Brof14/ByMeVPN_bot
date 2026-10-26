@@ -13,7 +13,7 @@ from database import (
     get_user_keys, get_key_by_id, delete_key_by_id, update_user_key_credentials,
 )
 from xui_client import (
-    delete_xui_user, get_xui_user, format_traffic,
+    delete_xui_user,
     get_xui_devices, delete_xui_hwid_device, rotate_xui_client_credentials,
     restore_xui_client_credentials, CredentialRotationRollbackError,
 )
@@ -52,12 +52,15 @@ async def cmd_keys(message: Message, bot: Bot):
         )
         return
 
-    text = (
-        "<b>Мои ключи</b>\n\n"
-        "Активные и завершённые подписки отображаются ниже.\n"
-        "Выберите ключ для подключения или управления подпиской."
+    if len(keys) == 1:
+        text, keyboard = await _key_info_content(user_id, keys[0])
+        await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+        return
+
+    await message.answer(
+        "<b>Ваши VPN-подписки</b>\n\nВыберите подписку для подключения или управления.",
+        parse_mode="HTML", reply_markup=my_keys_list_kb(keys),
     )
-    await message.answer(text, parse_mode="HTML", reply_markup=my_keys_list_kb(keys))
 
 
 # ---------------------------------------------------------------------------
@@ -78,11 +81,12 @@ async def cb_my_keys(callback: CallbackQuery, bot: Bot):
         await send_with_photo(bot, callback, text, back_to_menu())
         return
 
-    text = (
-        "<b>Мои ключи</b>\n\n"
-        "Активные и завершённые подписки отображаются ниже.\n"
-        "Выберите ключ для подключения или управления подпиской."
-    )
+    if len(keys) == 1:
+        text, keyboard = await _key_info_content(user_id, keys[0])
+        await send_or_edit(bot, callback, text, keyboard)
+        return
+
+    text = "<b>Ваши VPN-подписки</b>\n\nВыберите подписку для подключения или управления."
     await send_with_photo(bot, callback, text, my_keys_list_kb(keys))
 
 
@@ -100,42 +104,33 @@ async def cb_key_info(callback: CallbackQuery, bot: Bot):
         await safe_answer(callback, "Ключ не найден.", alert=True)
         return
 
+    text, keyboard = await _key_info_content(callback.from_user.id, k)
+    await send_or_edit(bot, callback, text, keyboard)
+
+
+async def _key_info_content(user_id: int, k: dict) -> tuple[str, object]:
+    key_id = int(k["id"])
+
     now = int(time.time())
     status = "Активен" if k["expiry"] > now else "Срок завершён"
-    devices = k.get("limit_ip", 2)
-    device_label = f"{devices} устройств" if devices in (5, 6, 7, 8, 9, 10, 0) else (f"{devices} устройства" if devices in (2, 3, 4) else f"{devices} устройство")
     subscription_url = k.get("key", "")
 
-    # These are independent panel reads; run together to keep the key screen quick.
-    traffic_info = ""
     devices_info = ""
-    xui_user, device_state = await asyncio.gather(
-        get_xui_user(callback.from_user.id),
-        get_xui_devices(callback.from_user.id),
-        return_exceptions=True,
-    )
-    if isinstance(xui_user, Exception):
-        logger.warning("Failed to get traffic info for user %s: %s", callback.from_user.id, xui_user)
-    elif xui_user and xui_user.get("used_traffic") is not None:
-        traffic_info = f"Трафик: {format_traffic(xui_user['used_traffic'])}\n"
-    if isinstance(device_state, Exception):
-        logger.warning("Failed to get device count for user %s: %s", callback.from_user.id, device_state)
-    elif isinstance(device_state, dict):
+    try:
+        device_state = await get_xui_devices(user_id)
+    except Exception:
+        device_state = None
+        logger.warning("Failed to get device count for user %s", user_id, exc_info=True)
+    if isinstance(device_state, dict):
         registered = len(device_state.get("devices") or [])
         device_limit = int(device_state.get("limit_hwid") or 0)
-        if device_limit:
-            device_label = (
-                f"{device_limit} устройств" if device_limit in (5, 6, 7, 8, 9, 10)
-                else f"{device_limit} устройства" if device_limit in (2, 3, 4)
-                else f"{device_limit} устройство"
-            )
         devices_info = (
-            f"Устройств в подписке: <b>{registered} из {device_limit}</b>\n"
-            if device_limit else f"Устройств в подписке: <b>{registered}</b>\n"
+            f"📱 Устройства: <b>{registered} из {device_limit}</b>\n"
+            if device_limit else f"📱 Устройств в подписке: <b>{registered}</b>\n"
         )
 
     from database import get_auto_renew_subscription
-    sub = await get_auto_renew_subscription(callback.from_user.id, key_id)
+    sub = await get_auto_renew_subscription(user_id, key_id)
     has_autorenew = sub is not None
     autorenew_active = sub is not None and sub.get("status") == "active"
     ar_line = ""
@@ -149,14 +144,14 @@ async def cb_key_info(callback: CallbackQuery, bot: Bot):
 
     text = (
         "<b>Мой VPN</b>\n\n"
-        f"{status} · {device_label}\n"
+        f"{status}\n"
         f"Действует до: <b>{fmt_date(k['expiry'])}</b>\n"
-        f"{ar_line}{devices_info}{traffic_info}\n"
+        f"{ar_line}{devices_info}\n"
         "<b>Ссылка для подключения</b>\n"
         f"<code>{escape(subscription_url)}</code>"
     )
 
-    await send_or_edit(bot, callback, text, key_detail_kb(key_id, has_autorenew=has_autorenew, autorenew_active=autorenew_active))
+    return text, key_detail_kb(key_id, has_autorenew=has_autorenew, autorenew_active=autorenew_active)
 
 
 def _time_ago(timestamp: int) -> str:
@@ -188,7 +183,6 @@ async def _key_devices_view(user_id: int, key: dict, page: int = 0) -> tuple[str
     lines = [
         "<b>📱 Устройства</b>",
         usage_line,
-        f"Одновременных подключений: <b>{info['limit_ip'] or 'без лимита'}</b>",
         "Трафик общий для всех устройств.",
     ]
     if devices:
@@ -789,11 +783,13 @@ async def cb_key_delete_confirm(callback: CallbackQuery, bot: Bot):
             f"Ключ «{remark}» удалён. Подключение по нему отключено.",
             back_to_menu(),
         )
+    elif len(keys) == 1:
+        text, keyboard = await _key_info_content(user_id, keys[0])
+        await send_or_edit(bot, callback, f"Ключ «{remark}» удалён.\n\n{text}", keyboard)
     else:
         text = (
             f"Ключ «{remark}» удалён.\n\n"
-            "Остальные подписки и подключение по ним работают как прежде.\n"
-            "Выберите ключ, чтобы открыть его настройки."
+            "Остальные подписки и подключения работают как прежде. Выберите нужную подписку ниже."
         )
         await send_with_photo(bot, callback, text, my_keys_list_kb(keys))
 

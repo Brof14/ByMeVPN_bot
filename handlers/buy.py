@@ -166,7 +166,7 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
         "<a href='https://telegra.ph/Soglashenie-ob-avtomaticheskom-prodlenii-podpiski-ByMeVPN-10-25'>условия автопродления</a>.\n\n"
         "Доступ будет активирован после подтверждения оплаты.\n"
         f"ЮKassa: если при платеже сохранится способ оплаты, по окончании срока спишется {price_rub} ₽, а доступ продлится ещё на {days} дней. "
-        "Автопродление можно отключить в «Моих ключах».\n"
+        "Автопродление можно отключить в разделе «Мой VPN».\n"
         "Stars и CryptoBot — разовая оплата.\n\n"
         "<b>Способ оплаты</b>"
     )
