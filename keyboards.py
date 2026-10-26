@@ -1,4 +1,5 @@
 from urllib.parse import quote_plus
+from urllib.parse import urlencode
 import time
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -191,12 +192,27 @@ def my_keys_list_kb(keys: list) -> InlineKeyboardMarkup:
 
 
 # Key detail: keep the two most common actions visible, group secondary ones.
-def key_detail_kb(key_id: int, has_autorenew: bool = False, autorenew_active: bool = False) -> InlineKeyboardMarkup:
+def bymevpn_sub_link(subscription_url: str) -> str:
+    """Build the app deep link for importing a subscription."""
+    return "bymevpn://sub?" + urlencode({"url": subscription_url})
+
+
+def key_detail_kb(
+    key_id: int,
+    has_autorenew: bool = False,
+    autorenew_active: bool = False,
+    subscription_url: str = "",
+) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(
         InlineKeyboardButton(text="Подключить", style="success", callback_data=f"key_instructions:{key_id}"),
         InlineKeyboardButton(text="Продлить", callback_data=f"key_renew:{key_id}"),
     )
+    if subscription_url:
+        kb.row(InlineKeyboardButton(
+            text="📱 Подключить приложение ByMeVPN",
+            url=bymevpn_sub_link(subscription_url),
+        ))
     kb.row(InlineKeyboardButton(text="📱 Мои устройства", callback_data=f"key_devices:{key_id}"))
     kb.row(InlineKeyboardButton(text="Управление подпиской", callback_data=f"key_settings:{key_id}"))
     kb.row(InlineKeyboardButton(text="← В главное меню", callback_data="back_to_menu"))
@@ -236,7 +252,6 @@ def key_device_detail_kb(key_id: int, device_id: int) -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(
         text="Удалить устройство", callback_data=f"key_device_delete_prompt:{key_id}:{device_id}", style="danger",
     ))
-    kb.row(InlineKeyboardButton(text="Перевыпустить ссылку", callback_data=f"key_reissue_prompt:{key_id}"))
     kb.row(InlineKeyboardButton(text="← К устройствам", callback_data=f"key_devices:{key_id}"))
     return kb.as_markup()
 
@@ -250,19 +265,9 @@ def confirm_delete_device_kb(key_id: int, device_id: int) -> InlineKeyboardMarku
     return kb.as_markup()
 
 
-def confirm_reissue_key_kb(key_id: int) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(
-        text="Да, перевыпустить ссылку", callback_data=f"key_reissue_confirm:{key_id}", style="danger",
-    ))
-    kb.row(InlineKeyboardButton(text="Отмена", callback_data=f"key_info:{key_id}"))
-    return kb.as_markup()
-
-
 def key_settings_kb(key_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="💳 Автопродление и оплата", callback_data=f"manage_payment_methods:{key_id}"))
-    kb.row(InlineKeyboardButton(text="🔄 Перевыпустить ссылку", callback_data=f"key_reissue_prompt:{key_id}", style="danger"))
     kb.row(InlineKeyboardButton(text="🗑 Удалить ключ", callback_data=f"key_delete:{key_id}", style="danger"))
     kb.row(InlineKeyboardButton(text="← К ключу", callback_data=f"key_info:{key_id}"))
     return kb.as_markup()
@@ -324,8 +329,13 @@ def confirm_delete_kb(key_id: int) -> InlineKeyboardMarkup:
 # After key delivery
 # ---------------------------------------------------------------------------
 
-def after_key_kb() -> InlineKeyboardMarkup:
+def after_key_kb(subscription_url: str = "") -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    if subscription_url:
+        kb.row(InlineKeyboardButton(
+            text="📱 Подключить приложение ByMeVPN",
+            url=bymevpn_sub_link(subscription_url),
+        ))
     kb.row(
         InlineKeyboardButton(text="Подключить VPN", style="success", callback_data="connection_guide"),
         InlineKeyboardButton(text="🔑 Мой VPN", callback_data="my_keys"),
@@ -361,7 +371,7 @@ def partner_kb(link: str) -> InlineKeyboardMarkup:
 # Connection guide
 # ---------------------------------------------------------------------------
 
-def connection_guide_kb(key_id: int | None = None) -> InlineKeyboardMarkup:
+def connection_guide_kb(key_id: int | None = None, subscription_url: str = "") -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     def platform_callback(name: str) -> str:
         return f"guide_{name}:{key_id}" if key_id else f"guide_{name}"
@@ -374,6 +384,11 @@ def connection_guide_kb(key_id: int | None = None) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="Windows", callback_data=platform_callback("windows")),
         InlineKeyboardButton(text="Linux", callback_data=platform_callback("linux")),
     )
+    if subscription_url:
+        kb.row(InlineKeyboardButton(
+            text="📱 Подключить приложение ByMeVPN",
+            url=bymevpn_sub_link(subscription_url),
+        ))
     back_callback = f"key_info:{key_id}" if key_id else "back_to_menu"
     back_text = "← Назад" if key_id else "← Назад в меню"
     kb.row(InlineKeyboardButton(text=back_text, callback_data=back_callback))

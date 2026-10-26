@@ -10,6 +10,7 @@ Menu states:
 import asyncio
 import logging
 import time
+from urllib.parse import urlencode
 
 from aiogram import Bot, F, Router
 from aiogram.filters import StateFilter
@@ -34,6 +35,72 @@ from constants import RECURRING_MONTHLY_PRICE, RECURRING_DAYS
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+
+async def _handle_app_login(message: Message, user_id: int, user_name: str) -> None:
+    """Send the ByMeVPN app login link for an active account, or access options."""
+    state = await _user_state(user_id)
+    if state == "unknown":
+        await message.answer(
+            "Не удалось проверить статус подписки. Попробуйте ещё раз немного позже."
+        )
+        return
+
+    if state == "active":
+        now = int(time.time())
+        active_keys = [
+            key for key in await get_user_keys(user_id)
+            if int(key.get("expiry", 0)) > now and key.get("key")
+        ]
+        subscription_url = (
+            max(active_keys, key=lambda key: int(key.get("expiry", 0)))["key"]
+            if active_keys else ""
+        )
+        if not subscription_url:
+            # Recover the subscription URL if 3x-ui has an active client whose
+            # key record is missing from the bot database.
+            try:
+                from xui_client import get_xui_client_details
+                client = await get_xui_client_details(user_id)
+                if client and int(client.get("expiry_time", 0)) > now * 1000:
+                    subscription_url = client.get("subscription_url", "")
+            except Exception:
+                logger.exception("Could not resolve app subscription URL for user %d", user_id)
+
+        if subscription_url:
+            app_name = f"@{message.from_user.username}" if message.from_user.username else user_name
+            app_url = "bymevpn://login?" + urlencode({
+                "sub": subscription_url,
+                "name": app_name,
+            })
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="🚀 Войти в ByMeVPN", url=app_url)
+            ]])
+            await message.answer(
+                "Для входа в приложение ByMeVPN нажмите кнопку ниже:",
+                reply_markup=keyboard,
+            )
+            return
+
+        await message.answer(
+            "Подписка отмечена как активная, но ссылку для приложения получить не удалось. "
+            "Откройте «Мой VPN» или обратитесь в поддержку."
+        )
+        return
+
+    trial_used = await has_trial_used(user_id)
+    user_keys = await get_user_keys(user_id)
+    if user_keys:
+        keyboard = main_menu_with_keys(trial_used=trial_used)
+    elif trial_used:
+        keyboard = main_menu_existing(trial_used=True)
+    else:
+        keyboard = main_menu_new_user()
+    await message.answer(
+        "Чтобы войти в приложение ByMeVPN, сначала активируйте доступ: "
+        + ("выберите пробный период или тариф ниже." if not trial_used else "выберите тариф ниже."),
+        reply_markup=keyboard,
+    )
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -198,6 +265,10 @@ async def cmd_start(message: Message, bot: Bot) -> None:
     args = message.text.split()
     is_new_referral = False
     referral_processed = False
+
+    if len(args) > 1 and args[1].strip().lower() == "login":
+        await _handle_app_login(message, user_id, user_name)
+        return
     
     if len(args) > 1:
         param = args[1].strip()

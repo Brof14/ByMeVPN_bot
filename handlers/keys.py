@@ -1,6 +1,5 @@
 """My Keys: list, info, renew, delete. (Fix: guide button, photos)"""
 import time
-import asyncio
 import logging
 from html import escape
 
@@ -10,19 +9,16 @@ from aiogram.filters import StateFilter
 from aiogram.types import CallbackQuery, Message
 
 from database import (
-    get_user_keys, get_key_by_id, delete_key_by_id, update_user_key_credentials,
+    get_user_keys, get_key_by_id, delete_key_by_id,
 )
 from xui_client import (
-    delete_xui_user,
-    get_xui_devices, delete_xui_hwid_device, rotate_xui_client_credentials,
-    restore_xui_client_credentials, CredentialRotationRollbackError,
+    delete_xui_user, get_xui_devices, delete_xui_hwid_device,
 )
 from keyboards import (
     my_keys_kb, my_keys_list_kb, key_detail_kb, confirm_delete_kb,
     payment_kb, back_to_menu, connection_guide_kb, tariff_selection_kb,
     autorenew_cancel_confirm_kb, manage_payment_methods_kb, key_settings_kb,
     key_devices_kb, key_device_detail_kb, confirm_delete_device_kb,
-    confirm_reissue_key_kb,
 )
 from utils import send_with_photo, send_or_edit, safe_answer
 from constants import format_timestamp as fmt_date, format_days_left as fmt_days_left
@@ -30,7 +26,6 @@ from states import BuyFlow
 
 logger = logging.getLogger(__name__)
 router = Router()
-_credential_rotation_lock = asyncio.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +146,10 @@ async def _key_info_content(user_id: int, k: dict) -> tuple[str, object]:
         f"<code>{escape(subscription_url)}</code>"
     )
 
-    return text, key_detail_kb(key_id, has_autorenew=has_autorenew, autorenew_active=autorenew_active)
+    return text, key_detail_kb(
+        key_id, has_autorenew=has_autorenew, autorenew_active=autorenew_active,
+        subscription_url=subscription_url,
+    )
 
 
 def _time_ago(timestamp: int) -> str:
@@ -249,7 +247,7 @@ async def cb_key_device(callback: CallbackQuery, bot: Bot):
             f"⚙️ Система: {escape(system or 'не определена')}\n"
             f"🕒 Последняя активность: {last_seen}\n\n"
             "Удаление освободит место, если для подписки задан лимит. Если устройство снова обновит подписку, "
-            "оно может зарегистрироваться повторно. Чтобы прекратить доступ, перевыпустите ссылку."
+            "оно может зарегистрироваться повторно. Не узнаёте устройство? Напишите в поддержку — поможем проверить подключение."
         )
         await send_or_edit(bot, callback, text, key_device_detail_kb(key_id, device_id))
     except Exception:
@@ -272,8 +270,8 @@ async def cb_key_device_delete_prompt(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
         "<b>Удалить это устройство?</b>\n\n"
-        "Оно освободит место, если включён лимит устройств. Если на нём останется ссылка, устройство может "
-        "зарегистрироваться снова. Для прекращения доступа перевыпустите ссылку подписки."
+        "Оно освободит место, если включён лимит устройств. Если устройство снова обновит подписку, "
+        "оно может зарегистрироваться повторно. Не узнаёте устройство? Напишите в поддержку — поможем проверить подключение."
     )
     await send_or_edit(bot, callback, text, confirm_delete_device_kb(key_id, device_id))
 
@@ -303,77 +301,6 @@ async def cb_key_device_delete(callback: CallbackQuery, bot: Bot):
     except Exception:
         logger.exception("Could not refresh device list after deleting for user %s", callback.from_user.id)
         await send_or_edit(bot, callback, "Устройство удалено.", key_devices_kb(key_id))
-
-
-@router.callback_query(F.data.startswith("key_reissue_prompt:"))
-async def cb_key_reissue_prompt(callback: CallbackQuery, bot: Bot):
-    try:
-        key_id = int(callback.data.split(":", 1)[1])
-    except (IndexError, ValueError):
-        await safe_answer(callback, "Ключ не найден.", alert=True)
-        return
-    key = await get_key_by_id(key_id)
-    if not key or key["user_id"] != callback.from_user.id:
-        await safe_answer(callback, "Ключ не найден.", alert=True)
-        return
-    await safe_answer(callback)
-    text = (
-        "<b>Перевыпустить ссылку и ключ доступа?</b>\n\n"
-        "Текущие подключения сразу отключатся. На каждом устройстве нужно будет добавить новую ссылку.\n"
-        "Доступ обновится для всех ключей аккаунта. Срок, тариф и трафик сохранятся."
-    )
-    await send_or_edit(bot, callback, text, confirm_reissue_key_kb(key_id))
-
-
-@router.callback_query(F.data.startswith("key_reissue_confirm:"))
-async def cb_key_reissue_confirm(callback: CallbackQuery, bot: Bot):
-    try:
-        key_id = int(callback.data.split(":", 1)[1])
-    except (IndexError, ValueError):
-        await safe_answer(callback, "Ключ не найден.", alert=True)
-        return
-    key = await get_key_by_id(key_id)
-    if not key or key["user_id"] != callback.from_user.id:
-        await safe_answer(callback, "Ключ не найден.", alert=True)
-        return
-    await safe_answer(callback, "Обновляю ссылку…")
-    try:
-        async with _credential_rotation_lock:
-            rotated = await rotate_xui_client_credentials(callback.from_user.id)
-            if not rotated:
-                raise RuntimeError("VPN credentials were not rotated")
-            saved = await update_user_key_credentials(
-                callback.from_user.id, rotated["uuid"], rotated["subscription_url"],
-            )
-            if not saved:
-                try:
-                    restored = await restore_xui_client_credentials(
-                        callback.from_user.id, rotated["previous_uuid"], rotated["previous_sub_id"],
-                    )
-                except Exception:
-                    restored = False
-                    logger.exception("Credential rollback failed for user %s", callback.from_user.id)
-                if not restored:
-                    logger.critical("VPN credentials rotated in panel but DB update and rollback failed for user %s", callback.from_user.id)
-                await send_or_edit(bot, callback,
-                                   "Не удалось завершить перевыпуск. " + (
-                                       "Текущий доступ восстановлен." if restored else
-                                       "Панель не подтвердила восстановление доступа. Напишите в поддержку, поможем восстановить подключение."
-                                   ), back_to_menu())
-                return
-        await send_or_edit(bot, callback,
-                           "Ссылка перевыпущена. Старые подключения отключены. Откройте ключ и добавьте новую ссылку на устройствах.",
-                           key_devices_kb(key_id))
-    except CredentialRotationRollbackError:
-        logger.exception("Credential rotation rollback failed for user %s", callback.from_user.id)
-        await send_or_edit(bot, callback,
-                           "Не удалось подтвердить восстановление доступа. Напишите в поддержку — поможем вернуть подключение.",
-                           back_to_menu())
-    except Exception:
-        logger.exception("Could not reissue VPN link for user %s", callback.from_user.id)
-        await send_or_edit(bot, callback,
-                           "Не удалось перевыпустить ссылку. Изменения не применены; попробуйте позже.",
-                           confirm_reissue_key_kb(key_id))
 
 
 @router.callback_query(F.data.startswith("key_settings:"))
@@ -667,7 +594,7 @@ async def cb_key_instructions(callback: CallbackQuery, bot: Bot):
         f"<b>Подключение VPN</b> · {escape(key.get('remark') or f'Ключ #{key_id}')}\n\n"
         f"Скопируйте ссылку и выберите устройство:\n<code>{escape(subscription_url)}</code>"
     )
-    await send_or_edit(bot, callback, text, connection_guide_kb(key_id))
+    await send_or_edit(bot, callback, text, connection_guide_kb(key_id, subscription_url))
 
 
 # ---------------------------------------------------------------------------

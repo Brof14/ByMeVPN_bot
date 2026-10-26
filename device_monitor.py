@@ -40,7 +40,7 @@ async def _check_user(bot: Bot, user_id: int, semaphore: asyncio.Semaphore) -> N
                         user_id,
                         "📱 <b>Новое устройство</b>\n"
                         f"🔗 {name}{system_label}\n\n"
-                        "⚠️ Не вы? Перевыпустите ссылку в разделе подписки — старая перестанет работать.",
+                        "⚠️ Не узнаёте устройство? Напишите в поддержку — поможем проверить подключение.",
                         reply_markup=markup,
                     )
                     await mark_hwid_device_notified(user_id, device["id"])

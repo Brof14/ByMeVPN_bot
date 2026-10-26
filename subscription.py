@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 
-async def _send_delivery_message(bot: Bot, chat_id: int, text: str) -> bool:
+async def _send_delivery_message(bot: Bot, chat_id: int, text: str, subscription_url: str = "") -> bool:
     """Deliver the key message to the user. NEVER raises.
 
     Provisioning success must not be downgraded by a notification failure:
@@ -39,7 +39,7 @@ async def _send_delivery_message(bot: Bot, chat_id: int, text: str) -> bool:
     try:
         await bot.send_photo(
             chat_id=chat_id, photo=LOGO_URL,
-            caption=text, parse_mode="HTML", reply_markup=after_key_kb(),
+            caption=text, parse_mode="HTML", reply_markup=after_key_kb(subscription_url),
         )
         return True
     except (TelegramBadRequest, TelegramForbiddenError) as e:
@@ -218,7 +218,7 @@ async def deliver_key(
                     f"Ссылка на VPN не изменилась. Повторно подключать устройства не нужно."
                 )
                 
-                delivered = await _send_delivery_message(bot, chat_id, text)
+                delivered = await _send_delivery_message(bot, chat_id, text, key_to_show)
                 if not delivered:
                     await _log_notification_failure(
                         user_id, {"branch": "deliver_key.extend", "days": days, "limit_ip": limit_ip}
@@ -323,7 +323,7 @@ async def deliver_key(
                 f"<code>{sub_url}</code>\n\n"
                 f"Ваш ByMeVPN готов к использованию."
             )
-            delivered = await _send_delivery_message(bot, chat_id, text)
+            delivered = await _send_delivery_message(bot, chat_id, text, sub_url)
             if not delivered:
                 await _log_notification_failure(
                     user_id, {"branch": "deliver_key.import_xui", "days": days, "limit_ip": limit_ip}
@@ -424,7 +424,7 @@ async def deliver_key(
             f"4. Включите VPN."
         )
         
-        delivered = await _send_delivery_message(bot, chat_id, text)
+        delivered = await _send_delivery_message(bot, chat_id, text, subscription_url)
         if not delivered:
             await _log_notification_failure(
                 user_id, {"branch": "deliver_key.create", "days": days, "limit_ip": limit_ip}

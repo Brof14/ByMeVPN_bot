@@ -27,10 +27,6 @@ from config import (
 logger = logging.getLogger(__name__)
 
 
-class CredentialRotationRollbackError(RuntimeError):
-    """The panel changed VPN credentials but did not confirm rollback."""
-
-
 def _inbound_name(inbound_id: int, inbound=None) -> str:
     """Prefer the live panel remark; use the verified map for safe fallback."""
     remark = getattr(inbound, "remark", None) if inbound is not None else None
@@ -819,106 +815,6 @@ async def delete_xui_hwid_device(user_id: int, device_id: int) -> bool:
         return True
 
     return await _api_call_with_retry(remove)
-
-
-async def rotate_xui_client_credentials(user_id: int) -> Optional[Dict[str, str]]:
-    """Rotate subscription id and UUID while preserving all other panel settings."""
-    api = await _get_api()
-    client_api = api.client
-    email = str(user_id)
-    encoded_email = quote(email, safe="")
-    old_response = await _api_call_with_retry(
-        client_api._get, client_api._url(f"panel/api/clients/get/{encoded_email}"),
-        {"Accept": "application/json"},
-    )
-    old_response.raise_for_status()
-    old_data = old_response.json()
-    current = ((old_data.get("obj") or {}).get("client") or {}) if isinstance(old_data, dict) else {}
-    if not isinstance(current, dict) or not current.get("uuid") or not current.get("subId"):
-        raise RuntimeError("Current VPN credentials are unavailable")
-
-    old_uuid = str(current["uuid"])
-    old_sub_id = str(current["subId"])
-    new_uuid = str(uuid_lib.uuid4())
-    new_sub_id = uuid_lib.uuid4().hex[:16]
-    updated = dict(current)
-    updated["uuid"] = new_uuid
-    updated["subId"] = new_sub_id
-    url = client_api._url(f"panel/api/clients/update/{encoded_email}")
-
-    async def update(payload: dict) -> None:
-        response = await client_api._post(url, {"Accept": "application/json"}, payload)
-        response.raise_for_status()
-        data = response.json()
-        if not isinstance(data, dict) or not data.get("success"):
-            raise RuntimeError("3x-ui rejected credential rotation")
-
-    await _api_call_with_retry(update, updated)
-
-    # Verify the panel committed both credentials before changing the bot DB.
-    try:
-        verify = await _api_call_with_retry(
-            client_api._get, client_api._url(f"panel/api/clients/get/{encoded_email}"),
-            {"Accept": "application/json"},
-        )
-        verify.raise_for_status()
-        verify_obj = ((verify.json().get("obj") or {}).get("client") or {})
-    except Exception:
-        verify_obj = {}
-    if verify_obj.get("uuid") != new_uuid or verify_obj.get("subId") != new_sub_id:
-        # Best-effort rollback, preserving the same full client payload.
-        rollback = dict(updated)
-        rollback["uuid"] = old_uuid
-        rollback["subId"] = old_sub_id
-        try:
-            await _api_call_with_retry(update, rollback)
-        except Exception:
-            logger.critical("Credential rotation rollback failed for user %s", email)
-            raise CredentialRotationRollbackError("credential rotation rollback failed")
-        raise RuntimeError("3x-ui did not confirm credential rotation")
-
-    return {
-        "uuid": new_uuid,
-        "subscription_url": _build_sub_url(new_sub_id),
-        "previous_uuid": old_uuid,
-        "previous_sub_id": old_sub_id,
-    }
-
-
-async def restore_xui_client_credentials(user_id: int, previous_uuid: str, previous_sub_id: str) -> bool:
-    """Compensating rollback used if the bot DB cannot save a successful rotation."""
-    api = await _get_api()
-    client_api = api.client
-    email = quote(str(user_id), safe="")
-    response = await _api_call_with_retry(
-        client_api._get, client_api._url(f"panel/api/clients/get/{email}"),
-        {"Accept": "application/json"},
-    )
-    response.raise_for_status()
-    obj = response.json().get("obj") or {}
-    current = obj.get("client") if isinstance(obj, dict) else None
-    if not isinstance(current, dict):
-        return False
-    current = dict(current)
-    current["uuid"] = previous_uuid
-    current["subId"] = previous_sub_id
-    url = client_api._url(f"panel/api/clients/update/{email}")
-
-    async def update() -> None:
-        result = await client_api._post(url, {"Accept": "application/json"}, current)
-        result.raise_for_status()
-        data = result.json()
-        if not isinstance(data, dict) or not data.get("success"):
-            raise RuntimeError("3x-ui rejected credential rollback")
-
-    await _api_call_with_retry(update)
-    verify = await _api_call_with_retry(
-        client_api._get, client_api._url(f"panel/api/clients/get/{email}"),
-        {"Accept": "application/json"},
-    )
-    verify.raise_for_status()
-    restored = ((verify.json().get("obj") or {}).get("client") or {})
-    return restored.get("uuid") == previous_uuid and restored.get("subId") == previous_sub_id
 
 
 async def delete_xui_user(user_id: int) -> bool:
