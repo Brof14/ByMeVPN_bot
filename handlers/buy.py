@@ -21,7 +21,7 @@ from constants import (
 from config import PRICE_1_MONTH, DAYS_1M
 from states import BuyFlow
 from keyboards import tariff_selection_kb, payment_kb
-from payments import create_yookassa_payment, create_crypto_payment
+from payments import create_yookassa_payment, create_crypto_payment, claim_yookassa_checkout, release_yookassa_checkout
 from subscription import deliver_key
 from database import (
     ensure_user,
@@ -292,14 +292,20 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
     promo_code: str = params["promo_code"]
     user_id = callback.from_user.id
 
-    url = await create_yookassa_payment(
-        price_rub, f"ByMeVPN {days} дней ({devices} устр.)", user_id, days, devices, promo_code=promo_code, months=months,
-    )
+    if not claim_yookassa_checkout(user_id):
+        await callback.message.answer("Запрос на оплату уже выполняется. Подождите немного.")
+        return
+    try:
+        url = await create_yookassa_payment(
+            price_rub, f"ByMeVPN {days} дней ({devices} устр.)", user_id, days, devices, promo_code=promo_code, months=months,
+        )
+    finally:
+        release_yookassa_checkout(user_id)
 
     if not url:
         await safe_answer(
             callback,
-            "ЮKassa временно недоступна. Пожалуйста, выберите оплату через Telegram Stars.",
+            "Не удалось подключиться к ЮKassa. Платёж не создан, списания не было. Попробуйте позже или выберите Telegram Stars.",
             alert=True,
         )
         return

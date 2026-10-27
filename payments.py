@@ -10,6 +10,21 @@ from config import YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY, CRYPTO_BOT_TOKEN
 
 logger = logging.getLogger(__name__)
 
+_yookassa_checkout_users: set[int] = set()
+
+
+def claim_yookassa_checkout(user_id: int) -> bool:
+    """Prevent overlapping payment-creation requests for one customer."""
+    user_id = int(user_id)
+    if user_id in _yookassa_checkout_users:
+        return False
+    _yookassa_checkout_users.add(user_id)
+    return True
+
+
+def release_yookassa_checkout(user_id: int) -> None:
+    _yookassa_checkout_users.discard(int(user_id))
+
 
 _yookassa_recurring_supported: Optional[bool] = None
 
@@ -130,17 +145,17 @@ async def create_yookassa_payment(
                     logger.info("YooKassa fallback standard payment created for user %d: %s", user_id, data.get("id"))
                     return url
             except Exception as retry_e:
-                logger.error("YooKassa fallback payment error for user %d: %s", user_id, retry_e)
+                logger.error("YooKassa fallback payment error for user %d (%s): %r", user_id, type(retry_e).__name__, retry_e)
                 return None
 
         error_msg = f"HTTP {e.response.status_code}: {error_text[:200]}"
         logger.error("YooKassa HTTP error for user %d: %s", user_id, error_msg)
         return None
     except httpx.RequestError as e:
-        logger.error("YooKassa request error for user %d: %s", user_id, str(e))
+        logger.error("YooKassa request error for user %d (%s): %r", user_id, type(e).__name__, e)
         return None
     except Exception as e:
-        logger.error("YooKassa error for user %d: %s", user_id, str(e))
+        logger.exception("YooKassa payment creation failed for user %d (%s)", user_id, type(e).__name__)
         return None
 
 

@@ -501,23 +501,29 @@ async def _start_intro_trial(bot: Bot, callback: CallbackQuery, ref_id: int | No
         await send_with_photo(bot, callback, text, trial_pay_kb(pending["confirmation_url"]))
         return
 
-    from payments import create_yookassa_payment
-    confirmation_url = await create_yookassa_payment(
-        amount_rub=INTRO_TRIAL_PRICE_RUB,
-        description=f"ByMeVPN — {INTRO_TRIAL_DAYS} дня за {INTRO_TRIAL_PRICE_RUB} ₽ (далее {RECURRING_MONTHLY_PRICE} ₽/мес)",
-        user_id=user_id,
-        days=INTRO_TRIAL_DAYS,
-        devices=INTRO_TRIAL_DEVICES,
-        months=1,
-        extra_metadata={"trial": "1"},
-    )
+    from payments import create_yookassa_payment, claim_yookassa_checkout, release_yookassa_checkout
+    if not claim_yookassa_checkout(user_id):
+        await callback.message.answer("Запрос на оплату уже выполняется. Подождите немного.")
+        return
+    try:
+        confirmation_url = await create_yookassa_payment(
+            amount_rub=INTRO_TRIAL_PRICE_RUB,
+            description=f"ByMeVPN — {INTRO_TRIAL_DAYS} дня за {INTRO_TRIAL_PRICE_RUB} ₽ (далее {RECURRING_MONTHLY_PRICE} ₽/мес)",
+            user_id=user_id,
+            days=INTRO_TRIAL_DAYS,
+            devices=INTRO_TRIAL_DEVICES,
+            months=1,
+            extra_metadata={"trial": "1"},
+        )
+    finally:
+        release_yookassa_checkout(user_id)
 
     if not confirmation_url:
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
         await safe_answer(callback, "Оплата временно недоступна, попробуйте чуть позже.", alert=True)
         await send_with_photo(
             bot, callback,
-            "Не удалось создать платёж. Попробуйте позже "
+            "Не удалось подключиться к ЮKassa. Платёж не создан и деньги не списаны. Попробуйте позже "
             "или выберите обычный тариф.",
             InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="💳 Тарифы", callback_data="buy_vpn"),
