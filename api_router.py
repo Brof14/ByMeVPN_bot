@@ -303,6 +303,7 @@ async def fetch_and_parse_real_nodes(sub_url: str, fallback_uuid: Optional[str] 
         if node:
             servers.append(node)
 
+    servers.sort(key=lambda s: 0 if s.get("config", {}).get("security") == "reality" else 1)
     return servers
 
 
@@ -737,7 +738,9 @@ async def create_vpn_session(req: SessionRequest, user_id: int = Depends(get_cur
 
     matched = next((s for s in servers if s.get("node_code") == req.node_code), servers[0])
     config = matched.get("config")
-    if not config or not config.get("public_key") or not config.get("uuid"):
+    if not config or not config.get("uuid"):
+        raise HTTPException(status_code=500, detail="Неполная конфигурация VPN-узла на сервере")
+    if config.get("security") == "reality" and not config.get("public_key"):
         raise HTTPException(status_code=500, detail="Неполная конфигурация VPN-узла на сервере")
 
     return config
