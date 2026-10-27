@@ -66,6 +66,13 @@ def _is_allowed_yookassa_source(source_ip: str | None) -> bool:
 
 app = FastAPI(docs_url=None, redoc_url=None)  # disable docs in production
 
+try:
+    from api_router import api_router
+    app.include_router(api_router, prefix="/api/v1")
+except Exception as _router_err:
+    logger.error("Failed to mount api_router: %s", _router_err)
+
+
 
 @app.get("/healthz")
 async def health_check():

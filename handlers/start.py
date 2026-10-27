@@ -269,6 +269,27 @@ async def cmd_start(message: Message, bot: Bot) -> None:
     if len(args) > 1 and args[1].strip().lower() == "login":
         await _handle_app_login(message, user_id, user_name)
         return
+
+    if len(args) > 1 and args[1].strip().startswith("auth_"):
+        auth_token = args[1].strip()
+        try:
+            from api_router import confirm_telegram_session
+            confirm_telegram_session(
+                token=auth_token,
+                user_id=user_id,
+                username=message.from_user.username or "",
+                full_name=message.from_user.full_name or message.from_user.first_name or "",
+            )
+            await message.answer(
+                "✅ <b>Вход в приложение ByMeVPN подтверждён!</b>\n\n"
+                "Вернитесь в приложение на телефоне — оно автоматически вошло в ваш аккаунт и загрузило подписку.",
+                parse_mode="HTML"
+            )
+            return
+        except Exception as e:
+            logger.error("Error confirming telegram session: %s", e)
+            await message.answer("Произошла ошибка при авторизации. Попробуйте ещё раз из приложения.")
+            return
     
     if len(args) > 1:
         param = args[1].strip()
