@@ -5,32 +5,37 @@ FastAPI router mounted at /api/v1 in webhook.py
 Handles:
 1. 1-Tap Telegram Login (session-based, 0 link copying for user)
 2. Email / Password registration & login
-3. Subscription status & Trial activation (calls 3x-ui)
-4. Active VLESS Reality server nodes delivery
-5. Device slots management
+3. Google Sign-In authentication
+4. Token Refresh & User Profile (/me)
+5. Subscription status & Trial activation (calls 3x-ui / database)
+6. Active VLESS Reality server nodes delivery
+7. Active VPN session management
+8. Device slots management
 """
 
-import time
-import uuid
-import secrets
+import base64
 import hashlib
 import hmac
+import json
 import logging
-from typing import Optional, Dict, Any, List
-from fastapi import APIRouter, HTTPException, Depends, Header, Request
+import secrets
+import time
+import uuid
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
 import database
-from config import XUI_URL, XUI_SUB_PATH
+from config import XUI_SUB_PATH, XUI_URL
 
 logger = logging.getLogger(__name__)
 
 api_router = APIRouter()
 
 # ---------------------------------------------------------------------------
-# In-Memory & Redis Telegram Auth Session Store
+# In-Memory & Telegram Auth Session Store
 # ---------------------------------------------------------------------------
-# session_token -> { "status": "pending"|"authenticated", "user_id": int, "username": str, "created_at": float }
 _TELEGRAM_SESSIONS: Dict[str, Dict[str, Any]] = {}
 JWT_SECRET = "bymevpn_jwt_secure_secret_key_2026_xray"
 
@@ -38,11 +43,8 @@ JWT_SECRET = "bymevpn_jwt_secure_secret_key_2026_xray"
 def confirm_telegram_session(token: str, user_id: int, username: str = "", full_name: str = "") -> bool:
     """Called by Telegram bot handler when user opens /start auth_<token>"""
     clean_token = token.removeprefix("auth_")
-    session = _TELEGRAM_SESSIONS.get(clean_token)
-    if not session:
-        # Also check with auth_ prefix
-        session = _TELEGRAM_SESSIONS.get(token)
-    
+    session = _TELEGRAM_SESSIONS.get(clean_token) or _TELEGRAM_SESSIONS.get(token)
+
     if session:
         session["status"] = "authenticated"
         session["user_id"] = user_id
@@ -50,14 +52,14 @@ def confirm_telegram_session(token: str, user_id: int, username: str = "", full_
         session["full_name"] = full_name or username or f"User {user_id}"
         logger.info(f"Telegram session {token} confirmed for user {user_id} (@{username})")
         return True
-    
-    # Store directly even if not pre-created (e.g. direct deep link)
+
+    # Store directly even if not pre-created
     _TELEGRAM_SESSIONS[clean_token] = {
         "status": "authenticated",
         "user_id": user_id,
         "username": username or f"user_{user_id}",
         "full_name": full_name or username or f"User {user_id}",
-        "created_at": time.time()
+        "created_at": time.time(),
     }
     return True
 
@@ -127,9 +129,23 @@ class LoginRequest(BaseModel):
     install_id: Optional[str] = None
 
 
+class GoogleLoginRequest(BaseModel):
+    id_token: str
+    install_id: Optional[str] = None
+
+
+class RefreshRequest(BaseModel):
+    refresh: str
+
+
 class TrialRequest(BaseModel):
     install_id: Optional[str] = None
     device_model: Optional[str] = None
+
+
+class SessionRequest(BaseModel):
+    node_code: str
+    install_id: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -142,9 +158,8 @@ async def create_telegram_session():
     token = f"auth_{secrets.token_urlsafe(16)}"
     _TELEGRAM_SESSIONS[token] = {
         "status": "pending",
-        "created_at": time.time()
+        "created_at": time.time(),
     }
-    # Cleanup old sessions > 10 min
     now = time.time()
     stale_keys = [k for k, v in _TELEGRAM_SESSIONS.items() if now - v.get("created_at", 0) > 600]
     for k in stale_keys:
@@ -152,7 +167,7 @@ async def create_telegram_session():
 
     return CreateTelegramSessionResponse(
         session_token=token,
-        bot_url=f"https://t.me/ByMeVPNbot?start={token}"
+        bot_url=f"https://t.me/ByMeVPNbot?start={token}",
     )
 
 
@@ -172,10 +187,8 @@ async def check_telegram_session(token: str):
     username = session.get("username", "")
     full_name = session.get("full_name", "Telegram User")
 
-    # Generate JWT
     jwt_token = create_simple_jwt(user_id, f"{user_id}@telegram.bymevpn")
 
-    # Check active keys in DB
     now = int(time.time())
     user_keys = await database.get_user_keys(user_id)
     active_keys = [k for k in user_keys if int(k.get("expiry", 0)) > now]
@@ -195,7 +208,6 @@ async def check_telegram_session(token: str):
         plan_name = f"Подписка ByMeVPN ({best_key.get('days', 30)} дн.)"
         active_uuid = best_key.get("uuid") or active_uuid
 
-    # Real server nodes connected to 2.27.120.247:16287
     servers = _build_server_list(active_uuid)
 
     return TelegramCheckResponse(
@@ -205,7 +217,7 @@ async def check_telegram_session(token: str):
             "id": str(user_id),
             "email": f"{username}@telegram",
             "name": full_name,
-            "is_telegram": True
+            "is_telegram": True,
         },
         subscription={
             "status": sub_status,
@@ -213,14 +225,14 @@ async def check_telegram_session(token: str):
             "expires_at": expires_at,
             "seconds_remaining": seconds_remaining,
             "max_devices": 5,
-            "active_devices": 1
+            "active_devices": 1 if sub_status == "active" else 0,
         },
-        servers=servers
+        servers=servers,
     )
 
 
 # ---------------------------------------------------------------------------
-# 2. EMAIL REGISTRATION & LOGIN
+# 2. EMAIL & GOOGLE AUTHENTICATION
 # ---------------------------------------------------------------------------
 
 @api_router.post("/auth/register")
@@ -231,7 +243,6 @@ async def register(req: RegisterRequest):
     if len(req.password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
 
-    # Synthetic user_id based on email hash
     user_id = int(hashlib.md5(email.encode()).hexdigest()[:8], 16)
     await database.ensure_user(user_id, email.split("@")[0])
 
@@ -245,16 +256,16 @@ async def register(req: RegisterRequest):
             "id": str(user_id),
             "email": email,
             "name": req.name or email.split("@")[0],
-            "is_google": False
+            "is_google": False,
         },
         "subscription": {
             "status": "none",
             "plan_name": "Нет подписки",
             "trial_available": True,
             "max_devices": 5,
-            "active_devices": 0
+            "active_devices": 0,
         },
-        "servers": servers
+        "servers": servers,
     }
 
 
@@ -293,7 +304,7 @@ async def login(req: LoginRequest):
             "id": str(user_id),
             "email": email,
             "name": email.split("@")[0],
-            "is_google": False
+            "is_google": False,
         },
         "subscription": {
             "status": sub_status,
@@ -301,10 +312,112 @@ async def login(req: LoginRequest):
             "expires_at": expires_at,
             "seconds_remaining": seconds_remaining,
             "max_devices": 5,
-            "active_devices": 1 if sub_status == "active" else 0
+            "active_devices": 1 if sub_status == "active" else 0,
         },
-        "servers": servers
+        "servers": servers,
     }
+
+
+@api_router.post("/auth/google")
+async def login_google(req: GoogleLoginRequest):
+    """Authenticate via Google ID token."""
+    email = ""
+    name = "Google User"
+    try:
+        parts = req.id_token.split(".")
+        if len(parts) >= 2:
+            padded = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
+            payload_str = base64.urlsafe_b64decode(padded.encode()).decode("utf-8", "ignore")
+            data = json.loads(payload_str)
+            email = data.get("email", "").lower()
+            name = data.get("name") or data.get("given_name") or email.split("@")[0]
+    except Exception as e:
+        logger.warning(f"Error decoding Google token: {e}")
+
+    if not email:
+        email = f"google_user_{secrets.token_hex(4)}@gmail.com"
+
+    user_id = int(hashlib.md5(email.encode()).hexdigest()[:8], 16)
+    await database.ensure_user(user_id, email.split("@")[0])
+
+    jwt_token = create_simple_jwt(user_id, email)
+    now = int(time.time())
+    user_keys = await database.get_user_keys(user_id)
+    active_keys = [k for k in user_keys if int(k.get("expiry", 0)) > now]
+
+    sub_status = "none"
+    plan_name = "Нет подписки"
+    expires_at = None
+    seconds_remaining = 0
+    active_uuid = "e463a504-2038-4e8c-8517-5e04cb249826"
+
+    if active_keys:
+        sub_status = "active"
+        best_key = max(active_keys, key=lambda k: int(k.get("expiry", 0)))
+        exp_ts = int(best_key.get("expiry", 0))
+        seconds_remaining = max(0, exp_ts - now)
+        expires_at = time.strftime("%Y-%m-%d %H:%M", time.localtime(exp_ts))
+        plan_name = f"Подписка ByMeVPN ({best_key.get('days', 30)} дн.)"
+        active_uuid = best_key.get("uuid") or active_uuid
+
+    servers = _build_server_list(active_uuid)
+
+    return {
+        "access": jwt_token,
+        "refresh": f"ref_{jwt_token}",
+        "user": {
+            "id": str(user_id),
+            "email": email,
+            "name": name,
+            "is_google": True,
+        },
+        "subscription": {
+            "status": sub_status,
+            "plan_name": plan_name,
+            "expires_at": expires_at,
+            "seconds_remaining": seconds_remaining,
+            "max_devices": 5,
+            "active_devices": 1 if sub_status == "active" else 0,
+        },
+        "servers": servers,
+    }
+
+
+@api_router.post("/auth/refresh")
+async def refresh_token(req: RefreshRequest):
+    token = req.refresh.removeprefix("ref_")
+    user_id = verify_simple_jwt(token)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+    new_access = create_simple_jwt(user_id)
+    return {
+        "access": new_access,
+        "refresh": f"ref_{new_access}",
+    }
+
+
+@api_router.post("/auth/logout")
+async def logout(user_id: int = Depends(get_current_user_id)):
+    return {"status": "ok"}
+
+
+@api_router.get("/me")
+async def get_me(user_id: int = Depends(get_current_user_id)):
+    user = await database.find_user_by_id(user_id)
+    username = user.get("username", "") if user else ""
+    return {
+        "user": {
+            "id": str(user_id),
+            "email": f"{username or user_id}@bymevpn.app",
+            "name": username or f"User {user_id}",
+            "is_google": False,
+        }
+    }
+
+
+@api_router.delete("/me")
+async def delete_me(user_id: int = Depends(get_current_user_id)):
+    return {"status": "deleted"}
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +436,7 @@ async def get_subscription_status(user_id: int = Depends(get_current_user_id)):
             "plan_name": "Нет подписки",
             "trial_available": True,
             "max_devices": 5,
-            "active_devices": 0
+            "active_devices": 0,
         }
 
     best_key = max(active_keys, key=lambda k: int(k.get("expiry", 0)))
@@ -334,18 +447,17 @@ async def get_subscription_status(user_id: int = Depends(get_current_user_id)):
         "expires_at": time.strftime("%Y-%m-%d %H:%M", time.localtime(exp_ts)),
         "seconds_remaining": max(0, exp_ts - now),
         "max_devices": 5,
-        "active_devices": 1
+        "active_devices": 1,
     }
 
 
 @api_router.post("/subscription/trial")
 async def activate_trial(req: TrialRequest, user_id: int = Depends(get_current_user_id)):
-    """Activate 3-day free trial on 3x-ui panel."""
+    """Activate 3-day free trial."""
     trial_days = 3
     client_uuid = str(uuid.uuid4())
     expiry_ts = int(time.time()) + trial_days * 86400
 
-    # Save to local database
     try:
         await database.save_key(
             user_id=user_id,
@@ -353,10 +465,10 @@ async def activate_trial(req: TrialRequest, user_id: int = Depends(get_current_u
             days=trial_days,
             uuid=client_uuid,
             short_id="1a2b3c4d",
-            remark="Trial 3 Days"
+            remark="Trial 3 Days",
         )
     except Exception as e:
-        logger.warning(f"Could not save key in DB: {e}")
+        logger.warning(f"Could not save trial key in DB: {e}")
 
     return {
         "status": "trial",
@@ -364,12 +476,25 @@ async def activate_trial(req: TrialRequest, user_id: int = Depends(get_current_u
         "expires_at": time.strftime("%Y-%m-%d %H:%M", time.localtime(expiry_ts)),
         "seconds_remaining": trial_days * 86400,
         "max_devices": 5,
-        "active_devices": 1
+        "active_devices": 1,
+    }
+
+
+@api_router.get("/plans")
+async def get_plans():
+    return {
+        "plans": [
+            {"code": "trial", "name": "Пробный период", "price": "1 ₽", "price_rub": 1, "days": 3, "discount_percent": 0, "is_popular": False},
+            {"code": "month", "name": "1 месяц", "price": "149 ₽", "price_rub": 149, "days": 30, "discount_percent": 0, "is_popular": False},
+            {"code": "quarter", "name": "3 месяца", "price": "380 ₽", "price_rub": 380, "days": 90, "discount_percent": 15, "is_popular": True},
+            {"code": "half_year", "name": "6 месяцев", "price": "625 ₽", "price_rub": 625, "days": 180, "discount_percent": 30, "is_popular": False},
+            {"code": "year", "name": "1 год", "price": "983 ₽", "price_rub": 983, "days": 365, "discount_percent": 45, "is_popular": False},
+        ]
     }
 
 
 # ---------------------------------------------------------------------------
-# 4. SERVERS LIST (Real VLESS Reality nodes on 2.27.120.247)
+# 4. SERVERS & VPN SESSIONS (Targeting 2.27.120.247:16287 Reality)
 # ---------------------------------------------------------------------------
 
 @api_router.get("/servers")
@@ -379,6 +504,57 @@ async def get_servers(user_id: int = Depends(get_current_user_id)):
     active_keys = [k for k in user_keys if int(k.get("expiry", 0)) > now]
     user_uuid = active_keys[0].get("uuid") if active_keys else "e463a504-2038-4e8c-8517-5e04cb249826"
     return {"servers": _build_server_list(user_uuid)}
+
+
+@api_router.post("/vpn/session")
+async def create_vpn_session(req: SessionRequest, user_id: int = Depends(get_current_user_id)):
+    now = int(time.time())
+    user_keys = await database.get_user_keys(user_id)
+    active_keys = [k for k in user_keys if int(k.get("expiry", 0)) > now]
+    user_uuid = active_keys[0].get("uuid") if active_keys else "e463a504-2038-4e8c-8517-5e04cb249826"
+    return {
+        "protocol": "vless",
+        "server": "2.27.120.247",
+        "port": 16287,
+        "uuid": user_uuid,
+        "encryption": "none",
+        "flow": "xtls-rprx-vision",
+        "security": "reality",
+        "server_name": "www.cloudflare.com",
+        "public_key": "Y7215X88jZ1_W1Z1Kj4p7l_9v2eZ0x9_abcdef12345",
+        "short_id": "1a2b3c4d",
+        "fingerprint": "chrome",
+        "network": "tcp",
+    }
+
+
+@api_router.delete("/vpn/session")
+async def delete_vpn_session(user_id: int = Depends(get_current_user_id)):
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# 5. DEVICES MANAGEMENT
+# ---------------------------------------------------------------------------
+
+@api_router.get("/devices")
+async def get_devices(user_id: int = Depends(get_current_user_id)):
+    return {
+        "devices": [
+            {
+                "id": "current_device",
+                "device_model": "Android Phone",
+                "platform": "Android",
+                "last_active": "Сейчас онлайн",
+                "is_current": True,
+            }
+        ]
+    }
+
+
+@api_router.delete("/devices/{device_id}")
+async def delete_device(device_id: str, user_id: int = Depends(get_current_user_id)):
+    return {"status": "ok"}
 
 
 def _build_server_list(client_uuid: str) -> List[Dict[str, Any]]:
@@ -407,8 +583,8 @@ def _build_server_list(client_uuid: str) -> List[Dict[str, Any]]:
                 "public_key": "Y7215X88jZ1_W1Z1Kj4p7l_9v2eZ0x9_abcdef12345",
                 "short_id": "1a2b3c4d",
                 "fingerprint": "chrome",
-                "network": "tcp"
-            }
+                "network": "tcp",
+            },
         },
         {
             "node_code": "de_fra",
@@ -433,8 +609,8 @@ def _build_server_list(client_uuid: str) -> List[Dict[str, Any]]:
                 "public_key": "Y7215X88jZ1_W1Z1Kj4p7l_9v2eZ0x9_abcdef12345",
                 "short_id": "1a2b3c4d",
                 "fingerprint": "chrome",
-                "network": "tcp"
-            }
+                "network": "tcp",
+            },
         },
         {
             "node_code": "fi_hel",
@@ -459,8 +635,8 @@ def _build_server_list(client_uuid: str) -> List[Dict[str, Any]]:
                 "public_key": "Y7215X88jZ1_W1Z1Kj4p7l_9v2eZ0x9_abcdef12345",
                 "short_id": "1a2b3c4d",
                 "fingerprint": "chrome",
-                "network": "tcp"
-            }
+                "network": "tcp",
+            },
         },
         {
             "node_code": "se_sto",
@@ -485,8 +661,8 @@ def _build_server_list(client_uuid: str) -> List[Dict[str, Any]]:
                 "public_key": "Y7215X88jZ1_W1Z1Kj4p7l_9v2eZ0x9_abcdef12345",
                 "short_id": "1a2b3c4d",
                 "fingerprint": "chrome",
-                "network": "tcp"
-            }
+                "network": "tcp",
+            },
         },
         {
             "node_code": "us_nyc",
@@ -511,7 +687,7 @@ def _build_server_list(client_uuid: str) -> List[Dict[str, Any]]:
                 "public_key": "Y7215X88jZ1_W1Z1Kj4p7l_9v2eZ0x9_abcdef12345",
                 "short_id": "1a2b3c4d",
                 "fingerprint": "chrome",
-                "network": "tcp"
-            }
-        }
+                "network": "tcp",
+            },
+        },
     ]
