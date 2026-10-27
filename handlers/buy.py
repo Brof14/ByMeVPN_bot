@@ -5,6 +5,7 @@ VPN purchase flow:
 import asyncio
 import time
 import logging
+from urllib.parse import quote_plus
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
@@ -303,10 +304,22 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
         release_yookassa_checkout(user_id)
 
     if not url:
-        await safe_answer(
-            callback,
-            "Не удалось подключиться к ЮKassa. Платёж не создан, списания не было. Попробуйте позже или выберите Telegram Stars.",
-            alert=True,
+        await safe_answer(callback)
+        support_text = quote_plus(
+            f"Здравствуйте! Не открывается оплата ByMeVPN через ЮKassa. "
+            f"Хочу оплатить картой: {days} дней, {devices} устройства, {price_rub} ₽."
+        )
+        await callback.message.answer(
+            "Не удалось открыть оплату через ЮKassa.\n\n"
+            "Напишите в поддержку — поможем оплатить подписку банковской картой. "
+            "Если деньги уже списались, не оплачивайте повторно: отправьте поддержке подтверждение платежа.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="💬 Оплатить картой через поддержку",
+                    url=f"https://t.me/ByMeVPNSupportBot?text={support_text}",
+                )],
+                [InlineKeyboardButton(text="Оплатить через Telegram Stars", callback_data="pay_stars")],
+            ]),
         )
         return
 
