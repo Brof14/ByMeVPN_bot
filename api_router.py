@@ -18,6 +18,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import secrets
 import time
 import uuid
@@ -39,7 +40,7 @@ api_router = APIRouter()
 # Telegram Session Store & JWT Signing
 # ---------------------------------------------------------------------------
 _TELEGRAM_SESSIONS: Dict[str, Dict[str, Any]] = {}
-JWT_SECRET = "bymevpn_jwt_secure_secret_key_2026_xray"
+JWT_SECRET = os.getenv("JWT_SECRET", "bymevpn_jwt_secure_secret_key_2026_xray")
 
 
 async def _ensure_auth_db():
