@@ -88,6 +88,27 @@ async def health_check():
         raise HTTPException(status_code=503, detail="database unavailable") from exc
     return {"status": "ok"}
 
+
+@app.get("/download")
+@app.get("/download/app.apk")
+async def download_app_apk():
+    """Direct APK download redirect for mobile devices."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(
+        url="https://github.com/Brof14/ByMeVPN-app/releases/download/v1.0.2/ByMeVPN-v1.0.2.apk",
+        status_code=302,
+    )
+
+
+@app.get("/download/debug")
+async def download_debug_apk():
+    """Direct debug APK download redirect for troubleshooting."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(
+        url="https://github.com/Brof14/ByMeVPN-app/releases/download/v1.0.2/ByMeVPN-v1.0.2-debug.apk",
+        status_code=302,
+    )
+
 # Global dispatcher for Telegram webhook handling
 dispatcher: Optional[Dispatcher] = None
 
