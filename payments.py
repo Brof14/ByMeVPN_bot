@@ -112,7 +112,7 @@ async def create_yookassa_payment(
                 user_id, days, devices, months, amount_rub, promo_code, payload.get("save_payment_method", False))
 
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=5.0)) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             logger.info("Sending YooKassa request for user %d", user_id)
             r = await client.post("https://api.yookassa.ru/v3/payments", json=payload, headers=headers)
             logger.info("YooKassa response status: %d", r.status_code)
@@ -136,7 +136,7 @@ async def create_yookassa_payment(
             payload.pop("save_payment_method", None)
             headers["Idempotence-Key"] = f"checkout_{user_id}_{uuid.uuid4().hex}_std"
             try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=5.0)) as client:
+                async with httpx.AsyncClient(timeout=15.0) as client:
                     r2 = await client.post("https://api.yookassa.ru/v3/payments", json=payload, headers=headers)
                     r2.raise_for_status()
                     data = r2.json()
@@ -216,7 +216,7 @@ async def charge_yookassa_recurrent(
                 user_id, key_id, days, devices, amount_rub, payment_method_id)
 
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=5.0)) as client:
+        async with httpx.AsyncClient(timeout=20.0) as client:
             r = await client.post("https://api.yookassa.ru/v3/payments", json=payload, headers=headers)
             r.raise_for_status()
             data = r.json()

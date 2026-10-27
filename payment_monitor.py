@@ -31,7 +31,7 @@ class PaymentMonitor:
         started = time.perf_counter()
         from async_utils import perf_metrics
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=5.0)) as client:
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 # Do not clamp to process start time: payments made during downtime
                 # must be discoverable after a restart.
                 cutoff_time = datetime.utcnow() - timedelta(minutes=minutes_back)

@@ -137,7 +137,7 @@ async def _fetch_yookassa_payment(payment_id: str) -> Optional[dict]:
     headers = {"Authorization": f"Basic {auth}"}
 
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=5.0)) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(
                 f"https://api.yookassa.ru/v3/payments/{payment_id}",
                 headers=headers,
