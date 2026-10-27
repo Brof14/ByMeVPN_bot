@@ -33,6 +33,15 @@ async def cb_partner(callback: CallbackQuery, bot: Bot):
     from referral_system_new import retry_pending_signup_bonuses
     pending_rewards = await retry_pending_signup_bonuses(bot, user_id)
     stats = await get_referral_stats_enhanced(user_id)
+    registrations = int(stats.get("total_registrations", 0))
+    paid_referrals = int(stats.get("paid_clients", 0))
+    bonus_days = int(stats.get("total_bonus_days", 0))
+    if registrations == 0:
+        next_step = "Поделитесь ссылкой: бонус начислится, когда новый пользователь впервые запустит бота по ней."
+    elif paid_referrals < registrations:
+        next_step = "За первую платную подписку приглашённого автоматически начислится ещё +30 дней."
+    else:
+        next_step = "Приглашайте новых друзей — бонусы за регистрации и первые платные подписки начисляются автоматически."
     pending_note = (
         f"\n\n⚠️ Не удалось начислить бонус за регистрацию {pending_rewards} приглашённого. "
         "Начисление сохранено — откройте этот раздел позже, чтобы повторить попытку."
@@ -43,6 +52,10 @@ async def cb_partner(callback: CallbackQuery, bot: Bot):
         "Приглашайте друзей и пользуйтесь ByMeVPN без оплаты и привязки карты.\n\n"
         "Друг зарегистрировался — <b>+15 дней</b>\n"
         "Друг впервые оплатил подходящую подписку — <b>+30 дней</b>\n\n"
+        f"<b>Ваш результат</b>\n"
+        f"Зарегистрировались: <b>{registrations}</b> · оплатили: <b>{paid_referrals}</b>\n"
+        f"Начислено: <b>+{bonus_days} дней</b>\n"
+        f"Следующий шаг: {next_step}\n\n"
         "<b>Ваша ссылка</b>\n"
         f"<code>{link}</code>\n\n"
         "Бонусные дни добавляются к вашему VPN. Если ключа ещё нет, бот создаст его автоматически."

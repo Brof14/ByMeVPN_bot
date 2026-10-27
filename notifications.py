@@ -24,6 +24,7 @@ from database import (
     update_key_last_notification, is_promotional_opted_out,
     get_due_connection_reminders, update_connection_reminder,
     retry_connection_reminder,
+    claim_expiry_notification, finish_expiry_notification,
 )
 
 logger = logging.getLogger(__name__)
@@ -124,14 +125,14 @@ async def _send_autorenew_upcoming(bot: Bot, item: dict, sub: dict) -> None:
         [InlineKeyboardButton(text="🆘 Поддержка", url="https://t.me/ByMeVPNSupportBot")],
     ])
     await bot.send_message(item["user_id"], text, parse_mode="HTML", reply_markup=kb)
+    return True
 
 
 async def _send_urgent_notification(bot: Bot, item: dict) -> None:
     """Send urgent notification for keys expiring in 1-3 days."""
     sub = await _get_active_autorenew(item["user_id"])
     if sub:
-        await _send_autorenew_upcoming(bot, item, sub)
-        return
+        return await _send_autorenew_upcoming(bot, item, sub)
 
     date_str = datetime.fromtimestamp(item["expiry"]).strftime("%d.%m.%Y")
     days_left = max(1, int((item["expiry"] - int(time.time())) / 86400))
@@ -156,6 +157,7 @@ async def _send_urgent_notification(bot: Bot, item: dict) -> None:
     ])
 
     await bot.send_message(item["user_id"], text, parse_mode="HTML", reply_markup=kb)
+    return True
 
 
 async def _send_warning_notification(bot: Bot, item: dict) -> None:
@@ -163,7 +165,7 @@ async def _send_warning_notification(bot: Bot, item: dict) -> None:
     sub = await _get_active_autorenew(item["user_id"])
     if sub:
         # Keep renewal messages to one clear reminder in the final days.
-        return
+        return False
 
     date_str = datetime.fromtimestamp(item["expiry"]).strftime("%d.%m.%Y")
     days_left = max(1, int((item["expiry"] - int(time.time())) / 86400))
@@ -188,6 +190,7 @@ async def _send_warning_notification(bot: Bot, item: dict) -> None:
     ])
 
     await bot.send_message(item["user_id"], text, parse_mode="HTML", reply_markup=kb)
+    return True
 
 
 async def _send_early_notification(bot: Bot, item: dict) -> None:
@@ -195,7 +198,7 @@ async def _send_early_notification(bot: Bot, item: dict) -> None:
     sub = await _get_active_autorenew(item["user_id"])
     if sub:
         # An auto-renewing customer only gets the pre-charge reminder close to billing.
-        return
+        return False
 
     date_str = datetime.fromtimestamp(item["expiry"]).strftime("%d.%m.%Y")
     days_left = max(1, int((item["expiry"] - int(time.time())) / 86400))
@@ -211,11 +214,14 @@ async def _send_early_notification(bot: Bot, item: dict) -> None:
     ])
 
     await bot.send_message(item["user_id"], text, parse_mode="HTML", reply_markup=kb)
+    return True
 
 
 async def _send_expiry_notifications(bot: Bot) -> None:
-    """Send all expiry notifications based on days remaining."""
+    """Send expiry reminders with bounded concurrency and durable deduplication."""
     import time as _time
+    from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
+    from async_utils import perf_metrics
     
     current_time = int(_time.time())
     
@@ -227,50 +233,56 @@ async def _send_expiry_notifications(bot: Bot) -> None:
     WARNING_INTERVAL = 10 * 86400    # 10 days
     EARLY_INTERVAL = 25 * 86400      # 25 days
     
-    # Urgent: 1-3 days remaining
-    urgent_keys = await get_keys_nearing_expiry(days_min=1, days_max=3)
-    for item in urgent_keys:
-        last_notif = item.get("last_notification_at", 0)
-        if last_notif and (current_time - last_notif) < URGENT_INTERVAL:
-            logger.debug("Skipping urgent notification for user %d (last sent %d seconds ago)", 
-                        item["user_id"], current_time - last_notif)
-            continue
-        try:
-            await _send_urgent_notification(bot, item)
-            await update_key_last_notification(item["user_id"], item["expiry"])
-            logger.info("Sent urgent notification to user %d", item["user_id"])
-        except Exception as e:
-            logger.debug("Urgent notification error for user %d: %s", item["user_id"], e)
+    batches = [
+        ("urgent", URGENT_INTERVAL, await get_keys_nearing_expiry(days_min=1, days_max=3), _send_urgent_notification),
+        ("warning", WARNING_INTERVAL, await get_keys_nearing_expiry(days_min=7, days_max=14), _send_warning_notification),
+        ("early", EARLY_INTERVAL, await get_keys_nearing_expiry(days_min=21, days_max=30), _send_early_notification),
+    ]
+    # One reminder per user per daily pass; the nearest expiry / highest urgency wins.
+    candidates = {}
+    priority = {"urgent": 0, "warning": 1, "early": 2}
+    for bucket, interval, rows, sender in batches:
+        for item in rows:
+            prior = candidates.get(item["user_id"])
+            if prior is None or priority[bucket] < priority[prior[0]]:
+                candidates[item["user_id"]] = (bucket, interval, item, sender)
 
-    # Warning: 7-14 days remaining
-    warning_keys = await get_keys_nearing_expiry(days_min=7, days_max=14)
-    for item in warning_keys:
-        last_notif = item.get("last_notification_at", 0)
-        if last_notif and (current_time - last_notif) < WARNING_INTERVAL:
-            logger.debug("Skipping warning notification for user %d (last sent %d seconds ago)", 
-                        item["user_id"], current_time - last_notif)
-            continue
-        try:
-            await _send_warning_notification(bot, item)
-            await update_key_last_notification(item["user_id"], item["expiry"])
-            logger.info("Sent warning notification to user %d", item["user_id"])
-        except Exception as e:
-            logger.debug("Warning notification error for user %d: %s", item["user_id"], e)
+    semaphore = asyncio.Semaphore(8)
 
-    # Early: 21-30 days remaining
-    early_keys = await get_keys_nearing_expiry(days_min=21, days_max=30)
-    for item in early_keys:
+    async def deliver(user_id, candidate):
+        bucket, interval, item, sender = candidate
         last_notif = item.get("last_notification_at", 0)
-        if last_notif and (current_time - last_notif) < EARLY_INTERVAL:
-            logger.debug("Skipping early notification for user %d (last sent %d seconds ago)", 
-                        item["user_id"], current_time - last_notif)
-            continue
+        if last_notif and current_time - last_notif < interval:
+            return
+        if not await claim_expiry_notification(user_id, item["expiry"], bucket):
+            return
+        started = _time.perf_counter()
+        status = "uncertain"
         try:
-            await _send_early_notification(bot, item)
-            await update_key_last_notification(item["user_id"], item["expiry"])
-            logger.info("Sent early notification to user %d", item["user_id"])
-        except Exception as e:
-            logger.debug("Early notification error for user %d: %s", item["user_id"], e)
+            async with semaphore:
+                perf_metrics.observe("notification_queue_wait", _time.perf_counter() - started)
+                try:
+                    sent = await sender(bot, item)
+                except TelegramRetryAfter as error:
+                    await asyncio.sleep(min(float(error.retry_after), 90))
+                    sent = await sender(bot, item)
+            status = "sent" if sent else "skipped"
+            if sent:
+                await update_key_last_notification(user_id, item["expiry"])
+        except TelegramForbiddenError:
+            status = "blocked"
+            logger.info("Expiry reminder blocked by user %d", user_id)
+        except TelegramRetryAfter:
+            status = "failed"
+            logger.warning("Expiry reminder rate limited twice; will retry later for user %d", user_id)
+        except Exception:
+            # A timeout can happen after Telegram accepted the message. Never blindly resend.
+            logger.exception("Expiry reminder delivery uncertain: user=%d bucket=%s", user_id, bucket)
+        finally:
+            await finish_expiry_notification(user_id, item["expiry"], bucket, status)
+            perf_metrics.observe("expiry_notification_dispatch", _time.perf_counter() - started, status == "uncertain")
+
+    await asyncio.gather(*(deliver(uid, candidate) for uid, candidate in candidates.items()))
 
 
 async def _backup_database(bot: Bot) -> None:

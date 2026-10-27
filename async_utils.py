@@ -7,8 +7,38 @@ import logging
 from typing import List, Any, Callable, Optional
 from concurrent.futures import ThreadPoolExecutor
 import functools
+import time
+from collections import defaultdict, deque
 
 logger = logging.getLogger(__name__)
+
+
+class _PerfMetrics:
+    """Small in-memory latency/error window; bounded to avoid VPS growth."""
+    def __init__(self):
+        self._data = defaultdict(lambda: {"samples": deque(maxlen=256), "errors": 0, "calls": 0})
+
+    def observe(self, name: str, seconds: float, failed: bool = False):
+        row = self._data[name]
+        row["calls"] += 1
+        row["errors"] += int(failed)
+        row["samples"].append(max(0.0, seconds))
+
+    def snapshot(self):
+        result = {}
+        for name, row in self._data.items():
+            values = sorted(row["samples"])
+            if not values:
+                continue
+            result[name] = {
+                "calls": row["calls"], "errors": row["errors"],
+                "avg_ms": round(sum(values) * 1000 / len(values)),
+                "p95_ms": round(values[min(len(values) - 1, int(len(values) * .95))] * 1000),
+            }
+        return result
+
+
+perf_metrics = _PerfMetrics()
 
 # Глобальный пул потоков для CPU-интенсивных операций
 _thread_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="vpnbot")
@@ -150,12 +180,21 @@ def monitor_performance(name: str):
     def decorator(func):
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
-            perf_monitor.start_timing(name)
+            started = time.perf_counter()
+            failed = False
             try:
                 result = await func(*args, **kwargs)
+                if result is None:
+                    failed = True
                 return result
+            except Exception:
+                failed = True
+                raise
             finally:
-                perf_monitor.end_timing(name)
+                elapsed = time.perf_counter() - started
+                perf_metrics.observe(name, elapsed, failed)
+                if elapsed > 1:
+                    logger.warning("Slow operation: %s took %.3fs", name, elapsed)
         return wrapper
     return decorator
 

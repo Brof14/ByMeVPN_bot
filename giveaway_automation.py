@@ -66,6 +66,20 @@ def _moscow_date(timestamp: int) -> str:
     return (datetime.fromtimestamp(timestamp, timezone.utc) + timedelta(hours=3)).strftime("%d.%m.%Y в %H:%M МСК")
 
 
+def format_giveaway_terms(giveaway: dict) -> str:
+    """One concise, shared set of rules for announcement and participant status."""
+    end_date = int(giveaway["end_date"])
+    cutoff = _moscow_date(end_date - 1)
+    results = _moscow_date(end_date)
+    prize_days = int(giveaway.get("prize_days") or MONTHLY_PRIZE_DAYS)
+    winners_count = int(giveaway.get("winners_count") or MONTHLY_WINNERS)
+    return (
+        "<b>Участие:</b> пригласите хотя бы одного нового пользователя. В зачёт попадёт тот, кто впервые запустит бота по вашей ссылке.\n\n"
+        f"<b>Призы:</b> {winners_count} победителя получат по <b>+{prize_days} дней VPN</b>. Выигрывают те, кто пригласил больше друзей; при равенстве победителя определит жребий. Если участников меньше {winners_count}, приз получит каждый.\n\n"
+        f"Приглашения засчитываются до <b>{cutoff}</b>, результаты будут подведены <b>{results}</b>."
+    )
+
+
 async def _notify_admins(bot: Bot, text: str) -> None:
     for admin_id in ADMIN_IDS:
         try:
@@ -129,16 +143,7 @@ async def _send_campaign_announcements(bot: Bot, giveaway: dict) -> None:
         return
     info = await bot.get_me()
     link = f"https://t.me/{info.username}?start=gw_{giveaway['id']}"
-    text = (
-        "🏆 <b>Ежемесячный конкурс приглашений</b>\n\n"
-        "<b>Как участвовать</b>\n"
-        "1. Нажмите «Участвовать» — бот зарегистрирует вас в конкурсе.\n"
-        "2. Пригласите хотя бы одного нового пользователя по своей ссылке. Сам переход по ссылке не засчитывается — друг должен впервые запустить бота.\n\n"
-        f"<b>Призы — 3 места:</b> каждый из трёх участников, пригласивших больше всех, получит <b>+{giveaway['prize_days']} дней VPN</b>.\n"
-        "При равном числе приглашённых победителя определит жребий. Если участников, выполнивших условие, меньше трёх — приз получит каждый.\n\n"
-        f"Приглашения засчитываются до <b>{_moscow_date(giveaway['end_date'] - 1)}</b>. "
-        f"Победителей объявим и призы начислим <b>{_moscow_date(giveaway['end_date'])}</b>."
-    )
+    text = "🏆 <b>Ежемесячный конкурс ByMeVPN</b>\n\n" + format_giveaway_terms(giveaway)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎉 Участвовать", url=link, style="primary")],
         [InlineKeyboardButton(text="Не присылать акции", callback_data="marketing_optout")],

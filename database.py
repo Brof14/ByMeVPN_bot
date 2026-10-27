@@ -347,6 +347,13 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
             PRIMARY KEY(provider, provider_payment_id)
         )"""
     )
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS expiry_notification_deliveries (
+            user_id INTEGER NOT NULL, expiry INTEGER NOT NULL, bucket TEXT NOT NULL,
+            status TEXT NOT NULL, updated_at INTEGER NOT NULL,
+            PRIMARY KEY(user_id, expiry, bucket)
+        )"""
+    )
 
     # Migration: add limit_ip column for existing databases
     try:
@@ -1257,9 +1264,48 @@ async def update_connection_reminder(key_id: int, status: str) -> None:
     if status not in {"sent", "connected", "expired", "failed"}:
         raise ValueError("invalid connection reminder status")
     db = await get_db()
-    await db.execute(
+    cur = await db.execute(
         "UPDATE keys SET connect_reminder_status=? WHERE id=? AND connect_reminder_status='pending'",
         (status, key_id),
+    )
+    if status == "connected" and cur.rowcount == 1:
+        user_cur = await db.execute("SELECT user_id FROM keys WHERE id=?", (key_id,))
+        row = await user_cur.fetchone()
+        if row:
+            await db.execute(
+                "INSERT INTO analytics_events(user_id,event_type,timestamp,details) "
+                "VALUES(?,'first_connection',strftime('%s','now'),?)",
+                (int(row[0]), f"key_id={int(key_id)}"),
+            )
+    await db.commit()
+
+
+async def claim_expiry_notification(user_id: int, expiry: int, bucket: str) -> bool:
+    """Durably claim a reminder before contacting Telegram (at-most-once on ambiguity)."""
+    db = await get_db()
+    cur = await db.execute(
+        "INSERT OR IGNORE INTO expiry_notification_deliveries(user_id,expiry,bucket,status,updated_at) "
+        "VALUES(?,?,?,'sending',?)",
+        (int(user_id), int(expiry), str(bucket), int(time.time())),
+    )
+    if cur.rowcount != 1:
+        cur = await db.execute(
+            "UPDATE expiry_notification_deliveries SET status='sending',updated_at=? "
+            "WHERE user_id=? AND expiry=? AND bucket=? AND status='failed' AND updated_at<?",
+            (int(time.time()), int(user_id), int(expiry), str(bucket), int(time.time()) - 900),
+        )
+    await db.commit()
+    return cur.rowcount == 1
+
+
+async def finish_expiry_notification(user_id: int, expiry: int, bucket: str, status: str) -> None:
+    if status not in {"sent", "blocked", "uncertain", "failed", "skipped"}:
+        raise ValueError("invalid expiry notification status")
+    db = await get_db()
+    await db.execute(
+        "UPDATE expiry_notification_deliveries SET status=?,updated_at=? "
+        "WHERE user_id=? AND expiry=? AND bucket=? AND status='sending'",
+        (status, int(time.time()), int(user_id), int(expiry), str(bucket)),
     )
     await db.commit()
 
@@ -2928,13 +2974,15 @@ async def get_referral_stats_enhanced(referrer_id: int) -> dict:
     )
     active_clients = (await cur.fetchone())[0]
     
-    # Paid clients (users who made at least one payment)
+    # Count only referrals whose first qualifying paid subscription earned the
+    # referral reward; the 1 ₽ intro checkout does not count as this milestone.
     cur = await db.execute(
         """
         SELECT COUNT(DISTINCT r.referred_id)
         FROM referrals r
-        INNER JOIN payments p ON r.referred_id = p.user_id
-        WHERE r.referrer_id=? AND p.method != 'trial'
+        INNER JOIN referral_events e ON e.referrer_id=r.referrer_id
+            AND e.referred_id=r.referred_id AND e.event_type='payment_bonus'
+        WHERE r.referrer_id=?
         """,
         (referrer_id,)
     )
@@ -4195,6 +4243,40 @@ async def log_analytics_event(
             await db.commit()
     except Exception as e:
         logger.debug("Failed to log analytics event %s: %s", event_type, e)
+
+
+async def get_conversion_funnel(days: int = 30) -> dict:
+    """Cohort users first seen in the period and their later conversion milestones."""
+    days = max(1, min(int(days), 365))
+    since = int(time.time()) - days * 86400
+    db = await get_db()
+    cur = await db.execute(
+        """
+        WITH cohort AS (
+          SELECT user_id, MIN(timestamp) AS started_at
+          FROM analytics_events WHERE event_type='bot_started' AND timestamp>=?
+          GROUP BY user_id
+        )
+        SELECT COALESCE(NULLIF(u.source, ''), 'direct') AS source,
+          COUNT(DISTINCT c.user_id),
+          COUNT(DISTINCT CASE WHEN e.event_type='trial_started' THEN c.user_id END),
+          COUNT(DISTINCT CASE WHEN e.event_type='subscription_created' THEN c.user_id END),
+          COUNT(DISTINCT CASE WHEN e.event_type='first_connection' THEN c.user_id END),
+          COUNT(DISTINCT CASE WHEN e.event_type='subscription_renewed' THEN c.user_id END)
+        FROM cohort c JOIN users u ON u.user_id=c.user_id
+        LEFT JOIN analytics_events e ON e.user_id=c.user_id AND e.timestamp>=c.started_at
+        GROUP BY source ORDER BY 2 DESC
+        """,
+        (since,),
+    )
+    rows = await cur.fetchall()
+    columns = ("started", "trial", "paid", "connected", "renewed")
+    by_source = {
+        row[0]: dict(zip(columns, (int(value or 0) for value in row[1:])))
+        for row in rows
+    }
+    totals = {name: sum(source[name] for source in by_source.values()) for name in columns}
+    return {"days": days, "totals": totals, "by_source": by_source}
 
 
 async def set_user_source(user_id: int, source: str) -> bool:

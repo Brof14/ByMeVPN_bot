@@ -398,6 +398,14 @@ async def cb_stats_ext(callback: CallbackQuery):
     try:
         s = await get_extended_stats()
         refund_stats = await get_refund_stats()
+        from database import get_conversion_funnel
+        funnel = await get_conversion_funnel(30)
+        f = funnel["totals"]
+        source_rows = sorted(funnel["by_source"].items(), key=lambda item: item[1]["started"], reverse=True)[:5]
+        source_text = "\n".join(
+            f"  {escape(source)}: {counts['started']} / {counts['trial']} / {counts['paid']} / {counts['connected']} / {counts['renewed']}"
+            for source, counts in source_rows
+        ) or "  Пока нет данных"
 
         top_text = ""
         if s["top_refs"]:
@@ -415,6 +423,11 @@ async def cb_stats_ext(callback: CallbackQuery):
             f"  📅 За месяц: {s['new_month']}\n"
             f"  📊 Конверсия Trial → Оплата: <b>{s.get('conversion_trial_pct', 0)}%</b> ({s.get('paid_users', 0)} / {s.get('trial_users', 0)})\n"
             f"  🌐 Общая конверсия в оплату: <b>{s.get('conversion_overall_pct', 0)}%</b>\n\n"
+            f"🧭 <b>Воронка за {funnel['days']} дней</b>\n"
+            f"Пришли: <b>{f['started']}</b> → начали пробный тариф: <b>{f['trial']}</b> → оплатили: <b>{f['paid']}</b> → подключились: <b>{f['connected']}</b> → продлили: <b>{f['renewed']}</b>\n"
+            "По источникам (пришли / пробный / оплата / подключились / продлили):\n"
+            f"{source_text}\n"
+            "Считаются пользователи, впервые запустившие бота после включения этой аналитики.\n\n"
             "📱 <b>Устройства (активные ключи):</b>\n"
             f"  📱 2 устройства: <b>{device_dist.get(2, 0)}</b>\n"
             f"  📱 5 устройств: <b>{device_dist.get(5, 0)}</b>\n"
@@ -2142,6 +2155,16 @@ async def cb_system_status(callback: CallbackQuery, bot: Bot):
     
     # Get user counts
     total_users = await get_users_count()
+    from async_utils import perf_metrics
+    perf = perf_metrics.snapshot()
+    perf_lines = []
+    for name in ("telegram_update", "xui_api_call", "yookassa_create_payment", "yookassa_recurrent_charge", "yookassa_payment_poll", "cryptobot_create_payment", "notification_queue_wait", "expiry_notification_dispatch"):
+        metric = perf.get(name)
+        if metric:
+            perf_lines.append(
+                f"  {escape(name)}: ср. {metric['avg_ms']} мс / p95 {metric['p95_ms']} мс; ошибок {metric['errors']} из {metric['calls']}"
+            )
+    perf_text = "\n".join(perf_lines) or "  Пока нет измерений"
     
     text = (
         f"⚙️ <b>Состояние системы ByMeVPN</b>\n\n"
@@ -2156,6 +2179,7 @@ async def cb_system_status(callback: CallbackQuery, bot: Bot):
         f"  Размер: {cache_stats.get('size', 0)} записей\n"
         f"  Попаданий: {cache_stats.get('hits', 0)}\n"
         f"  Промахов: {cache_stats.get('misses', 0)}\n\n"
+        f"⏱ <b>Отклик и ошибки с момента запуска</b>\n{perf_text}\n\n"
         f"🤖 <b>Бот:</b>\n"
         f"  ID: <code>{callback.bot.id}</code>\n"
         f"  Username: @{callback.bot._me.username if callback.bot._me else 'N/A'}\n"

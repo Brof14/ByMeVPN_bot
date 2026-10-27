@@ -122,17 +122,26 @@ async def _get_api() -> AsyncApi:
 
 async def _api_call_with_retry(func, *args, max_retries=3, base_delay=0.5, **kwargs):
     """Execute API call with exponential backoff retry logic."""
+    import time
+    from async_utils import perf_metrics
+    started = time.perf_counter()
+    failed = False
     for attempt in range(max_retries):
         try:
-            return await func(*args, **kwargs)
+            result = await func(*args, **kwargs)
+            perf_metrics.observe("xui_api_call", time.perf_counter() - started, failed)
+            return result
         except Exception as e:
+            failed = True
             if _is_authentication_error(e):
                 _invalidate_api_pool()
                 logger.error("3x-ui API authentication failed: %s", e)
+                perf_metrics.observe("xui_api_call", time.perf_counter() - started, True)
                 raise
 
             if attempt == max_retries - 1:
                 logger.error("API call failed after %d retries: %s", max_retries, e)
+                perf_metrics.observe("xui_api_call", time.perf_counter() - started, True)
                 raise
 
             delay = base_delay * (2 ** attempt)  # Exponential backoff

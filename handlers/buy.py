@@ -148,6 +148,11 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
         promo_text = ""
 
     await state.update_data(months=months, devices=devices, price_rub=price_rub, days=days, original_price=original_price)
+    from database import log_analytics_event
+    await log_analytics_event(
+        callback.from_user.id, "tariff_selected", tariff=f"{months}m", devices=devices,
+        amount=price_rub, promo=promo_info.get("code") if promo_info else None,
+    )
 
     dev_name = DEVICE_CONFIG.get(devices, {}).get("name", f"{devices} устройств")
 
@@ -252,6 +257,11 @@ async def cb_pay_stars(callback: CallbackQuery, bot: Bot, state: FSMContext):
             currency="XTR",
             prices=[LabeledPrice(label=f"VPN на {days} дней", amount=stars)],
         )
+        from database import log_analytics_event
+        await log_analytics_event(
+            user_id, "checkout_started", tariff=f"{months}m", devices=devices,
+            amount=price_rub, payment_provider="stars",
+        )
     except Exception as e:
         logger.error("Stars invoice error for user %d: %s", user_id, e)
         try:
@@ -293,6 +303,12 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
             alert=True,
         )
         return
+
+    from database import log_analytics_event
+    await log_analytics_event(
+        user_id, "checkout_started", tariff=f"{months}m", devices=devices,
+        amount=price_rub, payment_provider="yookassa",
+    )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"💳 Оплатить {price_rub} ₽", url=url)],
@@ -352,6 +368,12 @@ async def cb_pay_crypto(callback: CallbackQuery, bot: Bot, state: FSMContext):
             alert=True,
         )
         return
+
+    from database import log_analytics_event
+    await log_analytics_event(
+        user_id, "checkout_started", tariff=f"{months}m", devices=devices,
+        amount=price_rub, payment_provider="cryptobot",
+    )
 
     url, invoice_id = result
 

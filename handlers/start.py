@@ -10,6 +10,7 @@ Menu states:
 import asyncio
 import logging
 import time
+from html import escape
 from urllib.parse import urlencode
 
 from aiogram import Bot, F, Router
@@ -74,10 +75,12 @@ async def _handle_app_login(message: Message, user_id: int, user_name: str) -> N
                 "name": app_name,
             })
             keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="🚀 Войти в ByMeVPN", url=app_url)
+                InlineKeyboardButton(text="📋 Скопировать ссылку входа", copy_text={"text": app_url})
             ]])
             await message.answer(
-                "Для входа в приложение ByMeVPN нажмите кнопку ниже:",
+                "Скопируйте ссылку кнопкой ниже и откройте её на устройстве с установленным ByMeVPN.\n\n"
+                f"<code>{escape(app_url)}</code>",
+                parse_mode="HTML",
                 reply_markup=keyboard,
             )
             return
@@ -189,14 +192,14 @@ async def _send_main_menu(
             text = (
                 "<b>Добро пожаловать в ByMeVPN!</b>\n\n"
                 "Приглашение учтено. Подключиться можно за несколько шагов.\n\n"
-                "Российские сервисы могут работать без отключения VPN.\n\n"
+                "Российские сайты и приложения доступны без отключения VPN и дополнительных настроек.\n\n"
                 "3 дня за 1 ₽ или бесплатный доступ за приглашения друзей."
             )
         else:
             text = (
                 "<b>ByMeVPN — VPN, который просто работает.</b>\n\n"
                 "Доступ к любимым сайтам и приложениям без сложных настроек.\n\n"
-                "Российские сервисы могут работать без отключения VPN.\n\n"
+                "Российские сайты и приложения доступны без отключения VPN и дополнительных настроек.\n\n"
                 "3 дня за 1 ₽ или бесплатный доступ за приглашения друзей."
             )
         kb = main_menu_new_user()
@@ -266,6 +269,19 @@ async def cmd_start(message: Message, bot: Bot) -> None:
     is_new_referral = False
     referral_processed = False
 
+    start_source = "direct"
+    if len(args) > 1:
+        start_param = args[1].strip()
+        if start_param.startswith("src_") and start_param[4:]:
+            start_source = start_param[4:][:80]
+        elif start_param.startswith(("gw_", "giveaway_")):
+            start_source = "giveaway"
+        elif start_param.isdigit() or (start_param.startswith("ref_") and start_param[4:].isdigit()):
+            start_source = "referral"
+    if is_first_start:
+        from database import log_analytics_event
+        await log_analytics_event(user_id, "bot_started", source=start_source)
+
     if len(args) > 1 and args[1].strip().lower() == "login":
         await _handle_app_login(message, user_id, user_name)
         return
@@ -309,6 +325,8 @@ async def cmd_start(message: Message, bot: Bot) -> None:
                 gw_id = int(param.split("_")[1])
                 from database import join_giveaway, get_giveaway_entry_status, get_giveaway_by_id
                 from urllib.parse import urlencode
+                from database import set_user_source
+                await set_user_source(user_id, "giveaway")
 
                 contest = await get_giveaway_by_id(gw_id)
                 status = await get_giveaway_entry_status(gw_id, user_id)
@@ -340,22 +358,16 @@ async def cmd_start(message: Message, bot: Bot) -> None:
                 ]])
 
                 referral_count = status["referral_count"]
-                results_line = ""
-                if contest.get("end_date"):
-                    from giveaway_automation import _moscow_date
-                    results_line = f"\n\nИтоги и начисление призов: <b>{_moscow_date(contest['end_date'])}</b>."
+                from giveaway_automation import format_giveaway_terms
+                terms = format_giveaway_terms(contest)
                 if status["qualified"]:
                     entry_text = (
                         "✅ <b>Участие подтверждено</b>" if not already_joined
                         else "✅ <b>Вы участвуете</b>"
                     )
                     text = (
-                        f"{entry_text} в ежемесячном конкурсе.\n\n"
-                        f"В зачёте: <b>{referral_count}</b> новых приглашённых в этом месяце. "
-                        "Учитываются люди, которые впервые запустили бота по вашей ссылке.\n\n"
-                        f"Три участника с наибольшим числом приглашённых получат по <b>+{contest['prize_days']} дней VPN</b>. "
-                        "Если участников с приглашениями меньше трёх, приз получит каждый; при равном счёте место определит жребий."
-                        f"{results_line}"
+                        f"{entry_text} в ежемесячном конкурсе.\n"
+                        f"Приглашённых в зачёте: <b>{referral_count}</b>.\n\n{terms}"
                     )
                 else:
                     pending_intro = (
@@ -364,12 +376,9 @@ async def cmd_start(message: Message, bot: Bot) -> None:
                         "📝 <b>Заявка сохранена</b>\n\n"
                     )
                     text = pending_intro + (
-                        "Чтобы попасть в рейтинг, нужен минимум один новый приглашённый в этом месяце. "
-                        "Он засчитается, когда впервые запустит бота по вашей ссылке; одного перехода недостаточно. "
-                        "После регистрации друга условие выполнится автоматически.\n\n"
-                        f"Три участника с наибольшим числом приглашённых получат по <b>+{contest['prize_days']} дней VPN</b>. "
-                        "Если участников с приглашениями меньше трёх, приз получит каждый."
-                        f"{results_line}"
+                        f"Приглашённых в зачёте: <b>{referral_count}</b>.\n"
+                        "Следующий шаг: пригласите минимум одного нового пользователя. Он попадёт в зачёт, когда впервые запустит бота по вашей ссылке.\n\n"
+                        f"{terms}"
                     )
                 await message.answer(text, parse_mode="HTML", reply_markup=invite_kb)
                 return
@@ -386,12 +395,14 @@ async def cmd_start(message: Message, bot: Bot) -> None:
             if ref_id != user_id and is_first_start and await find_user_by_id(ref_id):
                 try:
                     from database import set_referrer, get_user_keys
+                    from database import set_user_source
                     from referral_system_new import process_referral_click
                     
                     existing_keys = await get_user_keys(user_id)
                     if not existing_keys:
                         # Set referrer
                         await set_referrer(user_id, ref_id)
+                        await set_user_source(user_id, "referral")
 
                         # Only acknowledge a referral if this inviter was newly
                         # attached to a genuinely new user. Repeated /start links
@@ -515,6 +526,12 @@ async def _start_intro_trial(bot: Bot, callback: CallbackQuery, ref_id: int | No
         )
         return
 
+    from database import log_analytics_event
+    await log_analytics_event(
+        user_id, "trial_checkout_started", tariff="trial_3d", devices=INTRO_TRIAL_DEVICES,
+        amount=INTRO_TRIAL_PRICE_RUB, payment_provider="yookassa",
+    )
+
     text = _intro_trial_offer_text()
     await send_with_photo(bot, callback, text, trial_pay_kb(confirmation_url))
 
@@ -587,7 +604,7 @@ async def cb_about(callback: CallbackQuery, bot: Bot):
         "<b>Возможности:</b>\n"
         "• Подключение на телефоне и компьютере.\n"
         "• До 10 устройств — в зависимости от тарифа.\n"
-        "• Российские приложения могут работать без отключения VPN при поддерживаемой настройке обхода.\n"
+        "• Российские сайты и приложения доступны без отключения VPN и дополнительных настроек.\n"
         "• Бесплатные дни за приглашение друзей.\n"
         "• Управление подпиской прямо в Telegram.\n"
         "• Подписчикам доступен @ByMeAudiobot для расшифровки голосовых сообщений.\n\n"

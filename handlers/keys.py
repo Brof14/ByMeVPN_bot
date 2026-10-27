@@ -18,7 +18,7 @@ from keyboards import (
     my_keys_kb, my_keys_list_kb, key_detail_kb, confirm_delete_kb,
     payment_kb, back_to_menu, connection_guide_kb, tariff_selection_kb,
     autorenew_cancel_confirm_kb, manage_payment_methods_kb, key_settings_kb,
-    key_devices_kb, key_device_detail_kb, confirm_delete_device_kb,
+    key_devices_kb, key_device_detail_kb, confirm_delete_device_kb, key_history_kb,
 )
 from utils import send_with_photo, send_or_edit, safe_answer
 from constants import format_timestamp as fmt_date, format_days_left as fmt_days_left
@@ -47,14 +47,26 @@ async def cmd_keys(message: Message, bot: Bot):
         )
         return
 
-    if len(keys) == 1:
+    now = int(time.time())
+    active_keys = sorted((k for k in keys if int(k.get("expiry") or 0) > now),
+                         key=lambda k: (k.get("expiry", 0), k.get("id", 0)), reverse=True)
+    if len(active_keys) == 1:
+        text, keyboard = await _key_info_content(user_id, active_keys[0])
+        await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+        return
+    if not active_keys and len(keys) == 1:
         text, keyboard = await _key_info_content(user_id, keys[0])
         await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
         return
-
+    if not active_keys:
+        await message.answer(
+            "<b>История подписок</b>\n\nАктивной подписки сейчас нет. Выберите завершённую, чтобы открыть её данные.",
+            parse_mode="HTML", reply_markup=key_history_kb(keys),
+        )
+        return
     await message.answer(
-        "<b>Ваши VPN-подписки</b>\n\nВыберите подписку для подключения или управления.",
-        parse_mode="HTML", reply_markup=my_keys_list_kb(keys),
+        "<b>Ваш активный VPN</b>\n\nВыберите подписку для управления. Завершённые подписки находятся в истории.",
+        parse_mode="HTML", reply_markup=my_keys_list_kb(active_keys, has_history=len(active_keys) < len(keys)),
     )
 
 
@@ -76,13 +88,35 @@ async def cb_my_keys(callback: CallbackQuery, bot: Bot):
         await send_with_photo(bot, callback, text, back_to_menu())
         return
 
-    if len(keys) == 1:
+    now = int(time.time())
+    active_keys = sorted((k for k in keys if int(k.get("expiry") or 0) > now),
+                         key=lambda k: (k.get("expiry", 0), k.get("id", 0)), reverse=True)
+    if len(active_keys) == 1:
+        text, keyboard = await _key_info_content(user_id, active_keys[0])
+        await send_or_edit(bot, callback, text, keyboard)
+        return
+    if not active_keys and len(keys) == 1:
         text, keyboard = await _key_info_content(user_id, keys[0])
         await send_or_edit(bot, callback, text, keyboard)
         return
+    if not active_keys:
+        text = "<b>История подписок</b>\n\nАктивной подписки сейчас нет. Выберите завершённую, чтобы открыть её данные."
+        await send_with_photo(bot, callback, text, key_history_kb(keys))
+        return
+    text = "<b>Ваш активный VPN</b>\n\nВыберите подписку для управления. Завершённые подписки находятся в истории."
+    await send_with_photo(bot, callback, text, my_keys_list_kb(active_keys, has_history=len(active_keys) < len(keys)))
 
-    text = "<b>Ваши VPN-подписки</b>\n\nВыберите подписку для подключения или управления."
-    await send_with_photo(bot, callback, text, my_keys_list_kb(keys))
+
+@router.callback_query(F.data == "key_history")
+async def cb_key_history(callback: CallbackQuery, bot: Bot):
+    await safe_answer(callback)
+    keys = await get_user_keys(callback.from_user.id)
+    expired = [key for key in keys if int(key.get("expiry") or 0) <= int(time.time())]
+    text = (
+        "<b>История подписок</b>\n\nВыберите завершённую подписку, чтобы посмотреть её данные."
+        if expired else "<b>История подписок</b>\n\nЗавершённых подписок пока нет."
+    )
+    await send_with_photo(bot, callback, text, key_history_kb(expired))
 
 
 # ---------------------------------------------------------------------------
@@ -137,18 +171,19 @@ async def _key_info_content(user_id: int, k: dict) -> tuple[str, object]:
         else:
             ar_line = "Автопродление: отключено\n"
 
+    all_keys = await get_user_keys(user_id)
+    has_history = any(int(item.get("expiry") or 0) <= now and item.get("id") != k.get("id") for item in all_keys)
     text = (
         "<b>Мой VPN</b>\n\n"
         f"{status}\n"
         f"Действует до: <b>{fmt_date(k['expiry'])}</b>\n"
         f"{ar_line}{devices_info}\n"
-        "<b>Ссылка для подключения</b>\n"
-        f"<code>{escape(subscription_url)}</code>"
+        "Ссылка готова: скопируйте её или подключите приложение кнопками ниже."
     )
 
     return text, key_detail_kb(
         key_id, has_autorenew=has_autorenew, autorenew_active=autorenew_active,
-        subscription_url=subscription_url,
+        subscription_url=subscription_url, has_history=has_history,
     )
 
 
@@ -718,7 +753,13 @@ async def cb_key_delete_confirm(callback: CallbackQuery, bot: Bot):
             f"Ключ «{remark}» удалён.\n\n"
             "Остальные подписки и подключения работают как прежде. Выберите нужную подписку ниже."
         )
-        await send_with_photo(bot, callback, text, my_keys_list_kb(keys))
+        now = int(time.time())
+        active = [key for key in keys if int(key.get("expiry") or 0) > now]
+        expired = [key for key in keys if int(key.get("expiry") or 0) <= now]
+        if not active and expired:
+            await send_with_photo(bot, callback, "<b>История подписок</b>", key_history_kb(expired))
+        else:
+            await send_with_photo(bot, callback, text, my_keys_list_kb(active, has_history=bool(expired)))
 
 # ---------------------------------------------------------------------------
 # Referral bonus activation

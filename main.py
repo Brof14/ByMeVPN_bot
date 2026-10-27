@@ -17,6 +17,7 @@ import asyncio
 import logging
 import sys
 import traceback
+import time
 
 from aiogram import Bot, Dispatcher
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
@@ -60,6 +61,8 @@ class UserProfileMiddleware(BaseMiddleware):
     """Keep Telegram usernames fresh for every user who interacts with the bot."""
 
     async def __call__(self, handler, event, data):
+        started = time.perf_counter()
+        failed = False
         user = getattr(event, "from_user", None)
         if user is not None:
             try:
@@ -67,7 +70,14 @@ class UserProfileMiddleware(BaseMiddleware):
                 await ensure_user(user.id, user.username)
             except Exception:
                 logger.exception("Could not sync Telegram profile for user %s", user.id)
-        return await handler(event, data)
+        try:
+            return await handler(event, data)
+        except Exception:
+            failed = True
+            raise
+        finally:
+            from async_utils import perf_metrics
+            perf_metrics.observe("telegram_update", time.perf_counter() - started, failed)
 
 
 def format_error_messages(exc: BaseException, update=None) -> list[str]:

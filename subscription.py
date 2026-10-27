@@ -295,7 +295,8 @@ async def deliver_key(
                     provider=method, provider_payment_id=payload,
                 )
                 await log_analytics_event(
-                    user_id=user_id, event_type="subscription_created",
+                    user_id=user_id,
+                    event_type="trial_started" if skip_referral_bonus else "subscription_created",
                     tariff=tariff_name, devices=limit_ip, amount=amount,
                     payment_provider=method,
                 )

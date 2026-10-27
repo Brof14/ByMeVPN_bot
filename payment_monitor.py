@@ -6,6 +6,7 @@ import asyncio
 import logging
 import base64
 import httpx
+import time
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 
@@ -27,8 +28,10 @@ class PaymentMonitor:
         
     async def get_successful_payments(self, minutes_back: int = 5) -> List[Dict]:
         """Получить успешные платежи за последние N минут, включая период до рестарта."""
+        started = time.perf_counter()
+        from async_utils import perf_metrics
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=5.0)) as client:
                 # Do not clamp to process start time: payments made during downtime
                 # must be discoverable after a restart.
                 cutoff_time = datetime.utcnow() - timedelta(minutes=minutes_back)
@@ -39,10 +42,16 @@ class PaymentMonitor:
                 resp.raise_for_status()
                 
                 data = resp.json()
-                return data.get('items', [])
+                payments = data.get('items', [])
+                perf_metrics.observe("yookassa_payment_poll", time.perf_counter() - started)
+                return payments
                 
-        except Exception as e:
-            logger.error(f"Error fetching payments: {e}")
+        except Exception as error:
+            perf_metrics.observe("yookassa_payment_poll", time.perf_counter() - started, True)
+            logger.warning(
+                "YooKassa payment poll failed (%s): %s",
+                type(error).__name__, str(error) or "no error details",
+            )
             return []
     
     async def check_and_process_payments(self, minutes_back: int = 5):

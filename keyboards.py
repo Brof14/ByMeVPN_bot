@@ -1,5 +1,4 @@
 from urllib.parse import quote_plus
-from urllib.parse import urlencode
 import time
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -176,7 +175,7 @@ def my_keys_kb(keys: list) -> InlineKeyboardMarkup:
 
 
 # One button per key keeps the list easy to scan.
-def my_keys_list_kb(keys: list) -> InlineKeyboardMarkup:
+def my_keys_list_kb(keys: list, has_history: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     now = int(time.time())
     for k in keys:
@@ -187,21 +186,33 @@ def my_keys_list_kb(keys: list) -> InlineKeyboardMarkup:
             text=f"{status} {remark}"[:64],
             callback_data=f"key_info:{kid}",
         ))
+    if has_history:
+        kb.row(InlineKeyboardButton(text="📚 История подписок", callback_data="key_history"))
+    kb.row(InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu"))
+    return kb.as_markup()
+
+
+def key_history_kb(keys: list) -> InlineKeyboardMarkup:
+    """List completed subscriptions separately from the current VPN key."""
+    kb = InlineKeyboardBuilder()
+    for key in sorted(keys, key=lambda item: (item.get("expiry", 0), item.get("id", 0)), reverse=True):
+        remark = key.get("remark") or f"#{key['id']}"
+        kb.row(InlineKeyboardButton(
+            text=f"⌛ {remark} · до {time.strftime('%d.%m.%Y', time.localtime(key.get('expiry', 0)))}"[:64],
+            callback_data=f"key_info:{key['id']}",
+        ))
+    kb.row(InlineKeyboardButton(text="← К моему VPN", callback_data="my_keys"))
     kb.row(InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu"))
     return kb.as_markup()
 
 
 # Key detail: keep the two most common actions visible, group secondary ones.
-def bymevpn_sub_link(subscription_url: str) -> str:
-    """Build the app deep link for importing a subscription."""
-    return "bymevpn://sub?" + urlencode({"url": subscription_url})
-
-
 def key_detail_kb(
     key_id: int,
     has_autorenew: bool = False,
     autorenew_active: bool = False,
     subscription_url: str = "",
+    has_history: bool = False,
 ) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(
@@ -210,9 +221,11 @@ def key_detail_kb(
     )
     if subscription_url:
         kb.row(InlineKeyboardButton(
-            text="📱 Подключить приложение ByMeVPN",
-            url=bymevpn_sub_link(subscription_url),
+            text="📋 Скопировать ссылку",
+            copy_text={"text": subscription_url},
         ))
+    if has_history:
+        kb.row(InlineKeyboardButton(text="📚 История подписок", callback_data="key_history"))
     kb.row(InlineKeyboardButton(text="📱 Мои устройства", callback_data=f"key_devices:{key_id}"))
     kb.row(InlineKeyboardButton(text="Управление подпиской", callback_data=f"key_settings:{key_id}"))
     kb.row(InlineKeyboardButton(text="← В главное меню", callback_data="back_to_menu"))
@@ -333,8 +346,8 @@ def after_key_kb(subscription_url: str = "") -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     if subscription_url:
         kb.row(InlineKeyboardButton(
-            text="📱 Подключить приложение ByMeVPN",
-            url=bymevpn_sub_link(subscription_url),
+            text="📋 Скопировать ссылку",
+            copy_text={"text": subscription_url},
         ))
     kb.row(
         InlineKeyboardButton(text="Подключить VPN", style="success", callback_data="connection_guide"),
@@ -384,11 +397,6 @@ def connection_guide_kb(key_id: int | None = None, subscription_url: str = "") -
         InlineKeyboardButton(text="Windows", callback_data=platform_callback("windows")),
         InlineKeyboardButton(text="Linux", callback_data=platform_callback("linux")),
     )
-    if subscription_url:
-        kb.row(InlineKeyboardButton(
-            text="📱 Подключить приложение ByMeVPN",
-            url=bymevpn_sub_link(subscription_url),
-        ))
     back_callback = f"key_info:{key_id}" if key_id else "back_to_menu"
     back_text = "← Назад" if key_id else "← Назад в меню"
     kb.row(InlineKeyboardButton(text=back_text, callback_data=back_callback))
