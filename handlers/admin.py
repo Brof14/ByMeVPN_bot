@@ -9,9 +9,11 @@ from html import escape
 import io
 import logging
 from datetime import datetime
+from urllib.parse import urlsplit
 
 from aiogram import Bot, F, Router
 from aiogram.filters import StateFilter
+from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     Message, CallbackQuery,
@@ -22,7 +24,7 @@ from aiogram.types import (
 from config import ADMIN_IDS, XUI_URL, XUI_USERNAME
 from database import (
     get_admin_stats, get_extended_stats,
-    get_all_user_ids, get_all_users, get_users_count, get_all_users_paginated,
+    get_all_users, get_users_count, get_all_users_paginated,
     find_user_by_id, delete_user_and_keys,
     get_user_keys, set_key_days, update_key_remark,
     set_trial_used, reset_trial_for_user, get_user_payments, get_payment_by_id,
@@ -76,33 +78,34 @@ async def _fill_missing_usernames(bot: Bot, users: list[dict]) -> None:
 
 def _main_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        # Row 1: Main stats & users
+        # Clients and service state
         [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats"),
          InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_users:0")],
-        # Row 2: Keys & Payments
         [InlineKeyboardButton(text="🗝 Ключи", callback_data="admin_all_keys:0"),
          InlineKeyboardButton(text="💳 Платежи", callback_data="admin_payments")],
-        # Row 3: Search & Broadcast
-        [InlineKeyboardButton(text="🔍 Поиск", callback_data="admin_search"),
-         InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
-        # Row 4: Financial
+        [InlineKeyboardButton(text="📢 Создать рассылку", callback_data="admin_broadcast")],
         [InlineKeyboardButton(text="💰 Финансы", callback_data="admin_finance"),
          InlineKeyboardButton(text="💳 Возвраты", callback_data="admin_refunds")],
-        # Row 5: Promo & Errors
-        [InlineKeyboardButton(text="🎁 Промокоды", callback_data="admin_promo_codes"),
-         InlineKeyboardButton(text="❌ Ошибки", callback_data="admin_key_errors:0")],
-        # Row 6: Mass actions
-        [InlineKeyboardButton(text="🎁 Пробник всем", callback_data="admin_mass_trial"),
-         InlineKeyboardButton(text="➕ Дни всем", callback_data="admin_mass_days")],
-        # Row 7: Export & Logs
+        [InlineKeyboardButton(text="🚀 Продвижение", callback_data="admin_growth")],
+        [InlineKeyboardButton(text="🖥 Система", callback_data="admin_system"),
+         InlineKeyboardButton(text="❌ Ошибки ключей", callback_data="admin_key_errors:0")],
         [InlineKeyboardButton(text="📥 Экспорт", callback_data="admin_export_csv"),
          InlineKeyboardButton(text="📋 Логи", callback_data="admin_logs:0")],
-        # Row 8: Giveaways & Ad program review
-        [InlineKeyboardButton(text="🎉 Розыгрыши", callback_data="admin_giveaways"),
-         InlineKeyboardButton(text="📣 Реклама (заявки)", callback_data="ad_admin_list")],
-        # Row 9: Operational tools already implemented by the bot
-        [InlineKeyboardButton(text="🖥 Состояние и 3x-ui", callback_data="admin_system"),
-         InlineKeyboardButton(text="🧹 Истёкшие ключи", callback_data="admin_cleanup")],
+        [InlineKeyboardButton(text="🎁 Пробник всем", callback_data="admin_mass_trial"),
+         InlineKeyboardButton(text="➕ Дни всем", callback_data="admin_mass_days")],
+        [InlineKeyboardButton(text="🧹 Истёкшие ключи", callback_data="admin_cleanup"),
+         InlineKeyboardButton(text="⚙️ Настройки", callback_data="admin_settings")],
+    ])
+
+
+def _growth_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎁 Промокоды", callback_data="admin_promo_codes"),
+         InlineKeyboardButton(text="🎉 Розыгрыши", callback_data="admin_giveaways")],
+        [InlineKeyboardButton(text="👥 Рефералы", callback_data="admin_referrals"),
+         InlineKeyboardButton(text="📣 Рекламные заявки", callback_data="ad_admin_list")],
+        [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
+        [InlineKeyboardButton(text="🔙 Главное меню", callback_data="admin_menu")],
     ])
 
 
@@ -110,6 +113,69 @@ def _back_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Главное меню", callback_data="admin_menu")]
     ])
+
+
+@router.callback_query(F.data == "admin_growth")
+async def cb_admin_growth(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    await callback.message.edit_text(
+        "🚀 <b>Продвижение и удержание</b>\n\n"
+        "Управление промокодами, розыгрышами, приглашениями и рекламными заявками:",
+        parse_mode="HTML", reply_markup=_growth_kb(),
+    )
+
+
+def _broadcast_controls() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Отправить", callback_data="admin_broadcast_send"),
+         InlineKeyboardButton(text="✖️ Отмена", callback_data="admin_broadcast_cancel")],
+    ])
+
+
+async def _broadcast_recipients(audience: str) -> list[int]:
+    now = int(datetime.now().timestamp())
+    db = await get_db()
+    if audience == "all":
+        query = "SELECT user_id FROM users WHERE COALESCE(is_banned,0)=0 ORDER BY user_id"
+        params = ()
+    elif audience == "active":
+        query = (
+            "SELECT DISTINCT u.user_id FROM users u JOIN keys k ON k.user_id=u.user_id "
+            "WHERE k.expiry>? AND COALESCE(u.is_banned,0)=0 ORDER BY u.user_id"
+        )
+        params = (now,)
+    else:
+        query = (
+            "SELECT u.user_id FROM users u WHERE COALESCE(u.is_banned,0)=0 "
+            "AND NOT EXISTS (SELECT 1 FROM keys k WHERE k.user_id=u.user_id AND k.expiry>?) "
+            "ORDER BY u.user_id"
+        )
+        params = (now,)
+    cur = await db.execute(query, params)
+    return [int(row[0]) for row in await cur.fetchall()]
+
+
+def _parse_broadcast_buttons(raw: str) -> list[list[InlineKeyboardButton]]:
+    if raw.strip() in {"", "-", "нет", "без кнопок"}:
+        return []
+
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    if len(lines) > 8:
+        raise ValueError("Можно добавить не больше 8 кнопок — по одной на строку.")
+
+    rows = []
+    for line in lines:
+        if "|" not in line:
+            raise ValueError("Формат строки: название кнопки | https://ссылка")
+        label, url = (part.strip() for part in line.split("|", 1))
+        parsed = urlsplit(url)
+        if not label or len(label) > 64 or parsed.scheme not in {"https", "http", "tg"} or not parsed.netloc:
+            raise ValueError("Проверьте название (до 64 знаков) и ссылку HTTPS/TG в каждой строке.")
+        rows.append([InlineKeyboardButton(text=label, url=url)])
+    return rows
 
 
 def _format_refund_breakdown(stats: dict, key: str) -> str:
@@ -133,26 +199,31 @@ def _format_currency_totals(values: dict) -> str:
     )
 
 
-def _user_kb(user_id: int) -> InlineKeyboardMarkup:
+def _user_kb(user_id: int, is_banned: bool = False) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         # Row 1: View info
         [InlineKeyboardButton(text="🔑 Ключи", callback_data=f"admin_user_keys:{user_id}"),
          InlineKeyboardButton(text="💳 Платежи", callback_data=f"admin_user_pay:{user_id}")],
-        # Row 2: Quick Actions
+        # Row 2: Subscription changes
         [InlineKeyboardButton(text="⏰ Продлить", callback_data=f"admin_extend_sub:{user_id}"),
-         InlineKeyboardButton(text="🎁 Пробник", callback_data=f"admin_grant_trial:{user_id}")],
-        # Row 3: Management
-        [InlineKeyboardButton(text="🔄 Сброс пробника", callback_data=f"admin_reset_trial:{user_id}"),
-         InlineKeyboardButton(text="✉️ Написать", callback_data=f"admin_pm:{user_id}")],
-        # Row 4: Grant Key & Refund
-        [InlineKeyboardButton(text="🆕 Выдать ключ", callback_data=f"admin_grant_key:{user_id}"),
-         InlineKeyboardButton(text="💰 Возврат", callback_data=f"admin_refund_user:{user_id}")],
-        # Row 5: Danger zone
-        [InlineKeyboardButton(text="🚫 Забанить", callback_data=f"admin_ban_user:{user_id}"),
-         InlineKeyboardButton(text="🗑 Удалить", callback_data=f"admin_del_user:{user_id}")],
-        # Row 6: Navigation
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_users:0"),
-         InlineKeyboardButton(text="🏠 Меню", callback_data="admin_menu")],
+         InlineKeyboardButton(text="➕ Дни", callback_data=f"admin_add_days:{user_id}")],
+        # Row 3: Access and support
+        [InlineKeyboardButton(text="🎁 Пробник", callback_data=f"admin_grant_trial:{user_id}"),
+         InlineKeyboardButton(text="🆕 Выдать ключ", callback_data=f"admin_grant_key:{user_id}")],
+        [InlineKeyboardButton(text="✉️ Написать", callback_data=f"admin_pm:{user_id}"),
+         InlineKeyboardButton(text="🔄 Сброс пробника", callback_data=f"admin_reset_trial:{user_id}")],
+        # Finance and moderation
+        [InlineKeyboardButton(text="💰 Возврат", callback_data=f"admin_refund_user:{user_id}"),
+         InlineKeyboardButton(
+             text="✅ Разбанить" if is_banned else "🚫 Забанить",
+             callback_data=f"admin_unban_user:{user_id}" if is_banned else f"admin_ban_user:{user_id}",
+         )],
+        # Destructive action and navigation
+        [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"admin_del_user:{user_id}"),
+         InlineKeyboardButton(text="🔙 К клиентам", callback_data="admin_users:0")],
+        [InlineKeyboardButton(
+            text="🏠 Главное меню", callback_data="admin_menu",
+        )],
     ])
 
 
@@ -180,11 +251,12 @@ def _key_detail_kb(key_id: int, user_id: int, is_active: bool) -> InlineKeyboard
             InlineKeyboardButton(text="➕ +30 дней", callback_data=f"admin_key_add_days:{key_id}:{user_id}:30"),
             InlineKeyboardButton(text="➕ +90 дней", callback_data=f"admin_key_add_days:{key_id}:{user_id}:90"),
         ],
-        # Edit and delete
+        # Edit the term and key name
         [
             InlineKeyboardButton(text="✏️ Указать срок", callback_data=f"admin_edit_key:{key_id}"),
-            InlineKeyboardButton(text="🗑️ Удалить", callback_data=f"admin_del_key_confirm:{key_id}:{user_id}"),
+            InlineKeyboardButton(text="🏷 Переименовать", callback_data=f"admin_rename_key:{key_id}"),
         ],
+        [InlineKeyboardButton(text="🗑️ Удалить ключ", callback_data=f"admin_del_key_confirm:{key_id}:{user_id}")],
         # Navigation
         [
             InlineKeyboardButton(text="🔙 К списку ключей", callback_data=f"admin_user_keys:{user_id}"),
@@ -221,118 +293,14 @@ async def cmd_admin(message: Message, state: FSMContext):
 
 
 @router.message(F.text.startswith("/give_trial_all"))
-async def cmd_give_trial_all(message: Message, bot: Bot):
-    """
-    Admin command: give trial keys to ALL users with specified days.
-    Usage: /give_trial_all <days>
-    Example: /give_trial_all 5
-    """
+async def cmd_give_trial_all(message: Message):
+    """Retire the old unconfirmed bulk-grant command in favor of the guarded flow."""
     if not _is_admin(message.from_user.id):
-        logger.warning(f"Unauthorized /give_trial_all attempt from user {message.from_user.id}")
         return
-    
-    # Parse days parameter
-    parts = message.text.split()
-    if len(parts) < 2:
-        await message.answer(
-            "❌ Укажите количество дней.\n"
-            "Пример: <code>/give_trial_all 5</code>",
-            parse_mode="HTML"
-        )
-        return
-    
-    try:
-        days = int(parts[1])
-        if days < 1 or days > 365:
-            await message.answer("❌ Количество дней должно быть от 1 до 365.")
-            return
-    except ValueError:
-        await message.answer("❌ Неверное количество дней. Укажите число.")
-        return
-    
-    # Get all users
-    db = await get_db()
-    cur = await db.execute("SELECT user_id FROM users")
-    rows = await cur.fetchall()
-    
-    if not rows:
-        await message.answer("ℹ️ В базе нет пользователей.")
-        return
-    
-    # Status message
-    status_msg = await message.answer(
-        f"⏳ Выдача пробников {len(rows)} пользователям на {days} дней...\n"
-        f"✅ Успешно: 0\n"
-        f"❌ Ошибок: 0\n"
-        f"⏭️ Пропущено: 0"
+    await message.answer(
+        "Эта команда отключена, чтобы случайно не раздать доступ всей базе. "
+        "Откройте /admin → «Пробник всем»: там можно проверить условия и подтвердить выдачу пользователям без активного ключа."
     )
-    
-    success_count = 0
-    failed_count = 0
-    skipped_count = 0
-    
-    from subscription import deliver_key
-    
-    for i, (user_id,) in enumerate(rows):
-        try:
-            # Reset trial flag so user can receive the key
-            await reset_trial_for_user(user_id)
-            
-            # Deliver trial key
-            success = await deliver_key(
-                bot=bot,
-                user_id=user_id,
-                chat_id=user_id,
-                config_name=f"Trial-{user_id}",
-                days=days,
-                limit_ip=2,  # Trial keys are limited to 2 devices
-                is_paid=False,
-                amount=0,
-                currency="RUB",
-                method="admin_mass_trial",
-                payload=f"mass_trial_{user_id}_{days}d",
-                extend_existing=False,  # Always create new key for mass trials
-            )
-            
-            if success:
-                success_count += 1
-                logger.info(f"Mass trial: delivered {days} days to user {user_id}")
-            else:
-                failed_count += 1
-                logger.warning(f"Mass trial: failed to deliver to user {user_id}")
-                
-        except Exception as e:
-            failed_count += 1
-            logger.error(f"Mass trial: error delivering to {user_id}: {e}")
-        
-        # Update status every 5 users
-        if (i + 1) % 5 == 0 or i == len(rows) - 1:
-            try:
-                await status_msg.edit_text(
-                    f"⏳ Выдача пробников... ({i+1}/{len(rows)})\n"
-                    f"✅ Успешно: {success_count}\n"
-                    f"❌ Ошибок: {failed_count}\n"
-                    f"⏭️ Пропущено: {skipped_count}"
-                )
-            except:
-                pass
-        
-        # Small delay to avoid rate limits
-        await asyncio.sleep(0.3)
-    
-    # Final report
-    await status_msg.edit_text(
-        f"✅ <b>Массовая выдача пробников завершена</b>\n\n"
-        f"📊 <b>Параметры:</b> {days} дней каждому\n"
-        f"👥 <b>Всего пользователей:</b> {len(rows)}\n"
-        f"✅ <b>Успешно выдано:</b> {success_count}\n"
-        f"❌ <b>Ошибок:</b> {failed_count}\n"
-        f"⏭️ <b>Пропущено:</b> {skipped_count}",
-        parse_mode="HTML"
-    )
-    
-    logger.info(f"Mass trial completed: {success_count} success, {failed_count} failed, "
-                f"{skipped_count} skipped out of {len(rows)} users ({days} days each)")
 
 
 @router.callback_query(F.data == "admin_menu")
@@ -461,35 +429,194 @@ async def cb_broadcast(callback: CallbackQuery, state: FSMContext):
     if not _is_admin(callback.from_user.id):
         await safe_answer(callback, "Нет доступа.", alert=True); return
     await safe_answer(callback)
-    await state.set_state(AdminFlow.broadcast)
+    await state.clear()
     await callback.message.edit_text(
-        "✍️ <b>Рассылка</b>\n\nОтправьте текст сообщения.\nПоддерживается HTML.",
-        parse_mode="HTML", reply_markup=_back_kb()
+        "📢 <b>Новая рассылка</b>\n\nВыберите аудиторию:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👥 Все пользователи", callback_data="admin_broadcast_audience:all")],
+            [InlineKeyboardButton(text="✅ С активной подпиской", callback_data="admin_broadcast_audience:active")],
+            [InlineKeyboardButton(text="🌱 Без активной подписки", callback_data="admin_broadcast_audience:inactive")],
+            [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_menu")],
+        ]),
     )
 
 
-@router.message(StateFilter(AdminFlow.broadcast))
-async def receive_broadcast(message: Message, bot: Bot, state: FSMContext):
+@router.callback_query(F.data.startswith("admin_broadcast_audience:"))
+async def cb_broadcast_audience(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True); return
+    audience = callback.data.split(":", 1)[1]
+    if audience not in {"all", "active", "inactive"}:
+        await safe_answer(callback, "Неизвестная аудитория.", alert=True); return
+    await safe_answer(callback)
+    recipients = await _broadcast_recipients(audience)
+    audience_names = {"all": "все пользователи", "active": "активные подписчики", "inactive": "пользователи без активной подписки"}
+    await state.clear()
+    await state.update_data(broadcast_audience=audience)
+    await state.set_state(AdminFlow.broadcast_content)
+    await callback.message.edit_text(
+        f"📢 <b>Аудитория:</b> {audience_names[audience]} — <b>{len(recipients)}</b> получателей.\n\n"
+        "Отправьте сообщение для рассылки: текст, фото, видео, GIF, файл, аудио или голосовое.\n"
+        "Подпись, форматирование и premium-эмодзи сохранятся. Для отмены отправьте /cancel.",
+        parse_mode="HTML", reply_markup=_back_kb(),
+    )
+
+
+@router.message(StateFilter(AdminFlow.broadcast_content))
+async def receive_broadcast_content(message: Message, state: FSMContext):
     if not _is_admin(message.from_user.id):
         return
+    if (message.text or "").strip().lower() in {"/cancel", "отмена"}:
+        await state.clear()
+        await message.answer("Рассылка отменена.", reply_markup=_main_kb())
+        return
+    has_content = bool(
+        message.text or message.photo or message.video or message.animation or message.document
+        or message.audio or message.voice or message.video_note or message.sticker
+        or message.poll or message.contact or message.location
+    )
+    if not has_content:
+        await message.answer("Не удалось распознать сообщение. Отправьте текст или поддерживаемое медиа.")
+        return
+    await state.update_data(
+        broadcast_source_chat_id=message.chat.id,
+        broadcast_source_message_id=message.message_id,
+    )
+    await state.set_state(AdminFlow.broadcast_buttons)
+    await message.answer(
+        "🔗 <b>Добавить кнопки?</b>\n\n"
+        "Отправьте по одной кнопке на строку в формате:\n"
+        "<code>Текст кнопки | https://ссылка</code>\n\n"
+        "Можно до 8 кнопок. Отправьте <code>-</code>, если кнопки не нужны.\n"
+        "Для отмены — /cancel.",
+        parse_mode="HTML", reply_markup=_back_kb(),
+    )
+
+
+@router.message(StateFilter(AdminFlow.broadcast_buttons))
+async def receive_broadcast_buttons(message: Message, bot: Bot, state: FSMContext):
+    if not _is_admin(message.from_user.id):
+        return
+    raw = message.text or ""
+    if raw.strip().lower() in {"/cancel", "отмена"}:
+        await state.clear()
+        await message.answer("Рассылка отменена.", reply_markup=_main_kb())
+        return
+    try:
+        button_rows = _parse_broadcast_buttons(raw)
+    except ValueError as error:
+        await message.answer(f"❌ {escape(str(error))}\n\nПопробуйте ещё раз или отправьте <code>-</code>.", parse_mode="HTML")
+        return
+
+    data = await state.get_data()
+    audience = data.get("broadcast_audience", "all")
+    recipients = await _broadcast_recipients(audience)
+    markup_rows = [[button.model_dump(exclude_none=True) for button in row] for row in button_rows]
+    await state.update_data(broadcast_button_rows=markup_rows)
+    preview_markup = InlineKeyboardMarkup(inline_keyboard=button_rows) if button_rows else None
+    try:
+        await bot.copy_message(
+            chat_id=message.chat.id,
+            from_chat_id=data["broadcast_source_chat_id"],
+            message_id=data["broadcast_source_message_id"],
+            reply_markup=preview_markup,
+        )
+    except Exception:
+        logger.exception("Broadcast preview copy failed for admin %d", message.from_user.id)
+        await message.answer("❌ Не получилось показать предпросмотр. Попробуйте отправить исходное сообщение ещё раз.")
+        await state.set_state(AdminFlow.broadcast_content)
+        return
+
+    audience_names = {"all": "все пользователи", "active": "активные подписчики", "inactive": "пользователи без активной подписки"}
+    await state.set_state(AdminFlow.broadcast_confirm)
+    await message.answer(
+        f"👆 Предпросмотр рассылки выше.\n\n"
+        f"Получатели: <b>{len(recipients)}</b> — {audience_names.get(audience, 'все пользователи')}.\n"
+        f"Кнопок: <b>{len(button_rows)}</b>.\n\nОтправить сейчас?",
+        parse_mode="HTML", reply_markup=_broadcast_controls(),
+    )
+
+
+@router.callback_query(F.data == "admin_broadcast_cancel")
+async def cb_broadcast_cancel(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True); return
+    await safe_answer(callback, "Рассылка отменена.")
     await state.clear()
-    text = message.html_text or message.text or ""
-    if not text:
-        await message.answer("Пустое сообщение. Отменено."); return
-    user_ids = await get_all_user_ids()
-    sent = failed = 0
-    status = await message.answer(f"⏳ Рассылка... ({len(user_ids)} пользователей)")
-    for uid in user_ids:
+    await callback.message.edit_text("Рассылка отменена.", reply_markup=_main_kb())
+
+
+@router.callback_query(F.data == "admin_broadcast_send")
+async def cb_broadcast_send(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True); return
+    data = await state.get_data()
+    if await state.get_state() != AdminFlow.broadcast_confirm.state or not data.get("broadcast_source_message_id"):
+        await safe_answer(callback, "Черновик рассылки устарел. Создайте её заново.", alert=True)
+        await state.clear()
+        return
+    await safe_answer(callback)
+    recipients = await _broadcast_recipients(data.get("broadcast_audience", "all"))
+    source_chat_id = data["broadcast_source_chat_id"]
+    source_message_id = data["broadcast_source_message_id"]
+    button_rows = data.get("broadcast_button_rows", [])
+    markup = InlineKeyboardMarkup(inline_keyboard=button_rows) if button_rows else None
+    await state.clear()
+    sent = failed = blocked = 0
+    status = await callback.message.edit_text(f"⏳ Рассылка началась: 0 из {len(recipients)}")
+    await log_admin_action(
+        admin_id=callback.from_user.id,
+        action_type="broadcast_started",
+        action_details=f"audience={data.get('broadcast_audience', 'all')}; recipients={len(recipients)}; buttons={len(button_rows)}",
+    )
+
+    for index, user_id in enumerate(recipients, start=1):
         try:
-            await bot.send_message(uid, text, parse_mode="HTML")
+            await bot.copy_message(
+                chat_id=user_id,
+                from_chat_id=source_chat_id,
+                message_id=source_message_id,
+                reply_markup=markup,
+            )
             sent += 1
+        except TelegramRetryAfter as error:
+            await asyncio.sleep(float(error.retry_after) + 0.2)
+            try:
+                await bot.copy_message(
+                    chat_id=user_id,
+                    from_chat_id=source_chat_id,
+                    message_id=source_message_id,
+                    reply_markup=markup,
+                )
+                sent += 1
+            except TelegramForbiddenError:
+                blocked += 1
+            except Exception:
+                failed += 1
+        except TelegramForbiddenError:
+            blocked += 1
         except Exception:
             failed += 1
-        if (sent + failed) % 25 == 0:
-            await asyncio.sleep(1)
+        if index % 100 == 0 or index == len(recipients):
+            try:
+                await status.edit_text(
+                    f"⏳ Рассылка: {index} из {len(recipients)}\n"
+                    f"✅ Доставлено: {sent} · 🚫 Недоступны: {blocked} · ⚠️ Ошибки: {failed}"
+                )
+            except Exception:
+                pass
+        await asyncio.sleep(0.05)
+
     await status.edit_text(
-        f"✅ <b>Рассылка завершена</b>\n\n📤 Отправлено: {sent}\n❌ Ошибок: {failed}",
+        f"✅ <b>Рассылка завершена</b>\n\n"
+        f"📤 Доставлено: {sent}\n🚫 Недоступны: {blocked}\n⚠️ Ошибки: {failed}",
         parse_mode="HTML", reply_markup=_back_kb()
+    )
+    await log_admin_action(
+        admin_id=callback.from_user.id,
+        action_type="broadcast_completed",
+        action_details=f"audience={data.get('broadcast_audience', 'all')}; sent={sent}; blocked={blocked}; failed={failed}",
     )
 
 
@@ -542,6 +669,7 @@ async def cb_user_list(callback: CallbackQuery):
         kb_rows = user_rows
         if nav_row:
             kb_rows = kb_rows + [nav_row]
+        kb_rows.append([InlineKeyboardButton(text="🔍 Найти по ID", callback_data="admin_search")])
         kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")])
 
         await callback.message.edit_text(
@@ -772,7 +900,9 @@ async def _show_user(target, user_id: int):
         f"💸 <b>Возвраты в журнале:</b> {refund_total_text}\n"
         f"🔄 <b>Записей возврата:</b> {len(refunds)}"
     )
-    kb = _user_kb(user_id)
+    if user.get("is_banned"):
+        text += f"\n🚫 <b>Статус:</b> заблокирован — {escape(user.get('ban_reason') or 'без причины')}"
+    kb = _user_kb(user_id, bool(user.get("is_banned")))
     if isinstance(target, Message):
         await target.answer(text, parse_mode="HTML", reply_markup=kb)
     else:
@@ -2188,6 +2318,7 @@ async def cb_system_status(callback: CallbackQuery, bot: Bot):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Проверить 3x-ui", callback_data="admin_check_xui")],
         [InlineKeyboardButton(text="🗑 Очистить кэш", callback_data="admin_clear_cache")],
+        [InlineKeyboardButton(text="⚙️ Тарифы и параметры", callback_data="admin_settings")],
         [InlineKeyboardButton(text="◀️ Главное меню", callback_data="admin_menu")]
     ])
     
@@ -2924,8 +3055,9 @@ async def cb_mass_trial_confirm(callback: CallbackQuery, bot: Bot):
     cur = await db.execute(
         "SELECT DISTINCT u.user_id "
         "FROM users u "
-        "LEFT JOIN keys k ON u.user_id = k.user_id AND k.is_active = 1 "
-        "WHERE k.id IS NULL"
+        "WHERE COALESCE(u.is_banned, 0)=0 "
+        "AND NOT EXISTS (SELECT 1 FROM keys k WHERE k.user_id=u.user_id AND k.expiry>?)",
+        (int(datetime.now().timestamp()),),
     )
     rows = await cur.fetchall()
     
@@ -3479,7 +3611,7 @@ async def cb_admin_mass_days(callback: CallbackQuery, state: FSMContext):
 
 
 @router.message(AdminFlow.mass_extend_days)
-async def msg_mass_extend_days(message: Message, state: FSMContext, bot: Bot):
+async def msg_mass_extend_days(message: Message, state: FSMContext):
     """Handle mass extend days input."""
     if not _is_admin(message.from_user.id):
         return
@@ -3493,75 +3625,91 @@ async def msg_mass_extend_days(message: Message, state: FSMContext, bot: Bot):
         await message.answer("❌ Укажите число от 1 до 365.")
         return
     
+    db = await get_db()
+    cur = await db.execute("SELECT COUNT(DISTINCT user_id) FROM keys")
+    eligible_count = int((await cur.fetchone())[0] or 0)
+    await state.update_data(mass_extend_days=days)
+    await state.set_state(AdminFlow.mass_extend_days_confirm)
+    await message.answer(
+        f"⚠️ Добавить <b>{days} дней</b> пользователям с ключами?\n\n"
+        f"Под действие попадут до <b>{eligible_count}</b> пользователей.\n"
+        "Подтвердите массовое начисление:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Подтвердить", callback_data="admin_mass_days_confirm"),
+             InlineKeyboardButton(text="✖️ Отмена", callback_data="admin_mass_days_cancel")],
+        ]),
+    )
+
+
+@router.callback_query(F.data == "admin_mass_days_cancel")
+async def cb_admin_mass_days_cancel(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback, "Отменено.")
     await state.clear()
-    
-    # Get all users
+    await callback.message.edit_text("Массовое начисление отменено.", reply_markup=_main_kb())
+
+
+@router.callback_query(F.data == "admin_mass_days_confirm")
+async def cb_admin_mass_days_confirm(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    data = await state.get_data()
+    days = data.get("mass_extend_days")
+    if await state.get_state() != AdminFlow.mass_extend_days_confirm.state or not days:
+        await safe_answer(callback, "Подтверждение устарело. Начните заново.", alert=True)
+        await state.clear()
+        return
+    await safe_answer(callback)
+    await state.clear()
+
     db = await get_db()
     cur = await db.execute("SELECT user_id FROM users")
     rows = await cur.fetchall()
-    
     if not rows:
-        await message.answer("ℹ️ В базе нет пользователей.", reply_markup=_main_kb())
+        await callback.message.edit_text("ℹ️ В базе нет пользователей.", reply_markup=_main_kb())
         return
-    
-    # Status message
-    status_msg = await message.answer(
-        f"⏳ Добавление {days} дней {len(rows)} пользователям...\n"
-        f"✅ Успешно: 0\n"
-        f"❌ Ошибок: 0\n"
-        f"⏭️ Пропущено: 0"
+
+    status_msg = await callback.message.edit_text(
+        f"⏳ Добавляю {days} дней пользователям с ключами...\n"
+        "✅ Успешно: 0 · ⏭️ Пропущено: 0 · ⚠️ Ошибки: 0"
     )
-    
-    success_count = 0
-    failed_count = 0
-    skipped_count = 0
-    
+    success_count = failed_count = skipped_count = 0
     for i, (user_id,) in enumerate(rows):
         try:
-            # Add days to user
-            success = await add_manual_days(user_id, days, message.from_user.id)
-            
+            success = await add_manual_days(user_id, days, callback.from_user.id)
             if success:
                 success_count += 1
-                logger.info(f"Mass extend: added {days} days to user {user_id}")
             else:
                 skipped_count += 1
-                logger.warning(f"Mass extend: skipped user {user_id} (no keys)")
-                
-        except Exception as e:
+        except Exception:
             failed_count += 1
-            logger.error(f"Mass extend: error for {user_id}: {e}")
-        
-        # Update status every 5 users
-        if (i + 1) % 5 == 0 or i == len(rows) - 1:
+            logger.exception("Mass extend failed for user %s", user_id)
+
+        if (i + 1) % 100 == 0 or i == len(rows) - 1:
             try:
                 await status_msg.edit_text(
-                    f"⏳ Добавление дней... ({i+1}/{len(rows)})\n"
-                    f"✅ Успешно: {success_count}\n"
-                    f"❌ Ошибок: {failed_count}\n"
-                    f"⏭️ Пропущено: {skipped_count}"
+                    f"⏳ Обработано: {i + 1} из {len(rows)}\n"
+                    f"✅ Начислено: {success_count} · ⏭️ Без ключа: {skipped_count} · ⚠️ Ошибки: {failed_count}"
                 )
-            except:
+            except Exception:
                 pass
-        
-        # Small delay to avoid rate limits
-        await asyncio.sleep(0.3)
-    
-    # Final report
-    await log_admin_action(
-        admin_id=message.from_user.id,
-        action_type="mass_extend",
-        action_details=f"Mass extend: {success_count} success, {failed_count} failed, {skipped_count} skipped",
+        await asyncio.sleep(0.05)
+
+    await status_msg.edit_text(
+        f"✅ <b>Массовое начисление завершено</b>\n\n"
+        f"Дней каждому: <b>{days}</b>\n"
+        f"✅ Начислено: {success_count}\n⏭️ Без ключа: {skipped_count}\n⚠️ Ошибки: {failed_count}",
+        parse_mode="HTML", reply_markup=_back_kb(),
     )
     
-    await status_msg.edit_text(
-        f"✅ <b>Добавление дней завершено</b>\n\n"
-        f"📊 <b>Результаты:</b>\n"
-        f"✅ Успешно: {success_count}\n"
-        f"❌ Ошибок: {failed_count}\n"
-        f"⏭️ Пропущено: {skipped_count}\n"
-        f"📁 Всего: {len(rows)}",
-        reply_markup=_main_kb()
+    await log_admin_action(
+        admin_id=callback.from_user.id,
+        action_type="mass_extend",
+        action_details=f"Mass extend: {success_count} success, {failed_count} failed, {skipped_count} skipped",
     )
 
 

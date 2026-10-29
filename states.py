@@ -8,7 +8,9 @@ class BuyFlow(StatesGroup):
 
 
 class AdminFlow(StatesGroup):
-    broadcast = State()
+    broadcast_content = State()
+    broadcast_buttons = State()
+    broadcast_confirm = State()
     search_user = State()
     edit_key_days = State()      # waiting for new days value
     edit_key_name = State()      # waiting for new key name (rename)
@@ -28,6 +30,7 @@ class AdminFlow(StatesGroup):
     add_days_value = State()     # waiting for days to add to user
     mass_trial_days = State()    # waiting for days for mass trial
     mass_extend_days = State()   # waiting for days for mass extend
+    mass_extend_days_confirm = State()  # require confirmation before mass extension
     giveaway_title = State()     # waiting for giveaway title
     giveaway_prize = State()     # waiting for prize days
     giveaway_winners = State()   # waiting for winner count

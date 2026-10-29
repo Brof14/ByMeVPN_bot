@@ -3256,7 +3256,8 @@ async def find_user_by_id(user_id: int) -> Optional[dict]:
     """Find user by ID"""
     db = await get_db()
     cur = await db.execute(
-        "SELECT user_id, referrer_id, trial_used, total_paid, created, username FROM users WHERE user_id=?",
+        "SELECT user_id, referrer_id, trial_used, total_paid, created, username, is_banned, ban_reason "
+        "FROM users WHERE user_id=?",
         (user_id,)
     )
     row = await cur.fetchone()
@@ -3269,6 +3270,8 @@ async def find_user_by_id(user_id: int) -> Optional[dict]:
         "total_paid": row[3] or 0,
         "created": row[4],
         "username": row[5],
+        "is_banned": bool(row[6]),
+        "ban_reason": row[7],
     }
 
 
