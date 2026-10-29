@@ -180,18 +180,26 @@ def parse_single_node_line(line: str, index: int, fallback_uuid: Optional[str] =
 
             country, country_code, city, flag = _detect_geo(remark)
             node_code = f"node_{index}_{server_ip.replace('.', '_')}_{port}"
+            sec_lower = security.lower()
+            proto_badge = "VLESS Reality" if sec_lower == "reality" else ("VLESS TLS" if sec_lower == "tls" else "VLESS")
+            clean_remark = remark if remark and not remark.lower().startswith("bymevpn node") and not remark.lower().startswith("node") else f"{country} #{index + 1}"
+            disp_name = f"{clean_remark} • {proto_badge}"
 
             return {
                 "node_code": node_code,
                 "country": country,
                 "country_code": country_code,
-                "city": city,
+                "city": f"{city} #{index + 1}",
                 "flag": flag,
+                "protocol": proto_badge,
+                "remark": clean_remark,
+                "display_name": disp_name,
+                "port": port,
                 "ping_ms": 25 + index * 6,
                 "load_percent": 18 + index * 4,
                 "is_premium": False,
                 "country_en": country,
-                "city_en": city,
+                "city_en": f"{city} #{index + 1}",
                 "config": {
                     "protocol": "vless",
                     "server": server_ip,
@@ -229,18 +237,25 @@ def parse_single_node_line(line: str, index: int, fallback_uuid: Optional[str] =
 
             country, country_code, city, flag = _detect_geo(remark)
             node_code = f"node_{index}_hy2_{server_ip.replace('.', '_')}_{port}"
+            proto_badge = "Hysteria 2"
+            clean_remark = remark if remark and not remark.lower().startswith("bymevpn fast") and not remark.lower().startswith("node") else f"{country} #{index + 1}"
+            disp_name = f"{clean_remark} • {proto_badge}"
 
             return {
                 "node_code": node_code,
                 "country": country,
                 "country_code": country_code,
-                "city": city,
+                "city": f"{city} #{index + 1}",
                 "flag": flag,
+                "protocol": proto_badge,
+                "remark": clean_remark,
+                "display_name": disp_name,
+                "port": port,
                 "ping_ms": 22 + index * 5,
                 "load_percent": 15,
                 "is_premium": False,
                 "country_en": country,
-                "city_en": city,
+                "city_en": f"{city} #{index + 1}",
                 "config": {
                     "protocol": "hysteria2",
                     "server": server_ip,
