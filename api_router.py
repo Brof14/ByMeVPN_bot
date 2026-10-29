@@ -132,7 +132,30 @@ async def get_current_user_id(authorization: Optional[str] = Header(None)) -> in
 # ---------------------------------------------------------------------------
 
 def _detect_geo(remark: str) -> Tuple[str, str, str, str]:
-    """Detect country, code, city, and flag from inbound remark."""
+    """Detect country, code, city, and flag from inbound remark (Примечание)."""
+    flag_map = [
+        ("🇩🇪", ("Германия", "de", "Франкфурт")),
+        ("🇳🇱", ("Нидерланды", "nl", "Амстердам")),
+        ("🇺🇸", ("США", "us", "Нью-Йорк")),
+        ("🇫🇮", ("Финляндия", "fi", "Хельсинки")),
+        ("🇸🇪", ("Швеция", "se", "Стокгольм")),
+        ("🇬🇧", ("Великобритания", "gb", "Лондон")),
+        ("🇹🇷", ("Турция", "tr", "Стамбул")),
+        ("🇫🇷", ("Франция", "fr", "Париж")),
+        ("🇵🇱", ("Польша", "pl", "Варшава")),
+        ("🇷🇺", ("Россия", "ru", "Москва")),
+        ("🇨🇦", ("Канада", "ca", "Торонто")),
+        ("🇯🇵", ("Япония", "jp", "Токио")),
+        ("🇸🇬", ("Сингапур", "sg", "Сингапур")),
+        ("🇨🇭", ("Швейцария", "ch", "Цюрих")),
+        ("🇦🇹", ("Австрия", "at", "Вена")),
+        ("🇪🇸", ("Испания", "es", "Мадрид")),
+        ("🇮🇹", ("Италия", "it", "Милан")),
+    ]
+    for flag_emoji, (cname, ccode, city) in flag_map:
+        if flag_emoji in remark:
+            return cname, ccode, city, flag_emoji
+
     lower = remark.lower()
     if any(k in lower for k in ["nl", "amsterdam", "netherland", "нидерланд"]):
         return "Нидерланды", "nl", "Амстердам", "🇳🇱"
@@ -142,9 +165,20 @@ def _detect_geo(remark: str) -> Tuple[str, str, str, str]:
         return "Финляндия", "fi", "Хельсинки", "🇫🇮"
     if any(k in lower for k in ["se", "stockholm", "sweden", "швеци"]):
         return "Швеция", "se", "Стокгольм", "🇸🇪"
-    if any(k in lower for k in ["us", "usa", "york", "сша"]):
+    if any(k in lower for k in ["us", "usa", "york", "сша", "miami", "america"]):
         return "США", "us", "Нью-Йорк", "🇺🇸"
-    return "Нидерланды", "nl", "ByMeVPN", "🇳🇱"
+    if any(k in lower for k in ["gb", "uk", "london", "британи", "англия"]):
+        return "Великобритания", "gb", "Лондон", "🇬🇧"
+    if any(k in lower for k in ["tr", "turkey", "турци", "istanbul"]):
+        return "Турция", "tr", "Стамбул", "🇹🇷"
+    if any(k in lower for k in ["fr", "france", "франци", "paris"]):
+        return "Франция", "fr", "Париж", "🇫🇷"
+    if any(k in lower for k in ["pl", "poland", "польш", "warsaw"]):
+        return "Польша", "pl", "Варшава", "🇵🇱"
+    if any(k in lower for k in ["ru", "russia", "росси", "moscow"]):
+        return "Россия", "ru", "Москва", "🇷🇺"
+
+    return "Сервер", "eu", "VPN", "🌐"
 
 
 def parse_single_node_line(line: str, index: int, fallback_uuid: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -178,18 +212,24 @@ def parse_single_node_line(line: str, index: int, fallback_uuid: Optional[str] =
             security = params.get("security", ["reality"])[0]
             net_type = params.get("type", ["tcp"])[0]
 
-            country, country_code, city, flag = _detect_geo(remark)
-            node_code = f"node_{index}_{server_ip.replace('.', '_')}_{port}"
+            country, country_code, base_city, flag = _detect_geo(remark)
             sec_lower = security.lower()
             proto_badge = "VLESS Reality" if sec_lower == "reality" else ("VLESS TLS" if sec_lower == "tls" else "VLESS")
-            clean_remark = remark if remark and not remark.lower().startswith("bymevpn node") and not remark.lower().startswith("node") else f"{country} #{index + 1}"
-            disp_name = f"{clean_remark} • {proto_badge}"
+            
+            # Prioritize exact Remark (Примечание) entered by admin in 3x-ui
+            clean_remark = remark.strip() if (remark and remark.strip()) else f"{country} #{index + 1}"
+            if proto_badge.lower() in clean_remark.lower() or "reality" in clean_remark.lower() or "vless" in clean_remark.lower():
+                disp_name = clean_remark
+            else:
+                disp_name = f"{clean_remark} • {proto_badge}"
+
+            node_code = f"node_{index}_{server_ip.replace('.', '_')}_{port}"
 
             return {
                 "node_code": node_code,
                 "country": country,
                 "country_code": country_code,
-                "city": f"{city} #{index + 1}",
+                "city": clean_remark,
                 "flag": flag,
                 "protocol": proto_badge,
                 "remark": clean_remark,
@@ -199,7 +239,7 @@ def parse_single_node_line(line: str, index: int, fallback_uuid: Optional[str] =
                 "load_percent": 18 + index * 4,
                 "is_premium": False,
                 "country_en": country,
-                "city_en": f"{city} #{index + 1}",
+                "city_en": clean_remark,
                 "config": {
                     "protocol": "vless",
                     "server": server_ip,
@@ -235,17 +275,23 @@ def parse_single_node_line(line: str, index: int, fallback_uuid: Optional[str] =
             params = parse_qs(query_str)
             sni = params.get("sni", [raw_host])[0]
 
-            country, country_code, city, flag = _detect_geo(remark)
-            node_code = f"node_{index}_hy2_{server_ip.replace('.', '_')}_{port}"
+            country, country_code, base_city, flag = _detect_geo(remark)
             proto_badge = "Hysteria 2"
-            clean_remark = remark if remark and not remark.lower().startswith("bymevpn fast") and not remark.lower().startswith("node") else f"{country} #{index + 1}"
-            disp_name = f"{clean_remark} • {proto_badge}"
+            
+            # Prioritize exact Remark (Примечание) entered by admin in 3x-ui
+            clean_remark = remark.strip() if (remark and remark.strip()) else f"{country} #{index + 1}"
+            if proto_badge.lower() in clean_remark.lower() or "hysteria" in clean_remark.lower() or "hy2" in clean_remark.lower():
+                disp_name = clean_remark
+            else:
+                disp_name = f"{clean_remark} • {proto_badge}"
+
+            node_code = f"node_{index}_hy2_{server_ip.replace('.', '_')}_{port}"
 
             return {
                 "node_code": node_code,
                 "country": country,
                 "country_code": country_code,
-                "city": f"{city} #{index + 1}",
+                "city": clean_remark,
                 "flag": flag,
                 "protocol": proto_badge,
                 "remark": clean_remark,
@@ -255,7 +301,7 @@ def parse_single_node_line(line: str, index: int, fallback_uuid: Optional[str] =
                 "load_percent": 15,
                 "is_premium": False,
                 "country_en": country,
-                "city_en": f"{city} #{index + 1}",
+                "city_en": clean_remark,
                 "config": {
                     "protocol": "hysteria2",
                     "server": server_ip,
@@ -267,7 +313,7 @@ def parse_single_node_line(line: str, index: int, fallback_uuid: Optional[str] =
                     "server_name": sni,
                     "public_key": "",
                     "short_id": "",
-                    "fingerprint": "chrome",
+                    "fingerprint": "firefox",
                     "network": "udp",
                 },
             }
