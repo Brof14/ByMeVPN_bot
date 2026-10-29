@@ -485,6 +485,14 @@ class TrialRequest(BaseModel):
     device_model: Optional[str] = None
 
 
+class PaymentCreateRequest(BaseModel):
+    plan_code: str
+    amount_rub: int
+    days: int
+    devices: Optional[int] = 2
+    provider: Optional[str] = "yookassa"
+
+
 class SessionRequest(BaseModel):
     node_code: str
     install_id: Optional[str] = None
@@ -776,6 +784,52 @@ async def get_plans():
 
 
 # ---------------------------------------------------------------------------
+@api_router.post("/payment/create")
+async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(get_current_user_id)):
+    """Create in-app payment via YooKassa (Cards/SBP) or CryptoBot without Telegram."""
+    if req.provider == "crypto":
+        from payments import create_crypto_payment
+        res = await create_crypto_payment(
+            amount_rub=req.amount_rub,
+            description=f"ByMeVPN Подписка ({req.days} дн., {req.devices} устр.)",
+            user_id=user_id,
+            days=req.days,
+            devices=req.devices or 2,
+        )
+        if not res:
+            raise HTTPException(status_code=500, detail="Не удалось создать счет в CryptoBot")
+        pay_url, invoice_id = res
+        return {"payment_url": pay_url, "invoice_id": invoice_id, "provider": "crypto"}
+    else:
+        from payments import create_yookassa_payment, claim_yookassa_checkout, release_yookassa_checkout
+        claim_yookassa_checkout(user_id)
+        try:
+            pay_url = await create_yookassa_payment(
+                amount_rub=req.amount_rub,
+                description=f"ByMeVPN Подписка ({req.days} дн., {req.devices} устр.)",
+                user_id=user_id,
+                days=req.days,
+                devices=req.devices or 2,
+                extra_metadata={"app_payment": "1"},
+            )
+        finally:
+            release_yookassa_checkout(user_id)
+        if not pay_url:
+            raise HTTPException(status_code=500, detail="Не удалось создать платеж в ЮKassa")
+        return {"payment_url": pay_url, "provider": "yookassa"}
+
+
+@api_router.get("/payment/check")
+async def api_check_payment(user_id: int = Depends(get_current_user_id)):
+    """Check subscription status after in-app payment."""
+    sub_url, servers, sub_dict = await get_user_real_subscription(user_id)
+    return {
+        "status": sub_dict.get("status"),
+        "is_active": sub_dict.get("status") in ("active", "trial", "grace"),
+        "subscription": sub_dict,
+    }
+
+
 # 4. SERVERS & VPN SESSIONS (Real Nodes Only)
 # ---------------------------------------------------------------------------
 
