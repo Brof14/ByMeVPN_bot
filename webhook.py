@@ -96,7 +96,7 @@ async def download_app_apk():
     """Direct APK download redirect for mobile devices."""
     from fastapi.responses import RedirectResponse
     return RedirectResponse(
-        url="https://github.com/Brof14/ByMeVPN-app/releases/download/v1.0.4/ByMeVPN-v1.0.4.apk",
+        url="https://github.com/Brof14/ByMeVPN-app/releases/download/v1.0.5/ByMeVPN-v1.0.5.apk",
         status_code=302,
     )
 
@@ -106,7 +106,7 @@ async def download_debug_apk():
     """Direct debug APK download redirect for troubleshooting."""
     from fastapi.responses import RedirectResponse
     return RedirectResponse(
-        url="https://github.com/Brof14/ByMeVPN-app/releases/download/v1.0.4/ByMeVPN-v1.0.4-debug.apk",
+        url="https://github.com/Brof14/ByMeVPN-app/releases/download/v1.0.5/ByMeVPN-v1.0.5-debug.apk",
         status_code=302,
     )
 
