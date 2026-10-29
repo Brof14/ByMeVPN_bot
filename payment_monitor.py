@@ -14,6 +14,7 @@ from aiogram import Bot
 from config import YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY, CRYPTO_BOT_TOKEN
 from webhook import _process_payment, _process_crypto_invoice
 from payments import get_crypto_invoices, get_paid_crypto_invoices
+from yookassa_http import yookassa_client
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ class PaymentMonitor:
         started = time.perf_counter()
         from async_utils import perf_metrics
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with yookassa_client(timeout=15.0) as client:
                 # Do not clamp to process start time: payments made during downtime
                 # must be discoverable after a restart.
                 cutoff_time = datetime.utcnow() - timedelta(minutes=minutes_back)

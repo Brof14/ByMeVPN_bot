@@ -29,6 +29,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Optional
 
 import httpx
+from yookassa_http import yookassa_client
 import uvicorn
 from aiogram import Bot, Dispatcher
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -158,7 +159,7 @@ async def _fetch_yookassa_payment(payment_id: str) -> Optional[dict]:
     headers = {"Authorization": f"Basic {auth}"}
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with yookassa_client(timeout=15.0) as client:
             resp = await client.get(
                 f"https://api.yookassa.ru/v3/payments/{payment_id}",
                 headers=headers,

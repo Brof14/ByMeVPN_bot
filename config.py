@@ -18,6 +18,7 @@ Environment Variables (.env file):
     XUI_SUB_PATH: path for subscriptions (default: sub)
     YOOKASSA_SHOP_ID: YooKassa payment shop ID
     YOOKASSA_SECRET_KEY: YooKassa payment secret key
+    YOOKASSA_SOURCE_IP: Optional local source IP for outbound YooKassa API requests
     SMTP_HOST: SMTP server host for email auth
     SMTP_PORT: SMTP server port (default: 465)
     SMTP_USER: SMTP username
@@ -120,6 +121,7 @@ XUI_SUB_PATH = os.getenv("XUI_SUB_PATH", "sub")
 # ============================================================================
 YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID", "")
 YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "")
+YOOKASSA_SOURCE_IP = os.getenv("YOOKASSA_SOURCE_IP", "").strip()
 
 # ============================================================================
 # Crypto Bot Payment Configuration (@send)

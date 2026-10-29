@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import httpx  # noqa: E402
 
 from config import YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY, CRYPTO_BOT_TOKEN, BOT_TOKEN  # noqa: E402
+from yookassa_http import yookassa_client  # noqa: E402
 import database  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-8s | %(message)s")
@@ -54,7 +55,7 @@ async def yookassa_payment_status(payment_id: str) -> dict:
         return {"status": "unknown", "reason": "no credentials"}
     auth = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with yookassa_client(timeout=15.0) as client:
             r = await client.get(
                 f"https://api.yookassa.ru/v3/payments/{payment_id}",
                 headers={"Authorization": f"Basic {auth}"},
