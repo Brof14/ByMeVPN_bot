@@ -16,7 +16,7 @@ _SUPPORT_URL = (
 
 def main_menu_new_user() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
+    kb.row(InlineKeyboardButton(text="Получить 3 дня бесплатно", callback_data="trial_free", style="success"))
     kb.row(InlineKeyboardButton(text="Выбрать тариф", callback_data="buy_vpn", style="primary"))
     kb.row(InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn"))
     kb.row(
@@ -29,7 +29,7 @@ def main_menu_new_user() -> InlineKeyboardMarkup:
 def main_menu_existing(trial_used: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     if not trial_used:
-        kb.row(InlineKeyboardButton(text="Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
+        kb.row(InlineKeyboardButton(text="Получить 3 дня бесплатно", callback_data="trial_free", style="success"))
     kb.row(InlineKeyboardButton(text="Выбрать тариф", callback_data="buy_vpn", style="primary"))
     kb.row(InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn"))
     kb.row(
@@ -48,7 +48,7 @@ def main_menu_with_keys(trial_used: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     # Show intro-trial button only if user hasn't used it yet
     if not trial_used:
-        kb.row(InlineKeyboardButton(text="Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
+        kb.row(InlineKeyboardButton(text="Получить 3 дня бесплатно", callback_data="trial_free", style="success"))
     kb.row(InlineKeyboardButton(text="🔑 Мой VPN", callback_data="my_keys", style="primary"))
     kb.row(InlineKeyboardButton(text="Выбрать тариф", callback_data="buy_vpn"))
     kb.row(InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn"))
@@ -319,9 +319,9 @@ def manage_payment_methods_kb(
 
 
 def trial_pay_kb(confirmation_url: str) -> InlineKeyboardMarkup:
-    """Intro trial checkout: 1 ₽ now → 3 days → 89 ₽/мес recurring."""
+    """Legacy payment link for an already-created introductory checkout."""
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="Оплатить 1 ₽", url=confirmation_url, style="success"))
+    kb.row(InlineKeyboardButton(text="Продолжить оплату", url=confirmation_url, style="success"))
     kb.row(
         InlineKeyboardButton(text="Другие тарифы", callback_data="buy_vpn"),
         InlineKeyboardButton(text="🏠 Меню", callback_data="back_to_menu"),
@@ -381,7 +381,7 @@ def partner_kb(link: str) -> InlineKeyboardMarkup:
     share_text = quote_plus(
         "Если у тебя не работает YouTube / Telegram — вот решение.\n\n"
         "Сам пользуюсь — реально норм VPN.\n\n"
-        "🎁 3 дня за 1 ₽\n"
+        "🎁 3 дня VPN бесплатно\n"
         "📱 До 10 устройств\n"
         "⚡ Всё открывается без лагов\n\n"
         "💳 Дальше — 89 ₽/мес (от 59 ₽/мес при оплате за год)\n\n"
