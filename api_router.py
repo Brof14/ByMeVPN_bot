@@ -322,16 +322,34 @@ def parse_single_node_line(line: str, index: int, fallback_uuid: Optional[str] =
     return None
 
 
-async def fetch_and_parse_real_nodes(sub_url: str, fallback_uuid: Optional[str] = None) -> List[Dict[str, Any]]:
+async def fetch_and_parse_real_nodes(
+    sub_url: str,
+    fallback_uuid: Optional[str] = None,
+    request_headers: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
     """Fetch raw base64 subscription from 3x-ui and parse into actual real nodes."""
     raw_content = ""
     parsed = urlparse(sub_url)
-    # Prefer direct localhost connection to port 2096 on VPS
-    local_url = f"http://127.0.0.1:{parsed.port or 2096}{parsed.path}"
+    # Preserve HTTPS and the subscription host: the listener uses them for
+    # routing and its HWID gate. Never downgrade a TLS subscription to HTTP.
+    scheme = parsed.scheme if parsed.scheme in ("http", "https") else "https"
+    local_url = f"{scheme}://127.0.0.1:{parsed.port or 2096}{parsed.path}"
+    if parsed.query:
+        local_url = f"{local_url}?{parsed.query}"
+    allowed_headers = ("X-HWID", "X-Device-OS", "X-Ver-OS", "X-Device-Model", "User-Agent")
+    upstream_headers = {
+        name: value for name in allowed_headers
+        if (value := (request_headers or {}).get(name))
+    }
+    if parsed.hostname:
+        host_header = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+        if parsed.port:
+            host_header = f"{host_header}:{parsed.port}"
+        upstream_headers["Host"] = host_header
 
     async with httpx.AsyncClient(verify=False, timeout=5.0) as client:
         try:
-            resp = await client.get(local_url)
+            resp = await client.get(local_url, headers=upstream_headers)
             if resp.status_code == 200:
                 raw_content = resp.text
         except Exception:
@@ -339,11 +357,15 @@ async def fetch_and_parse_real_nodes(sub_url: str, fallback_uuid: Optional[str] 
 
         if not raw_content:
             try:
-                resp = await client.get(sub_url)
+                resp = await client.get(sub_url, headers=upstream_headers)
                 if resp.status_code == 200:
                     raw_content = resp.text
             except Exception as e:
-                logger.error(f"Failed to fetch subscription from {sub_url}: {e}")
+                logger.error(
+                    "Failed to fetch subscription from host %s (%s)",
+                    parsed.hostname or "unknown",
+                    type(e).__name__,
+                )
 
     if not raw_content:
         return []
@@ -368,7 +390,10 @@ async def fetch_and_parse_real_nodes(sub_url: str, fallback_uuid: Optional[str] 
     return servers
 
 
-async def get_user_real_subscription(user_id: int) -> Tuple[Optional[str], List[Dict[str, Any]], Dict[str, Any]]:
+async def get_user_real_subscription(
+    user_id: int,
+    request_headers: Optional[Dict[str, str]] = None,
+) -> Tuple[Optional[str], List[Dict[str, Any]], Dict[str, Any]]:
     """
     Looks up user's active keys from DB or 3x-ui, fetches the real subscription,
     and parses all actual VLESS Reality & Hysteria nodes.
@@ -423,7 +448,7 @@ async def get_user_real_subscription(user_id: int) -> Tuple[Optional[str], List[
         }
 
     # Fetch and parse real nodes from 3x-ui
-    servers = await fetch_and_parse_real_nodes(sub_url, sub_uuid)
+    servers = await fetch_and_parse_real_nodes(sub_url, sub_uuid, request_headers)
 
     seconds_remaining = max(0, expiry_ts - now) if expiry_ts else 30 * 86400
     expires_at = time.strftime("%Y-%m-%d %H:%M", time.localtime(expiry_ts)) if expiry_ts else None
@@ -439,6 +464,12 @@ async def get_user_real_subscription(user_id: int) -> Tuple[Optional[str], List[
     }
 
     return sub_url, servers, sub_dict
+
+
+def _subscription_headers_from_request(request: Request) -> Dict[str, str]:
+    """Forward only device metadata required by the subscription HWID gate."""
+    names = ("X-HWID", "X-Device-OS", "X-Ver-OS", "X-Device-Model", "User-Agent")
+    return {name: value for name in names if (value := request.headers.get(name))}
 
 
 # ---------------------------------------------------------------------------
@@ -521,7 +552,7 @@ async def create_telegram_session():
 
 
 @api_router.get("/auth/telegram/check-session", response_model=TelegramCheckResponse)
-async def check_telegram_session(token: str):
+async def check_telegram_session(token: str, request: Request):
     clean_token = token if token in _TELEGRAM_SESSIONS else token.removeprefix("auth_")
     session = _TELEGRAM_SESSIONS.get(clean_token) or _TELEGRAM_SESSIONS.get(token)
 
@@ -536,7 +567,9 @@ async def check_telegram_session(token: str):
     full_name = session.get("full_name", "Telegram User")
 
     jwt_token = create_simple_jwt(user_id, f"{user_id}@telegram.bymevpn")
-    sub_url, servers, sub_dict = await get_user_real_subscription(user_id)
+    sub_url, servers, sub_dict = await get_user_real_subscription(
+        user_id, _subscription_headers_from_request(request)
+    )
 
     return TelegramCheckResponse(
         status="authenticated",
@@ -557,7 +590,7 @@ async def check_telegram_session(token: str):
 # ---------------------------------------------------------------------------
 
 @api_router.post("/auth/register")
-async def register(req: RegisterRequest):
+async def register(req: RegisterRequest, request: Request):
     await _ensure_auth_db()
     email = req.email.strip().lower()
     if not email or "@" not in email:
@@ -583,7 +616,9 @@ async def register(req: RegisterRequest):
     await database.ensure_user(user_id, email.split("@")[0])
 
     jwt_token = create_simple_jwt(user_id, email)
-    sub_url, servers, sub_dict = await get_user_real_subscription(user_id)
+    sub_url, servers, sub_dict = await get_user_real_subscription(
+        user_id, _subscription_headers_from_request(request)
+    )
 
     return {
         "access": jwt_token,
@@ -600,7 +635,7 @@ async def register(req: RegisterRequest):
 
 
 @api_router.post("/auth/login")
-async def login(req: LoginRequest):
+async def login(req: LoginRequest, request: Request):
     await _ensure_auth_db()
     email = req.email.strip().lower()
     if not email or "@" not in email:
@@ -621,7 +656,9 @@ async def login(req: LoginRequest):
         raise HTTPException(status_code=401, detail="Неверный email или пароль")
 
     jwt_token = create_simple_jwt(user_id, email)
-    sub_url, servers, sub_dict = await get_user_real_subscription(user_id)
+    sub_url, servers, sub_dict = await get_user_real_subscription(
+        user_id, _subscription_headers_from_request(request)
+    )
 
     return {
         "access": jwt_token,
@@ -638,7 +675,7 @@ async def login(req: LoginRequest):
 
 
 @api_router.post("/auth/google")
-async def login_google(req: GoogleLoginRequest):
+async def login_google(req: GoogleLoginRequest, request: Request):
     email = ""
     name = "Google User"
     try:
@@ -659,7 +696,9 @@ async def login_google(req: GoogleLoginRequest):
     await database.ensure_user(user_id, email.split("@")[0])
 
     jwt_token = create_simple_jwt(user_id, email)
-    sub_url, servers, sub_dict = await get_user_real_subscription(user_id)
+    sub_url, servers, sub_dict = await get_user_real_subscription(
+        user_id, _subscription_headers_from_request(request)
+    )
 
     return {
         "access": jwt_token,
@@ -717,13 +756,15 @@ async def delete_me(user_id: int = Depends(get_current_user_id)):
 # ---------------------------------------------------------------------------
 
 @api_router.get("/subscription/status")
-async def get_subscription_status(user_id: int = Depends(get_current_user_id)):
-    sub_url, servers, sub_dict = await get_user_real_subscription(user_id)
+async def get_subscription_status(request: Request, user_id: int = Depends(get_current_user_id)):
+    sub_url, servers, sub_dict = await get_user_real_subscription(
+        user_id, _subscription_headers_from_request(request)
+    )
     return sub_dict
 
 
 @api_router.post("/subscription/trial")
-async def activate_trial(req: TrialRequest, user_id: int = Depends(get_current_user_id)):
+async def activate_trial(req: TrialRequest, request: Request, user_id: int = Depends(get_current_user_id)):
     """Activate 3-day free trial on 3x-ui panel."""
     trial_days = 3
     sub_url = None
@@ -756,7 +797,9 @@ async def activate_trial(req: TrialRequest, user_id: int = Depends(get_current_u
 
     servers = []
     if sub_url:
-        servers = await fetch_and_parse_real_nodes(sub_url)
+        servers = await fetch_and_parse_real_nodes(
+            sub_url, request_headers=_subscription_headers_from_request(request)
+        )
 
     return {
         "status": "trial",
@@ -820,9 +863,11 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
 
 
 @api_router.get("/payment/check")
-async def api_check_payment(user_id: int = Depends(get_current_user_id)):
+async def api_check_payment(request: Request, user_id: int = Depends(get_current_user_id)):
     """Check subscription status after in-app payment."""
-    sub_url, servers, sub_dict = await get_user_real_subscription(user_id)
+    sub_url, servers, sub_dict = await get_user_real_subscription(
+        user_id, _subscription_headers_from_request(request)
+    )
     return {
         "status": sub_dict.get("status"),
         "is_active": sub_dict.get("status") in ("active", "trial", "grace"),
@@ -834,8 +879,10 @@ async def api_check_payment(user_id: int = Depends(get_current_user_id)):
 # ---------------------------------------------------------------------------
 
 @api_router.get("/servers")
-async def get_servers(user_id: int = Depends(get_current_user_id)):
-    sub_url, servers, sub_dict = await get_user_real_subscription(user_id)
+async def get_servers(request: Request, user_id: int = Depends(get_current_user_id)):
+    sub_url, servers, sub_dict = await get_user_real_subscription(
+        user_id, _subscription_headers_from_request(request)
+    )
     return {
         "servers": servers,
         "subscription_url": sub_url,
@@ -843,8 +890,10 @@ async def get_servers(user_id: int = Depends(get_current_user_id)):
 
 
 @api_router.post("/vpn/session")
-async def create_vpn_session(req: SessionRequest, user_id: int = Depends(get_current_user_id)):
-    sub_url, servers, sub_dict = await get_user_real_subscription(user_id)
+async def create_vpn_session(req: SessionRequest, request: Request, user_id: int = Depends(get_current_user_id)):
+    sub_url, servers, sub_dict = await get_user_real_subscription(
+        user_id, _subscription_headers_from_request(request)
+    )
     if not servers:
         raise HTTPException(
             status_code=403,
