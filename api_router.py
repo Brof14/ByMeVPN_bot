@@ -84,29 +84,48 @@ async def confirm_telegram_session(token: str, user_id: int, username: str = "",
     )
 
 
-def create_simple_jwt(user_id: int, email: str = "") -> str:
-    """Create a signed HMAC-SHA256 session token."""
-    payload = f"{user_id}:{email}:{int(time.time()) + 30 * 86400}"
+def create_simple_jwt(
+    user_id: int,
+    email: str = "",
+    *,
+    issued_at: Optional[int] = None,
+    expires_at: Optional[int] = None,
+) -> str:
+    """Create a signed token with an absolute lifetime that refresh cannot extend."""
+    issued = int(time.time()) if issued_at is None else int(issued_at)
+    expiry = issued + 30 * 86400 if expires_at is None else int(expires_at)
+    email_part = base64.urlsafe_b64encode(email.encode("utf-8")).decode("ascii").rstrip("=")
+    payload = f"v2:{int(user_id)}:{issued}:{expiry}:{email_part}"
     signature = hmac.new(JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
     return f"{payload}:{signature}"
 
 
-def verify_simple_jwt(token: str) -> Optional[int]:
-    """Verify signed session token and return user_id."""
+def _verified_token_claims(token: str) -> Optional[dict]:
     try:
         parts = token.split(":")
-        if len(parts) != 4:
+        if len(parts) != 6 or parts[0] != "v2":
             return None
-        user_id_str, email, exp_str, sig = parts
-        payload = f"{user_id_str}:{email}:{exp_str}"
-        expected_sig = hmac.new(JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(sig, expected_sig):
+        version, user_id_str, issued_str, expiry_str, email_part, signature = parts
+        payload = ":".join(parts[:-1])
+        expected = hmac.new(JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected):
             return None
-        if int(exp_str) < time.time():
+        user_id = int(user_id_str)
+        issued = int(issued_str)
+        expiry = int(expiry_str)
+        now = int(time.time())
+        if user_id <= 0 or issued > now + 60 or expiry <= now or expiry <= issued:
             return None
-        return int(user_id_str)
-    except Exception:
+        email = base64.urlsafe_b64decode(email_part + "=" * ((4 - len(email_part) % 4) % 4)).decode("utf-8")
+        return {"user_id": user_id, "email": email, "issued_at": issued, "expires_at": expiry}
+    except (ValueError, TypeError, UnicodeDecodeError):
         return None
+
+
+def verify_simple_jwt(token: str) -> Optional[int]:
+    """Verify signed session token and return user_id."""
+    claims = _verified_token_claims(token)
+    return int(claims["user_id"]) if claims else None
 
 
 async def get_current_user_id(authorization: Optional[str] = Header(None)) -> int:
@@ -663,51 +682,28 @@ async def login(req: LoginRequest, request: Request):
 
 @api_router.post("/auth/google")
 async def login_google(req: GoogleLoginRequest, request: Request):
-    email = ""
-    name = "Google User"
-    try:
-        parts = req.id_token.split(".")
-        if len(parts) >= 2:
-            padded = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
-            payload_str = base64.urlsafe_b64decode(padded.encode()).decode("utf-8", "ignore")
-            data = json.loads(payload_str)
-            email = data.get("email", "").lower()
-            name = data.get("name") or data.get("given_name") or email.split("@")[0]
-    except Exception as e:
-        logger.warning(f"Error decoding Google token: {e}")
-
-    if not email:
-        email = f"google_user_{secrets.token_hex(4)}@gmail.com"
-
-    user_id = int(hashlib.md5(email.encode()).hexdigest()[:8], 16)
-    await database.ensure_user(user_id, email.split("@")[0])
-
-    jwt_token = create_simple_jwt(user_id, email)
-    sub_url, servers, sub_dict = await get_user_real_subscription(
-        user_id, _subscription_headers_from_request(request)
+    # The former implementation decoded claims without checking the signature,
+    # audience, verified-email flag or nonce. Keep the endpoint closed until a
+    # Google client ID and nonce-bound native flow are configured and tested.
+    raise HTTPException(
+        status_code=503,
+        detail="Вход через Google временно недоступен",
     )
-
-    return {
-        "access": jwt_token,
-        "refresh": f"ref_{jwt_token}",
-        "user": {
-            "id": str(user_id),
-            "email": email,
-            "name": name,
-            "is_google": True,
-        },
-        "subscription": sub_dict,
-        "servers": servers,
-    }
 
 
 @api_router.post("/auth/refresh")
 async def refresh_token(req: RefreshRequest):
     token = req.refresh.removeprefix("ref_")
-    user_id = verify_simple_jwt(token)
-    if not user_id:
+    claims = _verified_token_claims(token)
+    if not claims:
         raise HTTPException(status_code=401, detail="Сессия истекла")
-    new_access = create_simple_jwt(user_id)
+    # The access and refresh values share the same 30-day absolute expiry for
+    # compatibility. Refreshing cannot silently turn one login into a forever
+    # session; after expiry the user must authenticate again.
+    new_access = create_simple_jwt(
+        claims["user_id"], claims["email"],
+        issued_at=claims["issued_at"], expires_at=claims["expires_at"],
+    )
     return {
         "access": new_access,
         "refresh": f"ref_{new_access}",
@@ -988,7 +984,9 @@ async def delete_device(device_id: str, user_id: int = Depends(get_current_user_
         current = await get_xui_devices(user_id)
         if not any(int(item.get("id", 0)) == parsed_id for item in current.get("devices", [])):
             raise HTTPException(status_code=404, detail="Устройство не найдено")
-        await delete_xui_hwid_device(user_id, parsed_id)
+        removed = await delete_xui_hwid_device(user_id, parsed_id)
+        if not removed:
+            raise HTTPException(status_code=503, detail="Не удалось удалить устройство. Попробуйте позже")
     except HTTPException:
         raise
     except Exception as exc:

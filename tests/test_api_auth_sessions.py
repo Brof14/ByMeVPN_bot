@@ -49,6 +49,20 @@ class TestJwtConfiguration(unittest.TestCase):
         finally:
             api_router.time.time = original_time
 
+    def test_refresh_preserves_original_absolute_expiry(self):
+        issued = int(api_router.time.time()) - 100
+        expiry = issued + 30 * 86400
+        token = api_router.create_simple_jwt(
+            123456, "test@example.invalid", issued_at=issued, expires_at=expiry
+        )
+        claims = api_router._verified_token_claims(token)
+        self.assertEqual(claims["expires_at"], expiry)
+        replacement = api_router.create_simple_jwt(
+            claims["user_id"], claims["email"],
+            issued_at=claims["issued_at"], expires_at=claims["expires_at"],
+        )
+        self.assertEqual(api_router._verified_token_claims(replacement)["expires_at"], expiry)
+
     def test_missing_or_short_secret_fails_configuration(self):
         for configured_value in (None, "short"):
             with self.subTest(configured=configured_value is not None):
@@ -68,6 +82,23 @@ class TestJwtConfiguration(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("JWT_SECRET must be configured", result.stderr)
+
+
+class TestGoogleLoginClosed(unittest.IsolatedAsyncioTestCase):
+    async def test_unverified_google_payload_is_never_accepted(self):
+        from fastapi import HTTPException
+        from starlette.requests import Request
+
+        request = Request({
+            "type": "http", "http_version": "1.1", "method": "POST",
+            "scheme": "https", "path": "/api/v1/auth/google",
+            "raw_path": b"/api/v1/auth/google", "query_string": b"",
+            "headers": [], "client": ("127.0.0.1", 1), "server": ("test.invalid", 443),
+        })
+        forged = "x.eyJlbWFpbCI6ImF0dGFja2VyQGV4YW1wbGUuaW52YWxpZCJ9.x"
+        with self.assertRaises(HTTPException) as result:
+            await api_router.login_google(api_router.GoogleLoginRequest(id_token=forged), request)
+        self.assertEqual(result.exception.status_code, 503)
 
 
 class TestTelegramAuthSessions(unittest.IsolatedAsyncioTestCase):
