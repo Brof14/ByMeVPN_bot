@@ -36,7 +36,6 @@ from keyboards import (
 from utils import send_with_photo, safe_answer, LOGO_URL
 from async_utils import monitor_performance
 from cache import cache_subscription_data
-from constants import RECURRING_MONTHLY_PRICE, RECURRING_DAYS
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -214,7 +213,7 @@ async def _send_main_menu(
         user_keys = await get_user_keys(user_id)
         has_keys = len(user_keys) > 0
         trial_used = await has_trial_used(user_id)
-        kb = main_menu_with_keys(trial_used=trial_used) if has_keys else main_menu_existing(trial_used=trial_used)
+        kb = main_menu_with_keys(trial_used=True) if has_keys else main_menu_existing(trial_used=True)
     else:  # active
         # Check if user has keys to show appropriate menu (use direct DB check, not cache)
         user_keys = await get_user_keys(user_id)
@@ -504,14 +503,6 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext) -> None:
     )
     
     # Не удаляем сообщения после /start, чтобы избежать бесконечной кнопки Старт
-
-
-def _free_trial_offer_text() -> str:
-    return (
-        "🎁 <b>3 дня ByMeVPN бесплатно</b>\n\n"
-        "Полный доступ на 3 дня — до 2 устройств.\n"
-        "Карта не нужна, автоматических списаний после пробного периода нет."
-    )
 
 
 async def _start_free_trial(bot: Bot, callback: CallbackQuery, ref_id: int | None = None) -> None:
