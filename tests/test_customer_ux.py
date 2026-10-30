@@ -166,7 +166,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         self.assertIn("+30 дней", text)
         self.assertIn("<b>Ваша ссылка</b>", text)
         self.assertIn("Бонусные дни добавляются к вашему VPN", text)
-        self.assertNotIn("Зарегистрировались: <b>1</b>", text)
+        self.assertIn("Зарегистрировались: <b>1</b> · оплатили: <b>1</b>", text)
         self.assertIn("бот создаст его автоматически", text)
 
     def test_back_is_full_width_and_support_is_not_mixed_into_navigation(self):

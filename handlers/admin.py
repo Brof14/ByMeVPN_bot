@@ -13,7 +13,6 @@ from urllib.parse import urlsplit
 
 from aiogram import Bot, F, Router
 from aiogram.filters import StateFilter
-from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     Message, CallbackQuery,
@@ -39,6 +38,9 @@ from database import (
     ban_user, unban_user, add_manual_days,
     create_giveaway, get_active_giveaways, get_giveaway_by_id,
     set_giveaway_status,
+    create_broadcast_campaign,
+    get_conversion_funnel,
+    get_performance_summary,
 )
 from states import AdminFlow
 from utils import safe_answer
@@ -104,6 +106,7 @@ def _growth_kb() -> InlineKeyboardMarkup:
          InlineKeyboardButton(text="🎉 Розыгрыши", callback_data="admin_giveaways")],
         [InlineKeyboardButton(text="👥 Рефералы", callback_data="admin_referrals"),
          InlineKeyboardButton(text="📣 Рекламные заявки", callback_data="ad_admin_list")],
+        [InlineKeyboardButton(text="📈 Воронка клиентов", callback_data="admin_funnel")],
         [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
         [InlineKeyboardButton(text="🔙 Главное меню", callback_data="admin_menu")],
     ])
@@ -126,6 +129,35 @@ async def cb_admin_growth(callback: CallbackQuery):
         "Управление промокодами, розыгрышами, приглашениями и рекламными заявками:",
         parse_mode="HTML", reply_markup=_growth_kb(),
     )
+
+
+@router.callback_query(F.data == "admin_funnel")
+async def cb_admin_funnel(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    funnel = await get_conversion_funnel(30)
+    totals = funnel["totals"]
+    lines = [
+        "📈 <b>Воронка за последние 30 дней</b>",
+        "Число пользователей, впервые пришедших за период, и достигнутые ими этапы:",
+        "",
+    ]
+    for name, label in (("started", "Пришли"), ("trial", "Запустили пробный тариф"),
+                        ("paid", "Оплатили подписку"), ("connected", "Подключились"),
+                        ("renewed", "Продлили")):
+        lines.append(f"{label}: <b>{totals.get(name, 0)}</b>")
+    sources = funnel.get("by_source", {})
+    if sources:
+        lines.extend(["", "<b>По источникам:</b>"])
+        for source, values in sorted(sources.items(), key=lambda item: item[1].get("started", 0), reverse=True)[:8]:
+            lines.append(
+                f"• {escape(str(source))}: {values.get('started', 0)} → {values.get('trial', 0)} → "
+                f"{values.get('paid', 0)} → {values.get('connected', 0)} → {values.get('renewed', 0)}"
+            )
+    lines.extend(["", "Этапы подключения считаются по первому подтверждённому признаку активности в 3x-ui."])
+    await callback.message.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=_growth_kb())
 
 
 def _broadcast_controls() -> InlineKeyboardMarkup:
@@ -485,57 +517,164 @@ async def receive_broadcast_content(message: Message, state: FSMContext):
     )
     await state.set_state(AdminFlow.broadcast_buttons)
     await message.answer(
-        "🔗 <b>Добавить кнопки?</b>\n\n"
-        "Отправьте по одной кнопке на строку в формате:\n"
-        "<code>Текст кнопки | https://ссылка</code>\n\n"
-        "Можно до 8 кнопок. Отправьте <code>-</code>, если кнопки не нужны.\n"
-        "Для отмены — /cancel.",
-        parse_mode="HTML", reply_markup=_back_kb(),
+        "🔗 <b>Кнопки под сообщением</b>\n\n"
+        "Добавьте ссылочную кнопку: задайте её текст, ссылку и цвет. Можно добавить до 8 кнопок.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Добавить кнопку", callback_data="admin_broadcast_add_button")],
+            [InlineKeyboardButton(text="Без кнопок", callback_data="admin_broadcast_no_buttons")],
+            [InlineKeyboardButton(text="Отмена", callback_data="admin_broadcast_cancel")],
+        ]),
     )
 
 
 @router.message(StateFilter(AdminFlow.broadcast_buttons))
-async def receive_broadcast_buttons(message: Message, bot: Bot, state: FSMContext):
+async def receive_broadcast_buttons(message: Message, state: FSMContext):
     if not _is_admin(message.from_user.id):
         return
-    raw = message.text or ""
-    if raw.strip().lower() in {"/cancel", "отмена"}:
+    if (message.text or "").strip().lower() in {"/cancel", "отмена"}:
         await state.clear()
         await message.answer("Рассылка отменена.", reply_markup=_main_kb())
         return
-    try:
-        button_rows = _parse_broadcast_buttons(raw)
-    except ValueError as error:
-        await message.answer(f"❌ {escape(str(error))}\n\nПопробуйте ещё раз или отправьте <code>-</code>.", parse_mode="HTML")
-        return
+    await message.answer("Используйте кнопки под предыдущим сообщением, чтобы добавить ссылку и выбрать цвет.")
 
+
+async def _broadcast_show_preview(bot: Bot, chat_id: int, state: FSMContext) -> None:
     data = await state.get_data()
+    button_rows = data.get("broadcast_button_rows", [])
     audience = data.get("broadcast_audience", "all")
     recipients = await _broadcast_recipients(audience)
-    markup_rows = [[button.model_dump(exclude_none=True) for button in row] for row in button_rows]
-    await state.update_data(broadcast_button_rows=markup_rows)
-    preview_markup = InlineKeyboardMarkup(inline_keyboard=button_rows) if button_rows else None
+    markup = InlineKeyboardMarkup(inline_keyboard=button_rows) if button_rows else None
     try:
         await bot.copy_message(
-            chat_id=message.chat.id,
+            chat_id=chat_id,
             from_chat_id=data["broadcast_source_chat_id"],
             message_id=data["broadcast_source_message_id"],
-            reply_markup=preview_markup,
+            reply_markup=markup,
         )
     except Exception:
-        logger.exception("Broadcast preview copy failed for admin %d", message.from_user.id)
-        await message.answer("❌ Не получилось показать предпросмотр. Попробуйте отправить исходное сообщение ещё раз.")
+        logger.exception("Broadcast preview copy failed for admin %d", chat_id)
+        await bot.send_message(chat_id, "❌ Не получилось показать предпросмотр. Попробуйте отправить исходное сообщение ещё раз.")
         await state.set_state(AdminFlow.broadcast_content)
         return
 
     audience_names = {"all": "все пользователи", "active": "активные подписчики", "inactive": "пользователи без активной подписки"}
     await state.set_state(AdminFlow.broadcast_confirm)
-    await message.answer(
+    await bot.send_message(
+        chat_id,
         f"👆 Предпросмотр рассылки выше.\n\n"
         f"Получатели: <b>{len(recipients)}</b> — {audience_names.get(audience, 'все пользователи')}.\n"
         f"Кнопок: <b>{len(button_rows)}</b>.\n\nОтправить сейчас?",
         parse_mode="HTML", reply_markup=_broadcast_controls(),
     )
+
+
+@router.callback_query(F.data == "admin_broadcast_add_button")
+async def cb_broadcast_add_button(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True); return
+    if await state.get_state() != AdminFlow.broadcast_buttons.state:
+        await safe_answer(callback, "Сначала подготовьте сообщение.", alert=True); return
+    data = await state.get_data()
+    if len(data.get("broadcast_button_rows", [])) >= 8:
+        await safe_answer(callback, "Можно добавить не больше 8 кнопок.", alert=True); return
+    await safe_answer(callback)
+    await state.set_state(AdminFlow.broadcast_button_label)
+    await callback.message.answer("Введите текст кнопки (до 64 символов). Для отмены рассылки — /cancel.")
+
+
+@router.message(StateFilter(AdminFlow.broadcast_button_label))
+async def receive_broadcast_button_label(message: Message, state: FSMContext):
+    if not _is_admin(message.from_user.id):
+        return
+    if (message.text or "").strip().lower() in {"/cancel", "отмена"}:
+        await state.clear()
+        await message.answer("Рассылка отменена.", reply_markup=_main_kb())
+        return
+    label = (message.text or "").strip()
+    if not label or len(label) > 64:
+        await message.answer("Текст кнопки должен содержать от 1 до 64 символов. Попробуйте ещё раз.")
+        return
+    await state.update_data(broadcast_new_button_label=label)
+    await state.set_state(AdminFlow.broadcast_button_url)
+    await message.answer("Отправьте ссылку, которая откроется при нажатии. Используйте полный адрес, начинающийся с https://")
+
+
+@router.message(StateFilter(AdminFlow.broadcast_button_url))
+async def receive_broadcast_button_url(message: Message, state: FSMContext):
+    if not _is_admin(message.from_user.id):
+        return
+    if (message.text or "").strip().lower() in {"/cancel", "отмена"}:
+        await state.clear()
+        await message.answer("Рассылка отменена.", reply_markup=_main_kb())
+        return
+    url = (message.text or "").strip()
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        await message.answer("Ссылка должна быть корректным HTTPS-адресом, например https://example.com")
+        return
+    await state.update_data(broadcast_new_button_url=url)
+    await state.set_state(AdminFlow.broadcast_button_color)
+    await message.answer(
+        "Выберите цвет кнопки:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔵 Синий", callback_data="admin_broadcast_color:primary", style="primary")],
+            [InlineKeyboardButton(text="🟢 Зелёный", callback_data="admin_broadcast_color:success", style="success")],
+            [InlineKeyboardButton(text="🔴 Красный", callback_data="admin_broadcast_color:danger", style="danger")],
+            [InlineKeyboardButton(text="Отмена", callback_data="admin_broadcast_cancel")],
+        ]),
+    )
+
+
+@router.callback_query(F.data.startswith("admin_broadcast_color:"))
+async def cb_broadcast_color(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True); return
+    if await state.get_state() != AdminFlow.broadcast_button_color.state:
+        await safe_answer(callback, "Выбор цвета устарел.", alert=True); return
+    style = callback.data.split(":", 1)[1]
+    if style not in {"primary", "success", "danger"}:
+        await safe_answer(callback, "Неизвестный цвет.", alert=True); return
+    data = await state.get_data()
+    button = InlineKeyboardButton(
+        text=data["broadcast_new_button_label"],
+        url=data["broadcast_new_button_url"],
+        style=style,
+    )
+    rows = list(data.get("broadcast_button_rows", []))
+    rows.append([button.model_dump(exclude_none=True)])
+    await state.update_data(broadcast_button_rows=rows)
+    await state.set_state(AdminFlow.broadcast_buttons)
+    await safe_answer(callback, "Цвет кнопки сохранён")
+    await callback.message.answer(
+        f"Кнопка добавлена. Всего: {len(rows)} из 8.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            *([[InlineKeyboardButton(text="➕ Добавить ещё", callback_data="admin_broadcast_add_button")]] if len(rows) < 8 else []),
+            [InlineKeyboardButton(text="👀 Предпросмотр", callback_data="admin_broadcast_buttons_done")],
+            [InlineKeyboardButton(text="Отмена", callback_data="admin_broadcast_cancel")],
+        ]),
+    )
+
+
+@router.callback_query(F.data == "admin_broadcast_no_buttons")
+async def cb_broadcast_no_buttons(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True); return
+    if await state.get_state() != AdminFlow.broadcast_buttons.state:
+        await safe_answer(callback, "Создание рассылки устарело.", alert=True); return
+    await state.update_data(broadcast_button_rows=[])
+    await safe_answer(callback)
+    await _broadcast_show_preview(bot, callback.message.chat.id, state)
+
+
+@router.callback_query(F.data == "admin_broadcast_buttons_done")
+async def cb_broadcast_buttons_done(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True); return
+    if await state.get_state() != AdminFlow.broadcast_buttons.state:
+        await safe_answer(callback, "Создание рассылки устарело.", alert=True); return
+    await safe_answer(callback)
+    await _broadcast_show_preview(bot, callback.message.chat.id, state)
 
 
 @router.callback_query(F.data == "admin_broadcast_cancel")
@@ -558,65 +697,25 @@ async def cb_broadcast_send(callback: CallbackQuery, bot: Bot, state: FSMContext
         return
     await safe_answer(callback)
     recipients = await _broadcast_recipients(data.get("broadcast_audience", "all"))
-    source_chat_id = data["broadcast_source_chat_id"]
-    source_message_id = data["broadcast_source_message_id"]
     button_rows = data.get("broadcast_button_rows", [])
-    markup = InlineKeyboardMarkup(inline_keyboard=button_rows) if button_rows else None
+    campaign_id = await create_broadcast_campaign(
+        source_chat_id=data["broadcast_source_chat_id"],
+        source_message_id=data["broadcast_source_message_id"],
+        buttons=button_rows,
+        audience=data.get("broadcast_audience", "all"),
+        recipients=recipients,
+    )
     await state.clear()
-    sent = failed = blocked = 0
-    status = await callback.message.edit_text(f"⏳ Рассылка началась: 0 из {len(recipients)}")
+    await callback.message.edit_text(
+        f"📬 <b>Рассылка #{campaign_id} поставлена в очередь</b>\n\n"
+        f"Получателей: {len(recipients)}. Сообщение будет отправлено в фоне; бот продолжит рассылку, даже если перезапустится.\n"
+        "Итог придёт сюда отдельным сообщением.",
+        parse_mode="HTML", reply_markup=_back_kb(),
+    )
     await log_admin_action(
         admin_id=callback.from_user.id,
         action_type="broadcast_started",
-        action_details=f"audience={data.get('broadcast_audience', 'all')}; recipients={len(recipients)}; buttons={len(button_rows)}",
-    )
-
-    for index, user_id in enumerate(recipients, start=1):
-        try:
-            await bot.copy_message(
-                chat_id=user_id,
-                from_chat_id=source_chat_id,
-                message_id=source_message_id,
-                reply_markup=markup,
-            )
-            sent += 1
-        except TelegramRetryAfter as error:
-            await asyncio.sleep(float(error.retry_after) + 0.2)
-            try:
-                await bot.copy_message(
-                    chat_id=user_id,
-                    from_chat_id=source_chat_id,
-                    message_id=source_message_id,
-                    reply_markup=markup,
-                )
-                sent += 1
-            except TelegramForbiddenError:
-                blocked += 1
-            except Exception:
-                failed += 1
-        except TelegramForbiddenError:
-            blocked += 1
-        except Exception:
-            failed += 1
-        if index % 100 == 0 or index == len(recipients):
-            try:
-                await status.edit_text(
-                    f"⏳ Рассылка: {index} из {len(recipients)}\n"
-                    f"✅ Доставлено: {sent} · 🚫 Недоступны: {blocked} · ⚠️ Ошибки: {failed}"
-                )
-            except Exception:
-                pass
-        await asyncio.sleep(0.05)
-
-    await status.edit_text(
-        f"✅ <b>Рассылка завершена</b>\n\n"
-        f"📤 Доставлено: {sent}\n🚫 Недоступны: {blocked}\n⚠️ Ошибки: {failed}",
-        parse_mode="HTML", reply_markup=_back_kb()
-    )
-    await log_admin_action(
-        admin_id=callback.from_user.id,
-        action_type="broadcast_completed",
-        action_details=f"audience={data.get('broadcast_audience', 'all')}; sent={sent}; blocked={blocked}; failed={failed}",
+        action_details=f"campaign={campaign_id}; audience={data.get('broadcast_audience', 'all')}; recipients={len(recipients)}; buttons={len(button_rows)}",
     )
 
 
@@ -2295,6 +2394,12 @@ async def cb_system_status(callback: CallbackQuery, bot: Bot):
                 f"  {escape(name)}: ср. {metric['avg_ms']} мс / p95 {metric['p95_ms']} мс; ошибок {metric['errors']} из {metric['calls']}"
             )
     perf_text = "\n".join(perf_lines) or "  Пока нет измерений"
+    history = await get_performance_summary(24)
+    history_lines = [
+        f"  {escape(item['metric'])}: {item['calls']} выз.; ошибок {item['errors']}; p95 до {item['p95_ms']} мс"
+        for item in history
+    ]
+    history_text = "\n".join(history_lines) or "  История появится после первой минуты работы"
     
     text = (
         f"⚙️ <b>Состояние системы ByMeVPN</b>\n\n"
@@ -2309,7 +2414,8 @@ async def cb_system_status(callback: CallbackQuery, bot: Bot):
         f"  Размер: {cache_stats.get('size', 0)} записей\n"
         f"  Попаданий: {cache_stats.get('hits', 0)}\n"
         f"  Промахов: {cache_stats.get('misses', 0)}\n\n"
-        f"⏱ <b>Отклик и ошибки с момента запуска</b>\n{perf_text}\n\n"
+        f"⏱ <b>Сейчас, с момента запуска</b>\n{perf_text}\n\n"
+        f"🕒 <b>Сводка за 24 часа</b>\n{history_text}\n\n"
         f"🤖 <b>Бот:</b>\n"
         f"  ID: <code>{callback.bot.id}</code>\n"
         f"  Username: @{callback.bot._me.username if callback.bot._me else 'N/A'}\n"
@@ -2317,12 +2423,46 @@ async def cb_system_status(callback: CallbackQuery, bot: Bot):
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Проверить 3x-ui", callback_data="admin_check_xui")],
+        [InlineKeyboardButton(text="💳 Проверить YooKassa", callback_data="admin_check_yookassa")],
         [InlineKeyboardButton(text="🗑 Очистить кэш", callback_data="admin_clear_cache")],
         [InlineKeyboardButton(text="⚙️ Тарифы и параметры", callback_data="admin_settings")],
         [InlineKeyboardButton(text="◀️ Главное меню", callback_data="admin_menu")]
     ])
     
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+
+
+@router.callback_query(F.data == "admin_check_yookassa")
+async def cb_check_yookassa(callback: CallbackQuery):
+    """Run a read-only authenticated connectivity check; never creates a charge."""
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True); return
+    await safe_answer(callback)
+    from config import YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY
+    if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
+        await callback.message.answer("❌ Реквизиты YooKassa не настроены.")
+        return
+    import base64
+    import httpx
+    from yookassa_http import yookassa_client
+    auth = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
+    try:
+        async with yookassa_client(timeout=10) as client:
+            response = await client.get(
+                "https://api.yookassa.ru/v3/payments?limit=1",
+                headers={"Authorization": f"Basic {auth}"},
+            )
+            response.raise_for_status()
+        await callback.message.answer("✅ YooKassa API отвечает; проверка прошла без создания платежа.")
+    except httpx.HTTPStatusError as error:
+        await callback.message.answer(
+            f"⚠️ YooKassa доступна по сети, но вернула HTTP {error.response.status_code}. Платёж не создавался."
+        )
+    except Exception as error:
+        logger.warning("YooKassa read-only admin check failed (%s)", type(error).__name__)
+        await callback.message.answer(
+            f"❌ Проверить YooKassa не удалось ({type(error).__name__}). Платёж не создавался."
+        )
 
 
 @router.callback_query(F.data == "admin_check_xui")

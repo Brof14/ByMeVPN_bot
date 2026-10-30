@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 
 from aiogram import Bot
 from config import YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY, CRYPTO_BOT_TOKEN
-from webhook import _process_payment, _process_crypto_invoice
+from webhook import _fetch_yookassa_payment, _process_payment, _process_crypto_invoice
 from payments import get_crypto_invoices, get_paid_crypto_invoices
 from yookassa_http import yookassa_client
 
@@ -72,6 +72,7 @@ class PaymentMonitor:
                 
             logger.info("Checking %d recent or locally tracked YooKassa payment(s)", len(payments))
             
+            pending_set = set(pending_ids)
             for payment in payments:
                 payment_id = payment.get('id')
                 if not payment_id:
@@ -81,8 +82,25 @@ class PaymentMonitor:
                 # processed marker alone must not hide an interrupted delivery.
                 logger.info("Checking YooKassa payment through recovery-safe handler: %s", payment_id)
                 
-                # Обрабатываем платеж (функция сама пометит как обработанный)
-                await _process_payment(self.bot, payment_id)
+                if payment_id in pending_set:
+                    verified = await _fetch_yookassa_payment(payment_id)
+                    if not verified:
+                        from database import defer_yookassa_pending_check
+                        await defer_yookassa_pending_check(payment_id, "unavailable")
+                        continue
+                    status = verified.get("status")
+                    if status != "succeeded":
+                        if status == "canceled":
+                            from database import delete_yookassa_pending
+                            await delete_yookassa_pending(payment_id)
+                        else:
+                            from database import defer_yookassa_pending_check
+                            await defer_yookassa_pending_check(payment_id, status or "unknown")
+                        continue
+                    await _process_payment(self.bot, payment_id, verified_payment=verified)
+                else:
+                    # The provider list contains successful payments only.
+                    await _process_payment(self.bot, payment_id)
                 
                 logger.info("YooKassa payment check finished: %s", payment_id)
                 
@@ -239,7 +257,8 @@ async def start_payment_monitor(bot: Bot) -> None:
     else:
         if _monitor_instance is None:
             _monitor_instance = PaymentMonitor(bot)
-        asyncio.create_task(_monitor_instance.start_monitoring())
+        from background_tasks import spawn_supervised
+        spawn_supervised("yookassa_payment_monitor", _monitor_instance.start_monitoring, bot)
         logger.info("Payment monitoring task started")
 
     # Crypto Bot monitor — independent of YooKassa config
@@ -250,7 +269,8 @@ async def start_payment_monitor(bot: Bot) -> None:
     else:
         if _crypto_monitor_instance is None:
             _crypto_monitor_instance = CryptoPaymentMonitor(bot)
-        asyncio.create_task(_crypto_monitor_instance.start_monitoring())
+        from background_tasks import spawn_supervised
+        spawn_supervised("crypto_payment_monitor", _crypto_monitor_instance.start_monitoring, bot)
         logger.info("Crypto Bot payment monitoring task started")
 
 async def stop_payment_monitor() -> None:

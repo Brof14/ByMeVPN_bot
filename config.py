@@ -25,6 +25,7 @@ Environment Variables (.env file):
     SMTP_PASSWORD: SMTP password
     WEBHOOK_HOST: Webhook server host (default: 0.0.0.0)
     WEBHOOK_PORT: Webhook server port (default: 8080)
+    APP_PUBLIC_URL: Public base URL for the /app/login handover page
     YOOKASSA_WEBHOOK_ALLOWED_IPS: Comma-separated YooKassa webhook IP ranges
 """
 
@@ -151,6 +152,12 @@ YOOKASSA_WEBHOOK_ALLOWED_IPS = os.getenv(
 WEBHOOK_URL = (
     os.getenv("WEBHOOK_URL") or "https://bymevpn.duckdns.org:8443/webhook/telegram"
 )
+
+# Public base URL of this webhook/API server. Used for the /app/login redirect
+# page that opens the mobile app from a Telegram inline button.
+APP_PUBLIC_URL = (
+    os.getenv("APP_PUBLIC_URL") or "http://bymevpn.duckdns.org:8080"
+).rstrip("/")
 
 # ============================================================================
 # Trial and Referral Configuration

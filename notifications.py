@@ -393,6 +393,8 @@ async def _connection_reminder_pass(bot: Bot) -> None:
 
         if int(panel_user["used_traffic"]) > int(item["traffic_baseline"]):
             await update_connection_reminder(key_id, "connected")
+            from database import log_analytics_event_once
+            await log_analytics_event_once(item["user_id"], "first_connection", "3x-ui traffic observed")
             continue
 
         # A client can establish a tunnel before any payload traffic is counted.
@@ -404,6 +406,8 @@ async def _connection_reminder_pass(bot: Bot) -> None:
             continue
         if connection_info.get("is_online"):
             await update_connection_reminder(key_id, "connected")
+            from database import log_analytics_event_once
+            await log_analytics_event_once(item["user_id"], "first_connection", "3x-ui online status observed")
             continue
 
         try:
@@ -445,8 +449,13 @@ async def start_notification_scheduler(bot: Bot) -> None:
                 logger.exception("Giveaway automation pass failed: %s", e)
             await asyncio.sleep(60)
 
-    asyncio.create_task(giveaway_scheduler())
-    asyncio.create_task(_connection_reminder_scheduler(bot))
+    from background_tasks import spawn_supervised
+    spawn_supervised("giveaway_scheduler", giveaway_scheduler, bot)
+    spawn_supervised(
+        "connection_reminder_scheduler",
+        lambda: _connection_reminder_scheduler(bot),
+        bot,
+    )
 
     # Start backup scheduler as separate task
     async def backup_scheduler():
@@ -462,7 +471,7 @@ async def start_notification_scheduler(bot: Bot) -> None:
             # Wait 24 hours before next backup attempt
             await asyncio.sleep(86400)
 
-    asyncio.create_task(backup_scheduler())
+    spawn_supervised("database_backup_scheduler", backup_scheduler, bot)
 
     # Do not send renewal reminders as a side effect of every container restart.
     # The daily cadence is anchored to 10:00 Moscow time.

@@ -123,11 +123,13 @@ class TestConnectionReminderWorker(unittest.IsolatedAsyncioTestCase):
             patch("notifications.get_due_connection_reminders", new=AsyncMock(return_value=[self._item()])),
             patch("notifications.update_connection_reminder", new=AsyncMock()) as update,
             patch("xui_client.get_xui_user", new=AsyncMock(return_value={"used_traffic": 5})),
+            patch("database.log_analytics_event_once", new=AsyncMock()) as log_event,
         ):
             await notifications._connection_reminder_pass(bot)
 
         bot.send_message.assert_not_awaited()
         update.assert_awaited_once_with(17, "connected")
+        log_event.assert_awaited_once_with(753159, "first_connection", "3x-ui traffic observed")
 
     async def test_no_traffic_sends_one_actionable_message(self):
         bot = SimpleNamespace(send_message=AsyncMock())

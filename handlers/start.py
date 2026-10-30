@@ -28,7 +28,11 @@ from database import (
     has_active_subscription,
     has_ever_had_key, get_user_keys,
 )
-from keyboards import main_menu_new_user, main_menu_existing, main_menu_with_keys, back_to_menu, cancel_kb, support_url
+from app_links import build_app_login_url, build_app_redirect_url
+from keyboards import (
+    main_menu_new_user, main_menu_existing, main_menu_with_keys,
+    back_to_menu, cancel_kb, support_url, app_open_kb,
+)
 from utils import send_with_photo, safe_answer, LOGO_URL
 from async_utils import monitor_performance
 from cache import cache_subscription_data
@@ -70,18 +74,15 @@ async def _handle_app_login(message: Message, user_id: int, user_name: str) -> N
 
         if subscription_url:
             app_name = f"@{message.from_user.username}" if message.from_user.username else user_name
-            app_url = "bymevpn://login?" + urlencode({
-                "sub": subscription_url,
-                "name": app_name,
-            })
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="📋 Скопировать ссылку входа", copy_text={"text": app_url})
-            ]])
+            app_url = build_app_login_url(subscription_url, app_name)
+            redirect_url = build_app_redirect_url(subscription_url, app_name)
             await message.answer(
-                "Скопируйте ссылку кнопкой ниже и откройте её на устройстве с установленным ByMeVPN.\n\n"
+                "<b>Вход в приложение ByMeVPN</b>\n\n"
+                "Нажмите «🚀 Открыть приложение» — ByMeVPN откроется и подключит подписку автоматически.\n\n"
+                "Если приложение не открылось, скопируйте ссылку ниже и вставьте её в ByMeVPN вручную.\n\n"
                 f"<code>{escape(app_url)}</code>",
                 parse_mode="HTML",
-                reply_markup=keyboard,
+                reply_markup=app_open_kb(redirect_url, app_url),
             )
             return
 
@@ -250,7 +251,7 @@ async def _send_main_menu(
 
 @router.message(F.text.startswith("/start"))
 @monitor_performance("start_command")
-async def cmd_start(message: Message, bot: Bot) -> None:
+async def cmd_start(message: Message, bot: Bot, state: FSMContext) -> None:
     """
     /start — register or return to main menu.
     Supports referral links: /start 123456
@@ -274,6 +275,8 @@ async def cmd_start(message: Message, bot: Bot) -> None:
         start_param = args[1].strip()
         if start_param.startswith("src_") and start_param[4:]:
             start_source = start_param[4:][:80]
+        elif start_param.lower().startswith("promo_"):
+            start_source = "promo"
         elif start_param.startswith(("gw_", "giveaway_")):
             start_source = "giveaway"
         elif start_param.isdigit() or (start_param.startswith("ref_") and start_param[4:].isdigit()):
@@ -298,14 +301,68 @@ async def cmd_start(message: Message, bot: Bot) -> None:
             )
             await message.answer(
                 "✅ <b>Вход в приложение ByMeVPN подтверждён!</b>\n\n"
-                "Вернитесь в приложение на телефоне — оно автоматически вошло в ваш аккаунт и загрузило подписку.",
-                parse_mode="HTML"
+                "Нажмите «🚀 Открыть приложение» — оно автоматически войдёт в ваш аккаунт и загрузит подписку.\n\n"
+                "Если приложение уже открыто, просто вернитесь в него.",
+                parse_mode="HTML",
+                reply_markup=app_open_kb(build_app_redirect_url()),
             )
             return
         except Exception as e:
             logger.error("Error confirming telegram session: %s", e)
             await message.answer("Произошла ошибка при авторизации. Попробуйте ещё раз из приложения.")
             return
+
+    # Promo deep link: https://t.me/<bot>?start=promo_CODE
+    # Telegram opens the bot with /start promo_CODE; it cannot send /promo CODE
+    # directly from an inline URL button.
+    if len(args) > 1 and args[1].strip().lower().startswith("promo_"):
+        code = args[1].strip()[6:].strip().upper()
+        if not code or len(code) > 64:
+            await message.answer("Промокод в ссылке указан неверно. Проверьте ссылку и попробуйте ещё раз.")
+            return
+        try:
+            from database import validate_promo_code, has_user_used_promo
+            promo = await validate_promo_code(code)
+            if not promo:
+                await message.answer(
+                    "<b>Промокод недействителен</b>\n\n"
+                    "Возможно, срок действия закончился или исчерпан лимит использований.",
+                    parse_mode="HTML",
+                )
+                return
+            if await has_user_used_promo(code, user_id):
+                await message.answer(
+                    "<b>Промокод уже использован</b>\n\nКаждый промокод можно применить один раз.",
+                    parse_mode="HTML",
+                )
+                return
+
+            from handlers.buy import _promo_purchase_keyboard
+            promo_type = promo.get("promo_type", "percent")
+            discount_value = promo.get("discount_value", 0)
+            if promo_type == "percent":
+                discount_text, promo_discount = f"{discount_value}%", discount_value
+            elif promo_type == "fixed_rub":
+                discount_text, promo_discount = f"{discount_value} ₽", 0
+            elif promo_type == "free_days":
+                discount_text, promo_discount = f"+{discount_value} дней", 0
+            else:
+                discount_text, promo_discount = str(discount_value), 0
+
+            await state.update_data(promo_info=promo, promo_code=code, promo_discount=promo_discount)
+            logger.info("Promo code %s activated via deep link for user %d", code, user_id)
+            await message.answer(
+                f"<b>Промокод активирован</b>\n\n"
+                f"🎁 Код: <code>{code}</code>\n"
+                f"💰 Бонус: <b>{discount_text}</b>\n\n"
+                "Бонус автоматически применится при следующей покупке.",
+                parse_mode="HTML",
+                reply_markup=_promo_purchase_keyboard(),
+            )
+        except Exception:
+            logger.exception("Could not activate promo deep link for user %d", user_id)
+            await message.answer("Не удалось проверить промокод. Попробуйте ещё раз или введите /promo КОД.")
+        return
     
     if len(args) > 1:
         param = args[1].strip()

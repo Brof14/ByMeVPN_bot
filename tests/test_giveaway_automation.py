@@ -59,9 +59,9 @@ class TestGiveawayAutomation(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Участвовать", bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard[0][0].text)
         self.assertNotIn("YouTube", bot.send_message.await_args.args[1])
         self.assertNotIn("Instagram", bot.send_message.await_args.args[1])
-        self.assertIn("Нажмите «Участвовать»", bot.send_message.await_args.args[1])
-        self.assertIn("Сам переход по ссылке не засчитывается", bot.send_message.await_args.args[1])
-        self.assertIn("Призы — 3 места", bot.send_message.await_args.args[1])
+        self.assertIn("пригласите хотя бы одного нового пользователя", bot.send_message.await_args.args[1])
+        self.assertIn("В зачёт попадёт тот, кто впервые запустит бота по вашей ссылке", bot.send_message.await_args.args[1])
+        self.assertIn("3 победителя получат по <b>+30 дней VPN</b>", bot.send_message.await_args.args[1])
 
     async def test_old_monthly_campaign_is_updated_without_resending_to_users(self):
         from giveaway_automation import _month_period, ensure_monthly_giveaway

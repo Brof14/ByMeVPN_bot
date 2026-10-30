@@ -38,6 +38,13 @@ router = Router()
 _stars_payment_locks: dict[str, asyncio.Lock] = {}
 
 
+def _promo_purchase_keyboard() -> InlineKeyboardMarkup:
+    """One consistent green action to continue to tariff selection."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🛒 Выбрать тариф", callback_data="buy_vpn", style="success")
+    ]])
+
+
 # ---------------------------------------------------------------------------
 # Step 1: Choose plan type & devices
 # ---------------------------------------------------------------------------
@@ -645,11 +652,9 @@ async def cb_activate_promo(callback: CallbackQuery, state: FSMContext):
         f"🎁 Код: <code>{code}</code>\n"
         f"💰 Бонус: <b>{discount_text}</b>\n\n"
         f"Бонус автоматически применится при следующей покупке.\n\n"
-        f"👉 Нажмите кнопку ниже для покупки VPN!",
+        f"Выберите тариф — скидка применится автоматически.",
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🛒 Купить VPN", callback_data="buy_vpn")]
-        ])
+        reply_markup=_promo_purchase_keyboard(),
     )
 
 
@@ -724,8 +729,9 @@ async def cmd_promo(message: Message, state: FSMContext):
             f"🎁 Код: <code>{code}</code>\n"
             f"💰 Бонус: <b>{discount_text}</b>\n\n"
             f"Бонус автоматически применится при следующей покупке.\n\n"
-            f"👉 Нажмите /buy чтобы купить VPN!",
-            parse_mode="HTML"
+            f"Выберите тариф — скидка применится автоматически.",
+            parse_mode="HTML",
+            reply_markup=_promo_purchase_keyboard(),
         )
 
     except Exception as e:

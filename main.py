@@ -33,6 +33,7 @@ from notifications import start_notification_scheduler
 from device_monitor import start_device_monitor
 from xui_client import get_api_client  # stub for 3x-ui (no pre-init needed)
 from async_utils import preload_static_data
+from background_tasks import spawn_supervised, cancel_background_tasks
 
 from handlers import (
     start_router, buy_router, keys_router, partner_router,
@@ -226,9 +227,10 @@ async def main() -> None:
 
     logger.info("All routers registered")
 
-    # Start background tasks
-    scheduler_task = asyncio.create_task(start_notification_scheduler(bot))
-    device_monitor_task = asyncio.create_task(start_device_monitor(bot))
+    # Start restartable background tasks; a failure is logged, reported to admin,
+    # and retried with bounded exponential backoff.
+    spawn_supervised("notification_scheduler", lambda: start_notification_scheduler(bot), bot)
+    spawn_supervised("device_monitor", lambda: start_device_monitor(bot), bot)
 
     # Start the YooKassa webhook HTTP server in the background.
     # FIX: this used to be imported but never called, so YooKassa's
@@ -236,7 +238,7 @@ async def main() -> None:
     # webhook.dispatcher stayed None forever — meaning even the FSM state
     # set after a payment (see webhook.py) had nothing to attach to.
     # We intentionally do NOT await this — it runs the uvicorn server forever.
-    webhook_task = asyncio.create_task(start_webhook_server(bot, dp))
+    spawn_supervised("webhook_server", lambda: start_webhook_server(bot, dp), bot)
 
     # Start automatic payment monitoring (polls YooKassa every 30s as a
     # belt-and-suspenders fallback in case the webhook is unreachable, e.g.
@@ -245,7 +247,29 @@ async def main() -> None:
 
     # Start YooKassa auto-renewal worker (checks expiring subscriptions every 60s)
     from autorenew import start_autorenew_worker
-    autorenew_task = asyncio.create_task(start_autorenew_worker(bot))
+    spawn_supervised("autorenew_worker", lambda: start_autorenew_worker(bot), bot)
+    from broadcast_worker import start_broadcast_worker
+    spawn_supervised("broadcast_worker", lambda: start_broadcast_worker(bot), bot)
+
+    async def performance_sampler():
+        from async_utils import perf_metrics
+        from database import save_performance_snapshot
+        previous = {}
+        while True:
+            await asyncio.sleep(60)
+            current = perf_metrics.snapshot()
+            interval = {}
+            for name, values in current.items():
+                old = previous.get(name, {})
+                interval[name] = {
+                    **values,
+                    "calls": max(0, int(values["calls"]) - int(old.get("calls", 0))),
+                    "errors": max(0, int(values["errors"]) - int(old.get("errors", 0))),
+                }
+            await save_performance_snapshot(interval)
+            previous = current
+
+    spawn_supervised("performance_sampler", performance_sampler, bot)
 
     logger.info("Bot is running in polling mode. Press Ctrl+C to stop.")
 
@@ -254,10 +278,7 @@ async def main() -> None:
         await dp.start_polling(bot, handle_signals=False)
     finally:
         # Graceful shutdown
-        scheduler_task.cancel()
-        device_monitor_task.cancel()
-        webhook_task.cancel()
-        autorenew_task.cancel()
+        await cancel_background_tasks()
         await dp.storage.close()
         await bot.session.close()
         await close_db()

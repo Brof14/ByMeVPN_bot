@@ -10,6 +10,9 @@ class BuyFlow(StatesGroup):
 class AdminFlow(StatesGroup):
     broadcast_content = State()
     broadcast_buttons = State()
+    broadcast_button_label = State()
+    broadcast_button_url = State()
+    broadcast_button_color = State()
     broadcast_confirm = State()
     search_user = State()
     edit_key_days = State()      # waiting for new days value

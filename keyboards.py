@@ -357,6 +357,22 @@ def after_key_kb(subscription_url: str = "") -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def app_open_kb(redirect_url: str, deep_link: str = "") -> InlineKeyboardMarkup:
+    """One-tap handover to the mobile app, with copy as a manual fallback."""
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(
+        text="🚀 Открыть приложение",
+        url=redirect_url,
+        style="success",
+    ))
+    if deep_link:
+        kb.row(InlineKeyboardButton(
+            text="📋 Скопировать ссылку входа",
+            copy_text={"text": deep_link},
+        ))
+    return kb.as_markup()
+
+
 # ---------------------------------------------------------------------------
 # Partner / referral
 # ---------------------------------------------------------------------------

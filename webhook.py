@@ -37,7 +37,7 @@ from fastapi import FastAPI, Request, Response
 
 from config import (
     YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY,
-    WEBHOOK_HOST, WEBHOOK_PORT, ADMIN_ID, YOOKASSA_WEBHOOK_ALLOWED_IPS,
+    WEBHOOK_HOST, WEBHOOK_PORT, ADMIN_ID, REDIS_URL, YOOKASSA_WEBHOOK_ALLOWED_IPS,
 )
 from database import init_db, is_yookassa_processed, mark_yookassa_processed
 from subscription import deliver_key
@@ -77,17 +77,35 @@ except Exception as _router_err:
 
 @app.get("/healthz")
 async def health_check():
-    """Container liveness/readiness endpoint; returns 503 if SQLite is unavailable."""
+    """Backward-compatible health endpoint; now also checks Redis readiness."""
+    return await readiness_check()
+
+
+@app.get("/livez")
+async def liveness_check():
+    """Liveness endpoint: process event loop and HTTP server are responding."""
+    return {"status": "ok"}
+
+
+@app.get("/readyz")
+async def readiness_check():
+    """Readiness endpoint for local state required to handle customer updates."""
     from database import get_db
     from fastapi import HTTPException
+    from redis.asyncio import Redis
 
     try:
         db = await get_db()
         await db.execute("SELECT 1")
+        redis = Redis.from_url(REDIS_URL, socket_connect_timeout=2, socket_timeout=2)
+        try:
+            await redis.ping()
+        finally:
+            await redis.aclose()
     except Exception as exc:
-        logger.error("Healthcheck failed: database unavailable: %s", exc)
-        raise HTTPException(status_code=503, detail="database unavailable") from exc
-    return {"status": "ok"}
+        logger.error("Readiness check failed: local dependency unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="local dependency unavailable") from exc
+    return {"status": "ready"}
 
 
 @app.get("/download")
@@ -108,6 +126,46 @@ async def download_debug_apk():
     return RedirectResponse(
         url="https://github.com/Brof14/ByMeVPN-app/releases/download/v1.0.9/ByMeVPN-v1.0.9-debug.apk",
         status_code=302,
+    )
+
+
+@app.get("/app/login")
+async def app_login_redirect(sub: str = "", name: str = ""):
+    """Open the ByMeVPN app from a Telegram inline button.
+
+    Telegram rejects custom URL schemes in buttons, so the bot links here and
+    this page immediately hands the user over to ``bymevpn://login``.
+    """
+    from fastapi.responses import HTMLResponse
+
+    from app_links import (
+        MAX_SUBSCRIPTION_URL_LENGTH,
+        MAX_USER_NAME_LENGTH,
+        build_app_login_url,
+        render_app_open_page,
+    )
+
+    sub = sub.strip()
+    name = "".join(ch for ch in name if ch.isprintable())[:MAX_USER_NAME_LENGTH].strip()
+
+    if len(sub) > MAX_SUBSCRIPTION_URL_LENGTH:
+        return HTMLResponse("Ссылка слишком длинная.", status_code=400)
+    if sub and not sub.startswith(("http://", "https://")):
+        return HTMLResponse("Некорректная ссылка подписки.", status_code=400)
+
+    page = render_app_open_page(build_app_login_url(sub, name))
+    return HTMLResponse(
+        page,
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Referrer-Policy": "no-referrer",
+            "X-Robots-Tag": "noindex, nofollow",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": (
+                "default-src 'none'; style-src 'unsafe-inline'; "
+                "script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
+            ),
+        },
     )
 
 # Global dispatcher for Telegram webhook handling
@@ -233,14 +291,14 @@ async def yookassa_webhook(request: Request) -> Response:
     return Response(status_code=200)
 
 
-async def _process_payment(bot: Bot, payment_id: str) -> None:
+async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional[dict] = None) -> None:
     """
     Verify and process a succeeded YooKassa payment.
     Fully idempotent — safe to call multiple times for the same payment_id.
     """
     try:
         # ── Step 1: Re-fetch from YooKassa to verify (never trust webhook body) ──
-        payment = await _fetch_yookassa_payment(payment_id)
+        payment = verified_payment or await _fetch_yookassa_payment(payment_id)
         if not payment:
             logger.error("Webhook: could not verify payment %s", payment_id)
             return

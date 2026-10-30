@@ -4,6 +4,7 @@ Uses aiosqlite with WAL mode for better concurrency and connection pooling.
 """
 import os
 import time
+import json
 import logging
 from typing import Optional
 import aiosqlite
@@ -155,9 +156,46 @@ CREATE TABLE IF NOT EXISTS yookassa_pending (
     days        INTEGER NOT NULL,
     devices     INTEGER NOT NULL DEFAULT 1,
     amount_rub  INTEGER NOT NULL DEFAULT 0,
+    poll_attempts INTEGER NOT NULL DEFAULT 0,
+    next_check INTEGER NOT NULL DEFAULT 0,
+    last_status TEXT,
     created     INTEGER DEFAULT (strftime('%s','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_ykp_user ON yookassa_pending(user_id);
+
+-- Durable admin broadcasts; queued recipients survive bot restarts.
+CREATE TABLE IF NOT EXISTS broadcast_campaigns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_chat_id INTEGER NOT NULL,
+    source_message_id INTEGER NOT NULL,
+    buttons_json TEXT NOT NULL DEFAULT '[]',
+    audience TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    created INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    finished INTEGER
+);
+CREATE TABLE IF NOT EXISTS broadcast_recipients (
+    campaign_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    PRIMARY KEY (campaign_id, user_id),
+    FOREIGN KEY(campaign_id) REFERENCES broadcast_campaigns(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_broadcast_queue ON broadcast_recipients(campaign_id, status, user_id);
+
+-- Bounded daily/hourly performance history, independent of process restarts.
+CREATE TABLE IF NOT EXISTS performance_samples (
+    metric TEXT NOT NULL,
+    sampled_at INTEGER NOT NULL,
+    calls INTEGER NOT NULL,
+    errors INTEGER NOT NULL,
+    avg_ms INTEGER NOT NULL,
+    p95_ms INTEGER NOT NULL,
+    PRIMARY KEY (metric, sampled_at)
+);
+CREATE INDEX IF NOT EXISTS idx_performance_sampled_at ON performance_samples(sampled_at);
 
 -- YooKassa intro trial (1 ₽): pending checkout links, one per user
 CREATE TABLE IF NOT EXISTS yookassa_trial_pending (
@@ -408,8 +446,19 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
             "payment_id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, "
             "days INTEGER NOT NULL, devices INTEGER NOT NULL DEFAULT 1, "
             "amount_rub INTEGER NOT NULL DEFAULT 0, "
+            "poll_attempts INTEGER NOT NULL DEFAULT 0, "
+            "next_check INTEGER NOT NULL DEFAULT 0, last_status TEXT, "
             "created INTEGER DEFAULT (strftime('%s','now')))"
         )
+        pending_columns = {row[1] for row in await (await db.execute("PRAGMA table_info(yookassa_pending)")).fetchall()}
+        for column, definition in (
+            ("poll_attempts", "INTEGER NOT NULL DEFAULT 0"),
+            ("next_check", "INTEGER NOT NULL DEFAULT 0"),
+            ("last_status", "TEXT"),
+        ):
+            if column not in pending_columns:
+                await db.execute(f"ALTER TABLE yookassa_pending ADD COLUMN {column} {definition}")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_ykp_next_check ON yookassa_pending(next_check)")
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_ykp_user ON yookassa_pending(user_id)"
         )
@@ -1802,8 +1851,9 @@ async def add_yookassa_pending(
 ) -> None:
     db = await get_db()
     await db.execute(
-        "INSERT OR REPLACE INTO yookassa_pending(payment_id, user_id, days, devices, amount_rub) "
-        "VALUES(?,?,?,?,?)",
+        "INSERT INTO yookassa_pending(payment_id, user_id, days, devices, amount_rub) "
+        "VALUES(?,?,?,?,?) ON CONFLICT(payment_id) DO UPDATE SET "
+        "user_id=excluded.user_id, days=excluded.days, devices=excluded.devices, amount_rub=excluded.amount_rub",
         (payment_id, user_id, days, devices, amount_rub),
     )
     await db.commit()
@@ -1829,16 +1879,186 @@ async def get_yookassa_pending(payment_id: str) -> Optional[dict]:
 
 
 async def get_all_yookassa_pending() -> list[str]:
-    """Return checkout IDs that still need provider-side reconciliation."""
+    """Return due checkout IDs that need provider-side reconciliation."""
     db = await get_db()
     cur = await db.execute(
         "SELECT pending.payment_id FROM yookassa_pending AS pending "
         "LEFT JOIN payments ON payments.provider='yookassa' "
         "AND payments.provider_payment_id=pending.payment_id "
-        "WHERE payments.status IS NULL OR payments.status='failed' "
+        "WHERE (payments.status IS NULL OR payments.status='failed') "
+        "AND pending.next_check <= ? "
         "ORDER BY pending.created ASC"
+        , (int(time.time()),)
     )
     return [row[0] for row in await cur.fetchall()]
+
+
+async def defer_yookassa_pending_check(payment_id: str, provider_status: str = "unavailable") -> None:
+    """Persist a bounded exponential backoff for an unsettled checkout."""
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT poll_attempts FROM yookassa_pending WHERE payment_id=?", (payment_id,)
+    )
+    row = await cur.fetchone()
+    if not row:
+        return
+    attempts = int(row[0] or 0)
+    delay = min(300, 60 * (2 ** min(attempts, 3)))
+    await db.execute(
+        "UPDATE yookassa_pending SET poll_attempts=poll_attempts+1, next_check=?, last_status=? "
+        "WHERE payment_id=?",
+        (int(time.time()) + delay, str(provider_status)[:40], payment_id),
+    )
+    await db.commit()
+
+
+async def create_broadcast_campaign(
+    source_chat_id: int, source_message_id: int, buttons: list, audience: str, recipients: list[int],
+) -> int:
+    """Persist a broadcast and its audience before acknowledging it to admin."""
+    db = await get_db()
+    async with _db_semaphore:
+        cur = await db.execute(
+            "INSERT INTO broadcast_campaigns(source_chat_id,source_message_id,buttons_json,audience,status) "
+            "VALUES(?,?,?,?, 'queued')",
+            (int(source_chat_id), int(source_message_id), json.dumps(buttons, ensure_ascii=False), str(audience)),
+        )
+        campaign_id = int(cur.lastrowid)
+        if recipients:
+            await db.executemany(
+                "INSERT INTO broadcast_recipients(campaign_id,user_id) VALUES(?,?)",
+                [(campaign_id, int(user_id)) for user_id in recipients],
+            )
+        await db.commit()
+    return campaign_id
+
+
+async def recover_interrupted_broadcasts() -> None:
+    """Return in-flight work to the queue after an unclean process restart."""
+    db = await get_db()
+    await db.execute(
+        "UPDATE broadcast_recipients SET status='queued' WHERE status='sending' "
+        "AND campaign_id IN (SELECT id FROM broadcast_campaigns WHERE status IN ('queued','running'))"
+    )
+    await db.execute(
+        "UPDATE broadcast_campaigns SET status='running' WHERE status='queued'"
+    )
+    await db.commit()
+
+
+async def get_active_broadcast_campaigns() -> list[dict]:
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT id,source_chat_id,source_message_id,buttons_json,audience FROM broadcast_campaigns "
+        "WHERE status IN ('queued','running') ORDER BY id"
+    )
+    return [dict(zip(("id", "source_chat_id", "source_message_id", "buttons_json", "audience"), row))
+            for row in await cur.fetchall()]
+
+
+async def claim_broadcast_recipient(campaign_id: int) -> Optional[int]:
+    db = await get_db()
+    async with _db_semaphore:
+        cur = await db.execute(
+            "SELECT user_id FROM broadcast_recipients WHERE campaign_id=? AND status='queued' "
+            "ORDER BY user_id LIMIT 1", (campaign_id,),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        user_id = int(row[0])
+        await db.execute(
+            "UPDATE broadcast_recipients SET status='sending', attempts=attempts+1, error=NULL "
+            "WHERE campaign_id=? AND user_id=? AND status='queued'", (campaign_id, user_id),
+        )
+        await db.commit()
+        return user_id
+
+
+async def update_broadcast_recipient(campaign_id: int, user_id: int, status: str, error: str = "") -> None:
+    db = await get_db()
+    await db.execute(
+        "UPDATE broadcast_recipients SET status=?, error=? WHERE campaign_id=? AND user_id=?",
+        (status, str(error)[:300], campaign_id, user_id),
+    )
+    await db.commit()
+
+
+async def retry_broadcast_recipient(campaign_id: int, user_id: int, error: str) -> bool:
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT attempts FROM broadcast_recipients WHERE campaign_id=? AND user_id=?",
+        (campaign_id, user_id),
+    )
+    row = await cur.fetchone()
+    if row and int(row[0]) < 3:
+        await db.execute(
+            "UPDATE broadcast_recipients SET status='queued', error=? WHERE campaign_id=? AND user_id=?",
+            (str(error)[:300], campaign_id, user_id),
+        )
+        await db.commit()
+        return True
+    await update_broadcast_recipient(campaign_id, user_id, "failed", error)
+    return False
+
+
+async def get_broadcast_campaign_stats(campaign_id: int) -> dict:
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT status,COUNT(*) FROM broadcast_recipients WHERE campaign_id=? GROUP BY status",
+        (campaign_id,),
+    )
+    stats = {str(status): int(count) for status, count in await cur.fetchall()}
+    stats["total"] = sum(stats.values())
+    return stats
+
+
+async def finish_broadcast_campaign(campaign_id: int) -> None:
+    db = await get_db()
+    await db.execute(
+        "UPDATE broadcast_campaigns SET status='completed', finished=? WHERE id=?",
+        (int(time.time()), campaign_id),
+    )
+    await db.commit()
+
+
+async def save_performance_snapshot(metrics: dict, sampled_at: Optional[int] = None) -> None:
+    """Store aggregate process metrics; never persist per-user data."""
+    if not metrics:
+        return
+    now = int(sampled_at or time.time())
+    db = await get_db()
+    async with _db_semaphore:
+        await db.executemany(
+            "INSERT OR REPLACE INTO performance_samples(metric,sampled_at,calls,errors,avg_ms,p95_ms) "
+            "VALUES(?,?,?,?,?,?)",
+            [(str(name), now, int(item.get("calls", 0)), int(item.get("errors", 0)),
+              int(item.get("avg_ms", 0)), int(item.get("p95_ms", 0))) for name, item in metrics.items()],
+        )
+        await db.execute("DELETE FROM performance_samples WHERE sampled_at < ?", (now - 7 * 86400,))
+        await db.commit()
+
+
+async def get_recent_performance_snapshot() -> list[dict]:
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT metric,sampled_at,calls,errors,avg_ms,p95_ms FROM performance_samples "
+        "WHERE sampled_at=(SELECT MAX(sampled_at) FROM performance_samples) ORDER BY metric"
+    )
+    return [dict(zip(("metric", "sampled_at", "calls", "errors", "avg_ms", "p95_ms"), row))
+            for row in await cur.fetchall()]
+
+
+async def get_performance_summary(hours: int = 24) -> list[dict]:
+    hours = max(1, min(int(hours), 720))
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT metric,SUM(calls),SUM(errors),ROUND(AVG(avg_ms)),MAX(p95_ms),COUNT(*) "
+        "FROM performance_samples WHERE sampled_at>=? GROUP BY metric ORDER BY metric",
+        (int(time.time()) - hours * 3600,),
+    )
+    return [dict(zip(("metric", "calls", "errors", "avg_ms", "p95_ms", "samples"), row))
+            for row in await cur.fetchall()]
 
 
 async def delete_yookassa_pending(payment_id: str) -> None:
@@ -4248,6 +4468,21 @@ async def log_analytics_event(
         logger.debug("Failed to log analytics event %s: %s", event_type, e)
 
 
+async def log_analytics_event_once(user_id: int, event_type: str, details: Optional[str] = None) -> None:
+    """Record a per-user milestone once, safe to call from retrying workers."""
+    try:
+        db = await get_db()
+        await db.execute(
+            "INSERT INTO analytics_events(user_id,event_type,timestamp,details) "
+            "SELECT ?,?,strftime('%s','now'),? WHERE NOT EXISTS "
+            "(SELECT 1 FROM analytics_events WHERE user_id=? AND event_type=?)",
+            (int(user_id), str(event_type), details, int(user_id), str(event_type)),
+        )
+        await db.commit()
+    except Exception as e:
+        logger.debug("Failed to record milestone %s: %s", event_type, e)
+
+
 async def get_conversion_funnel(days: int = 30) -> dict:
     """Cohort users first seen in the period and their later conversion milestones."""
     days = max(1, min(int(days), 365))
@@ -4256,11 +4491,14 @@ async def get_conversion_funnel(days: int = 30) -> dict:
     cur = await db.execute(
         """
         WITH cohort AS (
-          SELECT user_id, MIN(timestamp) AS started_at
-          FROM analytics_events WHERE event_type='bot_started' AND timestamp>=?
-          GROUP BY user_id
+          SELECT e.user_id, MIN(e.timestamp) AS started_at,
+            (SELECT first_event.source FROM analytics_events first_event
+             WHERE first_event.user_id=e.user_id AND first_event.event_type='bot_started'
+             ORDER BY first_event.timestamp ASC LIMIT 1) AS start_source
+          FROM analytics_events e WHERE e.event_type='bot_started' AND e.timestamp>=?
+          GROUP BY e.user_id
         )
-        SELECT COALESCE(NULLIF(u.source, ''), 'direct') AS source,
+        SELECT COALESCE(NULLIF(c.start_source, ''), NULLIF(u.source, ''), 'direct') AS source,
           COUNT(DISTINCT c.user_id),
           COUNT(DISTINCT CASE WHEN e.event_type='trial_started' THEN c.user_id END),
           COUNT(DISTINCT CASE WHEN e.event_type='subscription_created' THEN c.user_id END),
@@ -4268,7 +4506,7 @@ async def get_conversion_funnel(days: int = 30) -> dict:
           COUNT(DISTINCT CASE WHEN e.event_type='subscription_renewed' THEN c.user_id END)
         FROM cohort c JOIN users u ON u.user_id=c.user_id
         LEFT JOIN analytics_events e ON e.user_id=c.user_id AND e.timestamp>=c.started_at
-        GROUP BY source ORDER BY 2 DESC
+        GROUP BY 1 ORDER BY 2 DESC
         """,
         (since,),
     )
