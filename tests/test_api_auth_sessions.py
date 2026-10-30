@@ -145,6 +145,19 @@ class TestTelegramAuthSessions(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(result.get("status") == "authenticated" for result in results), 1)
         self.assertEqual(sum(result.get("status") == "expired" for result in results), 1)
 
+    async def test_mobile_payment_request_persists_owner_and_is_idempotent(self):
+        first = await database.ensure_mobile_payment_request(98765, "request-12345678", "1m", "yookassa")
+        replay = await database.ensure_mobile_payment_request(98765, "request-12345678", "1m", "yookassa")
+        self.assertEqual(first, replay)
+        self.assertTrue(await database.save_mobile_payment_request(
+            98765, "request-12345678", "1m", "yookassa", "invoice-123", "https://pay.invalid/checkout"
+        ))
+        stored = await database.get_mobile_payment_request(98765, "request-12345678")
+        self.assertEqual(stored["payment_id"], "invoice-123")
+        record = await database.get_mobile_payment_record("yookassa", "invoice-123")
+        self.assertEqual(record["user_id"], 98765)
+        self.assertEqual(record["status"], "pending")
+
 
 if __name__ == "__main__":
     unittest.main()

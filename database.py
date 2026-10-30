@@ -175,6 +175,21 @@ CREATE TABLE IF NOT EXISTS yookassa_pending (
 );
 CREATE INDEX IF NOT EXISTS idx_ykp_user ON yookassa_pending(user_id);
 
+-- App checkout idempotency and exact invoice ownership.
+CREATE TABLE IF NOT EXISTS mobile_payment_requests (
+    user_id INTEGER NOT NULL,
+    request_id TEXT NOT NULL,
+    plan_code TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    payment_id TEXT,
+    confirmation_url TEXT,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, request_id),
+    UNIQUE (provider, payment_id)
+);
+CREATE INDEX IF NOT EXISTS idx_mobile_payment_requests_payment
+    ON mobile_payment_requests(provider, payment_id);
+
 -- Durable admin broadcasts; queued recipients survive bot restarts.
 CREATE TABLE IF NOT EXISTS broadcast_campaigns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1529,6 +1544,106 @@ async def create_mobile_auth_session(state_hash: str, expires_at: int) -> None:
             (state_hash, "pending", now, int(expires_at)),
         )
         await db.commit()
+
+
+async def ensure_mobile_payment_request(
+    user_id: int, request_id: str, plan_code: str, provider: str,
+) -> dict:
+    """Atomically reserve an idempotent mobile checkout identity."""
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        await db.execute(
+            "INSERT OR IGNORE INTO mobile_payment_requests(user_id,request_id,plan_code,provider,created_at) "
+            "VALUES(?,?,?,?,?)",
+            (int(user_id), request_id, plan_code, provider, now),
+        )
+        cur = await db.execute(
+            "SELECT plan_code,provider,payment_id,confirmation_url FROM mobile_payment_requests "
+            "WHERE user_id=? AND request_id=?",
+            (int(user_id), request_id),
+        )
+        row = await cur.fetchone()
+        await db.commit()
+    if not row:
+        raise RuntimeError("mobile payment request reservation failed")
+    return {"plan_code": row[0], "provider": row[1], "payment_id": row[2], "confirmation_url": row[3]}
+
+
+async def save_mobile_payment_request(
+    user_id: int, request_id: str, plan_code: str, provider: str,
+    payment_id: str, confirmation_url: str,
+) -> bool:
+    """Persist provider invoice ownership and checkout link without logging either."""
+    db = await get_db()
+    async with _db_semaphore:
+        cur = await db.execute(
+            "UPDATE mobile_payment_requests SET payment_id=?,confirmation_url=? "
+            "WHERE user_id=? AND request_id=? AND plan_code=? AND provider=? "
+            "AND (payment_id IS NULL OR payment_id=?)",
+            (str(payment_id), confirmation_url, int(user_id), request_id, plan_code, provider, str(payment_id)),
+        )
+        await db.commit()
+    return cur.rowcount == 1
+
+
+async def get_mobile_payment_request(user_id: int, request_id: str) -> Optional[dict]:
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT plan_code,provider,payment_id,confirmation_url FROM mobile_payment_requests "
+        "WHERE user_id=? AND request_id=?",
+        (int(user_id), request_id),
+    )
+    row = await cur.fetchone()
+    if not row:
+        return None
+    return {"plan_code": row[0], "provider": row[1], "payment_id": row[2], "confirmation_url": row[3]}
+
+
+async def get_mobile_payment_record(provider: str, payment_id: str) -> Optional[dict]:
+    """Return only the owner and status of one provider invoice."""
+    db = await get_db()
+    normalized = "cryptobot" if provider == "crypto" else provider
+    cur = await db.execute(
+        "SELECT user_id,status,amount,days,devices FROM payments "
+        "WHERE provider=? AND CAST(provider_payment_id AS TEXT)=? "
+        "UNION ALL SELECT user_id,'pending',0,0,2 FROM mobile_payment_requests "
+        "WHERE provider=? AND payment_id=? "
+        "UNION ALL SELECT user_id,'pending',amount_rub,days,devices FROM yookassa_pending "
+        "WHERE payment_id=? AND ?='yookassa' "
+        "UNION ALL SELECT user_id,'pending',amount_rub,days,devices FROM crypto_pending "
+        "WHERE CAST(invoice_id AS TEXT)=? AND ?='crypto' LIMIT 1",
+        (normalized, str(payment_id), provider, str(payment_id), str(payment_id), provider, str(payment_id), provider),
+    )
+    row = await cur.fetchone()
+    if not row:
+        return None
+    return {"user_id": int(row[0]), "status": str(row[1]), "amount_rub": int(row[2]),
+            "days": int(row[3]), "devices": int(row[4])}
+
+
+async def list_recent_mobile_invoice_refs(user_id: int, max_age_seconds: int = 86400) -> list[dict]:
+    """List unique recent provider invoices for safe legacy check-payment calls."""
+    db = await get_db()
+    since = int(time.time()) - max(60, min(int(max_age_seconds), 7 * 86400))
+    cur = await db.execute(
+        "SELECT provider,CAST(provider_payment_id AS TEXT),created FROM payments "
+        "WHERE user_id=? AND provider IN ('yookassa','cryptobot') AND created>=? "
+        "UNION ALL SELECT 'yookassa',payment_id,created FROM yookassa_pending WHERE user_id=? AND created>=? "
+        "UNION ALL SELECT 'crypto',CAST(invoice_id AS TEXT),created FROM crypto_pending WHERE user_id=? AND created>=? "
+        "UNION ALL SELECT provider,payment_id,created_at FROM mobile_payment_requests "
+        "WHERE user_id=? AND payment_id IS NOT NULL AND created_at>=? "
+        "ORDER BY 3 DESC",
+        (int(user_id), since, int(user_id), since, int(user_id), since, int(user_id), since),
+    )
+    rows = await cur.fetchall()
+    unique = {}
+    for row in rows:
+        provider = "crypto" if row[0] == "cryptobot" else str(row[0])
+        invoice_id = str(row[1] or "")
+        if provider in ("yookassa", "crypto") and invoice_id:
+            unique.setdefault((provider, invoice_id), {"provider": provider, "payment_id": invoice_id})
+    return list(unique.values())
 
 
 async def confirm_mobile_auth_session(

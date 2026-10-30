@@ -19,6 +19,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import time
 import uuid
@@ -415,7 +416,7 @@ async def get_user_real_subscription(
     sub_uuid: Optional[str] = None
     expiry_ts = 0
     days_count = 30
-    limit_ip = 2
+    device_limit = 2
 
     # 1. Check local keys table
     user_keys = await database.get_user_keys(user_id)
@@ -424,7 +425,7 @@ async def get_user_real_subscription(
         best_key = max(active_keys, key=lambda k: int(k.get("expiry", 0)))
         expiry_ts = int(best_key.get("expiry", 0))
         days_count = int(best_key.get("days", 30))
-        limit_ip = int(best_key.get("limit_ip", 2))
+        device_limit = int(best_key.get("limit_ip", 2))
         sub_uuid = best_key.get("uuid")
         key_content = best_key.get("key", "").strip()
         if key_content.startswith("http://") or key_content.startswith("https://"):
@@ -438,6 +439,7 @@ async def get_user_real_subscription(
             if client_details:
                 sub_uuid = client_details.get("uuid") or sub_uuid
                 sub_url = client_details.get("subscription_url")
+                device_limit = int(client_details.get("limit_hwid", 0))
                 if not expiry_ts:
                     expiry_ts = int(client_details.get("expiry_time", 0)) // 1000
             if not sub_url:
@@ -470,7 +472,7 @@ async def get_user_real_subscription(
         "expires_at": expires_at,
         "seconds_remaining": seconds_remaining,
         "subscription_url": sub_url,
-        "max_devices": limit_ip,
+        "max_devices": device_limit,
         "active_devices": 1,
     }
 
@@ -529,9 +531,10 @@ class TrialRequest(BaseModel):
 
 class PaymentCreateRequest(BaseModel):
     plan_code: str
-    amount_rub: int
-    days: int
-    devices: Optional[int] = 2
+    request_id: Optional[str] = None
+    amount_rub: Optional[int] = None
+    days: Optional[int] = None
+    devices: Optional[int] = None
     provider: Optional[str] = "yookassa"
 
 
@@ -748,41 +751,55 @@ async def get_subscription_status(request: Request, user_id: int = Depends(get_c
 
 @api_router.post("/subscription/trial")
 async def activate_trial(req: TrialRequest, request: Request, user_id: int = Depends(get_current_user_id)):
-    """Activate 3-day free trial on 3x-ui panel."""
+    """Atomically grant one free 3-day trial to a user without a subscription."""
     trial_days = 3
-    sub_url = None
-    vless_links = []
+    if await database.has_trial_used(user_id):
+        raise HTTPException(status_code=409, detail="Пробный период уже использован")
+    current_keys = await database.get_user_keys(user_id)
+    now = int(time.time())
+    if any(int(key.get("expiry") or 0) > now for key in current_keys):
+        raise HTTPException(status_code=409, detail="У вас уже есть действующая подписка")
+    try:
+        from xui_client import get_xui_client_details
+        if await get_xui_client_details(user_id):
+            raise HTTPException(status_code=409, detail="Для этого аккаунта уже создана подписка")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Trial eligibility lookup failed (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось проверить доступность пробного периода") from None
 
-    # Provision client on 3x-ui panel
+    if not await database.try_claim_trial(user_id):
+        raise HTTPException(status_code=409, detail="Пробный период уже использован")
     try:
         from xui_client import create_xui_user
-        res = await create_xui_user(user_id=user_id, days=trial_days, limit_ip=2)
-        if res:
-            sub_url = res.get("subscription_url")
-            vless_links = res.get("vless_links", [])
-    except Exception as e:
-        logger.error(f"Error calling create_xui_user for trial user {user_id}: {e}")
-
+        res = await create_xui_user(user_id=user_id, days=trial_days, limit_ip=0, limit_hwid=2)
+    except Exception as exc:
+        logger.error("Trial provisioning failed (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось подключить пробный период. Напишите в поддержку") from None
+    if not res or not res.get("subscription_url"):
+        # The claim stays consumed when panel provisioning has an ambiguous
+        # outcome; this prevents retries from extending a partially created key.
+        raise HTTPException(status_code=503, detail="Не удалось подключить пробный период. Напишите в поддержку")
+    sub_url = res["subscription_url"]
     expiry_ts = int(time.time()) + trial_days * 86400
     try:
         await database.add_key(
             user_id=user_id,
-            key=sub_url or (vless_links[0] if vless_links else f"sub_{user_id}"),
-            remark="Trial 3 Days",
-            uuid=str(user_id),
+            key=sub_url,
+            remark="Пробный период — 3 дня",
+            uuid=str(res.get("uuid") or ""),
             days=trial_days,
-            limit_ip=2,
+            limit_ip=0,
             expiry=expiry_ts,
         )
-        await database.set_trial_used(user_id)
-    except Exception as e:
-        logger.warning(f"DB trial save error: {e}")
+    except Exception as exc:
+        logger.error("Trial database save failed (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Пробный период создан, но его статус не сохранился. Напишите в поддержку") from None
 
-    servers = []
-    if sub_url:
-        servers = await fetch_and_parse_real_nodes(
-            sub_url, request_headers=_subscription_headers_from_request(request)
-        )
+    servers = await fetch_and_parse_real_nodes(
+        sub_url, request_headers=_subscription_headers_from_request(request)
+    )
 
     return {
         "status": "trial",
@@ -798,64 +815,141 @@ async def activate_trial(req: TrialRequest, request: Request, user_id: int = Dep
 
 @api_router.get("/plans")
 async def get_plans():
+    from constants import get_price_for_months
+
+    plan_catalog = [
+        ("1m", 1, "1 месяц", 0, False),
+        ("3m", 3, "4 месяца (3+1)", 11, True),
+        ("6m", 6, "8 месяцев (6+2)", 22, False),
+        ("12m", 12, "15 месяцев (12+3)", 34, False),
+    ]
+    plans = [
+        {
+            "code": code,
+            "name": label,
+            "price": f"{get_price_for_months(months, 2)[0]} ₽",
+            "price_rub": get_price_for_months(months, 2)[0],
+            "days": get_price_for_months(months, 2)[1],
+            "devices": 2,
+            "discount_percent": discount,
+            "is_popular": popular,
+        }
+        for code, months, label, discount, popular in plan_catalog
+    ]
     return {
-        "plans": [
-            {"code": "trial", "name": "Пробный период", "price": "1 ₽", "price_rub": 1, "days": 3, "discount_percent": 0, "is_popular": False},
-            {"code": "month", "name": "1 месяц", "price": "149 ₽", "price_rub": 149, "days": 30, "discount_percent": 0, "is_popular": False},
-            {"code": "quarter", "name": "3 месяца", "price": "380 ₽", "price_rub": 380, "days": 90, "discount_percent": 15, "is_popular": True},
-            {"code": "half_year", "name": "6 месяцев", "price": "625 ₽", "price_rub": 625, "days": 180, "discount_percent": 30, "is_popular": False},
-            {"code": "year", "name": "1 год", "price": "983 ₽", "price_rub": 983, "days": 365, "discount_percent": 45, "is_popular": False},
-        ]
+        "trial": {"code": "trial", "name": "3 дня бесплатно", "price": "0 ₽", "price_rub": 0, "days": 3, "devices": 2},
+        "plans": plans,
     }
 
 
 # ---------------------------------------------------------------------------
 @api_router.post("/payment/create")
 async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(get_current_user_id)):
-    """Create in-app payment via YooKassa (Cards/SBP) or CryptoBot without Telegram."""
-    if req.provider == "crypto":
-        from payments import create_crypto_payment
-        res = await create_crypto_payment(
-            amount_rub=req.amount_rub,
-            description=f"ByMeVPN Подписка ({req.days} дн., {req.devices} устр.)",
-            user_id=user_id,
-            days=req.days,
-            devices=req.devices or 2,
-        )
-        if not res:
-            raise HTTPException(status_code=500, detail="Не удалось создать счет в CryptoBot")
-        pay_url, invoice_id = res
-        return {"payment_url": pay_url, "invoice_id": invoice_id, "provider": "crypto"}
-    else:
-        from payments import create_yookassa_payment, claim_yookassa_checkout, release_yookassa_checkout
-        claim_yookassa_checkout(user_id)
-        try:
-            pay_url = await create_yookassa_payment(
-                amount_rub=req.amount_rub,
-                description=f"ByMeVPN Подписка ({req.days} дн., {req.devices} устр.)",
-                user_id=user_id,
-                days=req.days,
-                devices=req.devices or 2,
-                extra_metadata={"app_payment": "1"},
-            )
-        finally:
-            release_yookassa_checkout(user_id)
-        if not pay_url:
-            raise HTTPException(status_code=500, detail="Не удалось создать платеж в ЮKassa")
-        return {"payment_url": pay_url, "provider": "yookassa"}
+    """Create an idempotent checkout from the server-owned tariff catalog."""
+    plan_map = {
+        "1m": 1, "month": 1,
+        "3m": 3, "quarter": 3,
+        "6m": 6, "half_year": 6,
+        "12m": 12, "year": 12,
+    }
+    months = plan_map.get(req.plan_code)
+    if months is None:
+        raise HTTPException(status_code=400, detail="Неизвестный тариф")
+    if req.provider != "yookassa":
+        raise HTTPException(status_code=400, detail="Этот способ оплаты недоступен в приложении")
+    if not req.request_id or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", req.request_id):
+        raise HTTPException(status_code=400, detail="Создайте новый запрос на оплату")
+
+    from constants import get_price_for_months
+    amount_rub, days = get_price_for_months(months, 2)
+    devices = 2
+    reserved = await database.ensure_mobile_payment_request(
+        user_id, req.request_id, req.plan_code, req.provider,
+    )
+    if reserved["plan_code"] != req.plan_code or reserved["provider"] != req.provider:
+        raise HTTPException(status_code=409, detail="Этот запрос уже использован для другого тарифа")
+    if reserved["payment_id"] and reserved["confirmation_url"]:
+        return {
+            "payment_url": reserved["confirmation_url"],
+            "invoice_id": reserved["payment_id"],
+            "provider": "yookassa",
+        }
+
+    from payments import create_yookassa_payment
+    stable_key = hashlib.sha256(f"bymevpn-mobile:{user_id}:{req.request_id}".encode()).hexdigest()
+    result = await create_yookassa_payment(
+        amount_rub=amount_rub,
+        description=f"ByMeVPN — {days} дней, {devices} устройства",
+        user_id=user_id,
+        days=days,
+        devices=devices,
+        months=months,
+        extra_metadata={
+            "app_payment": "1",
+            "plan_code": req.plan_code,
+            "mobile_request_hash": hashlib.sha256(req.request_id.encode()).hexdigest()[:20],
+        },
+        idempotency_key=stable_key,
+        return_payment_details=True,
+        save_payment_method=False,
+    )
+    if not isinstance(result, dict) or not result.get("payment_url") or not result.get("payment_id"):
+        raise HTTPException(status_code=502, detail="Не удалось создать платёж. Попробуйте позже")
+    if result.get("status") not in (None, "pending", "waiting_for_capture"):
+        raise HTTPException(status_code=502, detail="Платёжная страница недоступна. Попробуйте позже")
+    saved = await database.save_mobile_payment_request(
+        user_id, req.request_id, req.plan_code, req.provider,
+        result["payment_id"], result["payment_url"],
+    )
+    if not saved:
+        raise HTTPException(status_code=503, detail="Платёж создан, но статус запроса не сохранён. Повторите проверку")
+    return {
+        "payment_url": result["payment_url"],
+        "invoice_id": result["payment_id"],
+        "provider": "yookassa",
+    }
 
 
 @api_router.get("/payment/check")
-async def api_check_payment(request: Request, user_id: int = Depends(get_current_user_id)):
-    """Check subscription status after in-app payment."""
+async def api_check_payment(
+    request: Request,
+    invoice_id: Optional[str] = None,
+    provider: Optional[str] = None,
+    user_id: int = Depends(get_current_user_id),
+):
+    """Check one owned invoice; provider success alone never grants access."""
+    if not invoice_id:
+        recent = await database.list_recent_mobile_invoice_refs(user_id)
+        if len(recent) != 1:
+            raise HTTPException(status_code=400, detail="Укажите номер счёта для проверки оплаты")
+        invoice_id = recent[0]["payment_id"]
+        provider = recent[0]["provider"]
+    provider = provider or "yookassa"
+    if provider not in ("yookassa", "crypto") or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", invoice_id):
+        raise HTTPException(status_code=400, detail="Некорректные данные счёта")
+    record = await database.get_mobile_payment_record(provider, invoice_id)
+    if not record or record["user_id"] != user_id:
+        raise HTTPException(status_code=404, detail="Счёт не найден")
+
+    if record["status"] != "success":
+        if provider == "yookassa":
+            from payments import get_yookassa_payment_status
+            provider_status = await get_yookassa_payment_status(invoice_id)
+        else:
+            from payments import get_crypto_invoice
+            provider_payment = await get_crypto_invoice(invoice_id)
+            provider_status = provider_payment.get("status") if provider_payment else None
+        if provider_status == "canceled":
+            return {"status": "failed", "is_active": False, "subscription": None}
+        return {"status": "processing" if provider_status == "succeeded" or provider_status == "paid" else "pending",
+                "is_active": False, "subscription": None}
+
     sub_url, servers, sub_dict = await get_user_real_subscription(
         user_id, _subscription_headers_from_request(request)
     )
-    return {
-        "status": sub_dict.get("status"),
-        "is_active": sub_dict.get("status") in ("active", "trial", "grace"),
-        "subscription": sub_dict,
-    }
+    active = sub_dict.get("status") in ("active", "trial", "grace")
+    return {"status": "succeeded" if active else "processing", "is_active": active,
+            "subscription": sub_dict if active else None}
 
 
 # 4. SERVERS & VPN SESSIONS (Real Nodes Only)
@@ -915,10 +1009,15 @@ def _device_age_label(timestamp: int) -> str:
 
 
 def _device_is_current(item: dict, request: Request) -> bool:
-    """Compare the install ID only in-process; never return it to the client."""
+    """Compare the client HWID with 3x-ui's short SHA-256 fingerprint in-process."""
     hwid = request.headers.get("x-hwid", "").strip()[:256]
-    fingerprint = str(item.get("fingerprint") or "").strip()
-    return bool(hwid and fingerprint and hmac.compare_digest(hwid, fingerprint))
+    fingerprint = str(item.get("fingerprint") or "").strip().lower()
+    if not hwid or not fingerprint or len(fingerprint) > 64:
+        return False
+    if not re.fullmatch(r"[0-9a-f]+", fingerprint):
+        return False
+    digest = hashlib.sha256(hwid.encode("utf-8")).hexdigest()
+    return hmac.compare_digest(digest[:len(fingerprint)], fingerprint)
 
 
 def _device_metadata_matches(item: dict, request: Request) -> bool:

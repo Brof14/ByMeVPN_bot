@@ -1,5 +1,6 @@
 """Regression tests for preserving HWID metadata during server delivery."""
 import base64
+import hashlib
 import os
 import secrets
 import sys
@@ -136,7 +137,7 @@ class TestSubscriptionHwidForwarding(unittest.IsolatedAsyncioTestCase):
                 "os_version": "15",
                 "user_agent": "ByMeVPN-test",
                 "last_seen": int(api_router.time.time()),
-                "fingerprint": "private-fingerprint",
+                "fingerprint": hashlib.sha256(b"install-current").hexdigest()[:12],
             }],
             "limit_hwid": 2,
             "limit_ip": 0,

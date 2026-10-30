@@ -116,7 +116,7 @@ async def deliver_key(
                 # but its response timed out, retrying this same order remains
                 # idempotent instead of adding the days twice.
                 xui_res = await update_xui_user(
-                    user_id, new_expiry_ms=new_expiry * 1000, limit_ip=limit_ip
+                    user_id, new_expiry_ms=new_expiry * 1000, limit_ip=0, limit_hwid=limit_ip
                 )
 
                 if not xui_res:
@@ -244,7 +244,7 @@ async def deliver_key(
                     method, payload, user_id, target_expiry
                 )
             xui_res = await update_xui_user(
-                user_id, new_expiry_ms=target_expiry * 1000, limit_ip=limit_ip
+                user_id, new_expiry_ms=target_expiry * 1000, limit_ip=0, limit_hwid=limit_ip
             )
             if not xui_res:
                 # Do not import a stale panel snapshot as a newly provisioned
@@ -342,7 +342,7 @@ async def deliver_key(
 
         # Создаем клиента в 3x-ui (безлимитный трафик, лимит по числу устройств = limit_ip)
         user_result = await create_xui_user(
-            user_id, days, data_limit_gb=0, limit_ip=limit_ip,
+            user_id, days, data_limit_gb=0, limit_ip=0, limit_hwid=limit_ip,
             new_expiry_ms=target_expiry * 1000,
         )
         if not user_result:

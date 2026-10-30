@@ -150,6 +150,79 @@ async def _api_call_with_retry(func, *args, max_retries=3, base_delay=0.5, **kwa
             await asyncio.sleep(delay)
 
 
+async def update_xui_client_settings(
+    user_id: int,
+    *,
+    limit_ip: Optional[int] = None,
+    limit_hwid: Optional[int] = None,
+    expiry_ms: Optional[int] = None,
+    enable: Optional[bool] = None,
+) -> bool:
+    """Update selected 3x-ui fields while preserving the full panel client row."""
+    if limit_ip is None and limit_hwid is None and expiry_ms is None and enable is None:
+        return True
+    if limit_ip is not None and int(limit_ip) < 0:
+        raise ValueError("IP limit must be zero or greater")
+    if limit_hwid is not None and int(limit_hwid) < 0:
+        raise ValueError("HWID limit must be zero or greater")
+
+    api = await _get_api()
+    client_api = api.client
+    email = quote(str(int(user_id)), safe="")
+
+    async def request_json(method: str, path: str, payload: Optional[dict] = None) -> dict:
+        url = client_api._url(path)
+        if method == "POST":
+            response = await client_api._post(url, {"Accept": "application/json"}, payload or {})
+        else:
+            response = await client_api._get(url, {"Accept": "application/json"})
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict) or not data.get("success"):
+            raise RuntimeError("3x-ui client-limit update was rejected")
+        return data
+
+    try:
+        current = await _api_call_with_retry(request_json, "GET", f"panel/api/clients/get/{email}")
+        obj = current.get("obj")
+        client = obj.get("client") if isinstance(obj, dict) else None
+        if not isinstance(client, dict):
+            raise RuntimeError("3x-ui client details are unavailable")
+        payload = dict(client)
+        if limit_ip is not None:
+            payload["limitIp"] = int(limit_ip)
+        if limit_hwid is not None:
+            payload["limitHwid"] = int(limit_hwid)
+        if expiry_ms is not None:
+            payload["expiryTime"] = int(expiry_ms)
+        if enable is not None:
+            payload["enable"] = bool(enable)
+        await _api_call_with_retry(request_json, "POST", f"panel/api/clients/update/{email}", payload)
+        verified = await _api_call_with_retry(request_json, "GET", f"panel/api/clients/get/{email}")
+        verified_obj = verified.get("obj")
+        verified_client = verified_obj.get("client") if isinstance(verified_obj, dict) else None
+        if not isinstance(verified_client, dict):
+            return False
+        return (
+            (limit_ip is None or int(verified_client.get("limitIp") or 0) == int(limit_ip))
+            and (limit_hwid is None or int(verified_client.get("limitHwid") or 0) == int(limit_hwid))
+            and (expiry_ms is None or int(verified_client.get("expiryTime") or 0) == int(expiry_ms))
+            and (enable is None or bool(verified_client.get("enable")) == bool(enable))
+        )
+    except Exception as exc:
+        logger.error("3x-ui client-limit update failed (%s)", type(exc).__name__)
+        return False
+
+
+async def set_xui_client_limits(
+    user_id: int,
+    *,
+    limit_ip: Optional[int] = None,
+    limit_hwid: Optional[int] = None,
+) -> bool:
+    return await update_xui_client_settings(user_id, limit_ip=limit_ip, limit_hwid=limit_hwid)
+
+
 def _build_sub_url(sub_id: str) -> str:
     parsed = urlparse(XUI_URL)
     base_url = f"{parsed.scheme}://{parsed.netloc}"
@@ -306,6 +379,7 @@ async def create_xui_user(
     days: int,
     data_limit_gb: int = 0,
     limit_ip: int = 0,
+    limit_hwid: Optional[int] = None,
     new_expiry_ms: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """
@@ -346,6 +420,7 @@ async def create_xui_user(
                 days=days if new_expiry_ms is None else 0,
                 new_expiry_ms=new_expiry_ms,
                 limit_ip=limit_ip,
+                limit_hwid=limit_hwid,
             )
             if update_res:
                 update_res["created_new_client"] = False
@@ -514,6 +589,12 @@ async def create_xui_user(
 
         if success_count == 0:
             logger.error("Failed to add client %s to any inbound", email)
+            return None
+
+        if limit_hwid is not None and not await set_xui_client_limits(
+            user_id, limit_ip=limit_ip, limit_hwid=limit_hwid,
+        ):
+            logger.error("Could not verify HWID limit for newly provisioned client")
             return None
 
         # Проверяем что клиент реально создан и получаем его uuid (no sleep needed)
@@ -877,12 +958,13 @@ async def update_xui_user(
     user_id: int,
     days: int = 0,
     limit_ip: Optional[int] = None,
+    limit_hwid: Optional[int] = None,
     new_expiry_ms: Optional[int] = None,
     enable: Optional[bool] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Safely update client in 3x-ui WITHOUT deleting or changing UUID/sub_id.
-    Updates expiry_time, limit_ip (device limit), and enable state.
+    Updates expiry, the IP limit, the independent HWID limit, and enable state.
     """
     email = str(user_id)
     logger.info("update_xui_user: email=%s days=%d limit_ip=%s new_expiry_ms=%s enable=%s", email, days, limit_ip, new_expiry_ms, enable)
@@ -909,12 +991,11 @@ async def update_xui_user(
             logger.error("update_xui_user: refusing partial update for %s; full client details unavailable", email)
             return None
 
-        current_limit_ip = client.limit_ip if (client and client.limit_ip) else 2
-        current_total_gb = client.total_gb if (client and client.total_gb) else 0
+        current_limit_ip = int(getattr(client, "limit_ip", 0) or 0)
         current_sub_id = client.sub_id if (client and client.sub_id) else ""
         sub_id = current_sub_id or client_uuid.replace("-", "")[:16]
 
-        final_limit_ip = limit_ip if (limit_ip is not None and limit_ip > 0) else current_limit_ip
+        final_limit_ip = limit_ip if limit_ip is not None else current_limit_ip
 
         import time
         now_ms = int(time.time() * 1000)
@@ -928,17 +1009,15 @@ async def update_xui_user(
 
         is_enabled = enable if enable is not None else True
 
-        updated = Client(
-            email=email,
-            id=client_uuid,
-            uuid=client_uuid,
-            enable=is_enabled,
-            expiry_time=final_expiry_ms,
+        if not await update_xui_client_settings(
+            user_id,
             limit_ip=final_limit_ip,
-            total_gb=current_total_gb,
-            sub_id=sub_id,
-        )
-        await _api_call_with_retry(api.client.update, client_uuid, updated)
+            limit_hwid=limit_hwid,
+            expiry_ms=final_expiry_ms,
+            enable=is_enabled,
+        ):
+            logger.error("3x-ui did not confirm client update")
+            return None
         logger.info(
             "update_xui_user: %s updated (uuid=%s, limit_ip=%d, expiry=%s)",
             email,
@@ -962,9 +1041,11 @@ async def update_xui_user(
         return None
 
 
-async def update_xui_user_expiry(user_id: int, days: int, limit_ip: Optional[int] = None) -> bool:
+async def update_xui_user_expiry(
+    user_id: int, days: int, limit_ip: Optional[int] = None, limit_hwid: Optional[int] = None,
+) -> bool:
     """Backward-compatible wrapper to update client expiry and optional limit_ip."""
-    res = await update_xui_user(user_id, days=days, limit_ip=limit_ip)
+    res = await update_xui_user(user_id, days=days, limit_ip=limit_ip, limit_hwid=limit_hwid)
     return res is not None
 
 
@@ -977,11 +1058,18 @@ async def get_xui_client_details(user_id: int) -> Optional[Dict[str, Any]]:
         if not client or not client.uuid:
             return None
         sub_id = client.sub_id or client.uuid.replace("-", "")[:16]
+        limit_hwid = 0
+        try:
+            device_state = await get_xui_devices(user_id)
+            limit_hwid = int(device_state.get("limit_hwid", 0))
+        except Exception:
+            logger.warning("Could not read HWID limit for a client")
         return {
             "uuid": client.uuid,
             "sub_id": sub_id,
             "email": email,
-            "limit_ip": client.limit_ip or 2,
+            "limit_ip": int(client.limit_ip or 0),
+            "limit_hwid": limit_hwid,
             "expiry_time": client.expiry_time or 0,
             "subscription_url": _build_sub_url(sub_id),
             "enable": client.enable,
