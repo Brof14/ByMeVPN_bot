@@ -134,7 +134,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         welcome = send.call_args.args[2]
         self.assertIn("Добро пожаловать в ByMeVPN", welcome)
         self.assertIn("Приглашение учтено", welcome)
-        self.assertIn("3 дня за 1 ₽", welcome)
+        self.assertIn("3 бесплатных дня", welcome)
 
     def test_key_settings_remove_rf_routing_and_highlight_only_destructive_action(self):
         markup = key_settings_kb(9)
