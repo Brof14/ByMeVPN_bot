@@ -318,17 +318,6 @@ def manage_payment_methods_kb(
     return kb.as_markup()
 
 
-def trial_pay_kb(confirmation_url: str) -> InlineKeyboardMarkup:
-    """Legacy payment link for an already-created introductory checkout."""
-    kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="Продолжить оплату", url=confirmation_url, style="success"))
-    kb.row(
-        InlineKeyboardButton(text="Другие тарифы", callback_data="buy_vpn"),
-        InlineKeyboardButton(text="🏠 Меню", callback_data="back_to_menu"),
-    )
-    return kb.as_markup()
-
-
 def confirm_delete_kb(key_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(
