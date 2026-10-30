@@ -1,6 +1,7 @@
 """Regression tests for preserving HWID metadata during server delivery."""
 import base64
 import os
+import secrets
 import sys
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -10,6 +11,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 os.environ.setdefault("DB_FILE", "/tmp/test_api_server_hwid_forwarding.db")
+os.environ.setdefault("JWT_SECRET", secrets.token_urlsafe(48))
 
 from starlette.requests import Request
 import api_router
@@ -117,6 +119,60 @@ class TestSubscriptionHwidForwarding(unittest.IsolatedAsyncioTestCase):
             fetch.await_args.args[1],
             {"X-HWID": "test-installation", "X-Device-OS": "Android"},
         )
+
+    async def test_device_list_uses_panel_records_and_never_returns_fingerprint(self):
+        request = _request({
+            "X-HWID": "install-current",
+            "X-Device-Model": "Phone X",
+            "X-Device-OS": "Android",
+            "X-Ver-OS": "15",
+            "User-Agent": "ByMeVPN-test",
+        })
+        panel = {
+            "devices": [{
+                "id": 42,
+                "model": "Phone X",
+                "os": "Android",
+                "os_version": "15",
+                "user_agent": "ByMeVPN-test",
+                "last_seen": int(api_router.time.time()),
+                "fingerprint": "private-fingerprint",
+            }],
+            "limit_hwid": 2,
+            "limit_ip": 0,
+        }
+        with patch("xui_client.get_xui_devices", new=AsyncMock(return_value=panel)):
+            result = await api_router.get_devices(request, user_id=123)
+
+        self.assertEqual(result["devices_used"], 1)
+        self.assertEqual(result["device_limit"], 2)
+        self.assertTrue(result["devices"][0]["is_current"])
+        self.assertNotIn("fingerprint", result["devices"][0])
+        self.assertNotIn("install_id", result["devices"][0])
+
+    async def test_device_delete_checks_owner_scoped_panel_list(self):
+        panel = {"devices": [{"id": 42}], "limit_hwid": 2, "limit_ip": 0}
+        with (
+            patch("xui_client.get_xui_devices", new=AsyncMock(return_value=panel)) as get_devices,
+            patch("xui_client.delete_xui_hwid_device", new=AsyncMock(return_value=True)) as delete_device,
+        ):
+            result = await api_router.delete_device("42", user_id=123)
+
+        self.assertEqual(result, {"status": "ok"})
+        get_devices.assert_awaited_once_with(123)
+        delete_device.assert_awaited_once_with(123, 42)
+
+    async def test_device_delete_rejects_unknown_device_and_bad_id(self):
+        from fastapi import HTTPException
+
+        with patch("xui_client.get_xui_devices", new=AsyncMock(return_value={"devices": []})):
+            with self.assertRaises(HTTPException) as missing:
+                await api_router.delete_device("42", user_id=123)
+        self.assertEqual(missing.exception.status_code, 404)
+
+        with self.assertRaises(HTTPException) as malformed:
+            await api_router.delete_device("../42", user_id=123)
+        self.assertEqual(malformed.exception.status_code, 400)
 
 
 if __name__ == "__main__":

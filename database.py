@@ -69,6 +69,18 @@ CREATE TABLE IF NOT EXISTS keys (
 CREATE INDEX IF NOT EXISTS idx_keys_user   ON keys(user_id);
 CREATE INDEX IF NOT EXISTS idx_keys_expiry ON keys(expiry);
 
+CREATE TABLE IF NOT EXISTS mobile_auth_sessions (
+    state_hash TEXT PRIMARY KEY,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'authenticated', 'consumed')),
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    user_id INTEGER,
+    username TEXT NOT NULL DEFAULT '',
+    full_name TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_mobile_auth_sessions_expiry
+    ON mobile_auth_sessions(expires_at);
+
 CREATE TABLE IF NOT EXISTS known_hwid_devices (
     user_id INTEGER NOT NULL,
     device_id INTEGER NOT NULL,
@@ -1501,6 +1513,71 @@ async def remember_hwid_devices(user_id: int, devices: list[dict], monitor_start
                 pending.append(device)
         await db.commit()
     return pending
+
+
+async def create_mobile_auth_session(state_hash: str, expires_at: int) -> None:
+    """Persist only a hash of the short-lived Telegram login state."""
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        await db.execute(
+            "DELETE FROM mobile_auth_sessions WHERE expires_at<=? OR status='consumed'",
+            (now,),
+        )
+        await db.execute(
+            "INSERT INTO mobile_auth_sessions(state_hash,status,created_at,expires_at) VALUES(?,?,?,?)",
+            (state_hash, "pending", now, int(expires_at)),
+        )
+        await db.commit()
+
+
+async def confirm_mobile_auth_session(
+    state_hash: str,
+    user_id: int,
+    username: str,
+    full_name: str,
+) -> bool:
+    """Atomically confirm a not-yet-expired login state once."""
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        cur = await db.execute(
+            "UPDATE mobile_auth_sessions SET status='authenticated', user_id=?, username=?, full_name=? "
+            "WHERE state_hash=? AND status='pending' AND expires_at>?",
+            (int(user_id), username[:80], full_name[:160], state_hash, now),
+        )
+        await db.commit()
+    return cur.rowcount == 1
+
+
+async def poll_mobile_auth_session(state_hash: str) -> Optional[dict]:
+    """Return pending, or atomically consume an authenticated state exactly once."""
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        cur = await db.execute(
+            "SELECT status,user_id,username,full_name,expires_at FROM mobile_auth_sessions WHERE state_hash=?",
+            (state_hash,),
+        )
+        row = await cur.fetchone()
+        if not row or int(row[4]) <= now or row[0] == "consumed":
+            return {"status": "expired"}
+        if row[0] == "pending":
+            return {"status": "pending"}
+        cur = await db.execute(
+            "UPDATE mobile_auth_sessions SET status='consumed' "
+            "WHERE state_hash=? AND status='authenticated' AND expires_at>?",
+            (state_hash, now),
+        )
+        await db.commit()
+        if cur.rowcount != 1:
+            return {"status": "expired"}
+        return {
+            "status": "authenticated",
+            "user_id": int(row[1]),
+            "username": row[2],
+            "full_name": row[3],
+        }
 
 
 async def mark_hwid_device_notified(user_id: int, device_id: int) -> None:

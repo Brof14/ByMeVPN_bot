@@ -293,12 +293,17 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext) -> None:
         auth_token = args[1].strip()
         try:
             from api_router import confirm_telegram_session
-            confirm_telegram_session(
+            confirmed = await confirm_telegram_session(
                 token=auth_token,
                 user_id=user_id,
                 username=message.from_user.username or "",
                 full_name=message.from_user.full_name or message.from_user.first_name or "",
             )
+            if not confirmed:
+                await message.answer(
+                    "Эта ссылка для входа уже использована или истекла. Вернитесь в приложение и создайте новую."
+                )
+                return
             await message.answer(
                 "✅ <b>Вход в приложение ByMeVPN подтверждён!</b>\n\n"
                 "Нажмите «🚀 Открыть приложение» — оно автоматически войдёт в ваш аккаунт и загрузит подписку.\n\n"
@@ -308,7 +313,7 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext) -> None:
             )
             return
         except Exception as e:
-            logger.error("Error confirming telegram session: %s", e)
+            logger.error("Error confirming telegram session (%s)", type(e).__name__)
             await message.answer("Произошла ошибка при авторизации. Попробуйте ещё раз из приложения.")
             return
 

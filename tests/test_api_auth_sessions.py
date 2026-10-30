@@ -1,0 +1,119 @@
+"""Tests for JWT configuration and durable single-use Telegram login states."""
+import asyncio
+import hashlib
+import os
+import secrets
+import subprocess
+import sys
+import unittest
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+os.environ.setdefault("DB_FILE", "/tmp/test_api_auth_sessions_import.db")
+os.environ.setdefault("JWT_SECRET", secrets.token_urlsafe(48))
+
+import api_router
+import database
+
+
+TEST_DB_PATH = "/tmp/test_api_auth_sessions.db"
+
+
+def _clean_db():
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            os.remove(TEST_DB_PATH + suffix)
+        except FileNotFoundError:
+            pass
+
+
+class TestJwtConfiguration(unittest.TestCase):
+    def test_valid_signature_is_accepted(self):
+        token = api_router.create_simple_jwt(123456, "test@example.invalid")
+        self.assertEqual(api_router.verify_simple_jwt(token), 123456)
+
+    def test_tampered_signature_is_rejected(self):
+        token = api_router.create_simple_jwt(123456, "test@example.invalid")
+        altered = token[:-1] + ("0" if token[-1] != "0" else "1")
+        self.assertIsNone(api_router.verify_simple_jwt(altered))
+
+    def test_expired_token_is_rejected(self):
+        original_time = api_router.time.time
+        try:
+            api_router.time.time = lambda: 1_000
+            token = api_router.create_simple_jwt(123456, "test@example.invalid")
+            api_router.time.time = lambda: 40 * 86400
+            self.assertIsNone(api_router.verify_simple_jwt(token))
+        finally:
+            api_router.time.time = original_time
+
+    def test_missing_or_short_secret_fails_configuration(self):
+        for configured_value in (None, "short"):
+            with self.subTest(configured=configured_value is not None):
+                env = dict(os.environ)
+                if configured_value is None:
+                    env.pop("JWT_SECRET", None)
+                else:
+                    env["JWT_SECRET"] = configured_value
+                env["PYTHONPATH"] = PROJECT_ROOT
+                env["DB_FILE"] = "/tmp/test_missing_jwt_secret.db"
+                result = subprocess.run(
+                    [sys.executable, "-c", "import api_router"],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("JWT_SECRET must be configured", result.stderr)
+
+
+class TestTelegramAuthSessions(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        _clean_db()
+        database.DB_FILE = TEST_DB_PATH
+        database._db_pool = None
+        await database.init_db()
+
+    async def asyncTearDown(self):
+        await database.close_db()
+        _clean_db()
+
+    async def test_state_is_persisted_and_consumed_once(self):
+        state_hash = hashlib.sha256(secrets.token_urlsafe(32).encode()).hexdigest()
+        await database.create_mobile_auth_session(state_hash, int(api_router.time.time()) + 60)
+        self.assertEqual((await database.poll_mobile_auth_session(state_hash))["status"], "pending")
+
+        self.assertTrue(await database.confirm_mobile_auth_session(state_hash, 98765, "test-user", "Test User"))
+        self.assertFalse(await database.confirm_mobile_auth_session(state_hash, 98765, "again", "Again"))
+        session = await database.poll_mobile_auth_session(state_hash)
+        self.assertEqual(session, {
+            "status": "authenticated",
+            "user_id": 98765,
+            "username": "test-user",
+            "full_name": "Test User",
+        })
+        self.assertEqual((await database.poll_mobile_auth_session(state_hash))["status"], "expired")
+
+    async def test_expired_state_cannot_be_confirmed(self):
+        state_hash = hashlib.sha256(secrets.token_urlsafe(32).encode()).hexdigest()
+        await database.create_mobile_auth_session(state_hash, int(api_router.time.time()) - 1)
+        self.assertFalse(await database.confirm_mobile_auth_session(state_hash, 98765, "test", "Test"))
+        self.assertEqual((await database.poll_mobile_auth_session(state_hash))["status"], "expired")
+
+    async def test_parallel_polling_consumes_state_at_most_once(self):
+        state_hash = hashlib.sha256(secrets.token_urlsafe(32).encode()).hexdigest()
+        await database.create_mobile_auth_session(state_hash, int(api_router.time.time()) + 60)
+        await database.confirm_mobile_auth_session(state_hash, 98765, "test", "Test")
+        results = await asyncio.gather(
+            database.poll_mobile_auth_session(state_hash),
+            database.poll_mobile_auth_session(state_hash),
+        )
+        self.assertEqual(sum(result.get("status") == "authenticated" for result in results), 1)
+        self.assertEqual(sum(result.get("status") == "expired" for result in results), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

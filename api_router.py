@@ -37,10 +37,11 @@ logger = logging.getLogger(__name__)
 api_router = APIRouter()
 
 # ---------------------------------------------------------------------------
-# Telegram Session Store & JWT Signing
+# Telegram Session Exchange & JWT Signing
 # ---------------------------------------------------------------------------
-_TELEGRAM_SESSIONS: Dict[str, Dict[str, Any]] = {}
-JWT_SECRET = os.getenv("JWT_SECRET", "bymevpn_jwt_secure_secret_key_2026_xray")
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET or len(JWT_SECRET.encode("utf-8")) < 32:
+    raise RuntimeError("JWT_SECRET must be configured with at least 32 bytes")
 
 
 async def _ensure_auth_db():
@@ -69,27 +70,18 @@ def hash_password(password: str, salt: str) -> str:
     ).hex()
 
 
-def confirm_telegram_session(token: str, user_id: int, username: str = "", full_name: str = "") -> bool:
-    """Called by Telegram bot handler when user opens /start auth_<token>"""
-    clean_token = token.removeprefix("auth_")
-    session = _TELEGRAM_SESSIONS.get(clean_token) or _TELEGRAM_SESSIONS.get(token)
-
-    if session:
-        session["status"] = "authenticated"
-        session["user_id"] = user_id
-        session["username"] = username or f"user_{user_id}"
-        session["full_name"] = full_name or username or f"User {user_id}"
-        logger.info(f"Telegram session {token} confirmed for user {user_id} (@{username})")
-        return True
-
-    _TELEGRAM_SESSIONS[clean_token] = {
-        "status": "authenticated",
-        "user_id": user_id,
-        "username": username or f"user_{user_id}",
-        "full_name": full_name or username or f"User {user_id}",
-        "created_at": time.time(),
-    }
-    return True
+async def confirm_telegram_session(token: str, user_id: int, username: str = "", full_name: str = "") -> bool:
+    """Confirm a pending single-use login state created by the mobile API."""
+    state = token.removeprefix("auth_")
+    if not state or len(state) > 256:
+        return False
+    state_hash = hashlib.sha256(state.encode("utf-8")).hexdigest()
+    return await database.confirm_mobile_auth_session(
+        state_hash,
+        user_id,
+        (username or f"user_{user_id}")[:80],
+        (full_name or username or f"User {user_id}")[:160],
+    )
 
 
 def create_simple_jwt(user_id: int, email: str = "") -> str:
@@ -535,15 +527,9 @@ class SessionRequest(BaseModel):
 
 @api_router.post("/auth/telegram/create-session", response_model=CreateTelegramSessionResponse)
 async def create_telegram_session():
-    token = f"auth_{secrets.token_urlsafe(16)}"
-    _TELEGRAM_SESSIONS[token] = {
-        "status": "pending",
-        "created_at": time.time(),
-    }
-    now = time.time()
-    stale_keys = [k for k, v in _TELEGRAM_SESSIONS.items() if now - v.get("created_at", 0) > 600]
-    for k in stale_keys:
-        _TELEGRAM_SESSIONS.pop(k, None)
+    token = f"auth_{secrets.token_urlsafe(32)}"
+    state_hash = hashlib.sha256(token.removeprefix("auth_").encode("utf-8")).hexdigest()
+    await database.create_mobile_auth_session(state_hash, int(time.time()) + 600)
 
     return CreateTelegramSessionResponse(
         session_token=token,
@@ -553,16 +539,17 @@ async def create_telegram_session():
 
 @api_router.get("/auth/telegram/check-session", response_model=TelegramCheckResponse)
 async def check_telegram_session(token: str, request: Request):
-    clean_token = token if token in _TELEGRAM_SESSIONS else token.removeprefix("auth_")
-    session = _TELEGRAM_SESSIONS.get(clean_token) or _TELEGRAM_SESSIONS.get(token)
-
-    if not session:
+    state = token.removeprefix("auth_")
+    if not state or len(state) > 256:
         return TelegramCheckResponse(status="expired")
-
-    if session.get("status") != "authenticated":
+    state_hash = hashlib.sha256(state.encode("utf-8")).hexdigest()
+    session = await database.poll_mobile_auth_session(state_hash)
+    if not session or session.get("status") == "expired":
+        return TelegramCheckResponse(status="expired")
+    if session.get("status") == "pending":
         return TelegramCheckResponse(status="pending")
 
-    user_id = session["user_id"]
+    user_id = int(session["user_id"])
     username = session.get("username", "")
     full_name = session.get("full_name", "Telegram User")
 
@@ -919,21 +906,92 @@ async def delete_vpn_session(user_id: int = Depends(get_current_user_id)):
 # 5. DEVICES MANAGEMENT
 # ---------------------------------------------------------------------------
 
+def _device_age_label(timestamp: int) -> str:
+    """Return a bounded, localized relative age for the mobile device list."""
+    elapsed = max(0, int(time.time()) - max(0, int(timestamp or 0)))
+    if elapsed < 60:
+        return "Сейчас"
+    if elapsed < 3600:
+        return f"{elapsed // 60} мин. назад"
+    if elapsed < 86400:
+        return f"{elapsed // 3600} ч. назад"
+    return f"{elapsed // 86400} дн. назад"
+
+
+def _device_is_current(item: dict, request: Request) -> bool:
+    """Compare the install ID only in-process; never return it to the client."""
+    hwid = request.headers.get("x-hwid", "").strip()[:256]
+    fingerprint = str(item.get("fingerprint") or "").strip()
+    return bool(hwid and fingerprint and hmac.compare_digest(hwid, fingerprint))
+
+
+def _device_metadata_matches(item: dict, request: Request) -> bool:
+    model = request.headers.get("x-device-model", "").strip()[:120]
+    platform = request.headers.get("x-device-os", "").strip()[:80]
+    os_version = request.headers.get("x-ver-os", "").strip()[:80]
+    user_agent = request.headers.get("user-agent", "").strip()[:160]
+    return bool(
+        model and platform and os_version and user_agent
+        and str(item.get("model") or "").strip() == model
+        and str(item.get("os") or "").strip().casefold() == platform.casefold()
+        and str(item.get("os_version") or "").strip() == os_version
+        and str(item.get("user_agent") or "").strip() == user_agent
+    )
+
+
 @api_router.get("/devices")
-async def get_devices(user_id: int = Depends(get_current_user_id)):
+async def get_devices(request: Request, user_id: int = Depends(get_current_user_id)):
+    try:
+        from xui_client import get_xui_devices
+
+        result = await get_xui_devices(user_id)
+    except Exception as exc:
+        logger.warning("Device list unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Список устройств временно недоступен") from None
+
+    raw_devices = result.get("devices", [])
+    has_hwid = bool(request.headers.get("x-hwid", "").strip())
+    metadata_matches = [item for item in raw_devices if _device_metadata_matches(item, request)]
+    devices = []
+    for item in raw_devices:
+        model = str(item.get("model") or "").strip()[:120]
+        platform = str(item.get("os") or "").strip()[:80]
+        devices.append({
+            "id": str(item["id"]),
+            "device_model": model or "Устройство",
+            "platform": platform or "Неизвестная система",
+            "last_active": _device_age_label(item.get("last_seen", 0)),
+            "is_current": (
+                _device_is_current(item, request)
+                if has_hwid else len(metadata_matches) == 1 and item is metadata_matches[0]
+            ),
+        })
     return {
-        "devices": [
-            {
-                "id": "current_device",
-                "device_model": "Android Phone",
-                "platform": "Android",
-                "last_active": "Сейчас онлайн",
-                "is_current": True,
-            }
-        ]
+        "devices": devices,
+        "device_limit": int(result.get("limit_hwid", 0)),
+        "devices_used": len(devices),
     }
 
 
 @api_router.delete("/devices/{device_id}")
 async def delete_device(device_id: str, user_id: int = Depends(get_current_user_id)):
+    if not device_id.isascii() or not device_id.isdecimal() or len(device_id) > 12:
+        raise HTTPException(status_code=400, detail="Некорректный идентификатор устройства")
+    parsed_id = int(device_id)
+    if parsed_id <= 0:
+        raise HTTPException(status_code=400, detail="Некорректный идентификатор устройства")
+    try:
+        from xui_client import delete_xui_hwid_device, get_xui_devices
+
+        # Verify ownership against this authenticated user's panel record before
+        # issuing deletion. The XUI endpoint itself is scoped by user_id too.
+        current = await get_xui_devices(user_id)
+        if not any(int(item.get("id", 0)) == parsed_id for item in current.get("devices", [])):
+            raise HTTPException(status_code=404, detail="Устройство не найдено")
+        await delete_xui_hwid_device(user_id, parsed_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Device deletion unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось удалить устройство. Попробуйте позже") from None
     return {"status": "ok"}

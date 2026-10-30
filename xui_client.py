@@ -770,6 +770,9 @@ async def get_xui_devices(user_id: int) -> Dict[str, Any]:
             "os": str(item.get("deviceOs") or "").strip()[:80],
             "os_version": str(item.get("osVersion") or "").strip()[:80],
             "user_agent": str(item.get("userAgent") or "").strip()[:160],
+            # Retain the panel fingerprint only for an in-process current-device
+            # comparison; the API never sends it back to the mobile client.
+            "fingerprint": str(item.get("fingerprint") or "").strip()[:256],
         })
     devices.sort(key=lambda item: item["last_seen"], reverse=True)
     return {

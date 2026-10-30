@@ -71,7 +71,7 @@ try:
     from api_router import api_router
     app.include_router(api_router, prefix="/api/v1")
 except Exception as _router_err:
-    logger.error("Failed to mount api_router: %s", _router_err)
+    raise RuntimeError("Required ByMeVPN API failed to initialize; check server configuration") from _router_err
 
 
 
