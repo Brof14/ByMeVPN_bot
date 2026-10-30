@@ -71,7 +71,10 @@ class TestJwtConfiguration(unittest.TestCase):
                     env.pop("JWT_SECRET", None)
                 else:
                     env["JWT_SECRET"] = configured_value
-                env["PYTHONPATH"] = PROJECT_ROOT
+                inherited_pythonpath = env.get("PYTHONPATH", "")
+                env["PYTHONPATH"] = os.pathsep.join(
+                    value for value in (PROJECT_ROOT, inherited_pythonpath) if value
+                )
                 env["DB_FILE"] = "/tmp/test_missing_jwt_secret.db"
                 result = subprocess.run(
                     [sys.executable, "-c", "import api_router"],
