@@ -194,14 +194,14 @@ async def _send_main_menu(
                 "<b>Добро пожаловать в ByMeVPN!</b>\n\n"
                 "Приглашение учтено. Подключиться можно за несколько шагов.\n\n"
                 "Российские сайты и приложения доступны без отключения VPN и дополнительных настроек.\n\n"
-                "3 дня за 1 ₽ или бесплатный доступ за приглашения друзей."
+                "3 бесплатных дня или VPN-бонус за приглашения друзей."
             )
         else:
             text = (
                 "<b>ByMeVPN — VPN, который просто работает.</b>\n\n"
                 "Доступ к любимым сайтам и приложениям без сложных настроек.\n\n"
                 "Российские сайты и приложения доступны без отключения VPN и дополнительных настроек.\n\n"
-                "3 дня за 1 ₽ или бесплатный доступ за приглашения друзей."
+                "3 бесплатных дня или VPN-бонус за приглашения друзей."
             )
         kb = main_menu_new_user()
     elif state == "expired":
@@ -506,134 +506,106 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext) -> None:
     # Не удаляем сообщения после /start, чтобы избежать бесконечной кнопки Старт
 
 
-def _intro_trial_offer_text() -> str:
-    """Single customer-facing offer for new and resumed 1 ₽ checkouts."""
-    from constants import (
-        INTRO_TRIAL_DAYS, INTRO_TRIAL_DEVICES, INTRO_TRIAL_PRICE_RUB,
-        RECURRING_MONTHLY_PRICE, RECURRING_DAYS,
-    )
+def _free_trial_offer_text() -> str:
     return (
-        "<b>Попробуйте ByMeVPN за 1 ₽</b>\n\n"
-        f"Полный доступ на {INTRO_TRIAL_DAYS} дня. Подключите до {INTRO_TRIAL_DEVICES} устройств и оцените сервис.\n\n"
-        f"Сегодня: <b>{INTRO_TRIAL_PRICE_RUB} ₽</b>\n"
-        f"Первые {INTRO_TRIAL_DAYS} дня: <b>пробный период</b>\n"
-        f"Далее: <b>{RECURRING_MONTHLY_PRICE} ₽ / {RECURRING_DAYS} дней</b>\n\n"
-        "Если способ оплаты сохранён, подписка продлевается автоматически каждые 30 дней. "
-        "Отменить автопродление можно в любой момент — оплаченный срок сохранится."
+        "🎁 <b>3 дня ByMeVPN бесплатно</b>\n\n"
+        "Полный доступ на 3 дня — до 2 устройств.\n"
+        "Карта не нужна, автоматических списаний после пробного периода нет."
     )
 
 
-# ---------------------------------------------------------------------------
-# Intro trial — 1 ₽ → 3 days of access → 89 ₽/мес recurring
-# ---------------------------------------------------------------------------
-
-async def _start_intro_trial(bot: Bot, callback: CallbackQuery, ref_id: int | None = None) -> None:
-    """
-    Common entry for the paid intro trial (1 ₽ / 3 days).
-
-    - Eligible: no trial used before and no active key.
-    - Trial flag is NOT burned on click — only after successful payment
-      (webhook sets trial_used), so a failed payment doesn't lose the offer.
-    - A fresh pending checkout link (< 30 min) is reused instead of creating
-      a second payment.
-    - Explicit recurring disclosure BEFORE payment (89 ₽/мес, cancel anytime).
-    """
-    from database import (
-        has_trial_used, get_user_active_keys,
-        get_yookassa_trial_pending, save_yookassa_trial_pending,
-    )
-    from constants import (
-        INTRO_TRIAL_PRICE_RUB, INTRO_TRIAL_DAYS, INTRO_TRIAL_DEVICES,
-        RECURRING_MONTHLY_PRICE,
-    )
-    from keyboards import trial_pay_kb
-
+async def _start_free_trial(bot: Bot, callback: CallbackQuery, ref_id: int | None = None) -> None:
+    """Grant the one-time free trial to a new account without an existing panel client."""
     user_id = callback.from_user.id
 
-    trial_used = await has_trial_used(user_id)
-    active_keys = await get_user_active_keys(user_id)
-    if trial_used or active_keys:
-        await safe_answer(callback, "Пробный период за 1 ₽ доступен один раз. Выберите тариф в разделе «Тарифы».", alert=True)
+    await safe_answer(callback)
+    if await has_trial_used(user_id) or await get_user_keys(user_id):
+        await callback.message.answer(
+            "Бесплатный пробный период доступен один раз для новых пользователей. "
+            "Выберите тариф, чтобы продолжить пользоваться ByMeVPN."
+        )
         return
 
-    # Reuse a recent pending checkout to avoid duplicate 1 ₽ invoices
-    pending = await get_yookassa_trial_pending(user_id)
-    if pending and pending.get("confirmation_url") and int(time.time()) - (pending.get("created") or 0) < 1800:
-        text = _intro_trial_offer_text()
-        await send_with_photo(bot, callback, text, trial_pay_kb(pending["confirmation_url"]))
-        return
-
-    from payments import create_yookassa_payment, claim_yookassa_checkout, release_yookassa_checkout
-    if not claim_yookassa_checkout(user_id):
-        await callback.message.answer("Запрос на оплату уже выполняется. Подождите немного.")
-        return
     try:
-        confirmation_url = await create_yookassa_payment(
-            amount_rub=INTRO_TRIAL_PRICE_RUB,
-            description=f"ByMeVPN — {INTRO_TRIAL_DAYS} дня за {INTRO_TRIAL_PRICE_RUB} ₽ (далее {RECURRING_MONTHLY_PRICE} ₽/мес)",
-            user_id=user_id,
-            days=INTRO_TRIAL_DAYS,
-            devices=INTRO_TRIAL_DEVICES,
-            months=1,
-            extra_metadata={"trial": "1"},
+        from xui_client import get_xui_client_details
+        panel_client = await get_xui_client_details(user_id)
+    except Exception as exc:
+        logger.warning("Free trial eligibility check failed (%s)", type(exc).__name__)
+        await callback.message.answer(
+            "Не удалось проверить доступность пробного периода. Попробуйте позже или напишите в поддержку."
         )
-    finally:
-        release_yookassa_checkout(user_id)
-
-    if not confirmation_url:
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-        await safe_answer(callback, "Оплата временно недоступна, попробуйте чуть позже.", alert=True)
-        await send_with_photo(
-            bot, callback,
-            "Не удалось подключиться к ЮKassa. Платёж не создан и деньги не списаны. Попробуйте позже "
-            "или выберите обычный тариф.",
-            InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="💳 Тарифы", callback_data="buy_vpn"),
-                InlineKeyboardButton(text="🏠 Меню", callback_data="back_to_menu"),
-            ]]),
+        return
+    if panel_client:
+        await callback.message.answer(
+            "Бесплатный пробный период доступен один раз для новых пользователей. "
+            "Если подписка уже закончилась, выберите тариф для продления."
         )
         return
 
-    from database import log_analytics_event
-    await log_analytics_event(
-        user_id, "trial_checkout_started", tariff="trial_3d", devices=INTRO_TRIAL_DEVICES,
-        amount=INTRO_TRIAL_PRICE_RUB, payment_provider="yookassa",
-    )
+    from database import try_claim_trial
+    if not await try_claim_trial(user_id):
+        await callback.message.answer("Бесплатный пробный период уже использован.")
+        return
 
-    text = _intro_trial_offer_text()
-    await send_with_photo(bot, callback, text, trial_pay_kb(confirmation_url))
+    try:
+        from subscription import deliver_key
+        delivered = await deliver_key(
+            bot=bot,
+            user_id=user_id,
+            chat_id=user_id,
+            config_name=f"ByMeVPN_{user_id}",
+            days=3,
+            limit_ip=2,
+            is_paid=False,
+            amount=0,
+            currency="RUB",
+            method="trial",
+            extend_existing=False,
+        )
+    except Exception as exc:
+        logger.error("Free trial provisioning failed (%s)", type(exc).__name__)
+        await callback.message.answer(
+            "Не удалось подключить пробный период. Напишите в поддержку — поможем."
+        )
+        return
+
+    if not delivered:
+        return
+
+    try:
+        from database import log_analytics_event
+        await log_analytics_event(
+            user_id, "free_trial_activated", tariff="trial_3d", devices=2,
+            amount=0, payment_provider="none",
+        )
+    except Exception as exc:
+        logger.debug("Free trial analytics event failed (%s)", type(exc).__name__)
+
+
+@router.callback_query(F.data == "trial_free")
+async def cb_trial_free(callback: CallbackQuery, bot: Bot):
+    await _start_free_trial(bot, callback)
 
 
 @router.callback_query(F.data == "trial_1r")
-async def cb_trial_1r(callback: CallbackQuery, bot: Bot):
-    """Main menu: «Попробовать за 1 ₽»."""
-    await safe_answer(callback)
-    await _start_intro_trial(bot, callback)
+async def cb_trial_legacy_paid_offer(callback: CallbackQuery, bot: Bot):
+    """Legacy button callback now starts the free trial; no new paid checkout is created."""
+    await _start_free_trial(bot, callback)
 
 
 @router.callback_query(F.data == "trial")
 async def cb_trial(callback: CallbackQuery, bot: Bot):
-    """Legacy alias: old trial buttons/messages now lead to the 1 ₽ intro trial."""
-    await safe_answer(callback)
-    await _start_intro_trial(bot, callback)
+    await _start_free_trial(bot, callback)
 
 
 @router.callback_query(F.data == "trial_ref")
 async def cb_trial_ref(callback: CallbackQuery, bot: Bot):
-    """Referral welcome button: «Попробовать за 1 ₽»."""
-    await safe_answer(callback)
-    await _start_intro_trial(bot, callback)
+    await _start_free_trial(bot, callback)
 
 
 @router.callback_query(F.data.startswith("claim_trial:"))
 async def cb_claim_trial(callback: CallbackQuery, bot: Bot):
-    """Referral deep-link claim button → same 1 ₽ intro trial flow."""
-    await safe_answer(callback)
-    try:
-        ref_id = int(callback.data.split(":")[1])
-    except (IndexError, ValueError):
-        ref_id = None
-    await _start_intro_trial(bot, callback, ref_id=ref_id)
+    await _start_free_trial(bot, callback)
 
 
 # ---------------------------------------------------------------------------
@@ -676,7 +648,7 @@ async def cb_about(callback: CallbackQuery, bot: Bot):
         "• Бесплатные дни за приглашение друзей.\n"
         "• Управление подпиской прямо в Telegram.\n"
         "• Подписчикам доступен @ByMeAudiobot для расшифровки голосовых сообщений.\n\n"
-        "<b>3 дня за 1 ₽</b> или тарифы от <b>59 ₽/мес.</b> при оплате за год."
+        "<b>3 дня бесплатно</b> или тарифы от <b>59 ₽/мес.</b> при оплате за год."
     )
     # Keep the menu navigation in a fixed, full-width bottom row.
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
