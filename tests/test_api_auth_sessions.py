@@ -34,6 +34,24 @@ class TestJwtConfiguration(unittest.TestCase):
         token = api_router.create_simple_jwt(123456, "test@example.invalid")
         self.assertEqual(api_router.verify_simple_jwt(token), 123456)
 
+    def test_wrong_issuer_is_rejected_even_with_valid_signature(self):
+        token = api_router.create_simple_jwt(
+            123456, "test@example.invalid", issuer="unexpected-issuer"
+        )
+        self.assertIsNone(api_router.verify_simple_jwt(token))
+
+    def test_wrong_audience_is_rejected_even_with_valid_signature(self):
+        token = api_router.create_simple_jwt(
+            123456, "test@example.invalid", audience="another-client"
+        )
+        self.assertIsNone(api_router.verify_simple_jwt(token))
+
+    def test_issuer_and_exact_audience_are_present_in_verified_claims(self):
+        token = api_router.create_simple_jwt(123456, "test@example.invalid")
+        claims = api_router._verified_token_claims(token)
+        self.assertEqual(claims["issuer"], api_router.JWT_ISSUER)
+        self.assertEqual(claims["audience"], api_router.JWT_AUDIENCE)
+
     def test_tampered_signature_is_rejected(self):
         token = api_router.create_simple_jwt(123456, "test@example.invalid")
         altered = token[:-1] + ("0" if token[-1] != "0" else "1")
