@@ -968,14 +968,45 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
     if reserved["plan_code"] != req.plan_code or reserved["provider"] != req.provider:
         raise HTTPException(status_code=409, detail="Этот запрос уже использован для другого тарифа")
     if reserved["payment_id"] and reserved["confirmation_url"]:
-        return {
-            "payment_url": reserved["confirmation_url"],
-            "invoice_id": reserved["payment_id"],
-            "provider": "yookassa",
-        }
+        from payments import get_yookassa_payment_status
+
+        previous_invoice = reserved["payment_id"]
+        provider_status = await get_yookassa_payment_status(previous_invoice)
+        if provider_status == "canceled":
+            rotated = await database.advance_mobile_payment_request_generation(
+                user_id, req.request_id, req.plan_code, req.provider,
+                previous_invoice, reserved["generation"],
+            )
+            # A simultaneous retry may have rotated the request already. Reload
+            # the row and use its generation so all retries share one new invoice.
+            reserved = await database.ensure_mobile_payment_request(
+                user_id, req.request_id, req.plan_code, req.provider,
+            )
+            if reserved["payment_id"] == previous_invoice:
+                logger.error(
+                    "Canceled mobile invoice generation could not be rotated (user=%d)",
+                    user_id,
+                )
+                raise HTTPException(status_code=503, detail="Не удалось повторить оплату. Попробуйте позже")
+            if reserved["payment_id"] and reserved["confirmation_url"]:
+                return {
+                    "payment_url": reserved["confirmation_url"],
+                    "invoice_id": reserved["payment_id"],
+                    "provider": "yookassa",
+                }
+        else:
+            # Unknown provider status is not proof of cancellation. Preserve the
+            # existing idempotent invoice and never create a second charge.
+            return {
+                "payment_url": reserved["confirmation_url"],
+                "invoice_id": reserved["payment_id"],
+                "provider": "yookassa",
+            }
 
     from payments import create_yookassa_payment
-    stable_key = hashlib.sha256(f"bymevpn-mobile:{user_id}:{req.request_id}".encode()).hexdigest()
+    stable_key = hashlib.sha256(
+        f"bymevpn-mobile:{user_id}:{req.request_id}:{reserved['generation']}".encode()
+    ).hexdigest()
     result = await create_yookassa_payment(
         amount_rub=amount_rub,
         description=f"ByMeVPN — {days} дней, {devices} устройства",
