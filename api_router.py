@@ -577,6 +577,7 @@ class CreateTelegramSessionResponse(BaseModel):
 class TelegramCheckResponse(BaseModel):
     status: str
     access_token: Optional[str] = None
+    refresh_token: Optional[str] = None
     user: Optional[Dict[str, Any]] = None
     subscription: Optional[Dict[str, Any]] = None
     servers: Optional[List[Dict[str, Any]]] = None
@@ -667,6 +668,7 @@ async def check_telegram_session(token: str, request: Request):
     return TelegramCheckResponse(
         status="authenticated",
         access_token=jwt_token,
+        refresh_token=f"ref_{jwt_token}",
         user={
             "id": str(user_id),
             "email": f"{username}@telegram",
@@ -930,8 +932,10 @@ async def activate_trial(req: TrialRequest, request: Request, user_id: int = Dep
 
 
 @api_router.get("/plans")
-async def get_plans():
-    from constants import get_price_for_months
+async def get_plans(devices: int = 2):
+    from constants import get_price_for_months, VALID_DEVICE_LIMITS
+    if devices not in VALID_DEVICE_LIMITS:
+        raise HTTPException(status_code=400, detail="Выберите 2, 5 или 10 устройств")
 
     plan_catalog = [
         ("1m", 1, "1 месяц", 0, False),
@@ -943,10 +947,10 @@ async def get_plans():
         {
             "code": code,
             "name": label,
-            "price": f"{get_price_for_months(months, 2)[0]} ₽",
-            "price_rub": get_price_for_months(months, 2)[0],
-            "days": get_price_for_months(months, 2)[1],
-            "devices": 2,
+            "price": f"{get_price_for_months(months, devices)[0]} ₽",
+            "price_rub": get_price_for_months(months, devices)[0],
+            "days": get_price_for_months(months, devices)[1],
+            "devices": devices,
             "discount_percent": discount,
             "is_popular": popular,
         }
@@ -976,9 +980,12 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
     if not req.request_id or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", req.request_id):
         raise HTTPException(status_code=400, detail="Создайте новый запрос на оплату")
 
-    from constants import get_price_for_months
-    amount_rub, days = get_price_for_months(months, 2)
-    devices = 2
+    from constants import get_price_for_months, VALID_DEVICE_LIMITS
+    devices = 2 if req.devices is None else req.devices
+    if devices not in VALID_DEVICE_LIMITS:
+        raise HTTPException(status_code=400, detail="Выберите 2, 5 или 10 устройств")
+    # The server determines the real charge; client-supplied amount_rub/days are ignored.
+    amount_rub, days = get_price_for_months(months, devices)
     reserved = await database.ensure_mobile_payment_request(
         user_id, req.request_id, req.plan_code, req.provider,
     )

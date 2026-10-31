@@ -27,7 +27,27 @@ class TestMobilePaymentContract(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(item["days"], days)
             self.assertEqual(item["devices"], 2)
 
-    async def test_client_amount_days_and_device_values_are_ignored(self):
+    async def test_plans_price_all_supported_device_tiers(self):
+        for devices in (2, 5, 10):
+            result = await api_router.get_plans(devices=devices)
+            for code, months in (("1m", 1), ("3m", 3), ("6m", 6), ("12m", 12)):
+                plan = next(item for item in result["plans"] if item["code"] == code)
+                amount, days = get_price_for_months(months, devices)
+                self.assertEqual((plan["price_rub"], plan["days"], plan["devices"]), (amount, days, devices))
+
+    async def test_invalid_device_tiers_are_rejected(self):
+        with self.assertRaises(api_router.HTTPException) as plans_error:
+            await api_router.get_plans(devices=3)
+        self.assertEqual(plans_error.exception.status_code, 400)
+        req = api_router.PaymentCreateRequest(
+            plan_code="3m", request_id="12345678-1234-1234-1234-123456789012",
+            amount_rub=1, days=3, devices=3, provider="yookassa",
+        )
+        with self.assertRaises(api_router.HTTPException) as payment_error:
+            await api_router.api_create_payment(req, user_id=123)
+        self.assertEqual(payment_error.exception.status_code, 400)
+
+    async def test_client_amount_days_are_ignored_but_valid_device_tier_is_used(self):
         reserved = {"plan_code": "3m", "provider": "yookassa", "payment_id": None, "confirmation_url": None, "generation": 0}
         created = {"payment_url": "https://pay.example.invalid/checkout", "payment_id": "invoice-123", "status": "pending"}
         request = api_router.PaymentCreateRequest(
@@ -43,9 +63,9 @@ class TestMobilePaymentContract(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["invoice_id"], "invoice-123")
         kwargs = create.await_args.kwargs
-        self.assertEqual(kwargs["amount_rub"], get_price_for_months(3, 2)[0])
-        self.assertEqual(kwargs["days"], get_price_for_months(3, 2)[1])
-        self.assertEqual(kwargs["devices"], 2)
+        self.assertEqual(kwargs["amount_rub"], get_price_for_months(3, 10)[0])
+        self.assertEqual(kwargs["days"], get_price_for_months(3, 10)[1])
+        self.assertEqual(kwargs["devices"], 10)
         self.assertFalse(kwargs["save_payment_method"])
 
     async def test_repeated_request_returns_same_saved_invoice(self):
