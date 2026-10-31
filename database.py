@@ -69,6 +69,25 @@ CREATE TABLE IF NOT EXISTS keys (
 CREATE INDEX IF NOT EXISTS idx_keys_user   ON keys(user_id);
 CREATE INDEX IF NOT EXISTS idx_keys_expiry ON keys(expiry);
 
+CREATE TABLE IF NOT EXISTS revoked_mobile_jwt_sessions (
+    jti TEXT PRIMARY KEY,
+    expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_revoked_mobile_jwt_expiry
+    ON revoked_mobile_jwt_sessions(expires_at);
+
+CREATE TABLE IF NOT EXISTS mobile_auth_sessions (
+    state_hash TEXT PRIMARY KEY,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'authenticated', 'consumed')),
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    user_id INTEGER,
+    username TEXT NOT NULL DEFAULT '',
+    full_name TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_mobile_auth_sessions_expiry
+    ON mobile_auth_sessions(expires_at);
+
 CREATE TABLE IF NOT EXISTS known_hwid_devices (
     user_id INTEGER NOT NULL,
     device_id INTEGER NOT NULL,
@@ -162,6 +181,22 @@ CREATE TABLE IF NOT EXISTS yookassa_pending (
     created     INTEGER DEFAULT (strftime('%s','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_ykp_user ON yookassa_pending(user_id);
+
+-- App checkout idempotency and exact invoice ownership.
+CREATE TABLE IF NOT EXISTS mobile_payment_requests (
+    user_id INTEGER NOT NULL,
+    request_id TEXT NOT NULL,
+    plan_code TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    payment_id TEXT,
+    confirmation_url TEXT,
+    generation INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, request_id),
+    UNIQUE (provider, payment_id)
+);
+CREATE INDEX IF NOT EXISTS idx_mobile_payment_requests_payment
+    ON mobile_payment_requests(provider, payment_id);
 
 -- Durable admin broadcasts; queued recipients survive bot restarts.
 CREATE TABLE IF NOT EXISTS broadcast_campaigns (
@@ -385,6 +420,14 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
             PRIMARY KEY(provider, provider_payment_id)
         )"""
     )
+    payment_request_columns = {
+        row[1] for row in await (await db.execute("PRAGMA table_info(mobile_payment_requests)")).fetchall()
+    }
+    if "generation" not in payment_request_columns:
+        await db.execute(
+            "ALTER TABLE mobile_payment_requests ADD COLUMN generation INTEGER NOT NULL DEFAULT 0"
+        )
+
     await db.execute(
         """CREATE TABLE IF NOT EXISTS expiry_notification_deliveries (
             user_id INTEGER NOT NULL, expiry INTEGER NOT NULL, bucket TEXT NOT NULL,
@@ -1501,6 +1544,218 @@ async def remember_hwid_devices(user_id: int, devices: list[dict], monitor_start
                 pending.append(device)
         await db.commit()
     return pending
+
+
+async def create_mobile_auth_session(state_hash: str, expires_at: int) -> None:
+    """Persist only a hash of the short-lived Telegram login state."""
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        await db.execute(
+            "DELETE FROM mobile_auth_sessions WHERE expires_at<=? OR status='consumed'",
+            (now,),
+        )
+        await db.execute(
+            "INSERT INTO mobile_auth_sessions(state_hash,status,created_at,expires_at) VALUES(?,?,?,?)",
+            (state_hash, "pending", now, int(expires_at)),
+        )
+        await db.commit()
+
+
+async def ensure_mobile_payment_request(
+    user_id: int, request_id: str, plan_code: str, provider: str,
+) -> dict:
+    """Atomically reserve an idempotent mobile checkout identity."""
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        await db.execute(
+            "INSERT OR IGNORE INTO mobile_payment_requests(user_id,request_id,plan_code,provider,created_at) "
+            "VALUES(?,?,?,?,?)",
+            (int(user_id), request_id, plan_code, provider, now),
+        )
+        cur = await db.execute(
+            "SELECT plan_code,provider,payment_id,confirmation_url,generation FROM mobile_payment_requests "
+            "WHERE user_id=? AND request_id=?",
+            (int(user_id), request_id),
+        )
+        row = await cur.fetchone()
+        await db.commit()
+    if not row:
+        raise RuntimeError("mobile payment request reservation failed")
+    return {
+        "plan_code": row[0], "provider": row[1], "payment_id": row[2],
+        "confirmation_url": row[3], "generation": int(row[4] or 0),
+    }
+
+
+async def advance_mobile_payment_request_generation(
+    user_id: int, request_id: str, plan_code: str, provider: str,
+    payment_id: str, generation: int,
+) -> bool:
+    """Atomically rotate an idempotency generation after provider confirms cancellation."""
+    db = await get_db()
+    async with _db_semaphore:
+        cur = await db.execute(
+            "UPDATE mobile_payment_requests "
+            "SET payment_id=NULL,confirmation_url=NULL,generation=generation+1 "
+            "WHERE user_id=? AND request_id=? AND plan_code=? AND provider=? "
+            "AND payment_id=? AND generation=?",
+            (int(user_id), request_id, plan_code, provider, str(payment_id), int(generation)),
+        )
+        await db.commit()
+    return cur.rowcount == 1
+
+
+async def save_mobile_payment_request(
+    user_id: int, request_id: str, plan_code: str, provider: str,
+    payment_id: str, confirmation_url: str,
+) -> bool:
+    """Persist provider invoice ownership and checkout link without logging either."""
+    db = await get_db()
+    async with _db_semaphore:
+        cur = await db.execute(
+            "UPDATE mobile_payment_requests SET payment_id=?,confirmation_url=? "
+            "WHERE user_id=? AND request_id=? AND plan_code=? AND provider=? "
+            "AND (payment_id IS NULL OR payment_id=?)",
+            (str(payment_id), confirmation_url, int(user_id), request_id, plan_code, provider, str(payment_id)),
+        )
+        await db.commit()
+    return cur.rowcount == 1
+
+
+async def get_mobile_payment_request(user_id: int, request_id: str) -> Optional[dict]:
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT plan_code,provider,payment_id,confirmation_url FROM mobile_payment_requests "
+        "WHERE user_id=? AND request_id=?",
+        (int(user_id), request_id),
+    )
+    row = await cur.fetchone()
+    if not row:
+        return None
+    return {"plan_code": row[0], "provider": row[1], "payment_id": row[2], "confirmation_url": row[3]}
+
+
+async def get_mobile_payment_record(provider: str, payment_id: str) -> Optional[dict]:
+    """Return only the owner and status of one provider invoice."""
+    db = await get_db()
+    normalized = "cryptobot" if provider == "crypto" else provider
+    cur = await db.execute(
+        "SELECT user_id,status,amount,days,devices FROM payments "
+        "WHERE provider=? AND CAST(provider_payment_id AS TEXT)=? "
+        "UNION ALL SELECT user_id,'pending',0,0,2 FROM mobile_payment_requests "
+        "WHERE provider=? AND payment_id=? "
+        "UNION ALL SELECT user_id,'pending',amount_rub,days,devices FROM yookassa_pending "
+        "WHERE payment_id=? AND ?='yookassa' "
+        "UNION ALL SELECT user_id,'pending',amount_rub,days,devices FROM crypto_pending "
+        "WHERE CAST(invoice_id AS TEXT)=? AND ?='crypto' LIMIT 1",
+        (normalized, str(payment_id), provider, str(payment_id), str(payment_id), provider, str(payment_id), provider),
+    )
+    row = await cur.fetchone()
+    if not row:
+        return None
+    return {"user_id": int(row[0]), "status": str(row[1]), "amount_rub": int(row[2]),
+            "days": int(row[3]), "devices": int(row[4])}
+
+
+async def list_recent_mobile_invoice_refs(user_id: int, max_age_seconds: int = 86400) -> list[dict]:
+    """List unique recent provider invoices for safe legacy check-payment calls."""
+    db = await get_db()
+    since = int(time.time()) - max(60, min(int(max_age_seconds), 7 * 86400))
+    cur = await db.execute(
+        "SELECT provider,CAST(provider_payment_id AS TEXT),created FROM payments "
+        "WHERE user_id=? AND provider IN ('yookassa','cryptobot') AND created>=? "
+        "UNION ALL SELECT 'yookassa',payment_id,created FROM yookassa_pending WHERE user_id=? AND created>=? "
+        "UNION ALL SELECT 'crypto',CAST(invoice_id AS TEXT),created FROM crypto_pending WHERE user_id=? AND created>=? "
+        "UNION ALL SELECT provider,payment_id,created_at FROM mobile_payment_requests "
+        "WHERE user_id=? AND payment_id IS NOT NULL AND created_at>=? "
+        "ORDER BY 3 DESC",
+        (int(user_id), since, int(user_id), since, int(user_id), since, int(user_id), since),
+    )
+    rows = await cur.fetchall()
+    unique = {}
+    for row in rows:
+        provider = "crypto" if row[0] == "cryptobot" else str(row[0])
+        invoice_id = str(row[1] or "")
+        if provider in ("yookassa", "crypto") and invoice_id:
+            unique.setdefault((provider, invoice_id), {"provider": provider, "payment_id": invoice_id})
+    return list(unique.values())
+
+
+async def confirm_mobile_auth_session(
+    state_hash: str,
+    user_id: int,
+    username: str,
+    full_name: str,
+) -> bool:
+    """Atomically confirm a not-yet-expired login state once."""
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        cur = await db.execute(
+            "UPDATE mobile_auth_sessions SET status='authenticated', user_id=?, username=?, full_name=? "
+            "WHERE state_hash=? AND status='pending' AND expires_at>?",
+            (int(user_id), username[:80], full_name[:160], state_hash, now),
+        )
+        await db.commit()
+    return cur.rowcount == 1
+
+
+async def poll_mobile_auth_session(state_hash: str) -> Optional[dict]:
+    """Return pending, or atomically consume an authenticated state exactly once."""
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        cur = await db.execute(
+            "SELECT status,user_id,username,full_name,expires_at FROM mobile_auth_sessions WHERE state_hash=?",
+            (state_hash,),
+        )
+        row = await cur.fetchone()
+        if not row or int(row[4]) <= now or row[0] == "consumed":
+            return {"status": "expired"}
+        if row[0] == "pending":
+            return {"status": "pending"}
+        cur = await db.execute(
+            "UPDATE mobile_auth_sessions SET status='consumed' "
+            "WHERE state_hash=? AND status='authenticated' AND expires_at>?",
+            (state_hash, now),
+        )
+        await db.commit()
+        if cur.rowcount != 1:
+            return {"status": "expired"}
+        return {
+            "status": "authenticated",
+            "user_id": int(row[1]),
+            "username": row[2],
+            "full_name": row[3],
+        }
+
+
+async def is_mobile_jwt_revoked(jti: str) -> bool:
+    """Check whether one JWT session has been explicitly logged out."""
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT 1 FROM revoked_mobile_jwt_sessions WHERE jti=? AND expires_at>?",
+        (str(jti), int(time.time())),
+    )
+    return await cur.fetchone() is not None
+
+
+async def revoke_mobile_jwt(jti: str, expires_at: int) -> None:
+    """Persist a JWT revocation only until that token's natural expiry."""
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        await db.execute(
+            "DELETE FROM revoked_mobile_jwt_sessions WHERE expires_at<=?",
+            (now,),
+        )
+        await db.execute(
+            "INSERT OR REPLACE INTO revoked_mobile_jwt_sessions(jti,expires_at) VALUES(?,?)",
+            (str(jti), int(expires_at)),
+        )
+        await db.commit()
 
 
 async def mark_hwid_device_notified(user_id: int, device_id: int) -> None:

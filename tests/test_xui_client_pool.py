@@ -97,6 +97,39 @@ class TestXuiClientPool(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
         api_call.assert_not_awaited()
 
+    async def test_device_limit_update_changes_hwid_and_keeps_ip_unlimited(self):
+        state = {"client": {"email": "123", "limitIp": 2, "limitHwid": 0, "totalGB": 0, "custom": "preserve"}}
+
+        class Response:
+            def __init__(self, data):
+                self.data = data
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.data
+
+        class ClientApi:
+            def _url(self, path):
+                return path
+
+            async def _get(self, url, headers):
+                return Response({"success": True, "obj": {"client": dict(state["client"])}})
+
+            async def _post(self, url, headers, payload):
+                state["client"] = dict(payload)
+                return Response({"success": True})
+
+        api = SimpleNamespace(client=ClientApi())
+        with patch("xui_client._get_api", new=AsyncMock(return_value=api)):
+            result = await xui_client.set_xui_client_limits(123, limit_ip=0, limit_hwid=5)
+
+        self.assertTrue(result)
+        self.assertEqual(state["client"]["limitIp"], 0)
+        self.assertEqual(state["client"]["limitHwid"], 5)
+        self.assertEqual(state["client"]["custom"], "preserve")
+
     async def test_client_lookup_fallback_scans_configured_inbounds(self):
         client = SimpleNamespace(get_by_email=AsyncMock(return_value=None))
         inbound = SimpleNamespace(
