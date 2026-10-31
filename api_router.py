@@ -1190,7 +1190,7 @@ async def api_check_payment(
             from payments import get_crypto_invoice
             provider_payment = await get_crypto_invoice(invoice_id)
             provider_status = provider_payment.get("status") if provider_payment else None
-        if provider_status == "canceled":
+        if provider_status in ("canceled", "expired"):
             return {"status": "failed", "is_active": False, "subscription": None}
         return {"status": "processing" if provider_status == "succeeded" or provider_status == "paid" else "pending",
                 "is_active": False, "subscription": None}
