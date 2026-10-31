@@ -128,16 +128,18 @@ def create_router() -> APIRouter:
 
         db = await _db()
         now = int(time.time())
+        order_hash = hashlib.sha256(f"{user_id}:{req.request_id}".encode()).hexdigest()[:24]
+        payload = "bmv2_" + order_hash if req.provider == "crypto" else order_hash
         # BEGIN IMMEDIATE serializes competing request_id reservations across
         # connections. Unique(user_id, request_id) is the final idempotency guard.
         await db.execute("BEGIN IMMEDIATE")
         try:
             inserted = await db.execute(
                 "INSERT OR IGNORE INTO mobile_v2_orders"
-                "(user_id,request_id,plan_code,provider,amount_rub,days,devices,state,created_at,updated_at)"
-                " VALUES(?,?,?,?,?,?,?,'creating',?,?)",
+                "(user_id,request_id,plan_code,provider,amount_rub,days,devices,provider_payload,state,created_at,updated_at)"
+                " VALUES(?,?,?,?,?,?,?,?,'creating',?,?)",
                 (user_id, req.request_id, req.plan_code, req.provider, plan["price_rub"],
-                 plan["days"], plan["devices"], now, now),
+                 plan["days"], plan["devices"], payload, now, now),
             )
             cur = await db.execute(
                 "SELECT plan_code,provider,payment_id,payment_url,state FROM mobile_v2_orders WHERE user_id=? AND request_id=?",
@@ -153,12 +155,7 @@ def create_router() -> APIRouter:
                 await db.close()
                 return {"payment_url": row[3], "invoice_id": row[2], "provider": req.provider,
                         "request_id": req.request_id}
-            if not inserted.rowcount:
-                # A prior request may have timed out after provider acceptance.
-                # Reconcile manually rather than create a potentially duplicate invoice.
-                await db.rollback()
-                await db.close()
-                raise HTTPException(503, "Проверяем создание счёта; повторное создание заблокировано")
+            retry_existing = not inserted.rowcount
             await db.commit()
         except HTTPException:
             raise
@@ -169,24 +166,38 @@ def create_router() -> APIRouter:
         await db.close()
 
         database, config = _runtime()
-        order_hash = hashlib.sha256(f"{user_id}:{req.request_id}".encode()).hexdigest()[:24]
         description = f"ByMeVPN — {plan['days']} дней, {plan['devices']} устройства"
         if req.provider == "yookassa":
+            # Stable YooKassa idempotency key safely reconciles ambiguous retries.
             result = await _create_yookassa(config, plan, user_id, description, order_hash)
             if not result or not result.get("id") or not result.get("url"):
                 raise HTTPException(502, "Провайдер не подтвердил создание счёта")
             invoice_id, payment_url = str(result["id"]), str(result["url"])
-            payload = None
         else:
-            payload = "bmv2_" + order_hash
-            result = await _create_crypto(config, plan, description, payload)
+            if retry_existing:
+                from payments import find_crypto_invoice_by_payload
+                scan_complete, found = await find_crypto_invoice_by_payload(payload)
+                if not scan_complete:
+                    raise HTTPException(503, "Проверяем создание счёта; попробуйте позже")
+                if found:
+                    found_url = (found.get("bot_invoice_url") or found.get("web_app_invoice_url")
+                                 or found.get("pay_url"))
+                    found_id = found.get("invoice_id")
+                    if not found_url or found_id is None:
+                        raise HTTPException(503, "Найденный счёт пока недоступен; попробуйте позже")
+                    result = (str(found_url), str(found_id))
+                else:
+                    result = await _create_crypto(config, plan, description, payload)
+            else:
+                result = await _create_crypto(config, plan, description, payload)
             if not result or len(result) != 2:
                 raise HTTPException(502, "Провайдер не подтвердил создание счёта")
             payment_url, invoice_id = str(result[0]), str(result[1])
 
         db = await _db()
         await db.execute(
-            "UPDATE mobile_v2_orders SET payment_id=?,payment_url=?,provider_payload=?,state='pending',updated_at=? "
+            "UPDATE mobile_v2_orders SET payment_id=?,payment_url=?,provider_payload=?,"
+            "state=CASE WHEN state='fulfilled' THEN state ELSE 'pending' END,updated_at=? "
             "WHERE user_id=? AND request_id=? AND plan_code=? AND provider=?",
             (invoice_id, payment_url, payload, int(time.time()), user_id, req.request_id, req.plan_code, req.provider),
         )
@@ -280,21 +291,22 @@ async def validate_yookassa_mobile_payment(payment: dict) -> bool:
     metadata = payment.get("metadata") or {}
     invoice = str(payment.get("id") or "")
     db = await _db()
-    cur = await db.execute("SELECT user_id,plan_code,amount_rub,days,devices,state,payment_id FROM mobile_v2_orders WHERE provider='yookassa' AND payment_id=?", (invoice,))
-    row = await cur.fetchone()
-    if not row:
-        await db.close()
-        return metadata.get("mobile_v2") != "1"
-    if metadata.get("mobile_v2") != "1" or payment.get("status") != "succeeded":
-        await db.close()
-        return False
-    if not row or row[6] != invoice or row[5] not in ("pending", "fulfilled"):
-        return False
-    plan = CATALOG.get(row[1])
     try:
+        cur = await db.execute("SELECT user_id,plan_code,amount_rub,days,devices,state,payment_id,provider_payload,request_id FROM mobile_v2_orders WHERE provider='yookassa' AND payment_id=?", (invoice,))
+        row = await cur.fetchone()
+        if not row:
+            if metadata.get("mobile_v2") != "1":
+                return True
+            cur = await db.execute("SELECT user_id,plan_code,amount_rub,days,devices,state,payment_id,provider_payload,request_id FROM mobile_v2_orders WHERE provider='yookassa' AND provider_payload=?", (str(metadata.get("mobile_order") or ""),))
+            row = await cur.fetchone()
+        if not row or metadata.get("mobile_v2") != "1" or payment.get("status") != "succeeded":
+            return False
+        if row[6] not in (None, invoice) or row[5] not in ("creating", "pending", "fulfilled"):
+            return False
+        plan = CATALOG.get(row[1])
         amount = Decimal(str((payment.get("amount") or {}).get("value", "0")))
-        valid = bool(plan and metadata.get("mobile_order") == hashlib.sha256(
-            f"{row[0]}:{(await _order_request_id(db, 'yookassa', invoice))}".encode()
+        valid = bool(plan and metadata.get("mobile_order") == row[7] == hashlib.sha256(
+            f"{row[0]}:{row[8]}".encode()
         ).hexdigest()[:24] and int(metadata.get("user_id", -1)) == row[0]
             and int(metadata.get("days", -1)) == row[3]
             and int(metadata.get("devices", -1)) == row[4]
@@ -304,17 +316,19 @@ async def validate_yookassa_mobile_payment(payment: dict) -> bool:
             and plan["devices"] == row[4]
             and amount.is_finite() and amount == Decimal(row[2])
             and (payment.get("amount") or {}).get("currency") == "RUB")
-        await db.close()
+        if valid and row[6] is None:
+            linked = await db.execute("UPDATE mobile_v2_orders SET payment_id=?,state='pending',updated_at=? WHERE provider='yookassa' AND user_id=? AND request_id=? AND payment_id IS NULL", (invoice, int(time.time()), row[0], row[8]))
+            if linked.rowcount != 1:
+                cur = await db.execute("SELECT payment_id FROM mobile_v2_orders WHERE provider='yookassa' AND user_id=? AND request_id=?", (row[0], row[8]))
+                current = await cur.fetchone()
+                if not current or current[0] != invoice:
+                    return False
+            await db.commit()
         return valid
     except (TypeError, ValueError, InvalidOperation):
-        await db.close()
         return False
-
-
-async def _order_request_id(db, provider: str, invoice_id: str) -> str:
-    cur = await db.execute("SELECT request_id FROM mobile_v2_orders WHERE provider=? AND payment_id=?", (provider, invoice_id))
-    row = await cur.fetchone()
-    return str(row[0]) if row else ""
+    finally:
+        await db.close()
 
 
 async def validate_crypto_mobile_invoice(invoice: dict) -> bool:
@@ -322,30 +336,40 @@ async def validate_crypto_mobile_invoice(invoice: dict) -> bool:
     payload = str(invoice.get("payload") or "")
     invoice_id = str(invoice.get("invoice_id") or "")
     db = await _db()
-    cur = await db.execute("SELECT request_id,user_id,plan_code,amount_rub,days,devices,state,payment_id,provider_payload FROM mobile_v2_orders WHERE provider='crypto' AND payment_id=?", (invoice_id,))
-    row = await cur.fetchone()
-    if not row:
-        await db.close()
-        return not payload.startswith("bmv2_")
-    if not payload.startswith("bmv2_"):
-        await db.close()
-        return False
-    if not row or row[7] != invoice_id or row[8] != payload or row[6] not in ("pending", "fulfilled"):
-        await db.close()
-        return False
-    plan = CATALOG.get(row[2])
     try:
+        cur = await db.execute("SELECT request_id,user_id,plan_code,amount_rub,days,devices,state,payment_id,provider_payload FROM mobile_v2_orders WHERE provider='crypto' AND payment_id=?", (invoice_id,))
+        row = await cur.fetchone()
+        if not row:
+            if not payload.startswith("bmv2_"):
+                return True
+            cur = await db.execute("SELECT request_id,user_id,plan_code,amount_rub,days,devices,state,payment_id,provider_payload FROM mobile_v2_orders WHERE provider='crypto' AND provider_payload=?", (payload,))
+            row = await cur.fetchone()
+        if not row or not payload.startswith("bmv2_"):
+            return False
+        if row[7] not in (None, invoice_id) or row[8] != payload or row[6] not in ("creating", "pending", "fulfilled"):
+            return False
+        plan = CATALOG.get(row[2])
         amount = Decimal(str(invoice.get("amount", "0")))
         valid = bool(plan and payload == "bmv2_" + hashlib.sha256(f"{row[1]}:{row[0]}".encode()).hexdigest()[:24]
                     and plan["price_rub"] == row[3] and plan["days"] == row[4]
                     and plan["devices"] == row[5] and amount.is_finite() and amount == Decimal(row[3])
                     and invoice.get("status") == "paid" and invoice.get("currency_type") == "fiat"
                     and invoice.get("fiat") == "RUB")
-        await db.close()
+        if valid and row[7] is None:
+            linked = await db.execute("UPDATE mobile_v2_orders SET payment_id=?,state='pending',updated_at=? WHERE provider='crypto' AND user_id=? AND request_id=? AND payment_id IS NULL", (invoice_id, int(time.time()), row[1], row[0]))
+            if linked.rowcount != 1:
+                cur = await db.execute("SELECT payment_id FROM mobile_v2_orders WHERE provider='crypto' AND user_id=? AND request_id=?", (row[1], row[0]))
+                current = await cur.fetchone()
+                if not current or str(current[0]) != invoice_id:
+                    return False
+            await db.commit()
+            database, _ = _runtime()
+            await database.add_crypto_pending(invoice_id, row[1], row[4], row[5], row[3], payload)
         return valid
     except (TypeError, ValueError, InvalidOperation):
-        await db.close()
         return False
+    finally:
+        await db.close()
 
 
 async def mark_mobile_order_fulfilled(provider: str, invoice_id: str) -> None:

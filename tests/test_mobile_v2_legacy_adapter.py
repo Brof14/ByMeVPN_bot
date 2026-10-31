@@ -149,6 +149,120 @@ class LegacyMobileV2HttpTests(unittest.TestCase):
         self.assertEqual(check.json()["status"], "succeeded")
         self.assertTrue(check.json()["is_active"])
 
+    def test_yookassa_early_webhook_binds_order_before_provider_response(self):
+        async def provider_create(config, plan, user_id, description, order_hash):
+            payment = {"id": "yk-early", "status": "succeeded",
+                       "amount": {"value": "89.00", "currency": "RUB"},
+                       "metadata": {"mobile_v2": "1", "mobile_order": order_hash,
+                                    "user_id": str(user_id), "days": "30", "devices": "2",
+                                    "plan_code": "1m_d2", "months": "1"}}
+            # Emulate the provider webhook arriving while create() is still in flight.
+            self.assertTrue(await legacy.validate_yookassa_mobile_payment(payment))
+            await legacy.mark_mobile_order_fulfilled("yookassa", payment["id"])
+            return {"id": payment["id"], "url": "https://pay.invalid/early"}
+        with patch.object(legacy, "_create_yookassa", provider_create):
+            response = self.client.post("/api/v1/mobile/v2/payment/create", json={
+                "plan_code": "1m_d2", "request_id": "early_yk_12345", "provider": "yookassa"})
+        self.assertEqual(response.status_code, 200, response.text)
+        check = self.client.get("/api/v1/mobile/v2/payment/check",
+                                params={"invoice_id": "yk-early", "provider": "yookassa"})
+        self.assertTrue(check.json()["is_active"])
+
+    def test_crypto_early_webhook_binds_order_and_duplicate_is_safe(self):
+        async def provider_create(config, plan, description, payload):
+            invoice = {"invoice_id": "crypto-early", "payload": payload, "status": "paid",
+                       "amount": "89", "currency_type": "fiat", "fiat": "RUB"}
+            self.assertTrue(await legacy.validate_crypto_mobile_invoice(invoice))
+            await legacy.mark_mobile_order_fulfilled("crypto", invoice["invoice_id"])
+            return ("https://pay.invalid/crypto-early", "crypto-early")
+        with patch.object(legacy, "_create_crypto", provider_create):
+            response = self.client.post("/api/v1/mobile/v2/payment/create", json={
+                "plan_code": "1m_d2", "request_id": "early_crypto_123", "provider": "crypto"})
+        self.assertEqual(response.status_code, 200, response.text)
+        invoice = {"invoice_id": "crypto-early", "payload": "bmv2_" +
+                   __import__("hashlib").sha256(b"1001:early_crypto_123").hexdigest()[:24],
+                   "status": "paid", "amount": "89", "currency_type": "fiat", "fiat": "RUB"}
+        self.assertTrue(self.client.post("/test-hooks/crypto", json=invoice).json()["allowed"])
+        self.assertTrue(self.client.post("/test-hooks/crypto", json=invoice).json()["allowed"])
+        check = self.client.get("/api/v1/mobile/v2/payment/check",
+                                params={"invoice_id": "crypto-early", "provider": "crypto"})
+        self.assertTrue(check.json()["is_active"])
+
+    def test_uncertain_provider_create_can_recover_without_new_order(self):
+        fake_create = AsyncMock(side_effect=[None, {"id": "yk-recovered", "url": "https://pay.invalid/recovered"}])
+        body = {"plan_code": "1m_d2", "request_id": "uncertain_12345", "provider": "yookassa"}
+        with patch.object(legacy, "_create_yookassa", fake_create):
+            first = self.client.post("/api/v1/mobile/v2/payment/create", json=body)
+            second = self.client.post("/api/v1/mobile/v2/payment/create", json=body)
+        self.assertEqual(first.status_code, 502)
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(fake_create.await_count, 2)
+        self.assertEqual(fake_create.await_args_list[0].args[-1], fake_create.await_args_list[1].args[-1])
+        self.assertEqual(second.json()["invoice_id"], "yk-recovered")
+
+        crypto_create = AsyncMock(return_value=None)
+        crypto_body = {"plan_code": "1m_d2", "request_id": "uncertain_crypto_123",
+                       "provider": "crypto"}
+        with patch.object(legacy, "_create_crypto", crypto_create):
+            failed = self.client.post("/api/v1/mobile/v2/payment/create", json=crypto_body)
+        self.assertEqual(failed.status_code, 502)
+        recovered = {"invoice_id": "crypto-recovered", "payload": "bmv2_" +
+                     __import__("hashlib").sha256(b"1001:uncertain_crypto_123").hexdigest()[:24],
+                     "bot_invoice_url": "https://pay.invalid/recovered"}
+        with patch("payments.find_crypto_invoice_by_payload", new=AsyncMock(return_value=(True, recovered))):
+            retry = self.client.post("/api/v1/mobile/v2/payment/create", json=crypto_body)
+        self.assertEqual(retry.status_code, 200, retry.text)
+        self.assertEqual(retry.json()["invoice_id"], "crypto-recovered")
+        self.assertEqual(crypto_create.await_count, 1)
+
+    def test_webhook_validation_closes_connections_on_all_rejection_paths(self):
+        class TrackedConnection:
+            def __init__(self, connection):
+                self.connection = connection
+                self.closed = False
+            def __getattr__(self, name):
+                return getattr(self.connection, name)
+            async def close(self):
+                self.closed = True
+                await self.connection.close()
+
+        tracked = []
+        real_db_factory = legacy._db
+        async def tracked_db():
+            connection = TrackedConnection(await real_db_factory())
+            tracked.append(connection)
+            return connection
+        with patch.object(legacy, "_create_yookassa", AsyncMock(return_value={
+                "id": "yk-close", "url": "https://pay.invalid/close"})), \
+             patch.object(legacy, "_create_crypto", AsyncMock(return_value=(
+                "https://pay.invalid/close-crypto", "crypto-close"))):
+            self.client.post("/api/v1/mobile/v2/payment/create", json={
+                "plan_code": "1m_d2", "request_id": "close_yk_12345", "provider": "yookassa"})
+            self.client.post("/api/v1/mobile/v2/payment/create", json={
+                "plan_code": "1m_d2", "request_id": "close_crypto_123", "provider": "crypto"})
+        with patch.object(legacy, "_db", tracked_db):
+            # HTTP test hooks exercise the same validators used by the runtime.
+            self.assertFalse(self.client.post("/test-hooks/yookassa", json={
+                "id": "orphan", "status": "succeeded", "amount": {"value": "1", "currency": "RUB"},
+                "metadata": {"mobile_v2": "1"}}).json()["allowed"])
+            self.assertFalse(self.client.post("/test-hooks/crypto", json={
+                "invoice_id": "orphan", "payload": "bmv2_missing", "status": "paid",
+                "amount": "1", "currency_type": "fiat", "fiat": "RUB"}).json()["allowed"])
+            self.assertFalse(self.client.post("/test-hooks/yookassa", json={
+                "id": "yk-close", "status": "pending",
+                "amount": {"value": "89.00", "currency": "RUB"},
+                "metadata": {"mobile_v2": "1", "mobile_order":
+                    __import__("hashlib").sha256(b"1001:close_yk_12345").hexdigest()[:24],
+                    "user_id": "1001", "days": "30", "devices": "2", "plan_code": "1m_d2",
+                    "months": "1"}}).json()["allowed"])
+            self.assertFalse(self.client.post("/test-hooks/crypto", json={
+                "invoice_id": "crypto-close", "payload": "bmv2_" +
+                    __import__("hashlib").sha256(b"1001:close_crypto_123").hexdigest()[:24],
+                "status": "active", "amount": "89", "currency_type": "fiat", "fiat": "RUB"
+            }).json()["allowed"])
+        self.assertGreaterEqual(len(tracked), 2)
+        self.assertTrue(all(connection.closed for connection in tracked))
+
     def test_crypto_invoice_requires_linked_opaque_payload_and_paid_status(self):
         fake_create = AsyncMock(return_value=("https://pay.invalid/crypto", "crypto-71"))
         with patch.object(legacy, "_create_crypto", fake_create):
