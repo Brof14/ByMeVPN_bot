@@ -275,6 +275,7 @@ async def create_crypto_payment(
     days: int,
     devices: int = 2,
     promo_code: Optional[str] = None,
+    external_payload: Optional[str] = None,
 ) -> Optional[tuple[str, str]]:
     """Create payment via Crypto Bot (@send).
 
@@ -298,8 +299,11 @@ async def create_crypto_payment(
         "paid_btn_name": "openBot",
         "paid_btn_url": "https://t.me/ByMeVPN_bot",
         "expires_in": 3600,  # 1 hour
-        "hidden_message": f"User ID: {user_id}, Days: {days}, Devices: {devices}",
-        "payload": f"{user_id}:{days}:{devices}:{promo_code or ''}",
+        "hidden_message": (
+            "Оплата подписки ByMeVPN"
+            if external_payload else f"User ID: {user_id}, Days: {days}, Devices: {devices}"
+        ),
+        "payload": external_payload or f"{user_id}:{days}:{devices}:{promo_code or ''}",
     }
 
     logger.info("create_crypto_payment: user_id=%d days=%d devices=%d amount=%d", user_id, days, devices, amount_rub)
@@ -370,6 +374,47 @@ async def get_paid_crypto_invoices(limit: int = 50) -> list[dict]:
     except Exception as e:
         logger.error("Crypto Bot getInvoices unexpected error: %s", str(e))
         return []
+
+
+async def find_crypto_invoice_by_payload(payload: str, max_pages: int = 5) -> tuple[bool, Optional[dict]]:
+    """Find an invoice after an ambiguous create timeout without issuing a duplicate.
+
+    Crypto Pay has no documented create-invoice idempotency key. Scan recent
+    invoices for our opaque payload; if the bounded scan cannot prove absence,
+    callers must fail closed instead of creating another invoice.
+    """
+    if not CRYPTO_BOT_TOKEN:
+        return False, None
+    if not payload or len(payload) > 256:
+        return False, None
+    headers = {"Crypto-Pay-API-Token": CRYPTO_BOT_TOKEN}
+    page_size = 1000
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            for page in range(max(1, min(int(max_pages), 5))):
+                response = await client.get(
+                    "https://pay.crypt.bot/api/getInvoices",
+                    params={"count": page_size, "offset": page * page_size},
+                    headers=headers,
+                )
+                response.raise_for_status()
+                body = response.json()
+                if not isinstance(body, dict) or body.get("ok") is not True:
+                    return False, None
+                result = body.get("result") or {}
+                items = result.get("items", []) if isinstance(result, dict) else result
+                if not isinstance(items, list):
+                    return False, None
+                for invoice in items:
+                    if isinstance(invoice, dict) and invoice.get("payload") == payload:
+                        return True, invoice
+                if len(items) < page_size:
+                    return True, None
+        # A full final page means older invoices may exist beyond our scan.
+        return False, None
+    except Exception as exc:
+        logger.warning("Crypto Pay invoice reconciliation failed (%s)", type(exc).__name__)
+        return False, None
 
 
 async def get_crypto_invoice(invoice_id: str | int) -> Optional[dict]:
