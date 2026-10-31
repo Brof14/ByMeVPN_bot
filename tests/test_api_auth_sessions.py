@@ -169,6 +169,31 @@ class TestTelegramAuthSessions(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(result.get("status") == "authenticated" for result in results), 1)
         self.assertEqual(sum(result.get("status") == "expired" for result in results), 1)
 
+    async def test_logout_revokes_access_and_refresh_for_one_session(self):
+        from fastapi import HTTPException
+
+        token = api_router.create_simple_jwt(98765, "test@example.invalid")
+        claims = api_router._verified_token_claims(token)
+        self.assertTrue(claims["jti"])
+
+        result = await api_router.logout(f"Bearer {token}", user_id=98765)
+        self.assertEqual(result, {"status": "ok"})
+        self.assertTrue(await database.is_mobile_jwt_revoked(claims["jti"]))
+
+        with self.assertRaises(HTTPException) as access_result:
+            await api_router.get_current_user_id(f"Bearer {token}")
+        self.assertEqual(access_result.exception.status_code, 401)
+
+        with self.assertRaises(HTTPException) as refresh_result:
+            await api_router.refresh_token(api_router.RefreshRequest(refresh=f"ref_{token}"))
+        self.assertEqual(refresh_result.exception.status_code, 401)
+
+    async def test_revocation_is_limited_to_token_expiry(self):
+        token = api_router.create_simple_jwt(98765, "test@example.invalid")
+        claims = api_router._verified_token_claims(token)
+        await database.revoke_mobile_jwt(claims["jti"], claims["expires_at"])
+        self.assertTrue(await database.is_mobile_jwt_revoked(claims["jti"]))
+
     async def test_mobile_payment_request_persists_owner_and_is_idempotent(self):
         first = await database.ensure_mobile_payment_request(98765, "request-12345678", "1m", "yookassa")
         replay = await database.ensure_mobile_payment_request(98765, "request-12345678", "1m", "yookassa")
