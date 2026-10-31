@@ -129,6 +129,15 @@ class TestGoogleLoginClosed(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.exception.status_code, 503)
 
 
+class TestAccountDeletionUnavailable(unittest.IsolatedAsyncioTestCase):
+    async def test_delete_me_does_not_claim_success_without_deleting_account(self):
+        from fastapi import HTTPException
+
+        with self.assertRaises(HTTPException) as result:
+            await api_router.delete_me(user_id=98765)
+        self.assertEqual(result.exception.status_code, 501)
+
+
 class TestTelegramAuthSessions(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         _clean_db()
