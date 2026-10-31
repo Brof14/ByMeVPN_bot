@@ -1620,6 +1620,22 @@ async def claim_mobile_payment_creation(user_id: int, request_id: str, plan_code
     return cur.rowcount == 1
 
 
+async def reset_mobile_payment_creation(
+    user_id: int, request_id: str, plan_code: str, provider: str,
+) -> bool:
+    """Release a create claim only when the provider definitely rejected the attempt."""
+    db = await get_db()
+    async with _db_semaphore:
+        cur = await db.execute(
+            "UPDATE mobile_payment_requests SET creation_state='ready' "
+            "WHERE user_id=? AND request_id=? AND plan_code=? AND provider=? "
+            "AND payment_id IS NULL AND creation_state='creating'",
+            (int(user_id), request_id, plan_code, provider),
+        )
+        await db.commit()
+    return cur.rowcount == 1
+
+
 async def advance_mobile_payment_request_generation(
     user_id: int, request_id: str, plan_code: str, provider: str,
     payment_id: str, generation: int,
