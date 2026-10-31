@@ -28,7 +28,7 @@ class TestMobilePaymentContract(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(item["devices"], 2)
 
     async def test_client_amount_days_and_device_values_are_ignored(self):
-        reserved = {"plan_code": "3m", "provider": "yookassa", "payment_id": None, "confirmation_url": None}
+        reserved = {"plan_code": "3m", "provider": "yookassa", "payment_id": None, "confirmation_url": None, "generation": 0}
         created = {"payment_url": "https://pay.example.invalid/checkout", "payment_id": "invoice-123", "status": "pending"}
         request = api_router.PaymentCreateRequest(
             plan_code="3m", request_id="12345678-1234-1234-1234-123456789012",
@@ -51,18 +51,54 @@ class TestMobilePaymentContract(unittest.IsolatedAsyncioTestCase):
     async def test_repeated_request_returns_same_saved_invoice(self):
         reserved = {
             "plan_code": "1m", "provider": "yookassa", "payment_id": "invoice-existing",
-            "confirmation_url": "https://pay.example.invalid/checkout",
+            "confirmation_url": "https://pay.example.invalid/checkout", "generation": 0,
         }
         request = api_router.PaymentCreateRequest(
             plan_code="1m", request_id="12345678-1234-1234-1234-123456789012", provider="yookassa",
         )
         with (
             patch.object(api_router.database, "ensure_mobile_payment_request", new=AsyncMock(return_value=reserved)),
+            patch("payments.get_yookassa_payment_status", new=AsyncMock(return_value="pending")),
             patch("payments.create_yookassa_payment", new=AsyncMock()) as create,
         ):
             result = await api_router.api_create_payment(request, user_id=123)
         self.assertEqual(result["invoice_id"], "invoice-existing")
         create.assert_not_awaited()
+
+    async def test_canceled_invoice_is_rotated_and_retried_idempotently(self):
+        old = {
+            "plan_code": "1m", "provider": "yookassa", "payment_id": "invoice-canceled",
+            "confirmation_url": "https://pay.example.invalid/old", "generation": 0,
+        }
+        reset = {
+            "plan_code": "1m", "provider": "yookassa", "payment_id": None,
+            "confirmation_url": None, "generation": 1,
+        }
+        request = api_router.PaymentCreateRequest(
+            plan_code="1m", request_id="12345678-1234-1234-1234-123456789012", provider="yookassa",
+        )
+        created = {
+            "payment_url": "https://pay.example.invalid/new",
+            "payment_id": "invoice-new", "status": "pending",
+        }
+        with (
+            patch.object(api_router.database, "ensure_mobile_payment_request", new=AsyncMock(side_effect=[old, reset])) as reserve,
+            patch.object(api_router.database, "advance_mobile_payment_request_generation", new=AsyncMock(return_value=True)) as rotate,
+            patch.object(api_router.database, "save_mobile_payment_request", new=AsyncMock(return_value=True)),
+            patch("payments.get_yookassa_payment_status", new=AsyncMock(return_value="canceled")),
+            patch("payments.create_yookassa_payment", new=AsyncMock(return_value=created)) as create,
+        ):
+            result = await api_router.api_create_payment(request, user_id=123)
+
+        self.assertEqual(result["invoice_id"], "invoice-new")
+        rotate.assert_awaited_once_with(
+            123, request.request_id, "1m", "yookassa", "invoice-canceled", 0,
+        )
+        self.assertEqual(reserve.await_count, 2)
+        expected_key = api_router.hashlib.sha256(
+            f"bymevpn-mobile:123:{request.request_id}:1".encode()
+        ).hexdigest()
+        self.assertEqual(create.await_args.kwargs["idempotency_key"], expected_key)
 
     async def test_other_users_invoice_is_not_disclosed_or_queried(self):
         from fastapi import HTTPException
