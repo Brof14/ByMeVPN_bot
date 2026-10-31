@@ -1206,6 +1206,11 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
             "app_payment": "1",
             "plan_code": f"{plan_code}_d{devices}",
             "mobile_request_hash": hashlib.sha256(req.request_id.encode()).hexdigest()[:20],
+            # Every invoice created through this JWT-authenticated mobile API
+            # has a durable mobile_payment_requests row, including clients
+            # still using the pre-V2 route. Keep the V2 marker for existing
+            # diagnostics, but bind all new API invoices in fulfillment.
+            "mobile_api_checkout": "1",
             **({"mobile_v2": "1"} if mobile_v2_plan_code else {}),
         },
         idempotency_key=stable_key,

@@ -450,7 +450,7 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
         # that exact owner/request and recompute its terms from our catalog.
         # Telegram bot payments do not carry app_payment=1 and retain their
         # existing fulfillment contract.
-        if metadata.get("mobile_v2") == "1":
+        if metadata.get("mobile_api_checkout") == "1" or metadata.get("mobile_v2") == "1":
             if not await _mobile_yookassa_order_matches(
                 payment_id, user_id, days, devices, amount_rub, metadata,
             ):

@@ -21,7 +21,10 @@ the call path. The focused runtime change set is:
    support from `payments.py`, without changing the legacy function signatures
    used by Telegram handlers.
 4. Add the mobile-order verification guards from `webhook.py` before either
-   provider's fulfillment path can call subscription provisioning.
+   provider's fulfillment path can call subscription provisioning. Every new
+   invoice created through the JWT-authenticated `/payment/create` API is
+   marked and checked, including pre-V2 mobile clients; invoices created
+   before this marker and Telegram bot invoices keep their existing path.
 5. Retain the existing HWID path: device limit is written to `limitHwid`,
    `limitIp` stays `0`, and current HWID checks remain enabled.
 

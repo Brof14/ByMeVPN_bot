@@ -41,6 +41,20 @@ class TestMobileWebhookContract(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(wrong_tier)
         self.assertEqual(lookup.await_count, 4)
 
+    async def test_legacy_mobile_invoice_marker_uses_same_order_guard(self):
+        order = {
+            "user_id": 987654321, "request_id": "request-test", "plan_code": "1m",
+            "provider": "yookassa", "devices": 5, "payment_id": "legacy-mobile-invoice",
+        }
+        with patch(
+            "database.get_mobile_payment_request_by_invoice", new=AsyncMock(return_value=order),
+        ) as lookup:
+            self.assertTrue(await webhook._mobile_yookassa_order_matches(
+                "legacy-mobile-invoice", 987654321, 30, 5, 109,
+                {"plan_code": "1m_d5"},
+            ))
+        lookup.assert_awaited_once_with("yookassa", "legacy-mobile-invoice")
+
     async def test_crypto_requires_matching_invoice_owner_and_catalog_terms(self):
         order = {
             "user_id": 987654321, "request_id": "request-test", "plan_code": "6m",

@@ -84,6 +84,7 @@ class TestMobileApiV2(unittest.TestCase):
             (109, 30, 5, 1),
         )
         self.assertTrue(args["idempotency_key"])
+        self.assertEqual(args["extra_metadata"]["mobile_api_checkout"], "1")
         self.assertEqual(args["extra_metadata"]["mobile_v2"], "1")
         self.assertEqual(args["extra_metadata"]["plan_code"], "1m_d5")
         self.assertEqual(response.json()["invoice_id"], "test-invoice-001")
@@ -143,6 +144,38 @@ class TestMobileApiV2(unittest.TestCase):
             (872, 240, 10),
         )
         self.assertEqual(response.json()["invoice_id"], "crypto-test-invoice")
+
+    def test_legacy_mobile_checkout_is_also_tagged_for_order_bound_fulfillment(self):
+        reservation = {
+            "plan_code": "1m", "provider": "yookassa", "devices": 5,
+            "payment_id": None, "confirmation_url": None, "generation": 0,
+            "creation_state": "ready",
+        }
+        with patch.object(
+            api_router.database, "ensure_mobile_payment_request",
+            new=AsyncMock(return_value=reservation),
+        ), patch.object(
+            api_router.database, "claim_mobile_payment_creation", new=AsyncMock(return_value=True),
+        ), patch.object(
+            api_router.database, "save_mobile_payment_request", new=AsyncMock(return_value=True),
+        ), patch(
+            "payments.create_yookassa_payment", new=AsyncMock(return_value={
+                "payment_url": "https://pay.example.invalid/checkout",
+                "payment_id": "legacy-mobile-invoice", "status": "pending",
+            }),
+        ) as create_payment:
+            response = self.client.post(
+                "/api/v1/payment/create",
+                json={
+                    "plan_code": "1m", "devices": 5,
+                    "request_id": "legacy_mobile_123456",
+                    "provider": "yookassa",
+                },
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        metadata = create_payment.await_args.kwargs["extra_metadata"]
+        self.assertEqual(metadata["mobile_api_checkout"], "1")
+        self.assertNotIn("mobile_v2", metadata)
 
     def test_create_rejects_client_supplied_price_or_device_fields(self):
         response = self.client.post(
