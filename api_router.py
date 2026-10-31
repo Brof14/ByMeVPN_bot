@@ -557,6 +557,9 @@ async def check_telegram_session(token: str):
 
     if session.get("status") != "authenticated":
         return TelegramCheckResponse(status="pending")
+    # Consume before awaiting any I/O: overlapping polls must not both mint tokens.
+    _TELEGRAM_SESSIONS.pop(clean_token, None)
+    _TELEGRAM_SESSIONS.pop(token, None)
 
     user_id = session["user_id"]
     username = session.get("username", "")
@@ -564,8 +567,6 @@ async def check_telegram_session(token: str):
 
     jwt_token = create_simple_jwt(user_id, f"{user_id}@telegram.bymevpn")
     sub_url, servers, sub_dict = await get_user_real_subscription(user_id)
-    _TELEGRAM_SESSIONS.pop(clean_token, None)
-    _TELEGRAM_SESSIONS.pop(token, None)
 
     return TelegramCheckResponse(
         status="authenticated",
