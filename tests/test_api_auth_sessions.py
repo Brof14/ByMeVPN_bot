@@ -257,6 +257,17 @@ class TestTelegramAuthSessions(unittest.IsolatedAsyncioTestCase):
                 UNIQUE (provider, payment_id)
             )"""
         )
+        await db.execute("DROP TABLE crypto_pending")
+        await db.execute(
+            """CREATE TABLE crypto_pending (
+                invoice_id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                days INTEGER NOT NULL,
+                devices INTEGER NOT NULL DEFAULT 1,
+                amount_rub INTEGER NOT NULL DEFAULT 0,
+                created INTEGER DEFAULT (strftime('%s','now'))
+            )"""
+        )
         await db.commit()
 
         await database.init_db()
@@ -266,6 +277,10 @@ class TestTelegramAuthSessions(unittest.IsolatedAsyncioTestCase):
             )).fetchall()
         }
         self.assertTrue({"generation", "devices", "creation_state"}.issubset(columns))
+        crypto_columns = {
+            row[1] for row in await (await db.execute("PRAGMA table_info(crypto_pending)")).fetchall()
+        }
+        self.assertIn("payload", crypto_columns)
         current = await database.ensure_mobile_payment_request(
             98765, "request-migrated1", "1m", "yookassa", 5
         )
