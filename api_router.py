@@ -965,7 +965,7 @@ async def get_plans(devices: int = 2):
 # ---------------------------------------------------------------------------
 @api_router.post("/payment/create")
 async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(get_current_user_id)):
-    """Create an idempotent checkout from the server-owned tariff catalog."""
+    """Create an owned, idempotent checkout from the server-owned tariff catalog."""
     plan_map = {
         "1m": 1, "month": 1,
         "3m": 3, "quarter": 3,
@@ -975,7 +975,8 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
     months = plan_map.get(req.plan_code)
     if months is None:
         raise HTTPException(status_code=400, detail="Неизвестный тариф")
-    if req.provider != "yookassa":
+    provider = req.provider or "yookassa"
+    if provider not in ("yookassa", "crypto"):
         raise HTTPException(status_code=400, detail="Этот способ оплаты недоступен в приложении")
     if not req.request_id or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", req.request_id):
         raise HTTPException(status_code=400, detail="Создайте новый запрос на оплату")
@@ -984,43 +985,139 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
     devices = 2 if req.devices is None else req.devices
     if devices not in VALID_DEVICE_LIMITS:
         raise HTTPException(status_code=400, detail="Выберите 2, 5 или 10 устройств")
-    # The server determines the real charge; client-supplied amount_rub/days are ignored.
+    # Client amount/days are informational only; backend catalog owns all terms.
     amount_rub, days = get_price_for_months(months, devices)
     reserved = await database.ensure_mobile_payment_request(
-        user_id, req.request_id, req.plan_code, req.provider,
+        user_id, req.request_id, req.plan_code, provider, devices,
     )
-    if reserved["plan_code"] != req.plan_code or reserved["provider"] != req.provider:
+    if (
+        reserved["plan_code"] != req.plan_code
+        or reserved["provider"] != provider
+        or int(reserved.get("devices", 2)) != devices
+    ):
         raise HTTPException(status_code=409, detail="Этот запрос уже использован для другого тарифа")
-    if reserved["payment_id"] and reserved["confirmation_url"]:
+
+    if provider == "crypto":
+        from payments import create_crypto_payment, find_crypto_invoice_by_payload, get_crypto_invoice
+
+        def _crypto_payload(generation: int) -> str:
+            material = f"mobile:{user_id}:{req.request_id}:{req.plan_code}:{devices}:{generation}"
+            return "bm1_" + hashlib.sha256(material.encode()).hexdigest()
+
+        async def _bind_crypto_invoice(invoice_id: str, payment_url: str, payload: str) -> None:
+            saved = await database.save_mobile_crypto_checkout(
+                user_id, req.request_id, req.plan_code, devices, invoice_id,
+                payment_url, days, amount_rub, payload,
+            )
+            if not saved:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Счёт создан, но его безопасное сохранение не подтверждено. Повторите проверку позже",
+                )
+
+        async def _rotate_expired_crypto(invoice_id: str, generation: int) -> dict:
+            rotated = await database.advance_mobile_payment_request_generation(
+                user_id, req.request_id, req.plan_code, provider, invoice_id, generation,
+            )
+            if rotated:
+                await database.delete_crypto_pending(invoice_id)
+            latest = await database.ensure_mobile_payment_request(
+                user_id, req.request_id, req.plan_code, provider, devices,
+            )
+            if latest.get("payment_id") == invoice_id:
+                raise HTTPException(status_code=503, detail="Не удалось обновить просроченный счёт. Попробуйте позже")
+            return latest
+
+        if reserved.get("payment_id") and reserved.get("confirmation_url"):
+            previous_invoice = str(reserved["payment_id"])
+            invoice = await get_crypto_invoice(previous_invoice)
+            provider_status = invoice.get("status") if invoice else None
+            if provider_status == "expired":
+                reserved = await _rotate_expired_crypto(previous_invoice, reserved["generation"])
+            else:
+                # Reinsert the durable fulfillment intent if a previous process
+                # stopped between binding the invoice and queueing its delivery.
+                payload = _crypto_payload(reserved["generation"])
+                await _bind_crypto_invoice(previous_invoice, reserved["confirmation_url"], payload)
+                return {
+                    "payment_url": reserved["confirmation_url"],
+                    "invoice_id": previous_invoice,
+                    "provider": "crypto",
+                }
+
+        payload = _crypto_payload(reserved["generation"])
+        if reserved.get("creation_state") == "creating":
+            # Crypto Pay has no documented create idempotency key. Recover an
+            # invoice by its opaque payload after an ambiguous timeout; never
+            # issue a second invoice when absence cannot be proven.
+            scan_complete, invoice = await find_crypto_invoice_by_payload(payload)
+            if not scan_complete:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Проверяем создание счёта. Не запускайте оплату повторно; попробуйте позже",
+                )
+            if invoice:
+                invoice_id = str(invoice.get("invoice_id") or "")
+                payment_url = invoice.get("bot_invoice_url") or invoice.get("web_app_invoice_url")
+                if not invoice_id or not payment_url:
+                    raise HTTPException(status_code=503, detail="Найденный счёт пока недоступен для оплаты")
+                await _bind_crypto_invoice(invoice_id, payment_url, payload)
+                if invoice.get("status") == "expired":
+                    reserved = await _rotate_expired_crypto(invoice_id, reserved["generation"])
+                    payload = _crypto_payload(reserved["generation"])
+                else:
+                    return {"payment_url": payment_url, "invoice_id": invoice_id, "provider": "crypto"}
+            else:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Не удалось однозначно сверить создание счёта. Обратитесь в поддержку",
+                )
+
+        claimed = await database.claim_mobile_payment_creation(
+            user_id, req.request_id, req.plan_code, provider,
+        )
+        if not claimed:
+            raise HTTPException(status_code=409, detail="Создание счёта уже выполняется. Повторите проверку позже")
+        result = await create_crypto_payment(
+            amount_rub=amount_rub,
+            description=f"ByMeVPN — {days} дней, {devices} устройства",
+            user_id=user_id,
+            days=days,
+            devices=devices,
+            external_payload=payload,
+        )
+        if not result:
+            # The provider may have accepted a request before the network timed
+            # out. Keep the request in 'creating' so a retry reconciles by payload.
+            raise HTTPException(status_code=502, detail="Не удалось подтвердить создание счёта. Повторите проверку позже")
+        payment_url, invoice_id = result
+        await _bind_crypto_invoice(str(invoice_id), payment_url, payload)
+        return {"payment_url": payment_url, "invoice_id": str(invoice_id), "provider": "crypto"}
+
+    if reserved.get("payment_id") and reserved.get("confirmation_url"):
         from payments import get_yookassa_payment_status
 
         previous_invoice = reserved["payment_id"]
         provider_status = await get_yookassa_payment_status(previous_invoice)
         if provider_status == "canceled":
-            rotated = await database.advance_mobile_payment_request_generation(
-                user_id, req.request_id, req.plan_code, req.provider,
+            await database.advance_mobile_payment_request_generation(
+                user_id, req.request_id, req.plan_code, provider,
                 previous_invoice, reserved["generation"],
             )
-            # A simultaneous retry may have rotated the request already. Reload
-            # the row and use its generation so all retries share one new invoice.
+            # A simultaneous retry may have rotated the request already.
             reserved = await database.ensure_mobile_payment_request(
-                user_id, req.request_id, req.plan_code, req.provider,
+                user_id, req.request_id, req.plan_code, provider, devices,
             )
             if reserved["payment_id"] == previous_invoice:
-                logger.error(
-                    "Canceled mobile invoice generation could not be rotated (user=%d)",
-                    user_id,
-                )
                 raise HTTPException(status_code=503, detail="Не удалось повторить оплату. Попробуйте позже")
-            if reserved["payment_id"] and reserved["confirmation_url"]:
+            if reserved.get("payment_id") and reserved.get("confirmation_url"):
                 return {
                     "payment_url": reserved["confirmation_url"],
                     "invoice_id": reserved["payment_id"],
                     "provider": "yookassa",
                 }
         else:
-            # Unknown provider status is not proof of cancellation. Preserve the
-            # existing idempotent invoice and never create a second charge.
+            # Unknown status is not proof of cancellation: preserve the invoice.
             return {
                 "payment_url": reserved["confirmation_url"],
                 "invoice_id": reserved["payment_id"],
@@ -1052,7 +1149,7 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
     if result.get("status") not in (None, "pending", "waiting_for_capture"):
         raise HTTPException(status_code=502, detail="Платёжная страница недоступна. Попробуйте позже")
     saved = await database.save_mobile_payment_request(
-        user_id, req.request_id, req.plan_code, req.provider,
+        user_id, req.request_id, req.plan_code, provider,
         result["payment_id"], result["payment_url"],
     )
     if not saved:
