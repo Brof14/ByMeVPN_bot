@@ -845,7 +845,12 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
 
 @api_router.delete("/me")
 async def delete_me(user_id: int = Depends(get_current_user_id)):
-    return {"status": "deleted"}
+    # The mobile account-deletion flow is not implemented yet. Never report
+    # success while leaving the account and subscription untouched.
+    raise HTTPException(
+        status_code=501,
+        detail="Удаление аккаунта пока недоступно. Обратитесь в поддержку",
+    )
 
 
 # ---------------------------------------------------------------------------
