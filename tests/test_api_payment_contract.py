@@ -26,6 +26,13 @@ class TestMobilePaymentContract(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(item["price_rub"], amount)
             self.assertEqual(item["days"], days)
             self.assertEqual(item["devices"], 2)
+            self.assertEqual(item["desktop_code"], {"1m": "month", "3m": "quarter", "6m": "half_year", "12m": "year"}[code])
+            self.assertEqual(len(item["device_options"]), 3)
+            for option in item["device_options"]:
+                self.assertEqual(
+                    (option["price_rub"], option["days"]),
+                    get_price_for_months(months, option["devices"]),
+                )
 
     async def test_plans_price_all_supported_device_tiers(self):
         for devices in (2, 5, 10):
@@ -45,14 +52,27 @@ class TestMobilePaymentContract(unittest.IsolatedAsyncioTestCase):
         )
         with self.assertRaises(api_router.HTTPException) as payment_error:
             await api_router.api_create_payment(req, user_id=123)
-        self.assertEqual(payment_error.exception.status_code, 400)
+        self.assertEqual(payment_error.exception.status_code, 422)
 
-    async def test_client_amount_days_are_ignored_but_valid_device_tier_is_used(self):
+    async def test_checkout_rejects_tampered_price_and_days(self):
+        from fastapi import HTTPException
+        correct_amount, correct_days = get_price_for_months(3, 2)
+        for amount, days in ((1, correct_days), (correct_amount, 9999)):
+            request = api_router.PaymentCreateRequest(
+                plan_code="3m", request_id="12345678-1234-1234-1234-123456789012",
+                amount_rub=amount, days=days, devices=2, provider="yookassa",
+            )
+            with self.assertRaises(HTTPException) as error:
+                await api_router.api_create_payment(request, user_id=123)
+            self.assertEqual(error.exception.status_code, 422)
+
+    async def test_checkout_uses_selected_device_tier_and_server_price(self):
         reserved = {"plan_code": "3m", "provider": "yookassa", "devices": 10, "payment_id": None, "confirmation_url": None, "generation": 0}
         created = {"payment_url": "https://pay.example.invalid/checkout", "payment_id": "invoice-123", "status": "pending"}
+        amount, days = get_price_for_months(3, 10)
         request = api_router.PaymentCreateRequest(
             plan_code="3m", request_id="12345678-1234-1234-1234-123456789012",
-            amount_rub=1, days=3, devices=10, provider="yookassa",
+            amount_rub=amount, days=days, devices=10, provider="yookassa",
         )
         with (
             patch.object(api_router.database, "ensure_mobile_payment_request", new=AsyncMock(return_value=reserved)),
@@ -172,7 +192,10 @@ class TestMobilePaymentContract(unittest.IsolatedAsyncioTestCase):
                         request = api_router.PaymentCreateRequest(
                             plan_code=plan_code,
                             request_id=f"matrix-{provider}-{plan_code}-{devices}",
-                            provider=provider, amount_rub=1, days=1, devices=devices,
+                            provider=provider,
+                            amount_rub=get_price_for_months(months, devices)[0],
+                            days=get_price_for_months(months, devices)[1],
+                            devices=devices,
                         )
                         with (
                             patch.object(api_router.database, "ensure_mobile_payment_request", new=AsyncMock(return_value=reserved)),
@@ -205,9 +228,10 @@ class TestMobilePaymentContract(unittest.IsolatedAsyncioTestCase):
             "payment_id": None, "confirmation_url": None, "generation": 0,
             "creation_state": "ready",
         }
+        amount, days = get_price_for_months(3, 5)
         request = api_router.PaymentCreateRequest(
             plan_code="3m", request_id="request-crypto-1234", provider="crypto",
-            amount_rub=1, days=1, devices=5,
+            amount_rub=amount, days=days, devices=5,
         )
         with (
             patch.object(api_router.database, "ensure_mobile_payment_request", new=AsyncMock(return_value=reserved)),

@@ -293,7 +293,7 @@ def parse_single_node_line(line: str, index: int, fallback_uuid: Optional[str] =
             hp_parts = host_port.split(":")
             raw_host = hp_parts[0]
             port = int(hp_parts[1]) if len(hp_parts) > 1 else 443
-            server_ip = "2.27.120.247" if (raw_host == "bymevpn.duckdns.org" or not raw_host) else raw_host
+            server_ip = raw_host
 
             params = parse_qs(query_str)
             pbk = params.get("pbk", [""])[0]
@@ -361,7 +361,7 @@ def parse_single_node_line(line: str, index: int, fallback_uuid: Optional[str] =
             hp_parts = q_parts[0].split(":")
             raw_host = hp_parts[0]
             port = int(hp_parts[1]) if len(hp_parts) > 1 else 443
-            server_ip = "2.27.120.247" if (raw_host == "bymevpn.duckdns.org" or not raw_host) else raw_host
+            server_ip = raw_host
 
             query_str = q_parts[1] if len(q_parts) > 1 else ""
             params = parse_qs(query_str)
@@ -439,25 +439,28 @@ async def fetch_and_parse_real_nodes(
             host_header = f"{host_header}:{parsed.port}"
         upstream_headers["Host"] = host_header
 
-    async with httpx.AsyncClient(verify=False, timeout=5.0) as client:
+    # The local 3x-ui listener can have a hostname-specific certificate.
+    # Limit its TLS exception strictly to loopback; verify public TLS normally.
+    async with httpx.AsyncClient(verify=False, timeout=5.0) as local_client:
         try:
-            resp = await client.get(local_url, headers=upstream_headers)
+            resp = await local_client.get(local_url, headers=upstream_headers)
             if resp.status_code == 200:
                 raw_content = resp.text
         except Exception:
             pass
 
-        if not raw_content:
-            try:
-                resp = await client.get(sub_url, headers=upstream_headers)
+    if not raw_content:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as public_client:
+                resp = await public_client.get(sub_url, headers=upstream_headers)
                 if resp.status_code == 200:
                     raw_content = resp.text
-            except Exception as e:
-                logger.error(
-                    "Failed to fetch subscription from host %s (%s)",
-                    parsed.hostname or "unknown",
-                    type(e).__name__,
-                )
+        except Exception as e:
+            logger.error(
+                "Failed to fetch subscription from host %s (%s)",
+                parsed.hostname or "unknown",
+                type(e).__name__,
+            )
 
     if not raw_content:
         return []
@@ -505,7 +508,7 @@ async def get_user_real_subscription(
         best_key = max(active_keys, key=lambda k: int(k.get("expiry", 0)))
         expiry_ts = int(best_key.get("expiry", 0))
         days_count = int(best_key.get("days", 30))
-        device_limit = int(best_key.get("limit_ip", 2))
+        device_limit = max(2, int(best_key.get("limit_ip") or 0))
         sub_uuid = best_key.get("uuid")
         key_content = best_key.get("key", "").strip()
         if key_content.startswith("http://") or key_content.startswith("https://"):
@@ -534,8 +537,8 @@ async def get_user_real_subscription(
         return None, [], {
             "status": "none",
             "plan_name": "Нет подписки",
-            "trial_available": True,
-            "max_devices": 5,
+            "trial_available": not await database.has_trial_used(user_id),
+            "max_devices": device_limit,
             "active_devices": 0,
             "subscription_url": None,
         }
@@ -557,6 +560,18 @@ async def get_user_real_subscription(
     }
 
     return sub_url, servers, sub_dict
+
+
+async def _auth_subscription_snapshot(user_id: int, headers: Dict[str, str]):
+    """Keep login independent from 3x-ui subscription availability."""
+    try:
+        return await get_user_real_subscription(user_id, headers)
+    except Exception as exc:
+        logger.warning("Subscription lookup unavailable during login (%s)", type(exc).__name__)
+        return None, [], {
+            "status": "unknown", "plan_name": "Проверяем подписку",
+            "trial_available": False, "max_devices": 0, "active_devices": 0,
+        }
 
 
 def _subscription_headers_from_request(request: Request) -> Dict[str, str]:
@@ -661,7 +676,7 @@ async def check_telegram_session(token: str, request: Request):
     full_name = session.get("full_name", "Telegram User")
 
     jwt_token = create_simple_jwt(user_id, f"{user_id}@telegram.bymevpn")
-    sub_url, servers, sub_dict = await get_user_real_subscription(
+    sub_url, servers, sub_dict = await _auth_subscription_snapshot(
         user_id, _subscription_headers_from_request(request)
     )
 
@@ -719,7 +734,7 @@ async def register(req: RegisterRequest, request: Request):
     await database.ensure_user(user_id, email.split("@")[0])
 
     jwt_token = create_simple_jwt(user_id, email)
-    sub_url, servers, sub_dict = await get_user_real_subscription(
+    sub_url, servers, sub_dict = await _auth_subscription_snapshot(
         user_id, _subscription_headers_from_request(request)
     )
 
@@ -759,7 +774,7 @@ async def login(req: LoginRequest, request: Request):
         raise HTTPException(status_code=401, detail="Неверный email или пароль")
 
     jwt_token = create_simple_jwt(user_id, email)
-    sub_url, servers, sub_dict = await get_user_real_subscription(
+    sub_url, servers, sub_dict = await _auth_subscription_snapshot(
         user_id, _subscription_headers_from_request(request)
     )
 
@@ -835,11 +850,21 @@ async def logout(
 async def get_me(user_id: int = Depends(get_current_user_id)):
     user = await database.find_user_by_id(user_id)
     username = user.get("username", "") if user else ""
+    # Restore an actual registered email/name instead of manufacturing a false
+    # @bymevpn.app address for signed-in desktop accounts.
+    db = await database.get_db()
+    try:
+        cursor = await db.execute("SELECT email,name FROM app_users WHERE user_id=?", (user_id,))
+        row = await cursor.fetchone()
+    except Exception:
+        row = None  # Telegram identities do not necessarily have app_users rows.
+    email = str(row[0]) if row else ""
+    display_name = str(row[1] or "") if row else ""
     return {
         "user": {
             "id": str(user_id),
-            "email": f"{username or user_id}@bymevpn.app",
-            "name": username or f"User {user_id}",
+            "email": email,
+            "name": display_name or username or f"User {user_id}",
             "is_google": False,
         }
     }
@@ -933,34 +958,36 @@ async def activate_trial(req: TrialRequest, request: Request, user_id: int = Dep
 
 @api_router.get("/plans")
 async def get_plans(devices: int = 2):
+    """Server-owned tariff catalog with legacy and desktop plan identifiers."""
     from constants import get_price_for_months, VALID_DEVICE_LIMITS
     if devices not in VALID_DEVICE_LIMITS:
         raise HTTPException(status_code=400, detail="Выберите 2, 5 или 10 устройств")
 
     plan_catalog = [
-        ("1m", 1, "1 месяц", 0, False),
-        ("3m", 3, "4 месяца (3+1)", 11, True),
-        ("6m", 6, "8 месяцев (6+2)", 22, False),
-        ("12m", 12, "15 месяцев (12+3)", 34, False),
+        ("1m", "month", 1, "1 месяц", 0, False),
+        ("3m", "quarter", 3, "4 месяца (3+1)", 11, True),
+        ("6m", "half_year", 6, "8 месяцев (6+2)", 22, False),
+        ("12m", "year", 12, "15 месяцев (12+3)", 34, False),
     ]
-    plans = [
-        {
-            "code": code,
-            "name": label,
-            "price": f"{get_price_for_months(months, devices)[0]} ₽",
-            "price_rub": get_price_for_months(months, devices)[0],
-            "days": get_price_for_months(months, devices)[1],
-            "devices": devices,
-            "discount_percent": discount,
-            "is_popular": popular,
-        }
-        for code, months, label, discount, popular in plan_catalog
-    ]
+    plans = []
+    for code, desktop_code, months, label, discount, popular in plan_catalog:
+        options = [
+            {"devices": limit, "price_rub": get_price_for_months(months, limit)[0],
+             "days": get_price_for_months(months, limit)[1]}
+            for limit in VALID_DEVICE_LIMITS
+        ]
+        selected = next(option for option in options if option["devices"] == devices)
+        plans.append({
+            "code": code, "desktop_code": desktop_code, "name": label,
+            "price": f"{selected['price_rub']} ₽", "price_rub": selected["price_rub"],
+            "days": selected["days"], "devices": devices, "device_options": options,
+            "discount_percent": discount, "is_popular": popular,
+        })
     return {
-        "trial": {"code": "trial", "name": "3 дня бесплатно", "price": "0 ₽", "price_rub": 0, "days": 3, "devices": 2},
+        "trial": {"code": "trial", "name": "3 дня бесплатно",
+                  "price": "0 ₽", "price_rub": 0, "days": 3, "devices": 2},
         "plans": plans,
     }
-
 
 # ---------------------------------------------------------------------------
 @api_router.post("/payment/create")
@@ -984,9 +1011,14 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
     from constants import get_price_for_months, VALID_DEVICE_LIMITS
     devices = 2 if req.devices is None else req.devices
     if devices not in VALID_DEVICE_LIMITS:
-        raise HTTPException(status_code=400, detail="Выберите 2, 5 или 10 устройств")
-    # Client amount/days are informational only; backend catalog owns all terms.
+        raise HTTPException(status_code=422, detail="Недопустимое количество устройств")
+    # Price and term come from the backend catalog. Reject stale or altered
+    # client values before reserving an invoice.
     amount_rub, days = get_price_for_months(months, devices)
+    if req.amount_rub is not None and req.amount_rub != amount_rub:
+        raise HTTPException(status_code=422, detail="Стоимость тарифа изменилась. Обновите тарифы")
+    if req.days is not None and req.days != days:
+        raise HTTPException(status_code=422, detail="Срок тарифа изменился. Обновите тарифы")
     reserved = await database.ensure_mobile_payment_request(
         user_id, req.request_id, req.plan_code, provider, devices,
     )
@@ -1248,7 +1280,25 @@ async def create_vpn_session(req: SessionRequest, request: Request, user_id: int
             detail="Нет активной подписки или серверов. Оформите подписку или активируйте пробный период.",
         )
 
-    matched = next((s for s in servers if s.get("node_code") == req.node_code), servers[0])
+    def compatible_with_desktop(server: dict) -> bool:
+        conf = server.get("config") or {}
+        return (conf.get("protocol") == "vless"
+                and conf.get("security") == "reality"
+                and conf.get("network", "tcp") in ("tcp", "raw")
+                and bool(conf.get("public_key")))
+
+    is_windows = request.headers.get("x-device-os", "").casefold() == "windows"
+    if req.node_code == "auto":
+        choices = [node for node in servers if compatible_with_desktop(node)] if is_windows else servers
+        if not choices:
+            raise HTTPException(status_code=422, detail="Нет серверов с поддерживаемым протоколом для Windows")
+        matched = choices[0]
+    else:
+        matched = next((s for s in servers if s.get("node_code") == req.node_code), None)
+        if matched is None:
+            raise HTTPException(status_code=404, detail="Выбранный сервер больше не доступен")
+        if is_windows and not compatible_with_desktop(matched):
+            raise HTTPException(status_code=422, detail="Выбранный сервер не поддерживается Windows")
     config = matched.get("config")
     if not config or not config.get("uuid"):
         raise HTTPException(status_code=500, detail="Неполная конфигурация VPN-узла на сервере")
