@@ -16,6 +16,30 @@ class _Request:
         yield self._body
 
 
+class TestCryptoPayInvoiceValidation(unittest.TestCase):
+    def test_paid_crypto_invoice_must_match_server_owned_rub_order(self):
+        pending = {"amount_rub": 79, "payload": "bm1_expected"}
+
+        valid = {
+            "status": "paid", "currency_type": "fiat", "fiat": "RUB",
+            "amount": "79.00", "payload": "bm1_expected",
+        }
+        self.assertTrue(webhook._crypto_invoice_matches_pending(valid, pending))
+
+        for changed in (
+            {**valid, "amount": "1.00"},
+            {**valid, "fiat": "USD"},
+            {**valid, "currency_type": "crypto"},
+            {**valid, "payload": "bm1_other"},
+            {**valid, "amount": "not-a-number"},
+        ):
+            self.assertFalse(webhook._crypto_invoice_matches_pending(changed, pending))
+
+    def test_legacy_crypto_invoice_without_expected_payload_still_checks_amount(self):
+        invoice = {"currency_type": "fiat", "fiat": "RUB", "amount": "120"}
+        self.assertTrue(webhook._crypto_invoice_matches_pending(invoice, {"amount_rub": 120}))
+
+
 class TestYooKassaWebhookHardening(unittest.IsolatedAsyncioTestCase):
     def test_source_allowlist_handles_ipv4_ipv6_and_rejects_invalid_addresses(self):
         self.assertTrue(webhook._is_allowed_yookassa_source("185.71.76.12"))
