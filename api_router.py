@@ -562,6 +562,18 @@ async def get_user_real_subscription(
     return sub_url, servers, sub_dict
 
 
+async def _auth_subscription_snapshot(user_id: int, headers: Dict[str, str]):
+    """Keep login independent from 3x-ui subscription availability."""
+    try:
+        return await get_user_real_subscription(user_id, headers)
+    except Exception as exc:
+        logger.warning("Subscription lookup unavailable during login (%s)", type(exc).__name__)
+        return None, [], {
+            "status": "unknown", "plan_name": "Проверяем подписку",
+            "trial_available": False, "max_devices": 0, "active_devices": 0,
+        }
+
+
 def _subscription_headers_from_request(request: Request) -> Dict[str, str]:
     """Forward only device metadata required by the subscription HWID gate."""
     names = ("X-HWID", "X-Device-OS", "X-Ver-OS", "X-Device-Model", "User-Agent")
@@ -663,7 +675,7 @@ async def check_telegram_session(token: str, request: Request):
     full_name = session.get("full_name", "Telegram User")
 
     jwt_token = create_simple_jwt(user_id, f"{user_id}@telegram.bymevpn")
-    sub_url, servers, sub_dict = await get_user_real_subscription(
+    sub_url, servers, sub_dict = await _auth_subscription_snapshot(
         user_id, _subscription_headers_from_request(request)
     )
 
@@ -720,7 +732,7 @@ async def register(req: RegisterRequest, request: Request):
     await database.ensure_user(user_id, email.split("@")[0])
 
     jwt_token = create_simple_jwt(user_id, email)
-    sub_url, servers, sub_dict = await get_user_real_subscription(
+    sub_url, servers, sub_dict = await _auth_subscription_snapshot(
         user_id, _subscription_headers_from_request(request)
     )
 
@@ -760,7 +772,7 @@ async def login(req: LoginRequest, request: Request):
         raise HTTPException(status_code=401, detail="Неверный email или пароль")
 
     jwt_token = create_simple_jwt(user_id, email)
-    sub_url, servers, sub_dict = await get_user_real_subscription(
+    sub_url, servers, sub_dict = await _auth_subscription_snapshot(
         user_id, _subscription_headers_from_request(request)
     )
 
