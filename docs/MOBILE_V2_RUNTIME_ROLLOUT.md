@@ -69,13 +69,34 @@ Sign-In and real provider checkout out of scope for this change.
 ## Current release status
 
 PR #22 contains code and mock-backed tests on top of merged PR #21. This
-runbook does not claim the old runtime has been patched. The ED25519 host key
-was rechecked against the owner-confirmed fingerprint using strict SSH host
-verification, but the connection then failed with
-`Permission denied (publickey,password)`. The current execution environment
-has no SSH agent and no default SSH identity files, so no authenticated server
-command ran. No SSH trust setting was weakened, and no production file, DB,
-container, or service was changed. An authorized SSH identity must be made
-available to the deployment operator before the read-only runtime inspection,
-fresh online backup, and staging restore can continue; do not send private key
-material through chat.
+runbook does not claim the old runtime has been patched. Read-only inspection
+confirmed that the active bind-mounted API has only legacy `/payment/create`
+and `/payment/check` routes. It trusts client-supplied price and duration; the
+active provider helpers lack stable YooKassa idempotency/response details and
+Crypto Pay opaque-payload support; the active webhook has no owner-scoped
+mobile-order guard. The active DB initially had no `mobile_payment_requests`
+table. Therefore PR #22 is not a drop-in patch for the running image.
+
+A fresh online backup was created with Python SQLite's backup API while WAL
+was active, then restored separately and compared. Both integrity checks
+returned `ok`; `schema_version` was 1 and `user_version` was 0 before
+migration. Migration was applied only to a local restored copy. It added the
+three mobile/JWT tables and `crypto_pending.payload`; existing table row
+counts and columns were unchanged. `schema_version` became 8 as SQLite
+recorded DDL changes; `user_version` remained 0. The exact older runtime's DB
+initializer was also run against another copy of the migrated snapshot and
+kept the additive objects intact, confirming DB-level rollback compatibility.
+
+HTTP route, migration, request replay, owner, pending-payment, webhook-order,
+subscription-delivery, and mocked HWID/IP-limit checks passed locally on the
+isolated copy (18 focused tests). The full backend suite passed in GitHub
+Actions. Provider and 3x-ui tests are mocks only. No real payment or live
+panel check was performed.
+
+The host key was verified strictly against the fingerprint confirmed by the
+owner, and the authorized SSH session succeeded. Production API files, active
+DB, container, and service were not changed or restarted; only protected
+backup/restore files were created. The host checkout has pre-existing
+uncommitted changes, so deployment must use a separately staged additive
+patch and must not reset or overwrite that checkout. A runtime-specific patch
+is still required before rollout; do not copy PR #22 files wholesale.
