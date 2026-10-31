@@ -100,7 +100,7 @@ class DesktopSessionContract(unittest.IsolatedAsyncioTestCase):
                          new=AsyncMock(side_effect=RuntimeError("3x-ui offline"))),
         ):
             result = await api_router.check_telegram_session(
-                "auth_abcdef1234567890", request(), 
+                "auth_abcdef1234567890", request(),
             )
         self.assertEqual(result.status, "authenticated")
         self.assertTrue(result.access_token)

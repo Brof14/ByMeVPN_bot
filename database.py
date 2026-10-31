@@ -192,6 +192,7 @@ CREATE TABLE IF NOT EXISTS mobile_payment_requests (
     confirmation_url TEXT,
     devices INTEGER NOT NULL DEFAULT 2,
     generation INTEGER NOT NULL DEFAULT 0,
+    creation_state TEXT NOT NULL DEFAULT 'ready',
     created_at INTEGER NOT NULL,
     PRIMARY KEY (user_id, request_id),
     UNIQUE (provider, payment_id)
@@ -254,6 +255,7 @@ CREATE TABLE IF NOT EXISTS crypto_pending (
     days        INTEGER NOT NULL,
     devices     INTEGER NOT NULL DEFAULT 1,
     amount_rub  INTEGER NOT NULL DEFAULT 0,
+    payload     TEXT,
     created     INTEGER DEFAULT (strftime('%s','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_cp_user ON crypto_pending(user_id);
@@ -432,6 +434,10 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         await db.execute(
             "ALTER TABLE mobile_payment_requests ADD COLUMN devices INTEGER NOT NULL DEFAULT 2"
         )
+    if "creation_state" not in payment_request_columns:
+        await db.execute(
+            "ALTER TABLE mobile_payment_requests ADD COLUMN creation_state TEXT NOT NULL DEFAULT 'ready'"
+        )
 
     await db.execute(
         """CREATE TABLE IF NOT EXISTS expiry_notification_deliveries (
@@ -527,6 +533,11 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
             "amount_rub INTEGER NOT NULL DEFAULT 0, "
             "created INTEGER DEFAULT (strftime('%s','now')))"
         )
+        crypto_pending_columns = {
+            row[1] for row in await (await db.execute("PRAGMA table_info(crypto_pending)")).fetchall()
+        }
+        if "payload" not in crypto_pending_columns:
+            await db.execute("ALTER TABLE crypto_pending ADD COLUMN payload TEXT")
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_cp_user ON crypto_pending(user_id)"
         )
@@ -1570,18 +1581,18 @@ async def create_mobile_auth_session(state_hash: str, expires_at: int) -> None:
 async def ensure_mobile_payment_request(
     user_id: int, request_id: str, plan_code: str, provider: str, devices: int = 2,
 ) -> dict:
-    """Atomically reserve an idempotent mobile checkout identity."""
+    """Atomically reserve an idempotent mobile checkout identity and its terms."""
     db = await get_db()
     now = int(time.time())
     async with _db_semaphore:
         await db.execute(
-            "INSERT OR IGNORE INTO mobile_payment_requests(user_id,request_id,plan_code,provider,devices,created_at) "
-            "VALUES(?,?,?,?,?,?)",
+            "INSERT OR IGNORE INTO mobile_payment_requests"
+            "(user_id,request_id,plan_code,provider,devices,created_at) VALUES(?,?,?,?,?,?)",
             (int(user_id), request_id, plan_code, provider, int(devices), now),
         )
         cur = await db.execute(
-            "SELECT plan_code,provider,payment_id,confirmation_url,generation,devices FROM mobile_payment_requests "
-            "WHERE user_id=? AND request_id=?",
+            "SELECT plan_code,provider,devices,payment_id,confirmation_url,generation,creation_state "
+            "FROM mobile_payment_requests WHERE user_id=? AND request_id=?",
             (int(user_id), request_id),
         )
         row = await cur.fetchone()
@@ -1589,10 +1600,40 @@ async def ensure_mobile_payment_request(
     if not row:
         raise RuntimeError("mobile payment request reservation failed")
     return {
-        "plan_code": row[0], "provider": row[1], "payment_id": row[2],
-        "confirmation_url": row[3], "generation": int(row[4] or 0),
-        "devices": int(row[5] or 2),
+        "plan_code": row[0], "provider": row[1], "devices": int(row[2] or 2),
+        "payment_id": row[3], "confirmation_url": row[4],
+        "generation": int(row[5] or 0), "creation_state": row[6] or "ready",
     }
+
+
+async def claim_mobile_payment_creation(user_id: int, request_id: str, plan_code: str, provider: str) -> bool:
+    """Claim one external invoice creation attempt; ambiguous attempts are recovered, not repeated."""
+    db = await get_db()
+    async with _db_semaphore:
+        cur = await db.execute(
+            "UPDATE mobile_payment_requests SET creation_state='creating' "
+            "WHERE user_id=? AND request_id=? AND plan_code=? AND provider=? "
+            "AND payment_id IS NULL AND creation_state='ready'",
+            (int(user_id), request_id, plan_code, provider),
+        )
+        await db.commit()
+    return cur.rowcount == 1
+
+
+async def reset_mobile_payment_creation(
+    user_id: int, request_id: str, plan_code: str, provider: str,
+) -> bool:
+    """Release a create claim only when the provider definitely rejected the attempt."""
+    db = await get_db()
+    async with _db_semaphore:
+        cur = await db.execute(
+            "UPDATE mobile_payment_requests SET creation_state='ready' "
+            "WHERE user_id=? AND request_id=? AND plan_code=? AND provider=? "
+            "AND payment_id IS NULL AND creation_state='creating'",
+            (int(user_id), request_id, plan_code, provider),
+        )
+        await db.commit()
+    return cur.rowcount == 1
 
 
 async def advance_mobile_payment_request_generation(
@@ -1604,7 +1645,7 @@ async def advance_mobile_payment_request_generation(
     async with _db_semaphore:
         cur = await db.execute(
             "UPDATE mobile_payment_requests "
-            "SET payment_id=NULL,confirmation_url=NULL,generation=generation+1 "
+            "SET payment_id=NULL,confirmation_url=NULL,generation=generation+1,creation_state='ready' "
             "WHERE user_id=? AND request_id=? AND plan_code=? AND provider=? "
             "AND payment_id=? AND generation=?",
             (int(user_id), request_id, plan_code, provider, str(payment_id), int(generation)),
@@ -1621,13 +1662,52 @@ async def save_mobile_payment_request(
     db = await get_db()
     async with _db_semaphore:
         cur = await db.execute(
-            "UPDATE mobile_payment_requests SET payment_id=?,confirmation_url=? "
+            "UPDATE mobile_payment_requests SET payment_id=?,confirmation_url=?,creation_state='created' "
             "WHERE user_id=? AND request_id=? AND plan_code=? AND provider=? "
             "AND (payment_id IS NULL OR payment_id=?)",
             (str(payment_id), confirmation_url, int(user_id), request_id, plan_code, provider, str(payment_id)),
         )
         await db.commit()
     return cur.rowcount == 1
+
+
+async def save_mobile_crypto_checkout(
+    user_id: int, request_id: str, plan_code: str, devices: int, invoice_id: str,
+    confirmation_url: str, days: int, amount_rub: int, payload: str,
+) -> bool:
+    """Atomically bind a Crypto Pay invoice to its owner and durable fulfillment intent."""
+    db = await get_db()
+    async with _db_semaphore:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await db.execute(
+                "UPDATE mobile_payment_requests SET payment_id=?,confirmation_url=?,creation_state='created' "
+                "WHERE user_id=? AND request_id=? AND plan_code=? AND provider='crypto' AND devices=? "
+                "AND creation_state IN ('creating','created') AND (payment_id IS NULL OR payment_id=?)",
+                (str(invoice_id), confirmation_url, int(user_id), request_id, plan_code, int(devices), str(invoice_id)),
+            )
+            if cur.rowcount != 1:
+                await db.rollback()
+                return False
+            await db.execute(
+                "INSERT OR IGNORE INTO crypto_pending"
+                "(invoice_id,user_id,days,devices,amount_rub,payload) VALUES(?,?,?,?,?,?)",
+                (str(invoice_id), int(user_id), int(days), int(devices), int(amount_rub), payload),
+            )
+            pending_cur = await db.execute(
+                "SELECT user_id,days,devices,amount_rub,payload FROM crypto_pending WHERE invoice_id=?",
+                (str(invoice_id),),
+            )
+            pending_row = await pending_cur.fetchone()
+            expected = (int(user_id), int(days), int(devices), int(amount_rub), payload)
+            if not pending_row or tuple(pending_row) != expected:
+                await db.rollback()
+                return False
+            await db.commit()
+            return True
+        except Exception:
+            await db.rollback()
+            raise
 
 
 async def get_mobile_payment_request(user_id: int, request_id: str) -> Optional[dict]:
@@ -1650,7 +1730,7 @@ async def get_mobile_payment_record(provider: str, payment_id: str) -> Optional[
     cur = await db.execute(
         "SELECT user_id,status,amount,days,devices FROM payments "
         "WHERE provider=? AND CAST(provider_payment_id AS TEXT)=? "
-        "UNION ALL SELECT user_id,'pending',0,0,2 FROM mobile_payment_requests "
+        "UNION ALL SELECT user_id,'pending',0,0,devices FROM mobile_payment_requests "
         "WHERE provider=? AND payment_id=? "
         "UNION ALL SELECT user_id,'pending',amount_rub,days,devices FROM yookassa_pending "
         "WHERE payment_id=? AND ?='yookassa' "
@@ -2851,12 +2931,13 @@ async def add_crypto_pending(
     days: int,
     devices: int = 1,
     amount_rub: int = 0,
+    payload: Optional[str] = None,
 ) -> None:
     db = await get_db()
     await db.execute(
-        "INSERT OR REPLACE INTO crypto_pending(invoice_id, user_id, days, devices, amount_rub) "
-        "VALUES(?,?,?,?,?)",
-        (str(invoice_id), user_id, days, devices, amount_rub),
+        "INSERT OR REPLACE INTO crypto_pending(invoice_id, user_id, days, devices, amount_rub, payload) "
+        "VALUES(?,?,?,?,?,?)",
+        (str(invoice_id), user_id, days, devices, amount_rub, payload),
     )
     await db.commit()
 
@@ -2864,7 +2945,7 @@ async def add_crypto_pending(
 async def get_crypto_pending(invoice_id) -> Optional[dict]:
     db = await get_db()
     cur = await db.execute(
-        "SELECT user_id, days, devices, amount_rub, created "
+        "SELECT user_id, days, devices, amount_rub, created, payload "
         "FROM crypto_pending WHERE invoice_id=?",
         (str(invoice_id),),
     )
@@ -2877,6 +2958,7 @@ async def get_crypto_pending(invoice_id) -> Optional[dict]:
         "devices": row[2],
         "amount_rub": row[3],
         "created": row[4],
+        "payload": row[5],
     }
 
 

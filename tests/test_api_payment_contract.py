@@ -26,15 +26,48 @@ class TestMobilePaymentContract(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(item["price_rub"], amount)
             self.assertEqual(item["days"], days)
             self.assertEqual(item["devices"], 2)
+            self.assertEqual(item["desktop_code"], {"1m": "month", "3m": "quarter", "6m": "half_year", "12m": "year"}[code])
             self.assertEqual(len(item["device_options"]), 3)
-            for choice in item["device_options"]:
+            for option in item["device_options"]:
                 self.assertEqual(
-                    (choice["price_rub"], choice["days"]),
-                    get_price_for_months(months, choice["devices"])
+                    (option["price_rub"], option["days"]),
+                    get_price_for_months(months, option["devices"]),
                 )
 
-    async def test_checkout_charges_exact_server_price_for_selected_device_count(self):
-        reserved = {"plan_code": "3m", "provider": "yookassa", "payment_id": None, "confirmation_url": None, "generation": 0}
+    async def test_plans_price_all_supported_device_tiers(self):
+        for devices in (2, 5, 10):
+            result = await api_router.get_plans(devices=devices)
+            for code, months in (("1m", 1), ("3m", 3), ("6m", 6), ("12m", 12)):
+                plan = next(item for item in result["plans"] if item["code"] == code)
+                amount, days = get_price_for_months(months, devices)
+                self.assertEqual((plan["price_rub"], plan["days"], plan["devices"]), (amount, days, devices))
+
+    async def test_invalid_device_tiers_are_rejected(self):
+        with self.assertRaises(api_router.HTTPException) as plans_error:
+            await api_router.get_plans(devices=3)
+        self.assertEqual(plans_error.exception.status_code, 400)
+        req = api_router.PaymentCreateRequest(
+            plan_code="3m", request_id="12345678-1234-1234-1234-123456789012",
+            amount_rub=1, days=3, devices=3, provider="yookassa",
+        )
+        with self.assertRaises(api_router.HTTPException) as payment_error:
+            await api_router.api_create_payment(req, user_id=123)
+        self.assertEqual(payment_error.exception.status_code, 422)
+
+    async def test_checkout_rejects_tampered_price_and_days(self):
+        from fastapi import HTTPException
+        correct_amount, correct_days = get_price_for_months(3, 2)
+        for amount, days in ((1, correct_days), (correct_amount, 9999)):
+            request = api_router.PaymentCreateRequest(
+                plan_code="3m", request_id="12345678-1234-1234-1234-123456789012",
+                amount_rub=amount, days=days, devices=2, provider="yookassa",
+            )
+            with self.assertRaises(HTTPException) as error:
+                await api_router.api_create_payment(request, user_id=123)
+            self.assertEqual(error.exception.status_code, 422)
+
+    async def test_checkout_uses_selected_device_tier_and_server_price(self):
+        reserved = {"plan_code": "3m", "provider": "yookassa", "devices": 10, "payment_id": None, "confirmation_url": None, "generation": 0}
         created = {"payment_url": "https://pay.example.invalid/checkout", "payment_id": "invoice-123", "status": "pending"}
         amount, days = get_price_for_months(3, 10)
         request = api_router.PaymentCreateRequest(
@@ -47,28 +80,13 @@ class TestMobilePaymentContract(unittest.IsolatedAsyncioTestCase):
             patch("payments.create_yookassa_payment", new=AsyncMock(return_value=created)) as create,
         ):
             result = await api_router.api_create_payment(request, user_id=123)
+
         self.assertEqual(result["invoice_id"], "invoice-123")
         kwargs = create.await_args.kwargs
-        self.assertEqual(kwargs["amount_rub"], amount)
-        self.assertEqual(kwargs["days"], days)
+        self.assertEqual(kwargs["amount_rub"], get_price_for_months(3, 10)[0])
+        self.assertEqual(kwargs["days"], get_price_for_months(3, 10)[1])
         self.assertEqual(kwargs["devices"], 10)
         self.assertFalse(kwargs["save_payment_method"])
-        # The reservation itself locks the device choice for idempotent retries.
-        # A repeated request ID for a different device limit is rejected.
-
-
-    async def test_checkout_rejects_tampered_prices_and_days(self):
-        from fastapi import HTTPException
-        for overrides in ({"amount_rub": 1}, {"days": 9999}, {"devices": 100}):
-            request = api_router.PaymentCreateRequest(
-                plan_code="3m", request_id="12345678-1234-1234-1234-123456789012",
-                devices=2, **{key: val for key, val in overrides.items() if key != "devices"},
-            ) if "devices" not in overrides else api_router.PaymentCreateRequest(
-                plan_code="3m", request_id="12345678-1234-1234-1234-123456789012", devices=100,
-            )
-            with self.assertRaises(HTTPException) as error:
-                await api_router.api_create_payment(request, user_id=123)
-            self.assertEqual(error.exception.status_code, 422)
 
     async def test_repeated_request_returns_same_saved_invoice(self):
         reserved = {
@@ -157,6 +175,190 @@ class TestMobilePaymentContract(unittest.IsolatedAsyncioTestCase):
         ):
             result = await api_router.api_check_payment(request, "invoice-123", "yookassa", user_id=123)
         self.assertEqual(result["status"], "processing")
+        self.assertFalse(result["is_active"])
+        subscription.assert_not_awaited()
+
+
+    async def test_both_providers_use_server_catalog_for_all_plan_and_device_tiers(self):
+        for provider in ("yookassa", "crypto"):
+            for plan_code, months in (("1m", 1), ("3m", 3), ("6m", 6), ("12m", 12)):
+                for devices in (2, 5, 10):
+                    with self.subTest(provider=provider, plan=plan_code, devices=devices):
+                        reserved = {
+                            "plan_code": plan_code, "provider": provider, "devices": devices,
+                            "payment_id": None, "confirmation_url": None, "generation": 0,
+                            "creation_state": "ready",
+                        }
+                        request = api_router.PaymentCreateRequest(
+                            plan_code=plan_code,
+                            request_id=f"matrix-{provider}-{plan_code}-{devices}",
+                            provider=provider,
+                            amount_rub=get_price_for_months(months, devices)[0],
+                            days=get_price_for_months(months, devices)[1],
+                            devices=devices,
+                        )
+                        with (
+                            patch.object(api_router.database, "ensure_mobile_payment_request", new=AsyncMock(return_value=reserved)),
+                            patch.object(api_router.database, "claim_mobile_payment_creation", new=AsyncMock(return_value=True)),
+                            patch.object(api_router.database, "save_mobile_crypto_checkout", new=AsyncMock(return_value=True)),
+                            patch.object(api_router.database, "save_mobile_payment_request", new=AsyncMock(return_value=True)),
+                            patch("payments.create_crypto_payment", new=AsyncMock(return_value=("https://pay.example.invalid/c", "crypto-123"))) as crypto_create,
+                            patch("payments.create_yookassa_payment", new=AsyncMock(return_value={
+                                "payment_url": "https://pay.example.invalid/y", "payment_id": "yk-123", "status": "pending",
+                            })) as yookassa_create,
+                        ):
+                            await api_router.api_create_payment(request, user_id=123)
+                        expected_amount, expected_days = get_price_for_months(months, devices)
+                        create = crypto_create if provider == "crypto" else yookassa_create
+                        kwargs = create.await_args.kwargs
+                        self.assertEqual(
+                            (kwargs["amount_rub"], kwargs["days"], kwargs["devices"]),
+                            (expected_amount, expected_days, devices),
+                        )
+                        if provider == "crypto":
+                            crypto_create.assert_awaited_once()
+                            yookassa_create.assert_not_awaited()
+                        else:
+                            yookassa_create.assert_awaited_once()
+                            crypto_create.assert_not_awaited()
+
+    async def test_crypto_checkout_uses_server_price_and_durable_fulfillment_intent(self):
+        reserved = {
+            "plan_code": "3m", "provider": "crypto", "devices": 5,
+            "payment_id": None, "confirmation_url": None, "generation": 0,
+            "creation_state": "ready",
+        }
+        amount, days = get_price_for_months(3, 5)
+        request = api_router.PaymentCreateRequest(
+            plan_code="3m", request_id="request-crypto-1234", provider="crypto",
+            amount_rub=amount, days=days, devices=5,
+        )
+        with (
+            patch.object(api_router.database, "ensure_mobile_payment_request", new=AsyncMock(return_value=reserved)),
+            patch.object(api_router.database, "claim_mobile_payment_creation", new=AsyncMock(return_value=True)) as claim,
+            patch.object(api_router.database, "save_mobile_crypto_checkout", new=AsyncMock(return_value=True)) as save,
+            patch("payments.create_crypto_payment", new=AsyncMock(return_value=("https://pay.example.invalid/crypto", "987654321"))) as create,
+        ):
+            result = await api_router.api_create_payment(request, user_id=123)
+
+        self.assertEqual(result, {
+            "payment_url": "https://pay.example.invalid/crypto",
+            "invoice_id": "987654321",
+            "provider": "crypto",
+        })
+        kwargs = create.await_args.kwargs
+        self.assertEqual(kwargs["amount_rub"], get_price_for_months(3, 5)[0])
+        self.assertEqual(kwargs["days"], get_price_for_months(3, 5)[1])
+        self.assertEqual(kwargs["devices"], 5)
+        self.assertRegex(kwargs["external_payload"], r"^bm1_[a-f0-9]{64}$")
+        self.assertNotIn("123", kwargs["external_payload"])
+        claim.assert_awaited_once()
+        save.assert_awaited_once()
+        self.assertEqual(save.await_args.args[7], get_price_for_months(3, 5)[0])
+
+    async def test_crypto_retry_with_saved_invoice_does_not_create_another(self):
+        reserved = {
+            "plan_code": "1m", "provider": "crypto", "devices": 2,
+            "payment_id": "987654321", "confirmation_url": "https://pay.example.invalid/crypto",
+            "generation": 0, "creation_state": "created",
+        }
+        request = api_router.PaymentCreateRequest(
+            plan_code="1m", request_id="request-crypto-5678", provider="crypto",
+        )
+        with (
+            patch.object(api_router.database, "ensure_mobile_payment_request", new=AsyncMock(return_value=reserved)),
+            patch.object(api_router.database, "save_mobile_crypto_checkout", new=AsyncMock(return_value=True)),
+            patch("payments.get_crypto_invoice", new=AsyncMock(return_value={"status": "active"})),
+            patch("payments.create_crypto_payment", new=AsyncMock()) as create,
+        ):
+            result = await api_router.api_create_payment(request, user_id=123)
+        self.assertEqual(result["invoice_id"], "987654321")
+        create.assert_not_awaited()
+
+    async def test_ambiguous_crypto_create_fails_closed_without_duplicate_invoice(self):
+        from fastapi import HTTPException
+
+        reserved = {
+            "plan_code": "1m", "provider": "crypto", "devices": 2,
+            "payment_id": None, "confirmation_url": None, "generation": 0,
+            "creation_state": "creating",
+        }
+        request = api_router.PaymentCreateRequest(
+            plan_code="1m", request_id="request-crypto-ambiguous", provider="crypto",
+        )
+        with (
+            patch.object(api_router.database, "ensure_mobile_payment_request", new=AsyncMock(return_value=reserved)),
+            patch("payments.find_crypto_invoice_by_payload", new=AsyncMock(return_value=(False, None))),
+            patch("payments.create_crypto_payment", new=AsyncMock()) as create,
+        ):
+            with self.assertRaises(HTTPException) as result:
+                await api_router.api_create_payment(request, user_id=123)
+        self.assertEqual(result.exception.status_code, 503)
+        create.assert_not_awaited()
+
+    async def test_definite_crypto_rejection_releases_creation_claim(self):
+        from fastapi import HTTPException
+        from payments import CryptoPayCreateError
+
+        reserved = {
+            "plan_code": "1m", "provider": "crypto", "devices": 2,
+            "payment_id": None, "confirmation_url": None, "generation": 0,
+            "creation_state": "ready",
+        }
+        request = api_router.PaymentCreateRequest(
+            plan_code="1m", request_id="request-crypto-reject", provider="crypto",
+        )
+        with (
+            patch.object(api_router.database, "ensure_mobile_payment_request", new=AsyncMock(return_value=reserved)),
+            patch.object(api_router.database, "claim_mobile_payment_creation", new=AsyncMock(return_value=True)),
+            patch.object(api_router.database, "reset_mobile_payment_creation", new=AsyncMock(return_value=True)) as reset,
+            patch("payments.create_crypto_payment", new=AsyncMock(side_effect=CryptoPayCreateError("provider_rejected", False))) as create,
+        ):
+            with self.assertRaises(HTTPException) as result:
+                await api_router.api_create_payment(request, user_id=123)
+        self.assertEqual(result.exception.status_code, 502)
+        reset.assert_awaited_once_with(123, "request-crypto-reject", "1m", "crypto")
+        self.assertTrue(create.await_args.kwargs["raise_errors"])
+
+    async def test_ambiguous_crypto_create_keeps_claim_for_reconciliation(self):
+        from fastapi import HTTPException
+        from payments import CryptoPayCreateError
+
+        reserved = {
+            "plan_code": "1m", "provider": "crypto", "devices": 2,
+            "payment_id": None, "confirmation_url": None, "generation": 0,
+            "creation_state": "ready",
+        }
+        request = api_router.PaymentCreateRequest(
+            plan_code="1m", request_id="request-crypto-unknown", provider="crypto",
+        )
+        with (
+            patch.object(api_router.database, "ensure_mobile_payment_request", new=AsyncMock(return_value=reserved)),
+            patch.object(api_router.database, "claim_mobile_payment_creation", new=AsyncMock(return_value=True)),
+            patch.object(api_router.database, "reset_mobile_payment_creation", new=AsyncMock()) as reset,
+            patch("payments.create_crypto_payment", new=AsyncMock(side_effect=CryptoPayCreateError("network_error", True))),
+        ):
+            with self.assertRaises(HTTPException) as result:
+                await api_router.api_create_payment(request, user_id=123)
+        self.assertEqual(result.exception.status_code, 503)
+        reset.assert_not_awaited()
+
+    async def test_expired_crypto_invoice_is_failed_not_pending(self):
+        from starlette.requests import Request
+
+        request = Request({
+            "type": "http", "http_version": "1.1", "method": "GET",
+            "scheme": "https", "path": "/api/v1/payment/check", "raw_path": b"/api/v1/payment/check",
+            "query_string": b"", "headers": [], "client": ("127.0.0.1", 1),
+            "server": ("test.invalid", 443),
+        })
+        with (
+            patch.object(api_router.database, "get_mobile_payment_record", new=AsyncMock(return_value={"user_id": 123, "status": "pending"})),
+            patch("payments.get_crypto_invoice", new=AsyncMock(return_value={"status": "expired"})),
+            patch.object(api_router, "get_user_real_subscription", new=AsyncMock()) as subscription,
+        ):
+            result = await api_router.api_check_payment(request, "987654321", "crypto", user_id=123)
+        self.assertEqual(result["status"], "failed")
         self.assertFalse(result["is_active"])
         subscription.assert_not_awaited()
 
