@@ -833,11 +833,21 @@ async def logout(
 async def get_me(user_id: int = Depends(get_current_user_id)):
     user = await database.find_user_by_id(user_id)
     username = user.get("username", "") if user else ""
+    # Restore an actual registered email/name instead of manufacturing a false
+    # @bymevpn.app address for signed-in desktop accounts.
+    db = await database.get_db()
+    try:
+        cursor = await db.execute("SELECT email,name FROM app_users WHERE user_id=?", (user_id,))
+        row = await cursor.fetchone()
+    except Exception:
+        row = None  # Telegram identities do not necessarily have app_users rows.
+    email = str(row[0]) if row else ""
+    display_name = str(row[1] or "") if row else ""
     return {
         "user": {
             "id": str(user_id),
-            "email": f"{username or user_id}@bymevpn.app",
-            "name": username or f"User {user_id}",
+            "email": email,
+            "name": display_name or username or f"User {user_id}",
             "is_google": False,
         }
     }
@@ -987,10 +997,11 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
     if req.days is not None and req.days != days:
         raise HTTPException(status_code=422, detail="Срок тарифа изменился. Обновите тарифы")
     reserved = await database.ensure_mobile_payment_request(
-        user_id, req.request_id, req.plan_code, req.provider,
+        user_id, req.request_id, req.plan_code, req.provider, devices=devices,
     )
-    if reserved["plan_code"] != req.plan_code or reserved["provider"] != req.provider:
-        raise HTTPException(status_code=409, detail="Этот запрос уже использован для другого тарифа")
+    if (reserved["plan_code"] != req.plan_code or reserved["provider"] != req.provider
+            or reserved.get("devices", devices) != devices):
+        raise HTTPException(status_code=409, detail="Этот запрос уже использован для другого тарифа или числа устройств")
     if reserved["payment_id"] and reserved["confirmation_url"]:
         from payments import get_yookassa_payment_status
 
@@ -1004,7 +1015,7 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
             # A simultaneous retry may have rotated the request already. Reload
             # the row and use its generation so all retries share one new invoice.
             reserved = await database.ensure_mobile_payment_request(
-                user_id, req.request_id, req.plan_code, req.provider,
+                user_id, req.request_id, req.plan_code, req.provider, devices=devices,
             )
             if reserved["payment_id"] == previous_invoice:
                 logger.error(

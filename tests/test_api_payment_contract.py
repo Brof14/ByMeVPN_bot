@@ -53,6 +53,9 @@ class TestMobilePaymentContract(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["days"], days)
         self.assertEqual(kwargs["devices"], 10)
         self.assertFalse(kwargs["save_payment_method"])
+        # The reservation itself locks the device choice for idempotent retries.
+        # A repeated request ID for a different device limit is rejected.
+
 
     async def test_checkout_rejects_tampered_prices_and_days(self):
         from fastapi import HTTPException
