@@ -69,7 +69,13 @@ Sign-In and real provider checkout out of scope for this change.
 ## Current release status
 
 PR #22 contains code and mock-backed tests on top of merged PR #21. This
-runbook does not claim the old runtime has been patched. As of this review, a
-fresh SSH inspection was blocked because the host key presented by the server
-did not match the previously owner-supplied fingerprint. No SSH trust setting
-was weakened, and no production file, DB, container, or service was changed.
+runbook does not claim the old runtime has been patched. The ED25519 host key
+was rechecked against the owner-confirmed fingerprint using strict SSH host
+verification, but the connection then failed with
+`Permission denied (publickey,password)`. The current execution environment
+has no SSH agent and no default SSH identity files, so no authenticated server
+command ran. No SSH trust setting was weakened, and no production file, DB,
+container, or service was changed. An authorized SSH identity must be made
+available to the deployment operator before the read-only runtime inspection,
+fresh online backup, and staging restore can continue; do not send private key
+material through chat.
