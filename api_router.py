@@ -72,7 +72,10 @@ def hash_password(password: str, salt: str) -> str:
 def confirm_telegram_session(token: str, user_id: int, username: str = "", full_name: str = "") -> bool:
     """Called by Telegram bot handler when user opens /start auth_<token>"""
     clean_token = token.removeprefix("auth_")
-    session = _TELEGRAM_SESSIONS.get(clean_token) or _TELEGRAM_SESSIONS.get(token)
+    # Sessions created by the mobile API are keyed by the prefixed token, so
+    # look the original token up first; stripping the prefix would create a
+    # second, detached entry and leave the polled session pending forever.
+    session = _TELEGRAM_SESSIONS.get(token) or _TELEGRAM_SESSIONS.get(clean_token)
 
     if session:
         session["status"] = "authenticated"
