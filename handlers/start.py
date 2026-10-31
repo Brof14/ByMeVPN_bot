@@ -293,12 +293,15 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext) -> None:
         auth_token = args[1].strip()
         try:
             from api_router import confirm_telegram_session
-            confirm_telegram_session(
+            approved = confirm_telegram_session(
                 token=auth_token,
                 user_id=user_id,
                 username=message.from_user.username or "",
                 full_name=message.from_user.full_name or message.from_user.first_name or "",
             )
+            if not approved:
+                await message.answer("Ссылка для входа недействительна или истекла. Начните вход снова из приложения.")
+                return
             await message.answer(
                 "✅ <b>Вход в приложение ByMeVPN подтверждён!</b>\n\n"
                 "Нажмите «🚀 Открыть приложение» — оно автоматически войдёт в ваш аккаунт и загрузит подписку.\n\n"

@@ -100,25 +100,20 @@ def hash_password(password: str, salt: str) -> str:
 
 
 def confirm_telegram_session(token: str, user_id: int, username: str = "", full_name: str = "") -> bool:
-    """Called by Telegram bot handler when user opens /start auth_<token>"""
+    """Approve one previously issued, unexpired Telegram login ticket."""
     clean_token = token.removeprefix("auth_")
-    session = _TELEGRAM_SESSIONS.get(clean_token) or _TELEGRAM_SESSIONS.get(token)
-
-    if session:
-        session["status"] = "authenticated"
-        session["user_id"] = user_id
-        session["username"] = username or f"user_{user_id}"
-        session["full_name"] = full_name or username or f"User {user_id}"
-        logger.info(f"Telegram session {token} confirmed for user {user_id} (@{username})")
-        return True
-
-    _TELEGRAM_SESSIONS[clean_token] = {
-        "status": "authenticated",
-        "user_id": user_id,
-        "username": username or f"user_{user_id}",
-        "full_name": full_name or username or f"User {user_id}",
-        "created_at": time.time(),
-    }
+    session = _TELEGRAM_SESSIONS.get(token) or _TELEGRAM_SESSIONS.get(clean_token)
+    if not session or time.time() - session.get("created_at", 0) > 600:
+        _TELEGRAM_SESSIONS.pop(token, None)
+        _TELEGRAM_SESSIONS.pop(clean_token, None)
+        return False
+    if session.get("status") != "pending":
+        return False
+    session["status"] = "authenticated"
+    session["user_id"] = user_id
+    session["username"] = username or f"user_{user_id}"
+    session["full_name"] = full_name or username or f"User {user_id}"
+    logger.info("Telegram app login approved for user_id=%d", user_id)
     return True
 
 
@@ -446,7 +441,7 @@ async def get_user_real_subscription(user_id: int) -> Tuple[Optional[str], List[
         return None, [], {
             "status": "none",
             "plan_name": "Нет подписки",
-            "trial_available": True,
+            "trial_available": not await database.has_trial_used(user_id),
             "max_devices": 5,
             "active_devices": 0,
             "subscription_url": None,
@@ -555,15 +550,13 @@ async def check_telegram_session(token: str):
     clean_token = token if token in _TELEGRAM_SESSIONS else token.removeprefix("auth_")
     session = _TELEGRAM_SESSIONS.get(clean_token) or _TELEGRAM_SESSIONS.get(token)
 
-    if not session:
+    if not session or time.time() - session.get("created_at", 0) > 600:
+        _TELEGRAM_SESSIONS.pop(clean_token, None)
+        _TELEGRAM_SESSIONS.pop(token, None)
         return TelegramCheckResponse(status="expired")
 
     if session.get("status") != "authenticated":
         return TelegramCheckResponse(status="pending")
-    # The one-time login ticket is consumed here: prevent other clients
-    # polling an already approved token and replaying the same authorization.
-    _TELEGRAM_SESSIONS.pop(clean_token, None)
-    _TELEGRAM_SESSIONS.pop(token, None)
 
     user_id = session["user_id"]
     username = session.get("username", "")
@@ -571,6 +564,8 @@ async def check_telegram_session(token: str):
 
     jwt_token = create_simple_jwt(user_id, f"{user_id}@telegram.bymevpn")
     sub_url, servers, sub_dict = await get_user_real_subscription(user_id)
+    _TELEGRAM_SESSIONS.pop(clean_token, None)
+    _TELEGRAM_SESSIONS.pop(token, None)
 
     return TelegramCheckResponse(
         status="authenticated",
