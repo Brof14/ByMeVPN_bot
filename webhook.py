@@ -139,6 +139,7 @@ async def app_login_redirect(sub: str = "", name: str = ""):
     from fastapi.responses import HTMLResponse
 
     from app_links import (
+        APP_LOGIN_CONTENT_SECURITY_POLICY,
         MAX_SUBSCRIPTION_URL_LENGTH,
         MAX_USER_NAME_LENGTH,
         build_app_login_url,
@@ -161,11 +162,23 @@ async def app_login_redirect(sub: str = "", name: str = ""):
             "Referrer-Policy": "no-referrer",
             "X-Robots-Tag": "noindex, nofollow",
             "X-Content-Type-Options": "nosniff",
-            "Content-Security-Policy": (
-                "default-src 'none'; style-src 'unsafe-inline'; "
-                "script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
-            ),
+            "Content-Security-Policy": APP_LOGIN_CONTENT_SECURITY_POLICY,
         },
+    )
+
+
+@app.get("/app/logo")
+async def app_login_logo():
+    """Serve the official ByMeVPN mark used on the app handoff page."""
+    from pathlib import Path
+
+    from fastapi.responses import FileResponse
+
+    logo_path = Path(__file__).resolve().parent / "static" / "bymevpn-mark.png"
+    return FileResponse(
+        logo_path,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
     )
 
 # Global dispatcher for Telegram webhook handling
