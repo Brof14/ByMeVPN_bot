@@ -1,0 +1,29 @@
+--- a/api_router.py
++++ b/api_router.py
+@@ -904,0 +905,5 @@
++
++
++# Additive Android mobile API V2 adapter; preserve existing Telegram API routes.
++from mobile_v2_legacy import create_router as create_legacy_mobile_v2_router
++api_router.include_router(create_legacy_mobile_v2_router(), prefix="/mobile/v2")
+--- a/webhook.py
++++ b/webhook.py
+@@ -327,0 +328,6 @@
++
++        # Mobile V2 orders must match their durable server-side order before legacy fulfillment.
++        from mobile_v2_legacy import validate_yookassa_mobile_payment
++        if not await validate_yookassa_mobile_payment(payment):
++            logger.error("Mobile V2 YooKassa order validation failed; fulfillment blocked")
++            return
+@@ -516,0 +523,2 @@
++            from mobile_v2_legacy import mark_mobile_order_fulfilled
++            await mark_mobile_order_fulfilled("yookassa", payment_id)
+@@ -664,0 +673,5 @@
++
++        from mobile_v2_legacy import validate_crypto_mobile_invoice
++        if not await validate_crypto_mobile_invoice(invoice):
++            logger.error("Mobile V2 Crypto Pay order validation failed; fulfillment blocked")
++            return
+@@ -787,0 +801,2 @@
++            from mobile_v2_legacy import mark_mobile_order_fulfilled
++            await mark_mobile_order_fulfilled("crypto", str(invoice_id))
