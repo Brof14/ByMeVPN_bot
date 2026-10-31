@@ -44,6 +44,9 @@ JWT_SECRET = os.getenv("JWT_SECRET")
 if not JWT_SECRET or len(JWT_SECRET.encode("utf-8")) < 32:
     raise RuntimeError("JWT_SECRET must be configured with at least 32 bytes")
 
+JWT_ISSUER = "bymevpn-api"
+JWT_AUDIENCE = "bymevpn-mobile"
+
 
 async def _ensure_auth_db():
     """Ensure app_users table exists for secure mobile email authentication."""
@@ -85,46 +88,104 @@ async def confirm_telegram_session(token: str, user_id: int, username: str = "",
     )
 
 
+def _jwt_b64encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _jwt_b64decode(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * ((4 - len(value) % 4) % 4))
+
+
 def create_simple_jwt(
     user_id: int,
     email: str = "",
     *,
     issued_at: Optional[int] = None,
     expires_at: Optional[int] = None,
+    issuer: str = JWT_ISSUER,
+    audience: str = JWT_AUDIENCE,
 ) -> str:
-    """Create a signed token with an absolute lifetime that refresh cannot extend."""
+    """Create an HS256 JWT with fixed service issuer/audience and bounded lifetime."""
     issued = int(time.time()) if issued_at is None else int(issued_at)
     expiry = issued + 30 * 86400 if expires_at is None else int(expires_at)
-    email_part = base64.urlsafe_b64encode(email.encode("utf-8")).decode("ascii").rstrip("=")
-    payload = f"v2:{int(user_id)}:{issued}:{expiry}:{email_part}"
-    signature = hmac.new(JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    return f"{payload}:{signature}"
+    if int(user_id) <= 0 or expiry <= issued or expiry - issued > 30 * 86400:
+        raise ValueError("Invalid JWT subject or lifetime")
+
+    header = {"alg": "HS256", "typ": "JWT"}
+    claims = {
+        "sub": str(int(user_id)),
+        "email": str(email or ""),
+        "iss": issuer,
+        "aud": audience,
+        "iat": issued,
+        "exp": expiry,
+    }
+    header_part = _jwt_b64encode(json.dumps(header, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    claims_part = _jwt_b64encode(json.dumps(claims, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    signing_input = f"{header_part}.{claims_part}"
+    signature = hmac.new(JWT_SECRET.encode("utf-8"), signing_input.encode("ascii"), hashlib.sha256).digest()
+    return f"{signing_input}.{_jwt_b64encode(signature)}"
 
 
 def _verified_token_claims(token: str) -> Optional[dict]:
     try:
-        parts = token.split(":")
-        if len(parts) != 6 or parts[0] != "v2":
+        parts = token.split(".")
+        if len(parts) != 3:
             return None
-        version, user_id_str, issued_str, expiry_str, email_part, signature = parts
-        payload = ":".join(parts[:-1])
-        expected = hmac.new(JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(signature, expected):
+        header = json.loads(_jwt_b64decode(parts[0]).decode("utf-8"))
+        claims = json.loads(_jwt_b64decode(parts[1]).decode("utf-8"))
+        if not isinstance(header, dict) or header.get("alg") != "HS256" or header.get("typ") != "JWT":
             return None
-        user_id = int(user_id_str)
-        issued = int(issued_str)
-        expiry = int(expiry_str)
+        if not isinstance(claims, dict):
+            return None
+
+        signing_input = f"{parts[0]}.{parts[1]}"
+        expected = hmac.new(JWT_SECRET.encode("utf-8"), signing_input.encode("ascii"), hashlib.sha256).digest()
+        supplied = _jwt_b64decode(parts[2])
+        if not hmac.compare_digest(supplied, expected):
+            return None
+
+        # Require exact service claims. In particular, do not accept a list
+        # audience containing this app alongside an unexpected audience.
+        if claims.get("iss") != JWT_ISSUER or claims.get("aud") != JWT_AUDIENCE:
+            return None
+        subject = claims.get("sub")
+        issued = claims.get("iat")
+        expiry = claims.get("exp")
+        if (
+            not isinstance(subject, str)
+            or not subject.isdecimal()
+            or type(issued) is not int
+            or type(expiry) is not int
+        ):
+            return None
+        user_id = int(subject)
         now = int(time.time())
-        if user_id <= 0 or issued > now + 60 or expiry <= now or expiry <= issued:
+        if (
+            user_id <= 0
+            or issued > now + 60
+            or expiry <= now
+            or expiry <= issued
+            or expiry - issued > 30 * 86400
+        ):
             return None
-        email = base64.urlsafe_b64decode(email_part + "=" * ((4 - len(email_part) % 4) % 4)).decode("utf-8")
-        return {"user_id": user_id, "email": email, "issued_at": issued, "expires_at": expiry}
-    except (ValueError, TypeError, UnicodeDecodeError):
+        email = claims.get("email", "")
+        if not isinstance(email, str):
+            return None
+        return {
+            "user_id": user_id,
+            "email": email,
+            "issued_at": issued,
+            "expires_at": expiry,
+            "issuer": JWT_ISSUER,
+            "audience": JWT_AUDIENCE,
+        }
+    except (ValueError, TypeError, UnicodeDecodeError, OverflowError):
         return None
 
 
 def verify_simple_jwt(token: str) -> Optional[int]:
-    """Verify signed session token and return user_id."""
+    """Verify signature, issuer, exact audience and lifetime; return subject ID."""
     claims = _verified_token_claims(token)
     return int(claims["user_id"]) if claims else None
 
@@ -139,7 +200,6 @@ async def get_current_user_id(authorization: Optional[str] = Header(None)) -> in
     return user_id
 
 
-# ---------------------------------------------------------------------------
 # Real 3x-ui Server Nodes & Subscription Resolution
 # ---------------------------------------------------------------------------
 
