@@ -31,18 +31,26 @@ async def _check_user(bot: Bot, user_id: int, semaphore: asyncio.Semaphore) -> N
             markup = InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="Мои устройства", callback_data=f"key_devices:{key_id}")
             ]])
-            for device in pending:
+            devices_used = len(state["devices"])
+            device_limit = int(state.get("limit_hwid") or 0)
+            for index, device in enumerate(pending):
                 name = html.escape(device.get("model") or device.get("user_agent") or "Устройство")
                 system = " ".join(part for part in (device.get("os"), device.get("os_version")) if part)
                 system_label = f" ({html.escape(system)})" if system else ""
-                try:
-                    await bot.send_message(
-                        user_id,
-                        "📱 <b>Новое устройство</b>\n"
-                        f"🔗 {name}{system_label}\n\n"
-                        "⚠️ Не узнаёте устройство? Напишите в поддержку — поможем проверить подключение.",
-                        reply_markup=markup,
+                message = (
+                    "📱 <b>Новое устройство</b>\n"
+                    f"🔗 {name}{system_label}\n\n"
+                    "⚠️ Не узнаёте устройство? Напишите в поддержку — поможем проверить подключение."
+                )
+                # A zero HWID limit means unlimited; only append this notice
+                # once when the latest newly detected device fills the quota.
+                if device_limit > 0 and devices_used >= device_limit and index == len(pending) - 1:
+                    message += (
+                        f"\n\n✅ Лимит устройств достигнут: {devices_used} из {device_limit}. "
+                        "Чтобы подключить ещё устройства, увеличьте лимит при продлении подписки."
                     )
+                try:
+                    await bot.send_message(user_id, message, reply_markup=markup)
                     await mark_hwid_device_notified(user_id, device["id"])
                 except Exception:
                     logger.info("Could not send new-device notice to user %s", user_id, exc_info=True)

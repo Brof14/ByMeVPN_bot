@@ -1,6 +1,8 @@
 """Regression tests for 3x-ui API pool authentication recovery."""
+import asyncio
 import os
 import sys
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -13,6 +15,7 @@ if PROJECT_ROOT not in sys.path:
 os.environ.setdefault("DB_FILE", "/tmp/test_xui_client_pool.db")
 
 import xui_client
+import device_monitor
 
 
 class _FakeSession:
@@ -154,6 +157,96 @@ class TestXuiClientPool(unittest.IsolatedAsyncioTestCase):
             [call.args[0] for call in inbound.get_by_id.await_args_list],
             [12, 15],
         )
+
+    async def test_hwid_delete_is_verified_and_stale_button_is_idempotent(self):
+        device = {"id": 42}
+        listed = [
+            {"devices": [device], "limit_hwid": 2, "limit_ip": 0},
+            {"devices": [], "limit_hwid": 2, "limit_ip": 0},
+        ]
+
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"success": True}
+
+        client = SimpleNamespace(
+            _url=lambda path: path,
+            _request_with_retry=AsyncMock(return_value=Response()),
+        )
+        api = SimpleNamespace(client=client)
+
+        async def passthrough(func, *args, **kwargs):
+            return await func(*args, **kwargs)
+
+        with (
+            patch("xui_client.get_xui_devices", new=AsyncMock(side_effect=listed)) as get_devices,
+            patch("xui_client._get_api", new=AsyncMock(return_value=api)),
+            patch("xui_client._api_call_with_retry", new=passthrough),
+        ):
+            self.assertTrue(await xui_client.delete_xui_hwid_device(123, 42))
+
+        self.assertEqual(get_devices.await_count, 2)
+        client._request_with_retry.assert_awaited_once()
+        self.assertIn("/hwids/123/42", client._request_with_retry.await_args.args[1])
+
+        with (
+            patch("xui_client.get_xui_devices", new=AsyncMock(return_value={
+                "devices": [], "limit_hwid": 2, "limit_ip": 0,
+            })),
+            patch("xui_client._get_api", new=AsyncMock()) as get_api,
+        ):
+            self.assertTrue(await xui_client.delete_xui_hwid_device(123, 42))
+        get_api.assert_not_awaited()
+
+    async def test_hwid_delete_returns_false_when_panel_keeps_device(self):
+        client = SimpleNamespace(
+            _url=lambda path: path,
+            _request_with_retry=AsyncMock(return_value=SimpleNamespace(
+                raise_for_status=lambda: None,
+                json=lambda: {"success": True},
+            )),
+        )
+        api = SimpleNamespace(client=client)
+
+        async def passthrough(func, *args, **kwargs):
+            return await func(*args, **kwargs)
+
+        with (
+            patch("xui_client.get_xui_devices", new=AsyncMock(return_value={
+                "devices": [{"id": 42}], "limit_hwid": 2, "limit_ip": 0,
+            })),
+            patch("xui_client._get_api", new=AsyncMock(return_value=api)),
+            patch("xui_client._api_call_with_retry", new=passthrough),
+            patch("xui_client.asyncio.sleep", new=AsyncMock()),
+        ):
+            self.assertFalse(await xui_client.delete_xui_hwid_device(123, 42))
+
+    async def test_new_device_notice_explains_full_limit_but_not_unlimited(self):
+        user_id = 123
+        key = {"id": 7, "expiry": int(time.time()) + 3600}
+        device = {"id": 42, "model": "Test phone", "os": "Android", "os_version": "15"}
+        bot = SimpleNamespace(send_message=AsyncMock())
+
+        async def run(limit):
+            bot.send_message.reset_mock()
+            with (
+                patch("device_monitor.get_user_keys", new=AsyncMock(return_value=[key])),
+                patch("device_monitor.get_xui_devices", new=AsyncMock(return_value={
+                    "devices": [device] if limit else [device],
+                    "limit_hwid": limit,
+                    "limit_ip": 0,
+                })),
+                patch("device_monitor.remember_hwid_devices", new=AsyncMock(return_value=[device])),
+                patch("device_monitor.mark_hwid_device_notified", new=AsyncMock()),
+            ):
+                await device_monitor._check_user(bot, user_id, asyncio.Semaphore(1))
+            return bot.send_message.await_args.args[1]
+
+        self.assertIn("Лимит устройств достигнут: 1 из 1", await run(1))
+        self.assertNotIn("Лимит устройств достигнут", await run(0))
 
 
 if __name__ == "__main__":

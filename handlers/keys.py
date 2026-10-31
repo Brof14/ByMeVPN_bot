@@ -324,10 +324,17 @@ async def cb_key_device_delete(callback: CallbackQuery, bot: Bot):
         await safe_answer(callback, "Ключ не найден.", alert=True)
         return
     try:
-        await delete_xui_hwid_device(callback.from_user.id, device_id)
+        removed = await delete_xui_hwid_device(callback.from_user.id, device_id)
     except Exception:
         logger.exception("Could not remove device %s for user %s", device_id, callback.from_user.id)
-        await safe_answer(callback, "Не удалось удалить устройство. Попробуйте позже.", alert=True)
+        await safe_answer(callback, "Не удалось подтвердить удаление устройства. Попробуйте ещё раз.", alert=True)
+        return
+    if not removed:
+        await safe_answer(
+            callback,
+            "Панель не подтвердила удаление. Обновите список устройств и попробуйте ещё раз.",
+            alert=True,
+        )
         return
     await safe_answer(callback, "Устройство удалено")
     try:

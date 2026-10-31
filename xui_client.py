@@ -890,11 +890,20 @@ async def get_xui_online_user_ids() -> set[int]:
 
 
 async def delete_xui_hwid_device(user_id: int, device_id: int) -> bool:
-    """Remove one registered Happ device; this does not revoke its existing config."""
+    """Remove one registered Happ device and verify it disappeared from the owner's list."""
+    device_id = int(device_id)
+    if device_id <= 0:
+        raise ValueError("Device id must be positive")
+
+    # Device IDs are panel-global. Confirm the target appears in this user's
+    # owner-scoped list before issuing the delete; stale buttons are idempotent.
+    current = await get_xui_devices(user_id)
+    if not any(int(device.get("id", 0)) == device_id for device in current["devices"]):
+        return True
+
     api = await _get_api()
     client_api = api.client
     email = quote(str(user_id), safe="")
-    device_id = int(device_id)
 
     async def remove() -> bool:
         url = client_api._url(f"panel/api/clients/hwids/{email}/{device_id}")
@@ -907,7 +916,25 @@ async def delete_xui_hwid_device(user_id: int, device_id: int) -> bool:
             raise RuntimeError("3x-ui could not remove the device")
         return True
 
-    return await _api_call_with_retry(remove)
+    try:
+        await _api_call_with_retry(remove)
+    except Exception:
+        # A lost response can follow a successful delete. Reconcile against the
+        # authoritative list before reporting failure or asking the user to retry.
+        remaining = await get_xui_devices(user_id)
+        if not any(int(device.get("id", 0)) == device_id for device in remaining["devices"]):
+            return True
+        raise
+
+    # The panel may acknowledge before the device list reflects the deletion.
+    # Use a few bounded reads, then fail closed instead of claiming success.
+    for attempt in range(3):
+        remaining = await get_xui_devices(user_id)
+        if not any(int(device.get("id", 0)) == device_id for device in remaining["devices"]):
+            return True
+        if attempt < 2:
+            await asyncio.sleep(0.2 * (attempt + 1))
+    return False
 
 
 async def delete_xui_user(user_id: int) -> bool:
