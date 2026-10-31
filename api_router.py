@@ -104,16 +104,24 @@ def create_simple_jwt(
     expires_at: Optional[int] = None,
     issuer: str = JWT_ISSUER,
     audience: str = JWT_AUDIENCE,
+    jwt_id: Optional[str] = None,
 ) -> str:
     """Create an HS256 JWT with fixed service issuer/audience and bounded lifetime."""
     issued = int(time.time()) if issued_at is None else int(issued_at)
     expiry = issued + 30 * 86400 if expires_at is None else int(expires_at)
-    if int(user_id) <= 0 or expiry <= issued or expiry - issued > 30 * 86400:
-        raise ValueError("Invalid JWT subject or lifetime")
+    session_id = jwt_id or secrets.token_urlsafe(18)
+    if (
+        int(user_id) <= 0
+        or expiry <= issued
+        or expiry - issued > 30 * 86400
+        or not re.fullmatch(r"[A-Za-z0-9_-]{20,64}", session_id)
+    ):
+        raise ValueError("Invalid JWT subject, lifetime, or session ID")
 
     header = {"alg": "HS256", "typ": "JWT"}
     claims = {
         "sub": str(int(user_id)),
+        "jti": session_id,
         "email": str(email or ""),
         "iss": issuer,
         "aud": audience,
@@ -150,11 +158,14 @@ def _verified_token_claims(token: str) -> Optional[dict]:
         if claims.get("iss") != JWT_ISSUER or claims.get("aud") != JWT_AUDIENCE:
             return None
         subject = claims.get("sub")
+        session_id = claims.get("jti")
         issued = claims.get("iat")
         expiry = claims.get("exp")
         if (
             not isinstance(subject, str)
             or not subject.isdecimal()
+            or not isinstance(session_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{20,64}", session_id)
             or type(issued) is not int
             or type(expiry) is not int
         ):
@@ -174,6 +185,7 @@ def _verified_token_claims(token: str) -> Optional[dict]:
             return None
         return {
             "user_id": user_id,
+            "jti": session_id,
             "email": email,
             "issued_at": issued,
             "expires_at": expiry,
@@ -194,10 +206,18 @@ async def get_current_user_id(authorization: Optional[str] = Header(None)) -> in
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
     token = authorization.removeprefix("Bearer ").strip()
-    user_id = verify_simple_jwt(token)
-    if not user_id:
+    claims = _verified_token_claims(token)
+    if not claims:
         raise HTTPException(status_code=401, detail="Invalid or expired session token")
-    return user_id
+    try:
+        if await database.is_mobile_jwt_revoked(claims["jti"]):
+            raise HTTPException(status_code=401, detail="Session has been logged out")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("JWT revocation check unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Session verification temporarily unavailable") from None
+    return claims["user_id"]
 
 
 # Real 3x-ui Server Nodes & Subscription Resolution
@@ -760,12 +780,19 @@ async def refresh_token(req: RefreshRequest):
     claims = _verified_token_claims(token)
     if not claims:
         raise HTTPException(status_code=401, detail="Сессия истекла")
-    # The access and refresh values share the same 30-day absolute expiry for
-    # compatibility. Refreshing cannot silently turn one login into a forever
-    # session; after expiry the user must authenticate again.
+    try:
+        if await database.is_mobile_jwt_revoked(claims["jti"]):
+            raise HTTPException(status_code=401, detail="Сессия завершена")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("JWT revocation check unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Сессия временно недоступна") from None
+    # Refresh preserves the same revocable session and its absolute expiry.
     new_access = create_simple_jwt(
         claims["user_id"], claims["email"],
         issued_at=claims["issued_at"], expires_at=claims["expires_at"],
+        jwt_id=claims["jti"],
     )
     return {
         "access": new_access,
@@ -774,7 +801,19 @@ async def refresh_token(req: RefreshRequest):
 
 
 @api_router.post("/auth/logout")
-async def logout(user_id: int = Depends(get_current_user_id)):
+async def logout(
+    authorization: Optional[str] = Header(None),
+    user_id: int = Depends(get_current_user_id),
+):
+    token = (authorization or "").removeprefix("Bearer ").strip()
+    claims = _verified_token_claims(token)
+    if not claims or claims["user_id"] != user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired session token")
+    try:
+        await database.revoke_mobile_jwt(claims["jti"], claims["expires_at"])
+    except Exception as exc:
+        logger.error("JWT revocation failed (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось завершить сессию. Попробуйте позже") from None
     return {"status": "ok"}
 
 
