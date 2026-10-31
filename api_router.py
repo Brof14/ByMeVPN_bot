@@ -439,25 +439,28 @@ async def fetch_and_parse_real_nodes(
             host_header = f"{host_header}:{parsed.port}"
         upstream_headers["Host"] = host_header
 
-    async with httpx.AsyncClient(verify=False, timeout=5.0) as client:
+    # The local 3x-ui listener can have a hostname-specific certificate.
+    # Limit its TLS exception strictly to loopback; verify public TLS normally.
+    async with httpx.AsyncClient(verify=False, timeout=5.0) as local_client:
         try:
-            resp = await client.get(local_url, headers=upstream_headers)
+            resp = await local_client.get(local_url, headers=upstream_headers)
             if resp.status_code == 200:
                 raw_content = resp.text
         except Exception:
             pass
 
-        if not raw_content:
-            try:
-                resp = await client.get(sub_url, headers=upstream_headers)
+    if not raw_content:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as public_client:
+                resp = await public_client.get(sub_url, headers=upstream_headers)
                 if resp.status_code == 200:
                     raw_content = resp.text
-            except Exception as e:
-                logger.error(
-                    "Failed to fetch subscription from host %s (%s)",
-                    parsed.hostname or "unknown",
-                    type(e).__name__,
-                )
+        except Exception as e:
+            logger.error(
+                "Failed to fetch subscription from host %s (%s)",
+                parsed.hostname or "unknown",
+                type(e).__name__,
+            )
 
     if not raw_content:
         return []
