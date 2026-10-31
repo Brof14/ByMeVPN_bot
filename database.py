@@ -1678,6 +1678,15 @@ async def save_mobile_crypto_checkout(
                 "(invoice_id,user_id,days,devices,amount_rub,payload) VALUES(?,?,?,?,?,?)",
                 (str(invoice_id), int(user_id), int(days), int(devices), int(amount_rub), payload),
             )
+            pending_cur = await db.execute(
+                "SELECT user_id,days,devices,amount_rub,payload FROM crypto_pending WHERE invoice_id=?",
+                (str(invoice_id),),
+            )
+            pending_row = await pending_cur.fetchone()
+            expected = (int(user_id), int(days), int(devices), int(amount_rub), payload)
+            if not pending_row or tuple(pending_row) != expected:
+                await db.rollback()
+                return False
             await db.commit()
             return True
         except Exception:
