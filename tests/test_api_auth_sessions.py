@@ -265,11 +265,34 @@ class TestTelegramAuthSessions(unittest.IsolatedAsyncioTestCase):
                 "PRAGMA table_info(mobile_payment_requests)"
             )).fetchall()
         }
-        self.assertIn("generation", columns)
+        self.assertTrue({"generation", "devices", "creation_state"}.issubset(columns))
         current = await database.ensure_mobile_payment_request(
-            98765, "request-migrated1", "1m", "yookassa"
+            98765, "request-migrated1", "1m", "yookassa", 5
         )
         self.assertEqual(current["generation"], 0)
+        self.assertEqual(current["devices"], 5)
+        self.assertEqual(current["creation_state"], "ready")
+
+    async def test_crypto_mobile_invoice_and_fulfillment_intent_are_saved_together(self):
+        request_id = "request-crypto-1234"
+        reserved = await database.ensure_mobile_payment_request(
+            98765, request_id, "3m", "crypto", 5
+        )
+        self.assertTrue(await database.claim_mobile_payment_creation(
+            98765, request_id, "3m", "crypto"
+        ))
+        self.assertTrue(await database.save_mobile_crypto_checkout(
+            98765, request_id, "3m", 5, "invoice-123",
+            "https://pay.example.invalid/crypto", 120, 499, "bm1_order_digest",
+        ))
+        pending = await database.get_crypto_pending("invoice-123")
+        self.assertEqual(
+            (pending["user_id"], pending["days"], pending["devices"], pending["amount_rub"], pending["payload"]),
+            (98765, 120, 5, 499, "bm1_order_digest"),
+        )
+        owner = await database.get_mobile_payment_record("crypto", "invoice-123")
+        self.assertEqual(owner["user_id"], 98765)
+        self.assertEqual(owner["devices"], 5)
 
     async def test_canceled_mobile_payment_generation_rotates_once_atomically(self):
         request_id = "request-12345678"
