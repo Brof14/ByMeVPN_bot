@@ -638,6 +638,16 @@ class PaymentCreateRequest(BaseModel):
     provider: Optional[str] = "yookassa"
 
 
+class MobileV2PaymentCreateRequest(BaseModel):
+    """Mobile v2 accepts only a server-defined plan and an idempotency key."""
+    plan_code: str
+    request_id: str
+    provider: str = "yookassa"
+
+    class Config:
+        extra = "forbid"
+
+
 class SessionRequest(BaseModel):
     node_code: str
     install_id: Optional[str] = None
@@ -1253,6 +1263,97 @@ async def api_check_payment(
     active = sub_dict.get("status") in ("active", "trial", "grace")
     return {"status": "succeeded" if active else "processing", "is_active": active,
             "subscription": sub_dict if active else None}
+
+
+# Mobile v2 is deliberately namespaced so a compatibility patch can be added
+# beside the legacy production routes without replacing the router or changing
+# Telegram bot checkout callbacks. Its plan_code binds period and HWID tier.
+mobile_v2_router = APIRouter()
+
+
+@mobile_v2_router.get("/plans")
+async def get_mobile_v2_plans(devices: int = 2):
+    from constants import get_price_for_months, VALID_DEVICE_LIMITS
+
+    if devices not in VALID_DEVICE_LIMITS:
+        raise HTTPException(status_code=400, detail="Выберите 2, 5 или 10 устройств")
+    catalog = [
+        ("1m", "month", 1, "1 месяц", 0, False),
+        ("3m", "quarter", 3, "4 месяца (3+1)", 11, True),
+        ("6m", "half_year", 6, "8 месяцев (6+2)", 22, False),
+        ("12m", "year", 12, "15 месяцев (12+3)", 34, False),
+    ]
+    plans = []
+    for period_code, desktop_code, months, label, discount, popular in catalog:
+        options = []
+        for device_count in VALID_DEVICE_LIMITS:
+            amount, days = get_price_for_months(months, device_count)
+            options.append({
+                "plan_code": f"{period_code}_d{device_count}",
+                "devices": device_count,
+                "price_rub": amount,
+                "days": days,
+            })
+        selected = next(option for option in options if option["devices"] == devices)
+        plans.append({
+            "code": selected["plan_code"],
+            "desktop_code": desktop_code,
+            "name": label,
+            "price": f"{selected['price_rub']} ₽",
+            "price_rub": selected["price_rub"],
+            "days": selected["days"],
+            "devices": devices,
+            "device_options": options,
+            "discount_percent": discount,
+            "is_popular": popular,
+        })
+    return {
+        "trial": {
+            "code": "trial", "name": "3 дня бесплатно", "price": "0 ₽",
+            "price_rub": 0, "days": 3, "devices": 2,
+        },
+        "plans": plans,
+    }
+
+
+@mobile_v2_router.post("/payment/create")
+async def create_mobile_v2_payment(
+    req: MobileV2PaymentCreateRequest,
+    user_id: int = Depends(get_current_user_id),
+):
+    match = re.fullmatch(r"(1m|3m|6m|12m)_d(2|5|10)", req.plan_code)
+    if not match:
+        raise HTTPException(status_code=400, detail="Неизвестный тариф")
+    if req.provider not in ("yookassa", "crypto"):
+        raise HTTPException(status_code=400, detail="Этот способ оплаты недоступен в приложении")
+
+    # Device count is parsed from the server-issued plan code, never from a
+    # client-supplied `devices`, price, or duration field.
+    legacy_request = PaymentCreateRequest(
+        plan_code=match.group(1),
+        request_id=req.request_id,
+        provider=req.provider,
+        devices=int(match.group(2)),
+    )
+    return await api_create_payment(legacy_request, user_id=user_id)
+
+
+@mobile_v2_router.get("/payment/check")
+async def check_mobile_v2_payment(
+    request: Request,
+    invoice_id: str,
+    provider: str,
+    user_id: int = Depends(get_current_user_id),
+):
+    return await api_check_payment(
+        request=request,
+        invoice_id=invoice_id,
+        provider=provider,
+        user_id=user_id,
+    )
+
+
+api_router.include_router(mobile_v2_router, prefix="/mobile/v2")
 
 
 # 4. SERVERS & VPN SESSIONS (Real Nodes Only)
