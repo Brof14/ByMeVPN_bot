@@ -582,6 +582,10 @@ class TelegramCheckResponse(BaseModel):
     servers: Optional[List[Dict[str, Any]]] = None
 
 
+class TelegramSessionCheckRequest(BaseModel):
+    token: str
+
+
 class RegisterRequest(BaseModel):
     email: str
     password: str
@@ -672,6 +676,14 @@ async def check_telegram_session(token: str, request: Request):
         subscription=sub_dict,
         servers=servers,
     )
+
+
+@api_router.post("/auth/telegram/check-session", response_model=TelegramCheckResponse)
+async def check_telegram_session_body(req: TelegramSessionCheckRequest, request: Request):
+    """Poll Telegram login state in the request body to keep it out of URL logs."""
+    if not req.token or len(req.token) > 256:
+        return TelegramCheckResponse(status="expired")
+    return await check_telegram_session(req.token, request)
 
 
 # ---------------------------------------------------------------------------
