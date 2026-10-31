@@ -84,7 +84,32 @@ class TestMobileApiV2(unittest.TestCase):
             (109, 30, 5, 1),
         )
         self.assertTrue(args["idempotency_key"])
+        self.assertEqual(args["extra_metadata"]["mobile_v2"], "1")
+        self.assertEqual(args["extra_metadata"]["plan_code"], "1m_d5")
         self.assertEqual(response.json()["invoice_id"], "test-invoice-001")
+
+    def test_repeated_request_id_returns_same_invoice_without_creating_another(self):
+        reservation = {
+            "plan_code": "1m", "provider": "yookassa", "devices": 5,
+            "payment_id": "existing-invoice", "confirmation_url": "https://pay.example.invalid/existing",
+            "generation": 0, "creation_state": "created",
+        }
+        with patch.object(
+            api_router.database, "ensure_mobile_payment_request",
+            new=AsyncMock(return_value=reservation),
+        ), patch(
+            "payments.get_yookassa_payment_status", new=AsyncMock(return_value="pending"),
+        ), patch(
+            "payments.create_yookassa_payment", new=AsyncMock(),
+        ) as create_payment:
+            response = self.client.post(
+                "/api/v1/mobile/v2/payment/create",
+                json={"plan_code": "1m_d5", "request_id": "request_12345678", "provider": "yookassa"},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["invoice_id"], "existing-invoice")
+        self.assertEqual(response.json()["payment_url"], "https://pay.example.invalid/existing")
+        create_payment.assert_not_awaited()
 
     def test_crypto_create_uses_same_server_catalog_terms(self):
         reservation = {

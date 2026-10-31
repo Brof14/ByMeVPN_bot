@@ -304,6 +304,50 @@ async def yookassa_webhook(request: Request) -> Response:
     return Response(status_code=200)
 
 
+async def _mobile_yookassa_order_matches(
+    payment_id: str, user_id: int, days: int, devices: int,
+    amount_rub: int, metadata: dict,
+) -> bool:
+    """Verify a settled app invoice against its durable request and catalog."""
+    from database import get_mobile_payment_request_by_invoice
+    from constants import get_price_for_months
+
+    order = await get_mobile_payment_request_by_invoice("yookassa", payment_id)
+    months = {"1m": 1, "3m": 3, "6m": 6, "12m": 12}.get(order["plan_code"]) if order else None
+    if not order or not months:
+        return False
+    expected_amount, expected_days = get_price_for_months(months, order["devices"])
+    return all((
+        order["user_id"] == user_id,
+        order["provider"] == "yookassa",
+        order["payment_id"] == payment_id,
+        order["devices"] == devices,
+        f"{order['plan_code']}_d{order['devices']}" == metadata.get("plan_code"),
+        expected_days == days,
+        expected_amount == amount_rub,
+    ))
+
+
+async def _mobile_crypto_order_matches(invoice_id: str, pending: dict) -> bool:
+    """Verify a settled app Crypto Pay invoice against its durable request."""
+    from database import get_mobile_payment_request_by_invoice
+    from constants import get_price_for_months
+
+    order = await get_mobile_payment_request_by_invoice("crypto", invoice_id)
+    months = {"1m": 1, "3m": 3, "6m": 6, "12m": 12}.get(order["plan_code"]) if order else None
+    if not order or not months:
+        return False
+    expected_amount, expected_days = get_price_for_months(months, order["devices"])
+    return all((
+        order["user_id"] == int(pending["user_id"]),
+        order["provider"] == "crypto",
+        order["payment_id"] == invoice_id,
+        order["devices"] == int(pending["devices"]),
+        expected_days == int(pending["days"]),
+        expected_amount == int(pending["amount_rub"]),
+    ))
+
+
 async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional[dict] = None) -> None:
     """
     Verify and process a succeeded YooKassa payment.
@@ -399,6 +443,19 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                     bot,
                     f"⚠️ Платёж YooKassa {payment_id}: сумма {amount_str} ₽ не совпадает с ожидаемой {expected_amount} ₽. Автоматическая выдача остановлена.",
                 )
+                return
+
+        # Mobile checkouts have a separate durable request record. Before
+        # fulfillment, bind the provider's verified invoice metadata back to
+        # that exact owner/request and recompute its terms from our catalog.
+        # Telegram bot payments do not carry app_payment=1 and retain their
+        # existing fulfillment contract.
+        if metadata.get("mobile_v2") == "1":
+            if not await _mobile_yookassa_order_matches(
+                payment_id, user_id, days, devices, amount_rub, metadata,
+            ):
+                logger.error("Mobile YooKassa invoice does not match its server-owned checkout terms")
+                await _notify_admin(bot, "⚠️ Данные мобильного платежа не совпали с сохранённым тарифом. Автоматическая выдача остановлена.")
                 return
 
         logger.info(
@@ -766,6 +823,15 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
                     f"⚠️ Crypto Bot инвойс {invoice_id}: сумма, валюта или данные заказа не совпадают. Выдача остановлена для сверки.",
                 )
             return
+
+        # Mobile Crypto Pay invoices carry an opaque per-request payload. Bind
+        # those invoices to the owner-scoped mobile request and verify the
+        # server catalog terms before the shared provisioning path runs.
+        if str(pending.get("payload") or "").startswith("bm1_"):
+            if not await _mobile_crypto_order_matches(str(invoice_id), pending):
+                logger.error("Mobile Crypto invoice does not match its server-owned checkout terms")
+                await _notify_admin(bot, "⚠️ Данные мобильного Crypto Bot платежа не совпали с тарифом. Выдача остановлена.")
+                return
 
         user_id = pending["user_id"]
         days = pending["days"]
