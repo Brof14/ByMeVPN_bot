@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, urlsplit
 
 from app_links import (
+    APP_LOGIN_CONTENT_SECURITY_POLICY,
     build_app_login_url,
     build_app_redirect_url,
     render_app_open_page,
@@ -43,6 +44,24 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertIn('id="open-app"', page)
         self.assertIn("Открыть ByMeVPN", page)
         self.assertIn("intent://login", page)
+
+    def test_page_uses_same_origin_brand_mark(self):
+        page = render_app_open_page("bymevpn://login")
+
+        self.assertIn('src="/app/logo"', page)
+        self.assertIn('alt="Логотип ByMeVPN"', page)
+
+    def test_content_security_policy_allows_same_origin_logo(self):
+        self.assertIn("default-src 'none'", APP_LOGIN_CONTENT_SECURITY_POLICY)
+        self.assertIn("img-src 'self'", APP_LOGIN_CONTENT_SECURITY_POLICY)
+
+    def test_brand_mark_asset_is_committed(self):
+        from pathlib import Path
+
+        logo = Path(__file__).resolve().parents[1] / "static" / "bymevpn-mark.png"
+        self.assertTrue(logo.is_file())
+        self.assertGreater(logo.stat().st_size, 1024)
+        self.assertEqual(logo.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
 
     def test_untrusted_values_cannot_break_out_of_script(self):
         page = render_app_open_page(
