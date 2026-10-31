@@ -88,6 +88,24 @@ class DesktopSessionContract(unittest.IsolatedAsyncioTestCase):
                 )
         self.assertEqual(caught.exception.status_code, 409)
 
+    async def test_telegram_signin_does_not_fail_when_panel_is_unavailable(self):
+        session = {
+            "status": "authenticated", "user_id": 777,
+            "username": "tester", "full_name": "Test User",
+        }
+        with (
+            patch.object(api_router.database, "poll_mobile_auth_session",
+                         new=AsyncMock(return_value=session)),
+            patch.object(api_router, "get_user_real_subscription",
+                         new=AsyncMock(side_effect=RuntimeError("3x-ui offline"))),
+        ):
+            result = await api_router.check_telegram_session(
+                "auth_abcdef1234567890", request(), 
+            )
+        self.assertEqual(result.status, "authenticated")
+        self.assertTrue(result.access_token)
+        self.assertEqual(result.subscription["status"], "unknown")
+
     async def test_me_restores_registered_email_not_placeholder(self):
         class Cursor:
             async def fetchone(self):
