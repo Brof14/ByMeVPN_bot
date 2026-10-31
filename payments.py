@@ -267,6 +267,14 @@ async def charge_yookassa_recurrent(
         return None
 
 
+class CryptoPayCreateError(RuntimeError):
+    """A Crypto Pay invoice creation error with an explicit ambiguity marker."""
+
+    def __init__(self, reason: str, outcome_unknown: bool):
+        super().__init__(reason)
+        self.outcome_unknown = bool(outcome_unknown)
+
+
 @monitor_performance("cryptobot_create_payment")
 async def create_crypto_payment(
     amount_rub: int,
@@ -276,20 +284,22 @@ async def create_crypto_payment(
     devices: int = 2,
     promo_code: Optional[str] = None,
     external_payload: Optional[str] = None,
+    raise_errors: bool = False,
 ) -> Optional[tuple[str, str]]:
-    """Create payment via Crypto Bot (@send).
+    """Create a Crypto Pay invoice; optionally expose safe retry semantics to API callers."""
+    def fail(reason: str, outcome_unknown: bool):
+        if raise_errors:
+            raise CryptoPayCreateError(reason, outcome_unknown)
+        return None
 
-    Returns (pay_url, invoice_id) on success, None on failure.
-    """
     if not CRYPTO_BOT_TOKEN:
         logger.warning("Crypto Bot token not configured")
-        return None
+        return fail("not_configured", False)
 
     headers = {
         "Crypto-Pay-API-Token": CRYPTO_BOT_TOKEN,
         "Content-Type": "application/json",
     }
-
     payload = {
         "currency_type": "fiat",
         "fiat": "RUB",
@@ -298,7 +308,7 @@ async def create_crypto_payment(
         "description": description,
         "paid_btn_name": "openBot",
         "paid_btn_url": "https://t.me/ByMeVPN_bot",
-        "expires_in": 3600,  # 1 hour
+        "expires_in": 3600,
         "hidden_message": (
             "Оплата подписки ByMeVPN"
             if external_payload else f"User ID: {user_id}, Days: {days}, Devices: {devices}"
@@ -310,35 +320,36 @@ async def create_crypto_payment(
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.post("https://pay.crypt.bot/api/createInvoice", json=payload, headers=headers)
-            logger.info("Crypto Bot response status: %d", r.status_code)
-            r.raise_for_status()
-            data = r.json()
-            
-            if data.get("ok"):
-                invoice_data = data.get("result", {})
-                pay_url = invoice_data.get("bot_invoice_url") or invoice_data.get("pay_url")
-                invoice_id = invoice_data.get("invoice_id")
-                logger.info("Crypto Bot payment created for user %d: invoice_id=%s", user_id, invoice_id)
-                if not pay_url or invoice_id is None:
-                    logger.error("Crypto Bot response missing pay_url/invoice_id: %s", data)
-                    return None
-                return pay_url, str(invoice_id)
-            else:
-                logger.error("Crypto Bot error: %s", data.get("error", "Unknown error"))
-                return None
-            
-    except httpx.HTTPStatusError as e:
-        error_msg = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
-        logger.error("Crypto Bot HTTP error for user %d: %s", user_id, error_msg)
-        return None
-    except httpx.RequestError as e:
-        logger.error("Crypto Bot request error for user %d: %s", user_id, str(e))
-        return None
-    except Exception as e:
-        logger.error("Crypto Bot error for user %d: %s", user_id, str(e))
-        logger.error("Payload: %s", str(payload)[:200])
-        return None
+            response = await client.post(
+                "https://pay.crypt.bot/api/createInvoice",
+                json=payload,
+                headers=headers,
+            )
+            logger.info("Crypto Bot response status: %d", response.status_code)
+            response.raise_for_status()
+            data = response.json()
+            if not isinstance(data, dict) or data.get("ok") is not True:
+                # An explicit provider rejection confirms no invoice was created.
+                return fail("provider_rejected", False)
+            invoice_data = data.get("result") or {}
+            pay_url = invoice_data.get("bot_invoice_url") or invoice_data.get("pay_url")
+            invoice_id = invoice_data.get("invoice_id")
+            if not pay_url or invoice_id is None:
+                # The provider may have created an invoice but omitted response fields.
+                return fail("incomplete_provider_response", True)
+            return str(pay_url), str(invoice_id)
+    except CryptoPayCreateError:
+        raise
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        logger.warning("Crypto Bot invoice request returned HTTP %d", status_code)
+        return fail(f"http_{status_code}", status_code == 408 or status_code >= 500)
+    except httpx.RequestError as exc:
+        logger.warning("Crypto Bot invoice request failed (%s)", type(exc).__name__)
+        return fail("network_error", True)
+    except Exception as exc:
+        logger.warning("Crypto Bot invoice creation failed (%s)", type(exc).__name__)
+        return fail("unexpected_error", True)
 
 
 async def get_paid_crypto_invoices(limit: int = 50) -> list[dict]:
