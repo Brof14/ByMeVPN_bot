@@ -1714,7 +1714,7 @@ async def get_mobile_payment_record(provider: str, payment_id: str) -> Optional[
     cur = await db.execute(
         "SELECT user_id,status,amount,days,devices FROM payments "
         "WHERE provider=? AND CAST(provider_payment_id AS TEXT)=? "
-        "UNION ALL SELECT user_id,'pending',0,0,2 FROM mobile_payment_requests "
+        "UNION ALL SELECT user_id,'pending',0,0,devices FROM mobile_payment_requests "
         "WHERE provider=? AND payment_id=? "
         "UNION ALL SELECT user_id,'pending',amount_rub,days,devices FROM yookassa_pending "
         "WHERE payment_id=? AND ?='yookassa' "
