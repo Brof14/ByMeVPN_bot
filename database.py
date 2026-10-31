@@ -69,6 +69,13 @@ CREATE TABLE IF NOT EXISTS keys (
 CREATE INDEX IF NOT EXISTS idx_keys_user   ON keys(user_id);
 CREATE INDEX IF NOT EXISTS idx_keys_expiry ON keys(expiry);
 
+CREATE TABLE IF NOT EXISTS revoked_mobile_jwt_sessions (
+    jti TEXT PRIMARY KEY,
+    expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_revoked_mobile_jwt_expiry
+    ON revoked_mobile_jwt_sessions(expires_at);
+
 CREATE TABLE IF NOT EXISTS mobile_auth_sessions (
     state_hash TEXT PRIMARY KEY,
     status TEXT NOT NULL CHECK (status IN ('pending', 'authenticated', 'consumed')),
@@ -1693,6 +1700,32 @@ async def poll_mobile_auth_session(state_hash: str) -> Optional[dict]:
             "username": row[2],
             "full_name": row[3],
         }
+
+
+async def is_mobile_jwt_revoked(jti: str) -> bool:
+    """Check whether one JWT session has been explicitly logged out."""
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT 1 FROM revoked_mobile_jwt_sessions WHERE jti=? AND expires_at>?",
+        (str(jti), int(time.time())),
+    )
+    return await cur.fetchone() is not None
+
+
+async def revoke_mobile_jwt(jti: str, expires_at: int) -> None:
+    """Persist a JWT revocation only until that token's natural expiry."""
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        await db.execute(
+            "DELETE FROM revoked_mobile_jwt_sessions WHERE expires_at<=?",
+            (now,),
+        )
+        await db.execute(
+            "INSERT OR REPLACE INTO revoked_mobile_jwt_sessions(jti,expires_at) VALUES(?,?)",
+            (str(jti), int(expires_at)),
+        )
+        await db.commit()
 
 
 async def mark_hwid_device_notified(user_id: int, device_id: int) -> None:
