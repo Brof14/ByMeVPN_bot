@@ -232,6 +232,36 @@ class TestTelegramAuthSessions(unittest.IsolatedAsyncioTestCase):
         await database.revoke_mobile_jwt(claims["jti"], claims["expires_at"])
         self.assertTrue(await database.is_mobile_jwt_revoked(claims["jti"]))
 
+    async def test_existing_mobile_payment_table_migrates_generation_column(self):
+        db = await database.get_db()
+        await db.execute("DROP TABLE mobile_payment_requests")
+        await db.execute(
+            """CREATE TABLE mobile_payment_requests (
+                user_id INTEGER NOT NULL,
+                request_id TEXT NOT NULL,
+                plan_code TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                payment_id TEXT,
+                confirmation_url TEXT,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (user_id, request_id),
+                UNIQUE (provider, payment_id)
+            )"""
+        )
+        await db.commit()
+
+        await database.init_db()
+        columns = {
+            row[1] for row in await (await db.execute(
+                "PRAGMA table_info(mobile_payment_requests)"
+            )).fetchall()
+        }
+        self.assertIn("generation", columns)
+        current = await database.ensure_mobile_payment_request(
+            98765, "request-migrated1", "1m", "yookassa"
+        )
+        self.assertEqual(current["generation"], 0)
+
     async def test_canceled_mobile_payment_generation_rotates_once_atomically(self):
         request_id = "request-12345678"
         first = await database.ensure_mobile_payment_request(98765, request_id, "1m", "yookassa")
