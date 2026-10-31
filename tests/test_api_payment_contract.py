@@ -48,7 +48,7 @@ class TestMobilePaymentContract(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payment_error.exception.status_code, 400)
 
     async def test_client_amount_days_are_ignored_but_valid_device_tier_is_used(self):
-        reserved = {"plan_code": "3m", "provider": "yookassa", "payment_id": None, "confirmation_url": None, "generation": 0}
+        reserved = {"plan_code": "3m", "provider": "yookassa", "devices": 10, "payment_id": None, "confirmation_url": None, "generation": 0}
         created = {"payment_url": "https://pay.example.invalid/checkout", "payment_id": "invoice-123", "status": "pending"}
         request = api_router.PaymentCreateRequest(
             plan_code="3m", request_id="12345678-1234-1234-1234-123456789012",
@@ -190,7 +190,7 @@ class TestMobilePaymentContract(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("123", kwargs["external_payload"])
         claim.assert_awaited_once()
         save.assert_awaited_once()
-        self.assertEqual(save.await_args.kwargs["amount_rub"], get_price_for_months(3, 5)[0])
+        self.assertEqual(save.await_args.args[7], get_price_for_months(3, 5)[0])
 
     async def test_crypto_retry_with_saved_invoice_does_not_create_another(self):
         reserved = {
