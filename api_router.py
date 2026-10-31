@@ -1078,18 +1078,38 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
         )
         if not claimed:
             raise HTTPException(status_code=409, detail="Создание счёта уже выполняется. Повторите проверку позже")
-        result = await create_crypto_payment(
-            amount_rub=amount_rub,
-            description=f"ByMeVPN — {days} дней, {devices} устройства",
-            user_id=user_id,
-            days=days,
-            devices=devices,
-            external_payload=payload,
-        )
+        from payments import CryptoPayCreateError
+        try:
+            result = await create_crypto_payment(
+                amount_rub=amount_rub,
+                description=f"ByMeVPN — {days} дней, {devices} устройства",
+                user_id=user_id,
+                days=days,
+                devices=devices,
+                external_payload=payload,
+                raise_errors=True,
+            )
+        except CryptoPayCreateError as exc:
+            if not exc.outcome_unknown:
+                # A definite provider rejection created no invoice, so allow
+                # this same idempotent request to retry safely.
+                await database.reset_mobile_payment_creation(
+                    user_id, req.request_id, req.plan_code, provider,
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail="Провайдер отклонил создание счёта. Попробуйте ещё раз позже",
+                ) from exc
+            # A timeout or incomplete response may hide an accepted invoice.
+            # Keep 'creating'; the next retry must reconcile by opaque payload.
+            raise HTTPException(
+                status_code=503,
+                detail="Проверяем создание счёта. Не запускайте оплату повторно; попробуйте позже",
+            ) from exc
         if not result:
-            # The provider may have accepted a request before the network timed
-            # out. Keep the request in 'creating' so a retry reconciles by payload.
-            raise HTTPException(status_code=502, detail="Не удалось подтвердить создание счёта. Повторите проверку позже")
+            # Legacy helpers can still return None. Treat the outcome as unknown
+            # and reconcile on retry rather than risking a duplicate invoice.
+            raise HTTPException(status_code=503, detail="Не удалось подтвердить создание счёта. Повторите проверку позже")
         payment_url, invoice_id = result
         await _bind_crypto_invoice(str(invoice_id), payment_url, payload)
         return {"payment_url": payment_url, "invoice_id": str(invoice_id), "provider": "crypto"}
