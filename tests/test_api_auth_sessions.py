@@ -191,6 +191,16 @@ class TestTelegramAuthSessions(unittest.IsolatedAsyncioTestCase):
             await api_router.refresh_token(api_router.RefreshRequest(refresh=f"ref_{token}"))
         self.assertEqual(refresh_result.exception.status_code, 401)
 
+    async def test_revocation_store_failure_denies_authorization(self):
+        from fastapi import HTTPException
+        from unittest.mock import patch
+
+        token = api_router.create_simple_jwt(98765, "test@example.invalid")
+        with patch.object(database, "is_mobile_jwt_revoked", side_effect=RuntimeError("db unavailable")):
+            with self.assertRaises(HTTPException) as result:
+                await api_router.get_current_user_id(f"Bearer {token}")
+        self.assertEqual(result.exception.status_code, 503)
+
     async def test_revocation_is_limited_to_token_expiry(self):
         token = api_router.create_simple_jwt(98765, "test@example.invalid")
         claims = api_router._verified_token_claims(token)
