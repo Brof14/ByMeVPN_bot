@@ -139,6 +139,30 @@ class TestTelegramAuthSessions(unittest.IsolatedAsyncioTestCase):
         await database.close_db()
         _clean_db()
 
+    async def test_body_polling_consumes_telegram_state_without_query_parameter(self):
+        from starlette.requests import Request
+
+        state = "auth_" + secrets.token_urlsafe(32)
+        state_hash = hashlib.sha256(state.removeprefix("auth_").encode()).hexdigest()
+        await database.create_mobile_auth_session(state_hash, int(api_router.time.time()) + 60)
+        await database.confirm_mobile_auth_session(state_hash, 98765, "test-user", "Test User")
+        request = Request({
+            "type": "http", "http_version": "1.1", "method": "POST",
+            "scheme": "https", "path": "/api/v1/auth/telegram/check-session",
+            "raw_path": b"/api/v1/auth/telegram/check-session", "query_string": b"",
+            "headers": [], "client": ("127.0.0.1", 1), "server": ("test.invalid", 443),
+        })
+        with patch.object(
+            api_router, "get_user_real_subscription",
+            new=AsyncMock(return_value=("", [], {"status": "inactive"})),
+        ):
+            result = await api_router.check_telegram_session_body(
+                api_router.TelegramSessionCheckRequest(token=state), request
+            )
+        self.assertEqual(result.status, "authenticated")
+        self.assertEqual(api_router.verify_simple_jwt(result.access_token), 98765)
+        self.assertEqual((await database.poll_mobile_auth_session(state_hash))["status"], "expired")
+
     async def test_state_is_persisted_and_consumed_once(self):
         state_hash = hashlib.sha256(secrets.token_urlsafe(32).encode()).hexdigest()
         await database.create_mobile_auth_session(state_hash, int(api_router.time.time()) + 60)
