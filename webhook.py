@@ -670,6 +670,23 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
             pass
 
 
+def _crypto_invoice_matches_pending(invoice: dict, pending: dict) -> bool:
+    """Verify paid invoice amount and metadata against the server's durable order."""
+    if invoice.get("currency_type") != "fiat" or invoice.get("fiat") != "RUB":
+        return False
+    try:
+        actual = Decimal(str(invoice.get("amount")))
+        expected = Decimal(str(pending.get("amount_rub")))
+        if not actual.is_finite() or actual != expected:
+            return False
+    except (InvalidOperation, TypeError, ValueError):
+        return False
+    expected_payload = pending.get("payload")
+    if expected_payload and invoice.get("payload") != expected_payload:
+        return False
+    return True
+
+
 async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
     """
     Process a Crypto Bot (@send) invoice reported as paid by CryptoPaymentMonitor.
@@ -718,11 +735,36 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
             logger.warning("Crypto monitor: invoice %s awaits manual reconciliation", invoice_id)
             return
 
-        # Look up what we recorded when the invoice was created
+        # Look up what we recorded when the invoice was created. Provider status
+        # alone is not enough: the invoice must match the server-owned order.
         pending = await get_crypto_pending(invoice_id)
         if not pending:
             logger.error("Crypto monitor: no pending record for invoice %s — cannot deliver", invoice_id)
             await _notify_admin(bot, f"⚠️ Оплаченный Crypto Bot инвойс {invoice_id} без pending-записи")
+            return
+        if not _crypto_invoice_matches_pending(invoice, pending):
+            from database import record_payment_idempotent, update_payment_status
+
+            _, payment_row_id = await record_payment_idempotent(
+                user_id=pending["user_id"],
+                amount=pending["amount_rub"],
+                currency="RUB",
+                method="cryptobot",
+                days=pending["days"],
+                payload=str(invoice_id),
+                status="recovery_required",
+                tariff=f"Подписка {pending['days']} дней ({pending['devices']} устр.)",
+                devices=pending["devices"],
+                provider="cryptobot",
+                provider_payment_id=str(invoice_id),
+            )
+            await update_payment_status(payment_row_id, "recovery_required")
+            if not ledger_row or ledger_row[1] != "recovery_required":
+                logger.error("Crypto invoice %s does not match its stored order; fulfillment blocked", invoice_id)
+                await _notify_admin(
+                    bot,
+                    f"⚠️ Crypto Bot инвойс {invoice_id}: сумма, валюта или данные заказа не совпадают. Выдача остановлена для сверки.",
+                )
             return
 
         user_id = pending["user_id"]
