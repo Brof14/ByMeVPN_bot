@@ -272,6 +272,53 @@ class TestMobilePaymentContract(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.exception.status_code, 503)
         create.assert_not_awaited()
 
+    async def test_definite_crypto_rejection_releases_creation_claim(self):
+        from fastapi import HTTPException
+        from payments import CryptoPayCreateError
+
+        reserved = {
+            "plan_code": "1m", "provider": "crypto", "devices": 2,
+            "payment_id": None, "confirmation_url": None, "generation": 0,
+            "creation_state": "ready",
+        }
+        request = api_router.PaymentCreateRequest(
+            plan_code="1m", request_id="request-crypto-reject", provider="crypto",
+        )
+        with (
+            patch.object(api_router.database, "ensure_mobile_payment_request", new=AsyncMock(return_value=reserved)),
+            patch.object(api_router.database, "claim_mobile_payment_creation", new=AsyncMock(return_value=True)),
+            patch.object(api_router.database, "reset_mobile_payment_creation", new=AsyncMock(return_value=True)) as reset,
+            patch("payments.create_crypto_payment", new=AsyncMock(side_effect=CryptoPayCreateError("provider_rejected", False))) as create,
+        ):
+            with self.assertRaises(HTTPException) as result:
+                await api_router.api_create_payment(request, user_id=123)
+        self.assertEqual(result.exception.status_code, 502)
+        reset.assert_awaited_once_with(123, "request-crypto-reject", "1m", "crypto")
+        self.assertTrue(create.await_args.kwargs["raise_errors"])
+
+    async def test_ambiguous_crypto_create_keeps_claim_for_reconciliation(self):
+        from fastapi import HTTPException
+        from payments import CryptoPayCreateError
+
+        reserved = {
+            "plan_code": "1m", "provider": "crypto", "devices": 2,
+            "payment_id": None, "confirmation_url": None, "generation": 0,
+            "creation_state": "ready",
+        }
+        request = api_router.PaymentCreateRequest(
+            plan_code="1m", request_id="request-crypto-unknown", provider="crypto",
+        )
+        with (
+            patch.object(api_router.database, "ensure_mobile_payment_request", new=AsyncMock(return_value=reserved)),
+            patch.object(api_router.database, "claim_mobile_payment_creation", new=AsyncMock(return_value=True)),
+            patch.object(api_router.database, "reset_mobile_payment_creation", new=AsyncMock()) as reset,
+            patch("payments.create_crypto_payment", new=AsyncMock(side_effect=CryptoPayCreateError("network_error", True))),
+        ):
+            with self.assertRaises(HTTPException) as result:
+                await api_router.api_create_payment(request, user_id=123)
+        self.assertEqual(result.exception.status_code, 503)
+        reset.assert_not_awaited()
+
     async def test_expired_crypto_invoice_is_failed_not_pending(self):
         from starlette.requests import Request
 
