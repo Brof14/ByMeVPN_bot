@@ -19,6 +19,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import time
 import uuid
@@ -31,6 +32,7 @@ from pydantic import BaseModel
 
 import database
 from config import XUI_SUB_PATH, XUI_URL
+from constants import VALID_DEVICE_LIMITS, TARIFF_DAYS, get_price_for_months
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +42,35 @@ api_router = APIRouter()
 # Telegram Session Store & JWT Signing
 # ---------------------------------------------------------------------------
 _TELEGRAM_SESSIONS: Dict[str, Dict[str, Any]] = {}
-JWT_SECRET = os.getenv("JWT_SECRET", "bymevpn_jwt_secure_secret_key_2026_xray")
+JWT_SECRET = os.getenv("JWT_SECRET", "")
+
+
+def _signing_secret() -> bytes:
+    # Never use a predictable signing key. Deploy a 32+ character secret in JWT_SECRET.
+    if len(JWT_SECRET) < 32:
+        raise HTTPException(status_code=503, detail="Authentication signing key is not configured")
+    return JWT_SECRET.encode("utf-8")
+
+
+_PLAN_MONTHS = {"month": 1, "quarter": 3, "half_year": 6, "year": 12}
+_ANDROID_MONTHS = {"month1": 1, "month4": 3, "month8": 6, "month15": 12}
+
+
+def resolve_checkout_terms(plan_code: str, devices: int, amount_rub: int, days: int) -> tuple[int, int, int]:
+    """Reject client-supplied price/duration different from the authoritative bot catalog."""
+    if devices not in VALID_DEVICE_LIMITS:
+        raise HTTPException(status_code=422, detail="Unsupported device count")
+    months = _PLAN_MONTHS.get(plan_code)
+    if months is None:
+        match = re.fullmatch(r"plan_(month1|month4|month8|month15)_(2|5|10)dev", plan_code)
+        if not match or int(match.group(2)) != devices:
+            raise HTTPException(status_code=422, detail="Unknown plan")
+        months = _ANDROID_MONTHS[match.group(1)]
+    expected_price, expected_days = get_price_for_months(months, devices)
+    if amount_rub != expected_price or days != expected_days:
+        raise HTTPException(status_code=422, detail="Plan price or duration is out of date. Refresh tariffs.")
+    return expected_price, expected_days, devices
+
 
 
 async def _ensure_auth_db():
@@ -95,7 +125,7 @@ def confirm_telegram_session(token: str, user_id: int, username: str = "", full_
 def create_simple_jwt(user_id: int, email: str = "") -> str:
     """Create a signed HMAC-SHA256 session token."""
     payload = f"{user_id}:{email}:{int(time.time()) + 30 * 86400}"
-    signature = hmac.new(JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    signature = hmac.new(_signing_secret(), payload.encode(), hashlib.sha256).hexdigest()
     return f"{payload}:{signature}"
 
 
@@ -107,7 +137,7 @@ def verify_simple_jwt(token: str) -> Optional[int]:
             return None
         user_id_str, email, exp_str, sig = parts
         payload = f"{user_id_str}:{email}:{exp_str}"
-        expected_sig = hmac.new(JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        expected_sig = hmac.new(_signing_secret(), payload.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(sig, expected_sig):
             return None
         if int(exp_str) < time.time():
@@ -530,6 +560,10 @@ async def check_telegram_session(token: str):
 
     if session.get("status") != "authenticated":
         return TelegramCheckResponse(status="pending")
+    # The one-time login ticket is consumed here: prevent other clients
+    # polling an already approved token and replaying the same authorization.
+    _TELEGRAM_SESSIONS.pop(clean_token, None)
+    _TELEGRAM_SESSIONS.pop(token, None)
 
     user_id = session["user_id"]
     username = session.get("username", "")
@@ -639,40 +673,9 @@ async def login(req: LoginRequest):
 
 @api_router.post("/auth/google")
 async def login_google(req: GoogleLoginRequest):
-    email = ""
-    name = "Google User"
-    try:
-        parts = req.id_token.split(".")
-        if len(parts) >= 2:
-            padded = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
-            payload_str = base64.urlsafe_b64decode(padded.encode()).decode("utf-8", "ignore")
-            data = json.loads(payload_str)
-            email = data.get("email", "").lower()
-            name = data.get("name") or data.get("given_name") or email.split("@")[0]
-    except Exception as e:
-        logger.warning(f"Error decoding Google token: {e}")
-
-    if not email:
-        email = f"google_user_{secrets.token_hex(4)}@gmail.com"
-
-    user_id = int(hashlib.md5(email.encode()).hexdigest()[:8], 16)
-    await database.ensure_user(user_id, email.split("@")[0])
-
-    jwt_token = create_simple_jwt(user_id, email)
-    sub_url, servers, sub_dict = await get_user_real_subscription(user_id)
-
-    return {
-        "access": jwt_token,
-        "refresh": f"ref_{jwt_token}",
-        "user": {
-            "id": str(user_id),
-            "email": email,
-            "name": name,
-            "is_google": True,
-        },
-        "subscription": sub_dict,
-        "servers": servers,
-    }
+    # A decoded JWT payload is NOT proof of Google identity. Fail closed until
+    # issuer, audience, signature (Google JWKS), expiry and nonce are verified.
+    raise HTTPException(status_code=503, detail="Google sign-in is temporarily disabled")
 
 
 @api_router.post("/auth/refresh")
@@ -709,7 +712,8 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
 
 @api_router.delete("/me")
 async def delete_me(user_id: int = Depends(get_current_user_id)):
-    return {"status": "deleted"}
+    # Real deletion needs account, payment and subscription revocation in one workflow.
+    raise HTTPException(status_code=501, detail="Account deletion is not available yet")
 
 
 # ---------------------------------------------------------------------------
@@ -726,6 +730,11 @@ async def get_subscription_status(user_id: int = Depends(get_current_user_id)):
 async def activate_trial(req: TrialRequest, user_id: int = Depends(get_current_user_id)):
     """Activate 3-day free trial on 3x-ui panel."""
     trial_days = 3
+    # A trial must not be granted again for the same account.
+    if await database.has_trial_used(user_id):
+        raise HTTPException(status_code=409, detail="Free trial was already used")
+    if not await database.try_claim_trial(user_id):
+        raise HTTPException(status_code=409, detail="Free trial was already used")
     sub_url = None
     vless_links = []
 
@@ -738,6 +747,11 @@ async def activate_trial(req: TrialRequest, user_id: int = Depends(get_current_u
             vless_links = res.get("vless_links", [])
     except Exception as e:
         logger.error(f"Error calling create_xui_user for trial user {user_id}: {e}")
+        await database.reset_trial_for_user(user_id)
+        raise HTTPException(status_code=503, detail="Could not provision trial")
+    if not res or not (sub_url or vless_links):
+        await database.reset_trial_for_user(user_id)
+        raise HTTPException(status_code=503, detail="Trial provisioner returned no VPN credentials")
 
     expiry_ts = int(time.time()) + trial_days * 86400
     try:
@@ -752,7 +766,8 @@ async def activate_trial(req: TrialRequest, user_id: int = Depends(get_current_u
         )
         await database.set_trial_used(user_id)
     except Exception as e:
-        logger.warning(f"DB trial save error: {e}")
+        logger.error(f"DB trial save error: {e}")
+        raise HTTPException(status_code=503, detail="Trial created but account sync failed; contact support")
 
     servers = []
     if sub_url:
@@ -772,29 +787,41 @@ async def activate_trial(req: TrialRequest, user_id: int = Depends(get_current_u
 
 @api_router.get("/plans")
 async def get_plans():
-    return {
-        "plans": [
-            {"code": "trial", "name": "Пробный период", "price": "1 ₽", "price_rub": 1, "days": 3, "discount_percent": 0, "is_popular": False},
-            {"code": "month", "name": "1 месяц", "price": "149 ₽", "price_rub": 149, "days": 30, "discount_percent": 0, "is_popular": False},
-            {"code": "quarter", "name": "3 месяца", "price": "380 ₽", "price_rub": 380, "days": 90, "discount_percent": 15, "is_popular": True},
-            {"code": "half_year", "name": "6 месяцев", "price": "625 ₽", "price_rub": 625, "days": 180, "discount_percent": 30, "is_popular": False},
-            {"code": "year", "name": "1 год", "price": "983 ₽", "price_rub": 983, "days": 365, "discount_percent": 45, "is_popular": False},
-        ]
-    }
+    # Return actual current prices, bonus durations and device variants.
+    names = {1: "1 месяц", 3: "3 + 1 месяц", 6: "6 + 2 месяца", 12: "12 + 3 месяца"}
+    return {"plans": [
+        {
+            "code": code, "name": names[months],
+            "price": f"{get_price_for_months(months, 2)[0]} ₽",
+            "price_rub": get_price_for_months(months, 2)[0],
+            "days": TARIFF_DAYS[months],
+            "is_popular": months == 12,
+            "device_options": [
+                {"devices": devices, "price_rub": get_price_for_months(months, devices)[0], "days": TARIFF_DAYS[months]}
+                for devices in VALID_DEVICE_LIMITS
+            ],
+        }
+        for code, months in _PLAN_MONTHS.items()
+    ]}
 
 
 # ---------------------------------------------------------------------------
 @api_router.post("/payment/create")
 async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(get_current_user_id)):
     """Create in-app payment via YooKassa (Cards/SBP) or CryptoBot without Telegram."""
+    amount, days, devices = resolve_checkout_terms(
+        req.plan_code, req.devices, req.amount_rub, req.days
+    )
+    if req.provider not in ("crypto", "yookassa"):
+        raise HTTPException(status_code=422, detail="Unknown payment provider")
     if req.provider == "crypto":
         from payments import create_crypto_payment
         res = await create_crypto_payment(
-            amount_rub=req.amount_rub,
-            description=f"ByMeVPN Подписка ({req.days} дн., {req.devices} устр.)",
+            amount_rub=amount,
+            description=f"ByMeVPN Подписка ({days} дн., {devices} устр.)",
             user_id=user_id,
-            days=req.days,
-            devices=req.devices or 2,
+            days=days,
+            devices=devices,
         )
         if not res:
             raise HTTPException(status_code=500, detail="Не удалось создать счет в CryptoBot")
@@ -805,11 +832,11 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
         claim_yookassa_checkout(user_id)
         try:
             pay_url = await create_yookassa_payment(
-                amount_rub=req.amount_rub,
-                description=f"ByMeVPN Подписка ({req.days} дн., {req.devices} устр.)",
+                amount_rub=amount,
+                description=f"ByMeVPN Подписка ({days} дн., {devices} устр.)",
                 user_id=user_id,
-                days=req.days,
-                devices=req.devices or 2,
+                days=days,
+                devices=devices,
                 extra_metadata={"app_payment": "1"},
             )
         finally:
@@ -851,7 +878,12 @@ async def create_vpn_session(req: SessionRequest, user_id: int = Depends(get_cur
             detail="Нет активной подписки или серверов. Оформите подписку или активируйте пробный период.",
         )
 
-    matched = next((s for s in servers if s.get("node_code") == req.node_code), servers[0])
+    if req.node_code == "auto":
+        matched = servers[0]
+    else:
+        matched = next((s for s in servers if s.get("node_code") == req.node_code), None)
+        if matched is None:
+            raise HTTPException(status_code=404, detail="Requested server is unavailable")
     config = matched.get("config")
     if not config or not config.get("uuid"):
         raise HTTPException(status_code=500, detail="Неполная конфигурация VPN-узла на сервере")
@@ -872,19 +904,10 @@ async def delete_vpn_session(user_id: int = Depends(get_current_user_id)):
 
 @api_router.get("/devices")
 async def get_devices(user_id: int = Depends(get_current_user_id)):
-    return {
-        "devices": [
-            {
-                "id": "current_device",
-                "device_model": "Android Phone",
-                "platform": "Android",
-                "last_active": "Сейчас онлайн",
-                "is_current": True,
-            }
-        ]
-    }
+    # Until the 3x-ui-backed device registry is implemented, never fabricate entries.
+    return {"devices": [], "supported": False}
 
 
 @api_router.delete("/devices/{device_id}")
 async def delete_device(device_id: str, user_id: int = Depends(get_current_user_id)):
-    return {"status": "ok"}
+    raise HTTPException(status_code=501, detail="Device management is not available yet")
