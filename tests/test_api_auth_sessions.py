@@ -54,7 +54,10 @@ class TestJwtConfiguration(unittest.TestCase):
 
     def test_tampered_signature_is_rejected(self):
         token = api_router.create_simple_jwt(123456, "test@example.invalid")
-        altered = token[:-1] + ("0" if token[-1] != "0" else "1")
+        parts = token.split(".")
+        signature = parts[2]
+        changed_first = "A" if signature[0] != "A" else "B"
+        altered = ".".join((*parts[:2], changed_first + signature[1:]))
         self.assertIsNone(api_router.verify_simple_jwt(altered))
 
     def test_expired_token_is_rejected(self):
