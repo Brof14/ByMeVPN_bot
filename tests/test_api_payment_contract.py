@@ -159,6 +159,46 @@ class TestMobilePaymentContract(unittest.IsolatedAsyncioTestCase):
         subscription.assert_not_awaited()
 
 
+    async def test_both_providers_use_server_catalog_for_all_plan_and_device_tiers(self):
+        for provider in ("yookassa", "crypto"):
+            for plan_code, months in (("1m", 1), ("3m", 3), ("6m", 6), ("12m", 12)):
+                for devices in (2, 5, 10):
+                    with self.subTest(provider=provider, plan=plan_code, devices=devices):
+                        reserved = {
+                            "plan_code": plan_code, "provider": provider, "devices": devices,
+                            "payment_id": None, "confirmation_url": None, "generation": 0,
+                            "creation_state": "ready",
+                        }
+                        request = api_router.PaymentCreateRequest(
+                            plan_code=plan_code,
+                            request_id=f"matrix-{provider}-{plan_code}-{devices}",
+                            provider=provider, amount_rub=1, days=1, devices=devices,
+                        )
+                        with (
+                            patch.object(api_router.database, "ensure_mobile_payment_request", new=AsyncMock(return_value=reserved)),
+                            patch.object(api_router.database, "claim_mobile_payment_creation", new=AsyncMock(return_value=True)),
+                            patch.object(api_router.database, "save_mobile_crypto_checkout", new=AsyncMock(return_value=True)),
+                            patch.object(api_router.database, "save_mobile_payment_request", new=AsyncMock(return_value=True)),
+                            patch("payments.create_crypto_payment", new=AsyncMock(return_value=("https://pay.example.invalid/c", "crypto-123"))) as crypto_create,
+                            patch("payments.create_yookassa_payment", new=AsyncMock(return_value={
+                                "payment_url": "https://pay.example.invalid/y", "payment_id": "yk-123", "status": "pending",
+                            })) as yookassa_create,
+                        ):
+                            await api_router.api_create_payment(request, user_id=123)
+                        expected_amount, expected_days = get_price_for_months(months, devices)
+                        create = crypto_create if provider == "crypto" else yookassa_create
+                        kwargs = create.await_args.kwargs
+                        self.assertEqual(
+                            (kwargs["amount_rub"], kwargs["days"], kwargs["devices"]),
+                            (expected_amount, expected_days, devices),
+                        )
+                        if provider == "crypto":
+                            crypto_create.assert_awaited_once()
+                            yookassa_create.assert_not_awaited()
+                        else:
+                            yookassa_create.assert_awaited_once()
+                            crypto_create.assert_not_awaited()
+
     async def test_crypto_checkout_uses_server_price_and_durable_fulfillment_intent(self):
         reserved = {
             "plan_code": "3m", "provider": "crypto", "devices": 5,
