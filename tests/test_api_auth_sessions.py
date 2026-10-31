@@ -81,8 +81,11 @@ class TestJwtConfiguration(unittest.TestCase):
         replacement = api_router.create_simple_jwt(
             claims["user_id"], claims["email"],
             issued_at=claims["issued_at"], expires_at=claims["expires_at"],
+            jwt_id=claims["jti"],
         )
-        self.assertEqual(api_router._verified_token_claims(replacement)["expires_at"], expiry)
+        refreshed = api_router._verified_token_claims(replacement)
+        self.assertEqual(refreshed["expires_at"], expiry)
+        self.assertEqual(refreshed["jti"], claims["jti"])
 
     def test_missing_or_short_secret_fails_configuration(self):
         for configured_value in (None, "short"):
