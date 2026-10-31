@@ -37,3 +37,4 @@ services:
     volumes:
       - ./data:/app/data
       - ./.env:/app/.env:ro
+      - /root/cert/bymevpn.duckdns.org:/etc/bymevpn/tls:ro

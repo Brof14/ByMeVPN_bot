@@ -269,7 +269,7 @@ async def award_referral_for_payment(
 
     Guarantees:
     - one qualifying payment → at most one reward through ref_bonus_claims;
-    - intro-trial payments (1 ₽) are never a paid conversion → no reward;
+    - free trials are never a paid conversion → no reward;
     - duplicate webhooks / retries / renewals → no second reward.
 
     All payment handlers (YooKassa webhook, CryptoBot monitor, Telegram Stars)

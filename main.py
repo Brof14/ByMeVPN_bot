@@ -40,7 +40,7 @@ from handlers import (
     guide_router, legal_router, admin_router, auth_router, fallback_router, ad_program_router
 )
 from subscription import router as subscription_router
-from webhook import start_webhook_server
+from webhook import start_webhook_server, start_app_tls_server
 from payment_monitor import start_payment_monitor
 from handlers.marketing import router as marketing_router
 
@@ -239,6 +239,9 @@ async def main() -> None:
     # set after a payment (see webhook.py) had nothing to attach to.
     # We intentionally do NOT await this — it runs the uvicorn server forever.
     spawn_supervised("webhook_server", lambda: start_webhook_server(bot, dp), bot)
+    # HTTPS entry point for the mobile app handoff. This is a separate listener
+    # so the existing payment/webhook listener on WEBHOOK_PORT is untouched.
+    spawn_supervised("app_tls_server", start_app_tls_server, bot)
 
     # Start automatic payment monitoring (polls YooKassa every 30s as a
     # belt-and-suspenders fallback in case the webhook is unreachable, e.g.

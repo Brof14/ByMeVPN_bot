@@ -6,7 +6,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardBut
 
 from database import get_referral_stats_enhanced, get_referred_users_list
 from utils import send_with_photo, safe_answer
-from constants import format_timestamp, INTRO_TRIAL_DAYS, INTRO_TRIAL_PRICE_RUB, RECURRING_MONTHLY_PRICE, RECURRING_DAYS
+from constants import format_timestamp, INTRO_TRIAL_DAYS
 
 router = Router()
 
@@ -14,7 +14,8 @@ router = Router()
 def partner_main_kb(link: str) -> InlineKeyboardMarkup:
     share_text = quote_plus(
         "Попробуй ByMeVPN — VPN с простой настройкой и короткой инструкцией.\n\n"
-        f"{INTRO_TRIAL_DAYS} дня за {INTRO_TRIAL_PRICE_RUB} ₽, затем {RECURRING_MONTHLY_PRICE} ₽ за {RECURRING_DAYS} дней, если включено автопродление. Условия видны до оплаты.\n"
+        f"🎁 {INTRO_TRIAL_DAYS} дня бесплатно — без оплаты и привязки карты.\n"
+        "Платные тарифы можно оплатить картой через ЮKassa; при сохранении карты автопродление включается автоматически и его можно отключить.\n"
         f"Ссылка: {link}"
     )
     return InlineKeyboardMarkup(inline_keyboard=[

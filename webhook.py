@@ -38,6 +38,7 @@ from fastapi import FastAPI, Request, Response
 from config import (
     YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY,
     WEBHOOK_HOST, WEBHOOK_PORT, ADMIN_ID, REDIS_URL, YOOKASSA_WEBHOOK_ALLOWED_IPS,
+    APP_TLS_HOST, APP_TLS_PORT, APP_TLS_CERTFILE, APP_TLS_KEYFILE,
 )
 from database import init_db, is_yookassa_processed, mark_yookassa_processed
 from subscription import deliver_key
@@ -144,7 +145,6 @@ async def app_login_redirect(sub: str = "", name: str = ""):
         build_app_login_url,
         render_app_open_page,
     )
-
     sub = sub.strip()
     name = "".join(ch for ch in name if ch.isprintable())[:MAX_USER_NAME_LENGTH].strip()
 
@@ -162,10 +162,24 @@ async def app_login_redirect(sub: str = "", name: str = ""):
             "X-Robots-Tag": "noindex, nofollow",
             "X-Content-Type-Options": "nosniff",
             "Content-Security-Policy": (
-                "default-src 'none'; style-src 'unsafe-inline'; "
+                "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; "
                 "script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
             ),
         },
+    )
+
+
+@app.get("/app/logo")
+async def app_login_logo():
+    """Serve the official ByMeVPN mark used on the app handoff page."""
+    from pathlib import Path
+    from fastapi.responses import FileResponse
+
+    logo_path = Path(__file__).resolve().parent / "static" / "bymevpn-mark.png"
+    return FileResponse(
+        logo_path,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
     )
 
 # Global dispatcher for Telegram webhook handling
@@ -393,20 +407,19 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
             payment_id, user_id, days, devices, amount_rub,
         )
 
-        # Intro trial marker: metadata.trial == "1" → 1 ₽ for 3 days,
-        # then 89 ₽/мес recurring. Trial payments must NOT trigger referral
-        # rewards and must save renewal terms (89 ₽ / 30 days), not 1 ₽ / 3 days.
+        # Backward compatibility for paid trial checkouts created before the
+        # trial became free. New trial activation never creates a payment.
         is_trial = metadata.get("trial") == "1"
         if is_trial:
-            from constants import INTRO_TRIAL_PRICE_RUB
-            if amount_rub != INTRO_TRIAL_PRICE_RUB:
+            from constants import LEGACY_INTRO_TRIAL_PRICE_RUB
+            if amount_rub != LEGACY_INTRO_TRIAL_PRICE_RUB:
                 logger.error(
                     "Webhook: trial payment %s amount=%s does not match intro price",
                     payment_id, amount_str,
                 )
                 await _notify_admin(
                     bot,
-                    f"⚠️ Пробный платёж {payment_id}: сумма {amount_str} ₽ (ожидалось {INTRO_TRIAL_PRICE_RUB} ₽), user {user_id}. Автоматическая выдача остановлена.",
+                    f"⚠️ Устаревший пробный платёж {payment_id}: сумма {amount_str} ₽ не совпала с ожидаемой; user {user_id}. Автоматическая выдача остановлена.",
                 )
                 return
 
@@ -521,73 +534,27 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
             key_id = user_keys[0]["id"] if user_keys else None
 
             if is_trial:
-                # Intro trial succeeded: mark trial as used, clean pending link
-                # and store RENEWAL terms (89 ₽ / 30 days), so the autorenew
-                # worker charges the real price after 3 days — not 1 ₽.
+                # Complete any checkout opened before the free-trial change,
+                # but do not schedule a follow-up charge from a trial order.
                 from database import set_trial_used, delete_yookassa_trial_pending
-                from constants import (
-                    RECURRING_MONTHLY_PRICE, RECURRING_MONTHS, RECURRING_DAYS,
-                    INTRO_TRIAL_DEVICES, INTRO_TRIAL_DAYS,
-                )
+                from constants import INTRO_TRIAL_DAYS
                 try:
                     await set_trial_used(user_id)
                     await delete_yookassa_trial_pending(user_id)
                 except Exception as e:
                     logger.warning("Trial bookkeeping failed for user %d: %s", user_id, e)
-
-                pm = payment.get("payment_method") or {}
-                if pm.get("saved") and pm.get("id"):
-                    await save_auto_renew_subscription(
-                        user_id=user_id,
-                        key_id=key_id,
-                        payment_method_id=pm["id"],
-                        payment_method_title=pm.get("title", ""),
-                        payment_method_type=pm.get("type", "bank_card"),
-                        months=RECURRING_MONTHS,
-                        days=RECURRING_DAYS,
-                        devices=INTRO_TRIAL_DEVICES,
-                        amount_rub=RECURRING_MONTHLY_PRICE,
+                try:
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text=(
+                            f"🎁 <b>Пробный период активирован на {INTRO_TRIAL_DAYS} дня</b>\n\n"
+                            "Оплата по ранее созданной заявке обработана. Для дальнейшего доступа выберите тариф; "
+                            "автоматических списаний по этой пробной заявке не будет."
+                        ),
+                        parse_mode="HTML",
                     )
-                    logger.info(
-                        "Intro trial completed for user %d: ARS saved (89₽/%dd, pm_id=%s)",
-                        user_id, RECURRING_DAYS, pm["id"],
-                    )
-                    try:
-                        await bot.send_message(
-                            chat_id=user_id,
-                            text=(
-                                f"🎁 <b>Пробный период активирован!</b>\n\n"
-                                f"✅ Сегодня списано <b>1 ₽</b>, доступ — <b>{INTRO_TRIAL_DAYS} дня</b>.\n\n"
-                                f"🔁 <b>Дальше автоматически:</b>\n"
-                                f"Через {INTRO_TRIAL_DAYS} дня спишется <b>{RECURRING_MONTHLY_PRICE} ₽</b> — "
-                                f"и подписка продолжится на 30 дней.\n"
-                                f"Затем каждые 30 дней по {RECURRING_MONTHLY_PRICE} ₽, "
-                                f"пока автопродление не отключено.\n\n"
-                                f"🔓 Отключить автопродление можно в любой момент "
-                                f"в меню ключа — доступ сохранится до конца оплаченного периода."
-                            ),
-                            parse_mode="HTML",
-                        )
-                    except Exception as notify_e:
-                        logger.debug("Failed to send trial recurring notice to user %d: %s", user_id, notify_e)
-                else:
-                    logger.info(
-                        "Intro trial for user %d completed without saved payment method "
-                        "(recurring unavailable) — manual renewal only", user_id,
-                    )
-                    try:
-                        await bot.send_message(
-                            chat_id=user_id,
-                            text=(
-                                f"🎁 <b>Пробный период активирован!</b>\n\n"
-                                f"✅ Сегодня списано <b>1 ₽</b>, доступ — <b>{INTRO_TRIAL_DAYS} дня</b>.\n\n"
-                                f"Автопродление не подключено: банк не вернул сохранённый способ оплаты.\n"
-                                f"Продлить после окончания можно вручную — пришлём напоминание."
-                            ),
-                            parse_mode="HTML",
-                        )
-                    except Exception as notify_e:
-                        logger.debug("Failed to send trial notice to user %d: %s", user_id, notify_e)
+                except Exception as notify_e:
+                    logger.debug("Failed to send legacy trial notice to user %d: %s", user_id, notify_e)
 
             elif is_autorenew:
                 await update_auto_renew_charge_success_by_user_key(user_id, key_id, days, amount_rub)
@@ -636,6 +603,23 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                         )
                     except Exception as notify_e:
                         logger.debug("Failed to send autorenew confirmation to user %d: %s", user_id, notify_e)
+                else:
+                    logger.warning(
+                        "YooKassa payment %s succeeded but no reusable payment method was returned; auto-renew not enabled",
+                        payment_id,
+                    )
+                    try:
+                        await bot.send_message(
+                            chat_id=user_id,
+                            text=(
+                                "✅ <b>Оплата прошла, подписка активирована.</b>\n\n"
+                                "ЮKassa не сохранила способ оплаты, поэтому включение автопродления не удалось подтвердить. "
+                                "Проверьте его статус в разделе «Мой VPN». Оплаченный срок уже активен."
+                            ),
+                            parse_mode="HTML",
+                        )
+                    except Exception as notify_e:
+                        logger.debug("Failed to send auto-renew status to user %d: %s", user_id, notify_e)
 
             # Referral reward: single canonical path — idempotent (UNIQUE in DB)
             # and trial-safe. One qualifying payment = exactly one reward.
@@ -864,4 +848,20 @@ async def start_webhook_server(bot: Bot, dp: Dispatcher) -> None:
     )
     server = uvicorn.Server(config)
     logger.info("Webhook server starting on %s:%d", WEBHOOK_HOST, WEBHOOK_PORT)
+    await server.serve()
+
+
+async def start_app_tls_server() -> None:
+    """Serve the app handoff page over HTTPS on the standard TLS port."""
+    config = uvicorn.Config(
+        app,
+        host=APP_TLS_HOST,
+        port=APP_TLS_PORT,
+        log_level="warning",
+        access_log=False,
+        ssl_certfile=APP_TLS_CERTFILE,
+        ssl_keyfile=APP_TLS_KEYFILE,
+    )
+    server = uvicorn.Server(config)
+    logger.info("App handoff HTTPS server starting on %s:%d", APP_TLS_HOST, APP_TLS_PORT)
     await server.serve()

@@ -88,7 +88,7 @@ async def cmd_partner_program(message: Message):
     
     share_text = quote_plus(
         "Попробуй ByMeVPN — бот поможет подключиться шаг за шагом.\n\n"
-        "🎁 3 дня за 1 ₽\n"
+        "🎁 3 дня бесплатно — без оплаты и привязки карты\n"
         "📱 Подключение для нескольких устройств\n\n"
         f"Попробуй:\n{referral_link}"
     )

@@ -1,9 +1,8 @@
-"""Helpers for opening the ByMeVPN mobile app directly from Telegram.
+"""Helpers for opening the ByMeVPN mobile app from Telegram.
 
-Telegram only accepts HTTP(S) or ``tg://`` URLs in inline URL buttons, so a
-``bymevpn://`` deep link cannot be attached to a button directly.  Instead the
-bot points the button at our small ``/app/login`` page, which tries to launch
-the app immediately and keeps a manual button as a fallback.
+Telegram URL buttons accept HTTP(S) or ``tg://`` URLs, so the bot uses an
+HTTPS handoff page. The page presents a user-initiated app-open button, which
+avoids browsers blocking an automatic custom-scheme redirect.
 """
 from __future__ import annotations
 
@@ -88,7 +87,11 @@ def render_app_open_page(deep_link: str) -> str:
     background: #0d1117; color: #f0f6fc;
   }}
   main {{ width: 100%; max-width: 420px; text-align: center; }}
-  .logo {{ font-size: 22px; font-weight: 800; color: #2ee59d; margin-bottom: 24px; }}
+  .logo {{
+    display: block; width: 132px; height: 132px; object-fit: contain;
+    margin: 0 auto 28px;
+    filter: drop-shadow(0 12px 30px rgba(0, 212, 255, .18));
+  }}
   h1 {{ font-size: 22px; line-height: 1.3; margin: 0 0 12px; }}
   p {{ color: #9da7b3; line-height: 1.5; margin: 0 0 22px; }}
   .button {{
@@ -103,9 +106,9 @@ def render_app_open_page(deep_link: str) -> str:
 </head>
 <body>
 <main>
-  <div class="logo">ByMeVPN</div>
+  <img class="logo" src="/app/logo" alt="Логотип ByMeVPN">
   <h1>Открываем приложение…</h1>
-  <p>Если ByMeVPN не открылся автоматически, нажмите кнопку ниже — подписка подключится сама.</p>
+  <p>Нажмите кнопку ниже — приложение откроется и подключит подписку.</p>
   <a id="open-app" class="button" href="{escaped_link}">Открыть ByMeVPN</a>
   <p class="hint">Если приложение не установлено, установите его и откройте эту ссылку снова.</p>
 </main>
@@ -115,7 +118,6 @@ def render_app_open_page(deep_link: str) -> str:
   var target = /Android/i.test(navigator.userAgent) ? {js_intent} : deepLink;
   var button = document.getElementById("open-app");
   if (button) button.href = target;
-  window.setTimeout(function () {{ window.location.href = target; }}, 150);
 }})();
 </script>
 </body>

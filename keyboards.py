@@ -16,7 +16,7 @@ _SUPPORT_URL = (
 
 def main_menu_new_user() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
+    kb.row(InlineKeyboardButton(text="🎁 Попробовать 3 дня бесплатно", callback_data="trial_free", style="success"))
     kb.row(InlineKeyboardButton(text="Выбрать тариф", callback_data="buy_vpn", style="primary"))
     kb.row(InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn"))
     kb.row(
@@ -29,7 +29,7 @@ def main_menu_new_user() -> InlineKeyboardMarkup:
 def main_menu_existing(trial_used: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     if not trial_used:
-        kb.row(InlineKeyboardButton(text="Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
+        kb.row(InlineKeyboardButton(text="🎁 Попробовать 3 дня бесплатно", callback_data="trial_free", style="success"))
     kb.row(InlineKeyboardButton(text="Выбрать тариф", callback_data="buy_vpn", style="primary"))
     kb.row(InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn"))
     kb.row(
@@ -48,7 +48,7 @@ def main_menu_with_keys(trial_used: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     # Show intro-trial button only if user hasn't used it yet
     if not trial_used:
-        kb.row(InlineKeyboardButton(text="Попробовать за 1 ₽", callback_data="trial_1r", style="success"))
+        kb.row(InlineKeyboardButton(text="🎁 Попробовать 3 дня бесплатно", callback_data="trial_free", style="success"))
     kb.row(InlineKeyboardButton(text="🔑 Мой VPN", callback_data="my_keys", style="primary"))
     kb.row(InlineKeyboardButton(text="Выбрать тариф", callback_data="buy_vpn"))
     kb.row(InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn"))
@@ -128,7 +128,7 @@ def payment_kb(price_rub: int, days: int, devices: int = DEFAULT_DEVICE_LIMIT, y
     """Stars = rubles (1:1, intentional — covers Telegram commission)."""
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(
-        text=f"⭐ Telegram Stars ({price_rub} звёзд)",
+        text=f"⭐ Stars · разово ({price_rub})",
         callback_data="pay_stars",
     ))
     kb.row(InlineKeyboardButton(
@@ -137,7 +137,7 @@ def payment_kb(price_rub: int, days: int, devices: int = DEFAULT_DEVICE_LIMIT, y
         style="success",
     ))
     kb.row(InlineKeyboardButton(
-        text=f"₿ CryptoBot {price_rub} ₽",
+        text=f"₿ CryptoBot · разово ({price_rub} ₽)",
         callback_data="pay_crypto",
     ))
     kb.row(InlineKeyboardButton(text="Назад", callback_data=f"devtier_{devices}"))
@@ -318,17 +318,6 @@ def manage_payment_methods_kb(
     return kb.as_markup()
 
 
-def trial_pay_kb(confirmation_url: str) -> InlineKeyboardMarkup:
-    """Intro trial checkout: 1 ₽ now → 3 days → 89 ₽/мес recurring."""
-    kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="Оплатить 1 ₽", url=confirmation_url, style="success"))
-    kb.row(
-        InlineKeyboardButton(text="Другие тарифы", callback_data="buy_vpn"),
-        InlineKeyboardButton(text="🏠 Меню", callback_data="back_to_menu"),
-    )
-    return kb.as_markup()
-
-
 def confirm_delete_kb(key_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(
@@ -357,19 +346,14 @@ def after_key_kb(subscription_url: str = "") -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def app_open_kb(redirect_url: str, deep_link: str = "") -> InlineKeyboardMarkup:
-    """One-tap handover to the mobile app, with copy as a manual fallback."""
+def app_open_kb(redirect_url: str) -> InlineKeyboardMarkup:
+    """Hand off from Telegram to the ByMeVPN app through its launch page."""
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(
         text="🚀 Открыть приложение",
         url=redirect_url,
         style="success",
     ))
-    if deep_link:
-        kb.row(InlineKeyboardButton(
-            text="📋 Скопировать ссылку входа",
-            copy_text={"text": deep_link},
-        ))
     return kb.as_markup()
 
 
@@ -381,7 +365,7 @@ def partner_kb(link: str) -> InlineKeyboardMarkup:
     share_text = quote_plus(
         "Если у тебя не работает YouTube / Telegram — вот решение.\n\n"
         "Сам пользуюсь — реально норм VPN.\n\n"
-        "🎁 3 дня за 1 ₽\n"
+        "🎁 Первые 3 дня бесплатно — без оплаты и привязки карты\n"
         "📱 До 10 устройств\n"
         "⚡ Всё открывается без лагов\n\n"
         "💳 Дальше — 89 ₽/мес (от 59 ₽/мес при оплате за год)\n\n"

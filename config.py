@@ -156,8 +156,12 @@ WEBHOOK_URL = (
 # Public base URL of this webhook/API server. Used for the /app/login redirect
 # page that opens the mobile app from a Telegram inline button.
 APP_PUBLIC_URL = (
-    os.getenv("APP_PUBLIC_URL") or "http://bymevpn.duckdns.org:8080"
+    os.getenv("APP_PUBLIC_URL") or "https://bymevpn.duckdns.org"
 ).rstrip("/")
+APP_TLS_HOST = os.getenv("APP_TLS_HOST") or "0.0.0.0"
+APP_TLS_PORT = int(os.getenv("APP_TLS_PORT") or "443")
+APP_TLS_CERTFILE = os.getenv("APP_TLS_CERTFILE") or "/etc/bymevpn/tls/fullchain.pem"
+APP_TLS_KEYFILE = os.getenv("APP_TLS_KEYFILE") or "/etc/bymevpn/tls/privkey.pem"
 
 # ============================================================================
 # Trial and Referral Configuration

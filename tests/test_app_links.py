@@ -36,12 +36,13 @@ class TestAppLinkBuilders(unittest.TestCase):
 
 
 class TestAppOpenPage(unittest.TestCase):
-    def test_page_contains_automatic_redirect_and_manual_button(self):
+    def test_page_waits_for_user_to_open_app_button(self):
         page = render_app_open_page("bymevpn://login?sub=https%3A%2F%2Fsub.example%2Fabc")
 
-        self.assertIn("window.location.href = target", page)
+        self.assertNotIn("window.location.href = target", page)
         self.assertIn('id="open-app"', page)
         self.assertIn("Открыть ByMeVPN", page)
+        self.assertIn('src="/app/logo"', page)
         self.assertIn("intent://login", page)
 
     def test_untrusted_values_cannot_break_out_of_script(self):
@@ -54,14 +55,11 @@ class TestAppOpenPage(unittest.TestCase):
 
 
 class TestAppOpenKeyboard(unittest.TestCase):
-    def test_first_button_opens_app_and_copy_stays_as_fallback(self):
-        markup = app_open_kb("http://example.test/app/login?sub=1", "bymevpn://login?sub=1")
+    def test_button_uses_http_handoff_without_copy_link(self):
+        markup = app_open_kb("https://example.test/app/login?sub=1")
 
-        self.assertEqual(markup.inline_keyboard[0][0].url, "http://example.test/app/login?sub=1")
-        self.assertEqual(
-            markup.inline_keyboard[1][0].copy_text.text,
-            "bymevpn://login?sub=1",
-        )
+        self.assertEqual(markup.inline_keyboard[0][0].url, "https://example.test/app/login?sub=1")
+        self.assertEqual(len(markup.inline_keyboard), 1)
 
 
 class TestAppLoginHandler(unittest.IsolatedAsyncioTestCase):
@@ -85,13 +83,11 @@ class TestAppLoginHandler(unittest.IsolatedAsyncioTestCase):
         text = message.answer.await_args.args[0]
         markup = message.answer.await_args.kwargs["reply_markup"]
         open_button = markup.inline_keyboard[0][0]
-        self.assertIn("Открыть приложение", text)
-        self.assertIn("/app/login?", open_button.url)
-        self.assertTrue(open_button.url.startswith("http"))
-        self.assertEqual(
-            markup.inline_keyboard[1][0].copy_text.text.startswith("bymevpn://login?"),
-            True,
-        )
+        self.assertIn("Нажмите кнопку ниже", text)
+        self.assertTrue(open_button.url.startswith("https://bymevpn.duckdns.org/app/login?"))
+        self.assertNotIn("bymevpn://", text)
+        self.assertNotIn("http://", text)
+        self.assertEqual(len(markup.inline_keyboard), 1)
 
 
 if __name__ == "__main__":

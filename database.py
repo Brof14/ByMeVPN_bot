@@ -89,6 +89,13 @@ CREATE TABLE IF NOT EXISTS provisioning_intents (
     PRIMARY KEY(provider, provider_payment_id)
 );
 
+CREATE TABLE IF NOT EXISTS admin_payment_notifications (
+    provider TEXT NOT NULL,
+    provider_payment_id TEXT NOT NULL,
+    created INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    PRIMARY KEY(provider, provider_payment_id)
+);
+
 CREATE TABLE IF NOT EXISTS payments (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id  INTEGER NOT NULL,
@@ -197,7 +204,7 @@ CREATE TABLE IF NOT EXISTS performance_samples (
 );
 CREATE INDEX IF NOT EXISTS idx_performance_sampled_at ON performance_samples(sampled_at);
 
--- YooKassa intro trial (1 ₽): pending checkout links, one per user
+-- Legacy paid-trial checkout links retained only to finish existing checkouts.
 CREATE TABLE IF NOT EXISTS yookassa_trial_pending (
     user_id           INTEGER PRIMARY KEY,
     payment_id        TEXT NOT NULL,
@@ -1676,6 +1683,31 @@ async def record_payment_idempotent(
             raise
 
 
+async def claim_admin_payment_notification(provider: str, provider_payment_id: str) -> bool:
+    """Claim a single admin success notice for a settled provider payment."""
+    if not provider or not provider_payment_id:
+        return False
+    db = await get_db()
+    async with _db_semaphore:
+        cur = await db.execute(
+            "INSERT OR IGNORE INTO admin_payment_notifications(provider, provider_payment_id) VALUES(?,?)",
+            (provider, provider_payment_id),
+        )
+        await db.commit()
+        return cur.rowcount == 1
+
+
+async def release_admin_payment_notification(provider: str, provider_payment_id: str) -> None:
+    """Allow retry when Telegram explicitly rejects the notification send."""
+    db = await get_db()
+    async with _db_semaphore:
+        await db.execute(
+            "DELETE FROM admin_payment_notifications WHERE provider=? AND provider_payment_id=?",
+            (provider, provider_payment_id),
+        )
+        await db.commit()
+
+
 async def update_payment_status(payment_id: int, status: str) -> bool:
     """Update status of a payment (e.g. 'processing' -> 'success' or 'failed')."""
     db = await get_db()
@@ -2091,7 +2123,7 @@ async def get_yookassa_pending_by_user(user_id: int) -> Optional[dict]:
 
 
 # ---------------------------------------------------------------------------
-# YooKassa Intro Trial (1 ₽) — pending checkout links
+# Legacy paid-trial checkout links — pending rows are only for old checkouts.
 # ---------------------------------------------------------------------------
 
 async def save_yookassa_trial_pending(user_id: int, payment_id: str, confirmation_url: str) -> None:
@@ -3195,7 +3227,7 @@ async def get_referral_stats_enhanced(referrer_id: int) -> dict:
     active_clients = (await cur.fetchone())[0]
     
     # Count only referrals whose first qualifying paid subscription earned the
-    # referral reward; the 1 ₽ intro checkout does not count as this milestone.
+    # referral reward; free trials do not count as paid conversions.
     cur = await db.execute(
         """
         SELECT COUNT(DISTINCT r.referred_id)

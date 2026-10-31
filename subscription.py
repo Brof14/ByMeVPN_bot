@@ -4,12 +4,13 @@ Core subscription logic: ask config name → create VPN key → deliver.
 import asyncio
 import logging
 import time
+from html import escape
 from datetime import datetime
 
 from aiogram import Bot, Router
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 
-from config import ADMIN_ID
+from config import ADMIN_ID, ADMIN_IDS
 from constants import REFERRAL_FIRST_PAYMENT_BONUS_DAYS
 from utils import LOGO_URL, send_with_photo, safe_answer
 import database
@@ -61,6 +62,50 @@ async def _log_notification_failure(user_id: int, context: dict) -> None:
         )
     except Exception as e:
         logger.error("Failed to log notification failure for %s: %s", user_id, e)
+
+
+async def _notify_admin_payment_success(
+    bot: Bot, user_id: int, amount: int, currency: str, method: str,
+    days: int, devices: int, payload: str,
+) -> None:
+    """Notify admins once, only after the subscription is provisioned."""
+    try:
+        if not await database.claim_admin_payment_notification(method, str(payload or "")):
+            return
+        user = await database.find_user_by_id(user_id) or {}
+        username = user.get("username")
+        who = f"@{escape(str(username))}" if username else "пользователь без username"
+        method_names = {
+            "yookassa": "ЮKassa",
+            "cryptobot": "CryptoBot",
+            "crypto": "CryptoBot",
+            "stars": "Telegram Stars",
+            "telegram_stars": "Telegram Stars",
+            "auto_renew": "автопродление",
+        }
+        payment_method = method_names.get(method.lower(), method or "не указан")
+        text = (
+            "✅ <b>Оплата успешно активирована</b>\n\n"
+            f"👤 {who} · <code>{user_id}</code>\n"
+            f"💳 Сумма: <b>{amount} {escape(currency)}</b>\n"
+            f"📦 Тариф: {days} дней · {devices} устройств\n"
+            f"🧾 Способ: {escape(payment_method)}\n"
+            f"ID платежа: <code>{escape(str(payload or '—'))}</code>"
+        )
+        recipients = set(ADMIN_IDS or [])
+        if ADMIN_ID:
+            recipients.add(ADMIN_ID)
+        sent = False
+        for admin_id in recipients:
+            try:
+                await bot.send_message(admin_id, text, parse_mode="HTML")
+                sent = True
+            except Exception:
+                logger.exception("Could not notify admin %s about payment %s", admin_id, payload)
+        if not sent:
+            await database.release_admin_payment_notification(method, str(payload or ""))
+    except Exception:
+        logger.exception("Could not prepare admin payment notification for %s", payload)
 
 async def deliver_key(
     bot: Bot,
@@ -164,6 +209,9 @@ async def deliver_key(
                         status="success", tariff=tariff_name, devices=limit_ip,
                         provider=method, provider_payment_id=payload,
                     )
+                    await _notify_admin_payment_success(
+                        bot, user_id, amount, currency, method, days, limit_ip, payload
+                    )
                     await log_analytics_event(
                         user_id=user_id, event_type="subscription_renewed",
                         tariff=tariff_name, devices=limit_ip, amount=amount,
@@ -194,6 +242,7 @@ async def deliver_key(
                 title = (
                     "<b>Друг зарегистрировался по вашей ссылке</b>"
                     if method == "ref_signup_bonus"
+                    else "<b>Бесплатный пробный период активирован</b>" if method == "trial"
                     else "<b>Бонус за друга начислен</b>" if method == "ref_bonus"
                     else "<b>Ваш приз ByMeVPN начислен</b>" if method == "giveaway_prize"
                     else "Бонус за рекламу начислен" if method == "ad_bonus"
@@ -294,6 +343,9 @@ async def deliver_key(
                     status="success", tariff=tariff_name, devices=limit_ip,
                     provider=method, provider_payment_id=payload,
                 )
+                await _notify_admin_payment_success(
+                    bot, user_id, amount, currency, method, days, limit_ip, payload
+                )
                 await log_analytics_event(
                     user_id=user_id,
                     event_type="trial_started" if skip_referral_bonus else "subscription_created",
@@ -304,6 +356,7 @@ async def deliver_key(
             title = (
                 "<b>Друг зарегистрировался по вашей ссылке</b>"
                 if method == "ref_signup_bonus"
+                else "<b>Бесплатный пробный период активирован</b>" if method == "trial"
                 else "<b>Ваш приз ByMeVPN начислен</b>" if method == "giveaway_prize"
                 else "Бонус за рекламу активирован" if method == "ad_bonus"
                 else "<b>Подписка активирована</b>"
@@ -396,11 +449,15 @@ async def deliver_key(
                 status="success", tariff=tariff_name, devices=limit_ip,
                 provider=method, provider_payment_id=payload,
             )
+            await _notify_admin_payment_success(
+                bot, user_id, amount, currency, method, days, limit_ip, payload
+            )
 
         device_word = "устройство" if limit_ip == 1 else ("устройства" if limit_ip in (2, 3, 4) else "устройств")
         title = (
             "<b>Друг зарегистрировался по вашей ссылке</b>"
             if method == "ref_signup_bonus"
+            else "<b>Бесплатный пробный период активирован</b>" if method == "trial"
             else "<b>Ваш приз ByMeVPN начислен</b>" if method == "giveaway_prize"
             else "Бонус за рекламу активирован" if method == "ad_bonus"
             else "<b>Подписка активирована</b>"

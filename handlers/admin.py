@@ -768,7 +768,7 @@ async def cb_user_list(callback: CallbackQuery):
         kb_rows = user_rows
         if nav_row:
             kb_rows = kb_rows + [nav_row]
-        kb_rows.append([InlineKeyboardButton(text="🔍 Найти по ID", callback_data="admin_search")])
+        kb_rows.append([InlineKeyboardButton(text="🔍 Найти по ID или username", callback_data="admin_search")])
         kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")])
 
         await callback.message.edit_text(
@@ -842,7 +842,7 @@ async def cb_user_list_ext(callback: CallbackQuery):
         nav_row.append(InlineKeyboardButton(text="▶", callback_data=f"admin_users_ext:{page+1}"))
 
     kb_rows = [
-        [InlineKeyboardButton(text="🔍 Поиск по ID", callback_data="admin_search")],
+        [InlineKeyboardButton(text="🔍 Поиск по ID или username", callback_data="admin_search")],
     ]
     if nav_row:
         kb_rows.append(nav_row)
@@ -938,7 +938,8 @@ async def cb_search(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await state.set_state(AdminFlow.search_user)
     await callback.message.edit_text(
-        "🔍 Введите Telegram ID пользователя:",
+        "🔍 Введите Telegram ID или username пользователя (например, <code>5352436388</code> или <code>@username</code>):",
+        parse_mode="HTML",
         reply_markup=_back_kb()
     )
 
@@ -949,11 +950,55 @@ async def receive_search(message: Message, state: FSMContext):
         return
     flow_data = await state.get_data()
     await state.clear()
-    try:
-        uid = int(message.text.strip())
-    except (ValueError, AttributeError):
-        await message.answer("❌ Введите числовой ID.")
+    query = (message.text or "").strip()
+    if not query:
+        await message.answer("❌ Введите Telegram ID или username.")
         return
+
+    matches = []
+    if query.isdigit():
+        uid = int(query)
+        user = await find_user_by_id(uid)
+        if user:
+            matches = [user]
+    else:
+        username = query.removeprefix("@").strip()
+        if not username or len(username) > 32 or any(ch.isspace() for ch in username):
+            await message.answer("❌ Введите ID или username без пробелов, например <code>@username</code>.", parse_mode="HTML")
+            return
+        db = await get_db()
+        cur = await db.execute(
+            "SELECT user_id, username FROM users WHERE LOWER(username)=LOWER(?) LIMIT 1",
+            (username,),
+        )
+        row = await cur.fetchone()
+        if row:
+            matches = [{"user_id": int(row[0]), "username": row[1]}]
+        elif len(username) >= 3:
+            cur = await db.execute(
+                "SELECT user_id, username FROM users WHERE LOWER(username) LIKE LOWER(?) ORDER BY username LIMIT 20",
+                (f"%{username}%",),
+            )
+            matches = [{"user_id": int(row[0]), "username": row[1]} for row in await cur.fetchall()]
+
+    if not matches:
+        await message.answer("❌ Пользователь не найден. Проверьте ID или username.", reply_markup=_back_kb())
+        return
+    if len(matches) > 1:
+        if flow_data.get("refund_mode"):
+            await message.answer("Найдено несколько совпадений. Для возврата введите точный username или ID.", reply_markup=_back_kb())
+            return
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=f"@{u['username']} · {u['user_id']}" if u.get("username") else str(u["user_id"]),
+                callback_data=f"admin_user:{u['user_id']}",
+            )]
+            for u in matches
+        ] + [[InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")]])
+        await message.answer(f"🔎 Найдено совпадений: {len(matches)}. Выберите пользователя:", reply_markup=keyboard)
+        return
+
+    uid = int(matches[0]["user_id"])
     if flow_data.get("refund_mode"):
         text, keyboard = await _build_refund_user_view(uid)
         await message.answer(text, parse_mode="HTML", reply_markup=keyboard)

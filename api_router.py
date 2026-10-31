@@ -72,7 +72,7 @@ def hash_password(password: str, salt: str) -> str:
 def confirm_telegram_session(token: str, user_id: int, username: str = "", full_name: str = "") -> bool:
     """Called by Telegram bot handler when user opens /start auth_<token>"""
     clean_token = token.removeprefix("auth_")
-    session = _TELEGRAM_SESSIONS.get(clean_token) or _TELEGRAM_SESSIONS.get(token)
+    session = _TELEGRAM_SESSIONS.get(token) or _TELEGRAM_SESSIONS.get(clean_token)
 
     if session:
         session["status"] = "authenticated"
@@ -379,7 +379,7 @@ async def get_user_real_subscription(user_id: int) -> Tuple[Optional[str], List[
     sub_uuid: Optional[str] = None
     expiry_ts = 0
     days_count = 30
-    limit_ip = 2
+    device_limit = 2
 
     # 1. Check local keys table
     user_keys = await database.get_user_keys(user_id)
@@ -388,7 +388,7 @@ async def get_user_real_subscription(user_id: int) -> Tuple[Optional[str], List[
         best_key = max(active_keys, key=lambda k: int(k.get("expiry", 0)))
         expiry_ts = int(best_key.get("expiry", 0))
         days_count = int(best_key.get("days", 30))
-        limit_ip = int(best_key.get("limit_ip", 2))
+        device_limit = int(best_key.get("limit_ip", 2))
         sub_uuid = best_key.get("uuid")
         key_content = best_key.get("key", "").strip()
         if key_content.startswith("http://") or key_content.startswith("https://"):
@@ -404,6 +404,8 @@ async def get_user_real_subscription(user_id: int) -> Tuple[Optional[str], List[
                 sub_url = client_details.get("subscription_url")
                 if not expiry_ts:
                     expiry_ts = int(client_details.get("expiry_time", 0)) // 1000
+                if not active_keys:
+                    device_limit = int(client_details.get("limit_hwid", 2))
             if not sub_url:
                 links = await get_user_subscription_links(user_id)
                 if links:
@@ -434,7 +436,7 @@ async def get_user_real_subscription(user_id: int) -> Tuple[Optional[str], List[
         "expires_at": expires_at,
         "seconds_remaining": seconds_remaining,
         "subscription_url": sub_url,
-        "max_devices": limit_ip,
+        "max_devices": device_limit,
         "active_devices": 1,
     }
 
@@ -726,33 +728,45 @@ async def get_subscription_status(user_id: int = Depends(get_current_user_id)):
 async def activate_trial(req: TrialRequest, user_id: int = Depends(get_current_user_id)):
     """Activate 3-day free trial on 3x-ui panel."""
     trial_days = 3
-    sub_url = None
-    vless_links = []
+    if await database.get_user_active_keys(user_id):
+        raise HTTPException(status_code=409, detail="У вас уже есть активная подписка")
+    try:
+        from xui_client import create_xui_user, get_xui_client_details
+        existing = await get_xui_client_details(user_id)
+        if existing and int(existing.get("expiry_time") or 0) > int(time.time() * 1000):
+            raise HTTPException(status_code=409, detail="У вас уже есть активная подписка")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("Could not check existing panel subscription for trial user %d: %s", user_id, e)
 
-    # Provision client on 3x-ui panel
+    if not await database.try_claim_trial(user_id):
+        raise HTTPException(status_code=409, detail="Бесплатный пробный период уже использован")
+
     try:
         from xui_client import create_xui_user
         res = await create_xui_user(user_id=user_id, days=trial_days, limit_ip=2)
-        if res:
-            sub_url = res.get("subscription_url")
-            vless_links = res.get("vless_links", [])
-    except Exception as e:
-        logger.error(f"Error calling create_xui_user for trial user {user_id}: {e}")
-
-    expiry_ts = int(time.time()) + trial_days * 86400
-    try:
+        if not res or not res.get("subscription_url"):
+            raise HTTPException(status_code=503, detail="Не удалось создать VPN-доступ. Попробуйте позже")
+        sub_url = res["subscription_url"]
+        expiry_ts = int(res.get("expiry_time") or 0) // 1000
+        if expiry_ts <= int(time.time()):
+            raise HTTPException(status_code=503, detail="Не удалось получить срок VPN-доступа")
         await database.add_key(
             user_id=user_id,
-            key=sub_url or (vless_links[0] if vless_links else f"sub_{user_id}"),
-            remark="Trial 3 Days",
-            uuid=str(user_id),
+            key=sub_url,
+            remark="Бесплатный пробный период",
+            uuid=res.get("uuid") or str(user_id),
             days=trial_days,
             limit_ip=2,
             expiry=expiry_ts,
         )
-        await database.set_trial_used(user_id)
     except Exception as e:
-        logger.warning(f"DB trial save error: {e}")
+        await database.reset_trial_for_user(user_id)
+        if isinstance(e, HTTPException):
+            raise
+        logger.exception("Error activating free trial for user %d", user_id)
+        raise HTTPException(status_code=503, detail="Не удалось активировать пробный период. Попробуйте позже") from e
 
     servers = []
     if sub_url:
@@ -774,7 +788,7 @@ async def activate_trial(req: TrialRequest, user_id: int = Depends(get_current_u
 async def get_plans():
     return {
         "plans": [
-            {"code": "trial", "name": "Пробный период", "price": "1 ₽", "price_rub": 1, "days": 3, "discount_percent": 0, "is_popular": False},
+            {"code": "trial", "name": "3 дня бесплатно", "price": "Бесплатно", "price_rub": 0, "days": 3, "discount_percent": 0, "is_popular": False},
             {"code": "month", "name": "1 месяц", "price": "149 ₽", "price_rub": 149, "days": 30, "discount_percent": 0, "is_popular": False},
             {"code": "quarter", "name": "3 месяца", "price": "380 ₽", "price_rub": 380, "days": 90, "discount_percent": 15, "is_popular": True},
             {"code": "half_year", "name": "6 месяцев", "price": "625 ₽", "price_rub": 625, "days": 180, "discount_percent": 30, "is_popular": False},

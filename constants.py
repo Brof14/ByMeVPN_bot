@@ -77,12 +77,13 @@ TARIFF_DAYS = {
 }
 
 # ============================================================================
-# Intro Trial (paid): 1 ₽ → 3 days of access → 89 ₽/мес recurring
+# Free trial: 3 days of access, no payment method required.
 # ============================================================================
-INTRO_TRIAL_PRICE_RUB = 1          # charged today
-INTRO_TRIAL_DAYS = TRIAL_DAYS      # 3 days of access for 1 ₽
+INTRO_TRIAL_PRICE_RUB = 0
+LEGACY_INTRO_TRIAL_PRICE_RUB = 1   # Validate checkouts created before the free-trial change.
+INTRO_TRIAL_DAYS = TRIAL_DAYS
 INTRO_TRIAL_DEVICES = DEFAULT_DEVICE_LIMIT  # standard 2-device config
-# What the first recurring charge will be after the trial ends:
+# Legacy constants retained for processing already-created paid-trial payments.
 RECURRING_MONTHLY_PRICE = BASE_MONTHLY_PRICES[1]  # 89 ₽ per billing cycle
 RECURRING_MONTHS = 1
 RECURRING_DAYS = TARIFF_DAYS[1]    # 30 days per billing cycle
