@@ -1,6 +1,7 @@
 """Ensure an older database missing mobile checkout tables is upgraded safely."""
 import os
 import secrets
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,7 @@ class TestMobilePaymentSchemaBootstrap(unittest.TestCase):
             )
             script = r"""
 import asyncio
+import sqlite3
 import database
 
 async def main():
@@ -31,8 +33,18 @@ async def main():
     await db.close()
     database._db_pool = None
 
+    # Recreate the legacy snapshot through SQLite's backup API, then migrate
+    # only the restored copy. This models production's online-backup workflow.
+    source_path = database.DB_FILE
+    restored_path = source_path + ".restored"
+    with sqlite3.connect(source_path) as source, sqlite3.connect(restored_path) as target:
+        source.backup(target)
+    database.DB_FILE = restored_path
+
     await database.init_db()
     db = await database.get_db()
+    integrity = await (await db.execute("PRAGMA integrity_check")).fetchone()
+    assert integrity[0] == "ok"
     columns = {
         row[1] for row in await (await db.execute(
             "PRAGMA table_info(mobile_payment_requests)"
