@@ -207,6 +207,27 @@ class TestTelegramAuthSessions(unittest.IsolatedAsyncioTestCase):
         await database.revoke_mobile_jwt(claims["jti"], claims["expires_at"])
         self.assertTrue(await database.is_mobile_jwt_revoked(claims["jti"]))
 
+    async def test_canceled_mobile_payment_generation_rotates_once_atomically(self):
+        request_id = "request-12345678"
+        first = await database.ensure_mobile_payment_request(98765, request_id, "1m", "yookassa")
+        self.assertEqual(first["generation"], 0)
+        self.assertTrue(await database.save_mobile_payment_request(
+            98765, request_id, "1m", "yookassa", "old-invoice", "https://pay.invalid/old"
+        ))
+        rotations = await asyncio.gather(
+            database.advance_mobile_payment_request_generation(
+                98765, request_id, "1m", "yookassa", "old-invoice", 0
+            ),
+            database.advance_mobile_payment_request_generation(
+                98765, request_id, "1m", "yookassa", "old-invoice", 0
+            ),
+        )
+        self.assertEqual(sum(rotations), 1)
+        current = await database.ensure_mobile_payment_request(98765, request_id, "1m", "yookassa")
+        self.assertEqual(current["generation"], 1)
+        self.assertIsNone(current["payment_id"])
+        self.assertIsNone(current["confirmation_url"])
+
     async def test_mobile_payment_request_persists_owner_and_is_idempotent(self):
         first = await database.ensure_mobile_payment_request(98765, "request-12345678", "1m", "yookassa")
         replay = await database.ensure_mobile_payment_request(98765, "request-12345678", "1m", "yookassa")
