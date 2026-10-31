@@ -190,6 +190,7 @@ CREATE TABLE IF NOT EXISTS mobile_payment_requests (
     provider TEXT NOT NULL,
     payment_id TEXT,
     confirmation_url TEXT,
+    generation INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     PRIMARY KEY (user_id, request_id),
     UNIQUE (provider, payment_id)
@@ -419,6 +420,14 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
             PRIMARY KEY(provider, provider_payment_id)
         )"""
     )
+    payment_request_columns = {
+        row[1] for row in await (await db.execute("PRAGMA table_info(mobile_payment_requests)")).fetchall()
+    }
+    if "generation" not in payment_request_columns:
+        await db.execute(
+            "ALTER TABLE mobile_payment_requests ADD COLUMN generation INTEGER NOT NULL DEFAULT 0"
+        )
+
     await db.execute(
         """CREATE TABLE IF NOT EXISTS expiry_notification_deliveries (
             user_id INTEGER NOT NULL, expiry INTEGER NOT NULL, bucket TEXT NOT NULL,
@@ -1566,7 +1575,7 @@ async def ensure_mobile_payment_request(
             (int(user_id), request_id, plan_code, provider, now),
         )
         cur = await db.execute(
-            "SELECT plan_code,provider,payment_id,confirmation_url FROM mobile_payment_requests "
+            "SELECT plan_code,provider,payment_id,confirmation_url,generation FROM mobile_payment_requests "
             "WHERE user_id=? AND request_id=?",
             (int(user_id), request_id),
         )
@@ -1574,7 +1583,28 @@ async def ensure_mobile_payment_request(
         await db.commit()
     if not row:
         raise RuntimeError("mobile payment request reservation failed")
-    return {"plan_code": row[0], "provider": row[1], "payment_id": row[2], "confirmation_url": row[3]}
+    return {
+        "plan_code": row[0], "provider": row[1], "payment_id": row[2],
+        "confirmation_url": row[3], "generation": int(row[4] or 0),
+    }
+
+
+async def advance_mobile_payment_request_generation(
+    user_id: int, request_id: str, plan_code: str, provider: str,
+    payment_id: str, generation: int,
+) -> bool:
+    """Atomically rotate an idempotency generation after provider confirms cancellation."""
+    db = await get_db()
+    async with _db_semaphore:
+        cur = await db.execute(
+            "UPDATE mobile_payment_requests "
+            "SET payment_id=NULL,confirmation_url=NULL,generation=generation+1 "
+            "WHERE user_id=? AND request_id=? AND plan_code=? AND provider=? "
+            "AND payment_id=? AND generation=?",
+            (int(user_id), request_id, plan_code, provider, str(payment_id), int(generation)),
+        )
+        await db.commit()
+    return cur.rowcount == 1
 
 
 async def save_mobile_payment_request(
