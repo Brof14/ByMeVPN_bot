@@ -69,6 +69,18 @@ async def main():
     assert not await database.claim_mobile_payment_creation(
         987654321, "schema-bootstrap-test", "1m", "yookassa"
     )
+    assert await database.save_mobile_payment_request(
+        987654321, "schema-bootstrap-test", "1m", "yookassa",
+        "mobile-schema-invoice", "https://pay.example.invalid/checkout",
+    )
+    bound = await database.get_mobile_payment_request_by_invoice(
+        "yookassa", "mobile-schema-invoice"
+    )
+    assert bound == {
+        "user_id": 987654321, "request_id": "schema-bootstrap-test",
+        "plan_code": "1m", "provider": "yookassa", "devices": 5,
+        "payment_id": "mobile-schema-invoice",
+    }
     await db.close()
 
 asyncio.run(main())

@@ -1745,6 +1745,33 @@ async def get_mobile_payment_record(provider: str, payment_id: str) -> Optional[
             "days": int(row[3]), "devices": int(row[4])}
 
 
+async def get_mobile_payment_request_by_invoice(provider: str, payment_id: str) -> Optional[dict]:
+    """Resolve an invoice to its durable mobile checkout request, if any.
+
+    This is used by fulfillment handlers to distinguish an app checkout from
+    legacy Telegram invoices and to verify that provider metadata still agrees
+    with the server-owned request. It intentionally returns no URL or user
+    data beyond the owner ID needed for an authorization check.
+    """
+    if provider not in ("yookassa", "crypto") or not payment_id:
+        return None
+    db = await get_db()
+    async with _db_semaphore:
+        cur = await db.execute(
+            "SELECT user_id,request_id,plan_code,provider,devices,payment_id "
+            "FROM mobile_payment_requests WHERE provider=? AND payment_id=? LIMIT 1",
+            (provider, str(payment_id)),
+        )
+        row = await cur.fetchone()
+    if not row:
+        return None
+    return {
+        "user_id": int(row[0]), "request_id": str(row[1]),
+        "plan_code": str(row[2]), "provider": str(row[3]),
+        "devices": int(row[4]), "payment_id": str(row[5]),
+    }
+
+
 async def list_recent_mobile_invoice_refs(user_id: int, max_age_seconds: int = 86400) -> list[dict]:
     """List unique recent provider invoices for safe legacy check-payment calls."""
     db = await get_db()

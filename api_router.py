@@ -1009,7 +1009,10 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
         "6m": 6, "half_year": 6,
         "12m": 12, "year": 12,
     }
-    months = plan_map.get(req.plan_code)
+    tier_match = re.fullmatch(r"(1m|3m|6m|12m)_d(2|5|10)", req.plan_code)
+    plan_code = tier_match.group(1) if tier_match else req.plan_code
+    mobile_v2_plan_code = req.plan_code if tier_match else None
+    months = plan_map.get(plan_code)
     if months is None:
         raise HTTPException(status_code=400, detail="Неизвестный тариф")
     provider = req.provider or "yookassa"
@@ -1019,7 +1022,9 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
         raise HTTPException(status_code=400, detail="Создайте новый запрос на оплату")
 
     from constants import get_price_for_months, VALID_DEVICE_LIMITS
-    devices = 2 if req.devices is None else req.devices
+    devices = int(tier_match.group(2)) if tier_match else (2 if req.devices is None else req.devices)
+    if tier_match and req.devices is not None and int(req.devices) != devices:
+        raise HTTPException(status_code=422, detail="Тариф и лимит устройств не совпадают")
     if devices not in VALID_DEVICE_LIMITS:
         raise HTTPException(status_code=422, detail="Недопустимое количество устройств")
     # Price and term come from the backend catalog. Reject stale or altered
@@ -1030,10 +1035,10 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
     if req.days is not None and req.days != days:
         raise HTTPException(status_code=422, detail="Срок тарифа изменился. Обновите тарифы")
     reserved = await database.ensure_mobile_payment_request(
-        user_id, req.request_id, req.plan_code, provider, devices,
+        user_id, req.request_id, plan_code, provider, devices,
     )
     if (
-        reserved["plan_code"] != req.plan_code
+        reserved["plan_code"] != plan_code
         or reserved["provider"] != provider
         or int(reserved.get("devices", 2)) != devices
     ):
@@ -1043,12 +1048,12 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
         from payments import create_crypto_payment, find_crypto_invoice_by_payload, get_crypto_invoice
 
         def _crypto_payload(generation: int) -> str:
-            material = f"mobile:{user_id}:{req.request_id}:{req.plan_code}:{devices}:{generation}"
+            material = f"mobile:{user_id}:{req.request_id}:{mobile_v2_plan_code or plan_code}:{devices}:{generation}"
             return "bm1_" + hashlib.sha256(material.encode()).hexdigest()
 
         async def _bind_crypto_invoice(invoice_id: str, payment_url: str, payload: str) -> None:
             saved = await database.save_mobile_crypto_checkout(
-                user_id, req.request_id, req.plan_code, devices, invoice_id,
+                user_id, req.request_id, plan_code, devices, invoice_id,
                 payment_url, days, amount_rub, payload,
             )
             if not saved:
@@ -1059,12 +1064,12 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
 
         async def _rotate_expired_crypto(invoice_id: str, generation: int) -> dict:
             rotated = await database.advance_mobile_payment_request_generation(
-                user_id, req.request_id, req.plan_code, provider, invoice_id, generation,
+                user_id, req.request_id, plan_code, provider, invoice_id, generation,
             )
             if rotated:
                 await database.delete_crypto_pending(invoice_id)
             latest = await database.ensure_mobile_payment_request(
-                user_id, req.request_id, req.plan_code, provider, devices,
+                user_id, req.request_id, plan_code, provider, devices,
             )
             if latest.get("payment_id") == invoice_id:
                 raise HTTPException(status_code=503, detail="Не удалось обновить просроченный счёт. Попробуйте позже")
@@ -1116,7 +1121,7 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
                 )
 
         claimed = await database.claim_mobile_payment_creation(
-            user_id, req.request_id, req.plan_code, provider,
+            user_id, req.request_id, plan_code, provider,
         )
         if not claimed:
             raise HTTPException(status_code=409, detail="Создание счёта уже выполняется. Повторите проверку позже")
@@ -1136,7 +1141,7 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
                 # A definite provider rejection created no invoice, so allow
                 # this same idempotent request to retry safely.
                 await database.reset_mobile_payment_creation(
-                    user_id, req.request_id, req.plan_code, provider,
+                    user_id, req.request_id, plan_code, provider,
                 )
                 raise HTTPException(
                     status_code=502,
@@ -1163,12 +1168,12 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
         provider_status = await get_yookassa_payment_status(previous_invoice)
         if provider_status == "canceled":
             await database.advance_mobile_payment_request_generation(
-                user_id, req.request_id, req.plan_code, provider,
+                user_id, req.request_id, plan_code, provider,
                 previous_invoice, reserved["generation"],
             )
             # A simultaneous retry may have rotated the request already.
             reserved = await database.ensure_mobile_payment_request(
-                user_id, req.request_id, req.plan_code, provider, devices,
+                user_id, req.request_id, plan_code, provider, devices,
             )
             if reserved["payment_id"] == previous_invoice:
                 raise HTTPException(status_code=503, detail="Не удалось повторить оплату. Попробуйте позже")
@@ -1199,8 +1204,14 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
         months=months,
         extra_metadata={
             "app_payment": "1",
-            "plan_code": req.plan_code,
+            "plan_code": f"{plan_code}_d{devices}",
             "mobile_request_hash": hashlib.sha256(req.request_id.encode()).hexdigest()[:20],
+            # Every invoice created through this JWT-authenticated mobile API
+            # has a durable mobile_payment_requests row, including clients
+            # still using the pre-V2 route. Keep the V2 marker for existing
+            # diagnostics, but bind all new API invoices in fulfillment.
+            "mobile_api_checkout": "1",
+            **({"mobile_v2": "1"} if mobile_v2_plan_code else {}),
         },
         idempotency_key=stable_key,
         return_payment_details=True,
@@ -1211,7 +1222,7 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
     if result.get("status") not in (None, "pending", "waiting_for_capture"):
         raise HTTPException(status_code=502, detail="Платёжная страница недоступна. Попробуйте позже")
     saved = await database.save_mobile_payment_request(
-        user_id, req.request_id, req.plan_code, provider,
+        user_id, req.request_id, plan_code, provider,
         result["payment_id"], result["payment_url"],
     )
     if not saved:
@@ -1330,10 +1341,9 @@ async def create_mobile_v2_payment(
     # Device count is parsed from the server-issued plan code, never from a
     # client-supplied `devices`, price, or duration field.
     legacy_request = PaymentCreateRequest(
-        plan_code=match.group(1),
+        plan_code=req.plan_code,
         request_id=req.request_id,
         provider=req.provider,
-        devices=int(match.group(2)),
     )
     return await api_create_payment(legacy_request, user_id=user_id)
 
