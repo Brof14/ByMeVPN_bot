@@ -106,7 +106,7 @@ class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
         with (
             patch("subscription.get_user_keys", new=AsyncMock(return_value=[])),
             patch("xui_client.get_xui_client_details", new=AsyncMock(return_value=None)),
-            patch("subscription.create_xui_user", new=AsyncMock(return_value=xui_result)),
+            patch("subscription.create_xui_user", new=AsyncMock(return_value=xui_result)) as create_user,
             patch("subscription.add_key", new=AsyncMock(return_value=42)) as add_key,
         ):
             result = await subscription.deliver_key(
@@ -120,6 +120,8 @@ class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertTrue(result)
+        self.assertEqual(create_user.await_args.kwargs["limit_ip"], 0)
+        self.assertEqual(create_user.await_args.kwargs["limit_hwid"], 5)
         add_key.assert_awaited_once_with(
             5283200584,
             "https://panel.example/sub/test-sub-id",

@@ -201,7 +201,7 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
         """
         Verify create_xui_user checks existing client and preserves UUID.
         """
-        from xui_client import create_xui_user, update_xui_user
+        from xui_client import create_xui_user
 
         user_id = 999005
         existing_uuid = "existing-uuid-fixed-12345"
@@ -217,18 +217,24 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
         with patch("xui_client._get_api", new_callable=AsyncMock) as mock_get_api, \
              patch("xui_client._find_client_uuid", new_callable=AsyncMock) as mock_find_uuid, \
              patch("xui_client._find_client_sub_id", new_callable=AsyncMock) as mock_find_sub_id, \
-             patch("xui_client._api_call_with_retry", new_callable=AsyncMock) as mock_call:
+             patch("xui_client.update_xui_user", new_callable=AsyncMock) as mock_update:
 
             mock_get_api.return_value = mock_api
             mock_find_uuid.return_value = existing_uuid
             mock_find_sub_id.return_value = "existingsubid123"
-            mock_call.return_value = mock_client
+            mock_update.return_value = {
+                "uuid": existing_uuid,
+                "sub_id": "existingsubid123",
+                "subscription_url": "https://sub.example.invalid/test",
+            }
 
             # Calling create_xui_user for existing client
-            res = await create_xui_user(user_id, days=30, limit_ip=5)
+            res = await create_xui_user(user_id, days=30, limit_ip=0, limit_hwid=5)
 
             self.assertIsNotNone(res)
             self.assertEqual(res.get("uuid"), existing_uuid, "Existing client UUID must be strictly preserved!")
+            self.assertEqual(mock_update.await_args.kwargs["limit_ip"], 0)
+            self.assertEqual(mock_update.await_args.kwargs["limit_hwid"], 5)
             # Ensure delete was NEVER called
             mock_api.client.delete.assert_not_called()
 

@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import time
 import uuid
 import logging
@@ -70,16 +71,22 @@ async def create_yookassa_payment(
     promo_code: Optional[str] = None,
     months: int = 1,
     extra_metadata: Optional[dict] = None,
-) -> Optional[str]:
+    idempotency_key: Optional[str] = None,
+    return_payment_details: bool = False,
+    save_payment_method: Optional[bool] = None,
+) -> Optional[str | dict]:
     if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
         logger.warning("YooKassa credentials not configured")
         return None
 
     auth = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
 
+    stable_key = idempotency_key or f"checkout_{user_id}_{uuid.uuid4().hex}"
+    if len(stable_key) > 64:
+        stable_key = hashlib.sha256(stable_key.encode()).hexdigest()
     headers = {
         "Authorization": f"Basic {auth}",
-        "Idempotence-Key": f"checkout_{user_id}_{uuid.uuid4().hex}",
+        "Idempotence-Key": stable_key,
         "Content-Type": "application/json",
     }
 
@@ -106,7 +113,8 @@ async def create_yookassa_payment(
         "metadata": metadata,
     }
 
-    if is_yookassa_recurring_supported():
+    should_save_method = is_yookassa_recurring_supported() if save_payment_method is None else bool(save_payment_method)
+    if should_save_method:
         payload["save_payment_method"] = True
 
     logger.info("create_yookassa_payment: user_id=%d days=%d devices=%d months=%d amount=%d promo=%s recurring=%s",
@@ -122,6 +130,8 @@ async def create_yookassa_payment(
             url = data["confirmation"]["confirmation_url"]
             await _remember_yookassa_checkout(data.get("id"), user_id, days, devices, amount_rub)
             logger.info("YooKassa payment created for user %d: %s", user_id, data.get("id"))
+            if return_payment_details:
+                return {"payment_url": url, "payment_id": str(data.get("id") or ""), "status": data.get("status")}
             return url
             
     except httpx.HTTPStatusError as e:
@@ -135,7 +145,7 @@ async def create_yookassa_payment(
             global _yookassa_recurring_supported
             _yookassa_recurring_supported = False
             payload.pop("save_payment_method", None)
-            headers["Idempotence-Key"] = f"checkout_{user_id}_{uuid.uuid4().hex}_std"
+            headers["Idempotence-Key"] = hashlib.sha256((stable_key + ":standard").encode()).hexdigest()
             try:
                 async with yookassa_client(timeout=15.0) as client:
                     r2 = await client.post("https://api.yookassa.ru/v3/payments", json=payload, headers=headers)
@@ -144,6 +154,8 @@ async def create_yookassa_payment(
                     url = data["confirmation"]["confirmation_url"]
                     await _remember_yookassa_checkout(data.get("id"), user_id, days, devices, amount_rub)
                     logger.info("YooKassa fallback standard payment created for user %d: %s", user_id, data.get("id"))
+                    if return_payment_details:
+                        return {"payment_url": url, "payment_id": str(data.get("id") or ""), "status": data.get("status")}
                     return url
             except Exception as retry_e:
                 logger.error("YooKassa fallback payment error for user %d (%s): %r", user_id, type(retry_e).__name__, retry_e)
@@ -157,6 +169,28 @@ async def create_yookassa_payment(
         return None
     except Exception as e:
         logger.exception("YooKassa payment creation failed for user %d (%s)", user_id, type(e).__name__)
+        return None
+
+
+async def get_yookassa_payment_status(payment_id: str) -> Optional[str]:
+    """Fetch the authoritative provider status for a specific invoice ID."""
+    if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
+        return None
+    if not payment_id or len(payment_id) > 128 or any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for ch in payment_id):
+        return None
+    auth = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
+    try:
+        async with yookassa_client(timeout=10.0) as client:
+            response = await client.get(
+                f"https://api.yookassa.ru/v3/payments/{payment_id}",
+                headers={"Authorization": f"Basic {auth}"},
+            )
+            response.raise_for_status()
+            data = response.json()
+            status = data.get("status") if isinstance(data, dict) else None
+            return status if status in {"pending", "waiting_for_capture", "succeeded", "canceled"} else None
+    except Exception as exc:
+        logger.warning("YooKassa status lookup failed (%s)", type(exc).__name__)
         return None
 
 

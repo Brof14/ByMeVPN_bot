@@ -19,6 +19,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import time
 import uuid
@@ -37,10 +38,14 @@ logger = logging.getLogger(__name__)
 api_router = APIRouter()
 
 # ---------------------------------------------------------------------------
-# Telegram Session Store & JWT Signing
+# Telegram Session Exchange & JWT Signing
 # ---------------------------------------------------------------------------
-_TELEGRAM_SESSIONS: Dict[str, Dict[str, Any]] = {}
-JWT_SECRET = os.getenv("JWT_SECRET", "bymevpn_jwt_secure_secret_key_2026_xray")
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET or len(JWT_SECRET.encode("utf-8")) < 32:
+    raise RuntimeError("JWT_SECRET must be configured with at least 32 bytes")
+
+JWT_ISSUER = "bymevpn-api"
+JWT_AUDIENCE = "bymevpn-mobile"
 
 
 async def _ensure_auth_db():
@@ -69,68 +74,152 @@ def hash_password(password: str, salt: str) -> str:
     ).hex()
 
 
-def confirm_telegram_session(token: str, user_id: int, username: str = "", full_name: str = "") -> bool:
-    """Called by Telegram bot handler when user opens /start auth_<token>"""
-    clean_token = token.removeprefix("auth_")
-    # Sessions created by the mobile API are keyed by the prefixed token, so
-    # look the original token up first; stripping the prefix would create a
-    # second, detached entry and leave the polled session pending forever.
-    session = _TELEGRAM_SESSIONS.get(token) or _TELEGRAM_SESSIONS.get(clean_token)
+async def confirm_telegram_session(token: str, user_id: int, username: str = "", full_name: str = "") -> bool:
+    """Confirm a pending single-use login state created by the mobile API."""
+    state = token.removeprefix("auth_")
+    if not state or len(state) > 256:
+        return False
+    state_hash = hashlib.sha256(state.encode("utf-8")).hexdigest()
+    return await database.confirm_mobile_auth_session(
+        state_hash,
+        user_id,
+        (username or f"user_{user_id}")[:80],
+        (full_name or username or f"User {user_id}")[:160],
+    )
 
-    if session:
-        session["status"] = "authenticated"
-        session["user_id"] = user_id
-        session["username"] = username or f"user_{user_id}"
-        session["full_name"] = full_name or username or f"User {user_id}"
-        logger.info(f"Telegram session {token} confirmed for user {user_id} (@{username})")
-        return True
 
-    _TELEGRAM_SESSIONS[clean_token] = {
-        "status": "authenticated",
-        "user_id": user_id,
-        "username": username or f"user_{user_id}",
-        "full_name": full_name or username or f"User {user_id}",
-        "created_at": time.time(),
+def _jwt_b64encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _jwt_b64decode(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * ((4 - len(value) % 4) % 4))
+
+
+def create_simple_jwt(
+    user_id: int,
+    email: str = "",
+    *,
+    issued_at: Optional[int] = None,
+    expires_at: Optional[int] = None,
+    issuer: str = JWT_ISSUER,
+    audience: str = JWT_AUDIENCE,
+    jwt_id: Optional[str] = None,
+) -> str:
+    """Create an HS256 JWT with fixed service issuer/audience and bounded lifetime."""
+    issued = int(time.time()) if issued_at is None else int(issued_at)
+    expiry = issued + 30 * 86400 if expires_at is None else int(expires_at)
+    session_id = jwt_id or secrets.token_urlsafe(18)
+    if (
+        int(user_id) <= 0
+        or expiry <= issued
+        or expiry - issued > 30 * 86400
+        or not re.fullmatch(r"[A-Za-z0-9_-]{20,64}", session_id)
+    ):
+        raise ValueError("Invalid JWT subject, lifetime, or session ID")
+
+    header = {"alg": "HS256", "typ": "JWT"}
+    claims = {
+        "sub": str(int(user_id)),
+        "jti": session_id,
+        "email": str(email or ""),
+        "iss": issuer,
+        "aud": audience,
+        "iat": issued,
+        "exp": expiry,
     }
-    return True
+    header_part = _jwt_b64encode(json.dumps(header, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    claims_part = _jwt_b64encode(json.dumps(claims, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    signing_input = f"{header_part}.{claims_part}"
+    signature = hmac.new(JWT_SECRET.encode("utf-8"), signing_input.encode("ascii"), hashlib.sha256).digest()
+    return f"{signing_input}.{_jwt_b64encode(signature)}"
 
 
-def create_simple_jwt(user_id: int, email: str = "") -> str:
-    """Create a signed HMAC-SHA256 session token."""
-    payload = f"{user_id}:{email}:{int(time.time()) + 30 * 86400}"
-    signature = hmac.new(JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    return f"{payload}:{signature}"
+def _verified_token_claims(token: str) -> Optional[dict]:
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        header = json.loads(_jwt_b64decode(parts[0]).decode("utf-8"))
+        claims = json.loads(_jwt_b64decode(parts[1]).decode("utf-8"))
+        if not isinstance(header, dict) or header.get("alg") != "HS256" or header.get("typ") != "JWT":
+            return None
+        if not isinstance(claims, dict):
+            return None
+
+        signing_input = f"{parts[0]}.{parts[1]}"
+        expected = hmac.new(JWT_SECRET.encode("utf-8"), signing_input.encode("ascii"), hashlib.sha256).digest()
+        supplied = _jwt_b64decode(parts[2])
+        if not hmac.compare_digest(supplied, expected):
+            return None
+
+        # Require exact service claims. In particular, do not accept a list
+        # audience containing this app alongside an unexpected audience.
+        if claims.get("iss") != JWT_ISSUER or claims.get("aud") != JWT_AUDIENCE:
+            return None
+        subject = claims.get("sub")
+        session_id = claims.get("jti")
+        issued = claims.get("iat")
+        expiry = claims.get("exp")
+        if (
+            not isinstance(subject, str)
+            or not subject.isdecimal()
+            or not isinstance(session_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{20,64}", session_id)
+            or type(issued) is not int
+            or type(expiry) is not int
+        ):
+            return None
+        user_id = int(subject)
+        now = int(time.time())
+        if (
+            user_id <= 0
+            or issued > now + 60
+            or expiry <= now
+            or expiry <= issued
+            or expiry - issued > 30 * 86400
+        ):
+            return None
+        email = claims.get("email", "")
+        if not isinstance(email, str):
+            return None
+        return {
+            "user_id": user_id,
+            "jti": session_id,
+            "email": email,
+            "issued_at": issued,
+            "expires_at": expiry,
+            "issuer": JWT_ISSUER,
+            "audience": JWT_AUDIENCE,
+        }
+    except (ValueError, TypeError, UnicodeDecodeError, OverflowError):
+        return None
 
 
 def verify_simple_jwt(token: str) -> Optional[int]:
-    """Verify signed session token and return user_id."""
-    try:
-        parts = token.split(":")
-        if len(parts) != 4:
-            return None
-        user_id_str, email, exp_str, sig = parts
-        payload = f"{user_id_str}:{email}:{exp_str}"
-        expected_sig = hmac.new(JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(sig, expected_sig):
-            return None
-        if int(exp_str) < time.time():
-            return None
-        return int(user_id_str)
-    except Exception:
-        return None
+    """Verify signature, issuer, exact audience and lifetime; return subject ID."""
+    claims = _verified_token_claims(token)
+    return int(claims["user_id"]) if claims else None
 
 
 async def get_current_user_id(authorization: Optional[str] = Header(None)) -> int:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
     token = authorization.removeprefix("Bearer ").strip()
-    user_id = verify_simple_jwt(token)
-    if not user_id:
+    claims = _verified_token_claims(token)
+    if not claims:
         raise HTTPException(status_code=401, detail="Invalid or expired session token")
-    return user_id
+    try:
+        if await database.is_mobile_jwt_revoked(claims["jti"]):
+            raise HTTPException(status_code=401, detail="Session has been logged out")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("JWT revocation check unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Session verification temporarily unavailable") from None
+    return claims["user_id"]
 
 
-# ---------------------------------------------------------------------------
 # Real 3x-ui Server Nodes & Subscription Resolution
 # ---------------------------------------------------------------------------
 
@@ -407,7 +496,7 @@ async def get_user_real_subscription(
     sub_uuid: Optional[str] = None
     expiry_ts = 0
     days_count = 30
-    limit_ip = 2
+    device_limit = 2
 
     # 1. Check local keys table
     user_keys = await database.get_user_keys(user_id)
@@ -416,7 +505,7 @@ async def get_user_real_subscription(
         best_key = max(active_keys, key=lambda k: int(k.get("expiry", 0)))
         expiry_ts = int(best_key.get("expiry", 0))
         days_count = int(best_key.get("days", 30))
-        limit_ip = int(best_key.get("limit_ip", 2))
+        device_limit = int(best_key.get("limit_ip", 2))
         sub_uuid = best_key.get("uuid")
         key_content = best_key.get("key", "").strip()
         if key_content.startswith("http://") or key_content.startswith("https://"):
@@ -430,6 +519,7 @@ async def get_user_real_subscription(
             if client_details:
                 sub_uuid = client_details.get("uuid") or sub_uuid
                 sub_url = client_details.get("subscription_url")
+                device_limit = int(client_details.get("limit_hwid", 0))
                 if not expiry_ts:
                     expiry_ts = int(client_details.get("expiry_time", 0)) // 1000
             if not sub_url:
@@ -462,7 +552,7 @@ async def get_user_real_subscription(
         "expires_at": expires_at,
         "seconds_remaining": seconds_remaining,
         "subscription_url": sub_url,
-        "max_devices": limit_ip,
+        "max_devices": device_limit,
         "active_devices": 1,
     }
 
@@ -490,6 +580,10 @@ class TelegramCheckResponse(BaseModel):
     user: Optional[Dict[str, Any]] = None
     subscription: Optional[Dict[str, Any]] = None
     servers: Optional[List[Dict[str, Any]]] = None
+
+
+class TelegramSessionCheckRequest(BaseModel):
+    token: str
 
 
 class RegisterRequest(BaseModel):
@@ -521,9 +615,10 @@ class TrialRequest(BaseModel):
 
 class PaymentCreateRequest(BaseModel):
     plan_code: str
-    amount_rub: int
-    days: int
-    devices: Optional[int] = 2
+    request_id: Optional[str] = None
+    amount_rub: Optional[int] = None
+    days: Optional[int] = None
+    devices: Optional[int] = None
     provider: Optional[str] = "yookassa"
 
 
@@ -538,15 +633,9 @@ class SessionRequest(BaseModel):
 
 @api_router.post("/auth/telegram/create-session", response_model=CreateTelegramSessionResponse)
 async def create_telegram_session():
-    token = f"auth_{secrets.token_urlsafe(16)}"
-    _TELEGRAM_SESSIONS[token] = {
-        "status": "pending",
-        "created_at": time.time(),
-    }
-    now = time.time()
-    stale_keys = [k for k, v in _TELEGRAM_SESSIONS.items() if now - v.get("created_at", 0) > 600]
-    for k in stale_keys:
-        _TELEGRAM_SESSIONS.pop(k, None)
+    token = f"auth_{secrets.token_urlsafe(32)}"
+    state_hash = hashlib.sha256(token.removeprefix("auth_").encode("utf-8")).hexdigest()
+    await database.create_mobile_auth_session(state_hash, int(time.time()) + 600)
 
     return CreateTelegramSessionResponse(
         session_token=token,
@@ -556,16 +645,17 @@ async def create_telegram_session():
 
 @api_router.get("/auth/telegram/check-session", response_model=TelegramCheckResponse)
 async def check_telegram_session(token: str, request: Request):
-    clean_token = token if token in _TELEGRAM_SESSIONS else token.removeprefix("auth_")
-    session = _TELEGRAM_SESSIONS.get(clean_token) or _TELEGRAM_SESSIONS.get(token)
-
-    if not session:
+    state = token.removeprefix("auth_")
+    if not state or len(state) > 256:
         return TelegramCheckResponse(status="expired")
-
-    if session.get("status") != "authenticated":
+    state_hash = hashlib.sha256(state.encode("utf-8")).hexdigest()
+    session = await database.poll_mobile_auth_session(state_hash)
+    if not session or session.get("status") == "expired":
+        return TelegramCheckResponse(status="expired")
+    if session.get("status") == "pending":
         return TelegramCheckResponse(status="pending")
 
-    user_id = session["user_id"]
+    user_id = int(session["user_id"])
     username = session.get("username", "")
     full_name = session.get("full_name", "Telegram User")
 
@@ -586,6 +676,14 @@ async def check_telegram_session(token: str, request: Request):
         subscription=sub_dict,
         servers=servers,
     )
+
+
+@api_router.post("/auth/telegram/check-session", response_model=TelegramCheckResponse)
+async def check_telegram_session_body(req: TelegramSessionCheckRequest, request: Request):
+    """Poll Telegram login state in the request body to keep it out of URL logs."""
+    if not req.token or len(req.token) > 256:
+        return TelegramCheckResponse(status="expired")
+    return await check_telegram_session(req.token, request)
 
 
 # ---------------------------------------------------------------------------
@@ -679,51 +777,35 @@ async def login(req: LoginRequest, request: Request):
 
 @api_router.post("/auth/google")
 async def login_google(req: GoogleLoginRequest, request: Request):
-    email = ""
-    name = "Google User"
-    try:
-        parts = req.id_token.split(".")
-        if len(parts) >= 2:
-            padded = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
-            payload_str = base64.urlsafe_b64decode(padded.encode()).decode("utf-8", "ignore")
-            data = json.loads(payload_str)
-            email = data.get("email", "").lower()
-            name = data.get("name") or data.get("given_name") or email.split("@")[0]
-    except Exception as e:
-        logger.warning(f"Error decoding Google token: {e}")
-
-    if not email:
-        email = f"google_user_{secrets.token_hex(4)}@gmail.com"
-
-    user_id = int(hashlib.md5(email.encode()).hexdigest()[:8], 16)
-    await database.ensure_user(user_id, email.split("@")[0])
-
-    jwt_token = create_simple_jwt(user_id, email)
-    sub_url, servers, sub_dict = await get_user_real_subscription(
-        user_id, _subscription_headers_from_request(request)
+    # The former implementation decoded claims without checking the signature,
+    # audience, verified-email flag or nonce. Keep the endpoint closed until a
+    # Google client ID and nonce-bound native flow are configured and tested.
+    raise HTTPException(
+        status_code=503,
+        detail="Вход через Google временно недоступен",
     )
-
-    return {
-        "access": jwt_token,
-        "refresh": f"ref_{jwt_token}",
-        "user": {
-            "id": str(user_id),
-            "email": email,
-            "name": name,
-            "is_google": True,
-        },
-        "subscription": sub_dict,
-        "servers": servers,
-    }
 
 
 @api_router.post("/auth/refresh")
 async def refresh_token(req: RefreshRequest):
     token = req.refresh.removeprefix("ref_")
-    user_id = verify_simple_jwt(token)
-    if not user_id:
+    claims = _verified_token_claims(token)
+    if not claims:
         raise HTTPException(status_code=401, detail="Сессия истекла")
-    new_access = create_simple_jwt(user_id)
+    try:
+        if await database.is_mobile_jwt_revoked(claims["jti"]):
+            raise HTTPException(status_code=401, detail="Сессия завершена")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("JWT revocation check unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Сессия временно недоступна") from None
+    # Refresh preserves the same revocable session and its absolute expiry.
+    new_access = create_simple_jwt(
+        claims["user_id"], claims["email"],
+        issued_at=claims["issued_at"], expires_at=claims["expires_at"],
+        jwt_id=claims["jti"],
+    )
     return {
         "access": new_access,
         "refresh": f"ref_{new_access}",
@@ -731,7 +813,19 @@ async def refresh_token(req: RefreshRequest):
 
 
 @api_router.post("/auth/logout")
-async def logout(user_id: int = Depends(get_current_user_id)):
+async def logout(
+    authorization: Optional[str] = Header(None),
+    user_id: int = Depends(get_current_user_id),
+):
+    token = (authorization or "").removeprefix("Bearer ").strip()
+    claims = _verified_token_claims(token)
+    if not claims or claims["user_id"] != user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired session token")
+    try:
+        await database.revoke_mobile_jwt(claims["jti"], claims["expires_at"])
+    except Exception as exc:
+        logger.error("JWT revocation failed (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось завершить сессию. Попробуйте позже") from None
     return {"status": "ok"}
 
 
@@ -751,7 +845,12 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
 
 @api_router.delete("/me")
 async def delete_me(user_id: int = Depends(get_current_user_id)):
-    return {"status": "deleted"}
+    # The mobile account-deletion flow is not implemented yet. Never report
+    # success while leaving the account and subscription untouched.
+    raise HTTPException(
+        status_code=501,
+        detail="Удаление аккаунта пока недоступно. Обратитесь в поддержку",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -768,41 +867,55 @@ async def get_subscription_status(request: Request, user_id: int = Depends(get_c
 
 @api_router.post("/subscription/trial")
 async def activate_trial(req: TrialRequest, request: Request, user_id: int = Depends(get_current_user_id)):
-    """Activate 3-day free trial on 3x-ui panel."""
+    """Atomically grant one free 3-day trial to a user without a subscription."""
     trial_days = 3
-    sub_url = None
-    vless_links = []
+    if await database.has_trial_used(user_id):
+        raise HTTPException(status_code=409, detail="Пробный период уже использован")
+    current_keys = await database.get_user_keys(user_id)
+    now = int(time.time())
+    if any(int(key.get("expiry") or 0) > now for key in current_keys):
+        raise HTTPException(status_code=409, detail="У вас уже есть действующая подписка")
+    try:
+        from xui_client import get_xui_client_details
+        if await get_xui_client_details(user_id):
+            raise HTTPException(status_code=409, detail="Для этого аккаунта уже создана подписка")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Trial eligibility lookup failed (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось проверить доступность пробного периода") from None
 
-    # Provision client on 3x-ui panel
+    if not await database.try_claim_trial(user_id):
+        raise HTTPException(status_code=409, detail="Пробный период уже использован")
     try:
         from xui_client import create_xui_user
-        res = await create_xui_user(user_id=user_id, days=trial_days, limit_ip=2)
-        if res:
-            sub_url = res.get("subscription_url")
-            vless_links = res.get("vless_links", [])
-    except Exception as e:
-        logger.error(f"Error calling create_xui_user for trial user {user_id}: {e}")
-
+        res = await create_xui_user(user_id=user_id, days=trial_days, limit_ip=0, limit_hwid=2)
+    except Exception as exc:
+        logger.error("Trial provisioning failed (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось подключить пробный период. Напишите в поддержку") from None
+    if not res or not res.get("subscription_url"):
+        # The claim stays consumed when panel provisioning has an ambiguous
+        # outcome; this prevents retries from extending a partially created key.
+        raise HTTPException(status_code=503, detail="Не удалось подключить пробный период. Напишите в поддержку")
+    sub_url = res["subscription_url"]
     expiry_ts = int(time.time()) + trial_days * 86400
     try:
         await database.add_key(
             user_id=user_id,
-            key=sub_url or (vless_links[0] if vless_links else f"sub_{user_id}"),
-            remark="Trial 3 Days",
-            uuid=str(user_id),
+            key=sub_url,
+            remark="Пробный период — 3 дня",
+            uuid=str(res.get("uuid") or ""),
             days=trial_days,
-            limit_ip=2,
+            limit_ip=0,
             expiry=expiry_ts,
         )
-        await database.set_trial_used(user_id)
-    except Exception as e:
-        logger.warning(f"DB trial save error: {e}")
+    except Exception as exc:
+        logger.error("Trial database save failed (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Пробный период создан, но его статус не сохранился. Напишите в поддержку") from None
 
-    servers = []
-    if sub_url:
-        servers = await fetch_and_parse_real_nodes(
-            sub_url, request_headers=_subscription_headers_from_request(request)
-        )
+    servers = await fetch_and_parse_real_nodes(
+        sub_url, request_headers=_subscription_headers_from_request(request)
+    )
 
     return {
         "status": "trial",
@@ -818,64 +931,172 @@ async def activate_trial(req: TrialRequest, request: Request, user_id: int = Dep
 
 @api_router.get("/plans")
 async def get_plans():
+    from constants import get_price_for_months
+
+    plan_catalog = [
+        ("1m", 1, "1 месяц", 0, False),
+        ("3m", 3, "4 месяца (3+1)", 11, True),
+        ("6m", 6, "8 месяцев (6+2)", 22, False),
+        ("12m", 12, "15 месяцев (12+3)", 34, False),
+    ]
+    plans = [
+        {
+            "code": code,
+            "name": label,
+            "price": f"{get_price_for_months(months, 2)[0]} ₽",
+            "price_rub": get_price_for_months(months, 2)[0],
+            "days": get_price_for_months(months, 2)[1],
+            "devices": 2,
+            "discount_percent": discount,
+            "is_popular": popular,
+        }
+        for code, months, label, discount, popular in plan_catalog
+    ]
     return {
-        "plans": [
-            {"code": "trial", "name": "Пробный период", "price": "1 ₽", "price_rub": 1, "days": 3, "discount_percent": 0, "is_popular": False},
-            {"code": "month", "name": "1 месяц", "price": "149 ₽", "price_rub": 149, "days": 30, "discount_percent": 0, "is_popular": False},
-            {"code": "quarter", "name": "3 месяца", "price": "380 ₽", "price_rub": 380, "days": 90, "discount_percent": 15, "is_popular": True},
-            {"code": "half_year", "name": "6 месяцев", "price": "625 ₽", "price_rub": 625, "days": 180, "discount_percent": 30, "is_popular": False},
-            {"code": "year", "name": "1 год", "price": "983 ₽", "price_rub": 983, "days": 365, "discount_percent": 45, "is_popular": False},
-        ]
+        "trial": {"code": "trial", "name": "3 дня бесплатно", "price": "0 ₽", "price_rub": 0, "days": 3, "devices": 2},
+        "plans": plans,
     }
 
 
 # ---------------------------------------------------------------------------
 @api_router.post("/payment/create")
 async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(get_current_user_id)):
-    """Create in-app payment via YooKassa (Cards/SBP) or CryptoBot without Telegram."""
-    if req.provider == "crypto":
-        from payments import create_crypto_payment
-        res = await create_crypto_payment(
-            amount_rub=req.amount_rub,
-            description=f"ByMeVPN Подписка ({req.days} дн., {req.devices} устр.)",
-            user_id=user_id,
-            days=req.days,
-            devices=req.devices or 2,
-        )
-        if not res:
-            raise HTTPException(status_code=500, detail="Не удалось создать счет в CryptoBot")
-        pay_url, invoice_id = res
-        return {"payment_url": pay_url, "invoice_id": invoice_id, "provider": "crypto"}
-    else:
-        from payments import create_yookassa_payment, claim_yookassa_checkout, release_yookassa_checkout
-        claim_yookassa_checkout(user_id)
-        try:
-            pay_url = await create_yookassa_payment(
-                amount_rub=req.amount_rub,
-                description=f"ByMeVPN Подписка ({req.days} дн., {req.devices} устр.)",
-                user_id=user_id,
-                days=req.days,
-                devices=req.devices or 2,
-                extra_metadata={"app_payment": "1"},
+    """Create an idempotent checkout from the server-owned tariff catalog."""
+    plan_map = {
+        "1m": 1, "month": 1,
+        "3m": 3, "quarter": 3,
+        "6m": 6, "half_year": 6,
+        "12m": 12, "year": 12,
+    }
+    months = plan_map.get(req.plan_code)
+    if months is None:
+        raise HTTPException(status_code=400, detail="Неизвестный тариф")
+    if req.provider != "yookassa":
+        raise HTTPException(status_code=400, detail="Этот способ оплаты недоступен в приложении")
+    if not req.request_id or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", req.request_id):
+        raise HTTPException(status_code=400, detail="Создайте новый запрос на оплату")
+
+    from constants import get_price_for_months
+    amount_rub, days = get_price_for_months(months, 2)
+    devices = 2
+    reserved = await database.ensure_mobile_payment_request(
+        user_id, req.request_id, req.plan_code, req.provider,
+    )
+    if reserved["plan_code"] != req.plan_code or reserved["provider"] != req.provider:
+        raise HTTPException(status_code=409, detail="Этот запрос уже использован для другого тарифа")
+    if reserved["payment_id"] and reserved["confirmation_url"]:
+        from payments import get_yookassa_payment_status
+
+        previous_invoice = reserved["payment_id"]
+        provider_status = await get_yookassa_payment_status(previous_invoice)
+        if provider_status == "canceled":
+            rotated = await database.advance_mobile_payment_request_generation(
+                user_id, req.request_id, req.plan_code, req.provider,
+                previous_invoice, reserved["generation"],
             )
-        finally:
-            release_yookassa_checkout(user_id)
-        if not pay_url:
-            raise HTTPException(status_code=500, detail="Не удалось создать платеж в ЮKassa")
-        return {"payment_url": pay_url, "provider": "yookassa"}
+            # A simultaneous retry may have rotated the request already. Reload
+            # the row and use its generation so all retries share one new invoice.
+            reserved = await database.ensure_mobile_payment_request(
+                user_id, req.request_id, req.plan_code, req.provider,
+            )
+            if reserved["payment_id"] == previous_invoice:
+                logger.error(
+                    "Canceled mobile invoice generation could not be rotated (user=%d)",
+                    user_id,
+                )
+                raise HTTPException(status_code=503, detail="Не удалось повторить оплату. Попробуйте позже")
+            if reserved["payment_id"] and reserved["confirmation_url"]:
+                return {
+                    "payment_url": reserved["confirmation_url"],
+                    "invoice_id": reserved["payment_id"],
+                    "provider": "yookassa",
+                }
+        else:
+            # Unknown provider status is not proof of cancellation. Preserve the
+            # existing idempotent invoice and never create a second charge.
+            return {
+                "payment_url": reserved["confirmation_url"],
+                "invoice_id": reserved["payment_id"],
+                "provider": "yookassa",
+            }
+
+    from payments import create_yookassa_payment
+    stable_key = hashlib.sha256(
+        f"bymevpn-mobile:{user_id}:{req.request_id}:{reserved['generation']}".encode()
+    ).hexdigest()
+    result = await create_yookassa_payment(
+        amount_rub=amount_rub,
+        description=f"ByMeVPN — {days} дней, {devices} устройства",
+        user_id=user_id,
+        days=days,
+        devices=devices,
+        months=months,
+        extra_metadata={
+            "app_payment": "1",
+            "plan_code": req.plan_code,
+            "mobile_request_hash": hashlib.sha256(req.request_id.encode()).hexdigest()[:20],
+        },
+        idempotency_key=stable_key,
+        return_payment_details=True,
+        save_payment_method=False,
+    )
+    if not isinstance(result, dict) or not result.get("payment_url") or not result.get("payment_id"):
+        raise HTTPException(status_code=502, detail="Не удалось создать платёж. Попробуйте позже")
+    if result.get("status") not in (None, "pending", "waiting_for_capture"):
+        raise HTTPException(status_code=502, detail="Платёжная страница недоступна. Попробуйте позже")
+    saved = await database.save_mobile_payment_request(
+        user_id, req.request_id, req.plan_code, req.provider,
+        result["payment_id"], result["payment_url"],
+    )
+    if not saved:
+        raise HTTPException(status_code=503, detail="Платёж создан, но статус запроса не сохранён. Повторите проверку")
+    return {
+        "payment_url": result["payment_url"],
+        "invoice_id": result["payment_id"],
+        "provider": "yookassa",
+    }
 
 
 @api_router.get("/payment/check")
-async def api_check_payment(request: Request, user_id: int = Depends(get_current_user_id)):
-    """Check subscription status after in-app payment."""
+async def api_check_payment(
+    request: Request,
+    invoice_id: Optional[str] = None,
+    provider: Optional[str] = None,
+    user_id: int = Depends(get_current_user_id),
+):
+    """Check one owned invoice; provider success alone never grants access."""
+    if not invoice_id:
+        recent = await database.list_recent_mobile_invoice_refs(user_id)
+        if len(recent) != 1:
+            raise HTTPException(status_code=400, detail="Укажите номер счёта для проверки оплаты")
+        invoice_id = recent[0]["payment_id"]
+        provider = recent[0]["provider"]
+    provider = provider or "yookassa"
+    if provider not in ("yookassa", "crypto") or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", invoice_id):
+        raise HTTPException(status_code=400, detail="Некорректные данные счёта")
+    record = await database.get_mobile_payment_record(provider, invoice_id)
+    if not record or record["user_id"] != user_id:
+        raise HTTPException(status_code=404, detail="Счёт не найден")
+
+    if record["status"] != "success":
+        if provider == "yookassa":
+            from payments import get_yookassa_payment_status
+            provider_status = await get_yookassa_payment_status(invoice_id)
+        else:
+            from payments import get_crypto_invoice
+            provider_payment = await get_crypto_invoice(invoice_id)
+            provider_status = provider_payment.get("status") if provider_payment else None
+        if provider_status == "canceled":
+            return {"status": "failed", "is_active": False, "subscription": None}
+        return {"status": "processing" if provider_status == "succeeded" or provider_status == "paid" else "pending",
+                "is_active": False, "subscription": None}
+
     sub_url, servers, sub_dict = await get_user_real_subscription(
         user_id, _subscription_headers_from_request(request)
     )
-    return {
-        "status": sub_dict.get("status"),
-        "is_active": sub_dict.get("status") in ("active", "trial", "grace"),
-        "subscription": sub_dict,
-    }
+    active = sub_dict.get("status") in ("active", "trial", "grace")
+    return {"status": "succeeded" if active else "processing", "is_active": active,
+            "subscription": sub_dict if active else None}
 
 
 # 4. SERVERS & VPN SESSIONS (Real Nodes Only)
@@ -922,21 +1143,99 @@ async def delete_vpn_session(user_id: int = Depends(get_current_user_id)):
 # 5. DEVICES MANAGEMENT
 # ---------------------------------------------------------------------------
 
+def _device_age_label(timestamp: int) -> str:
+    """Return a bounded, localized relative age for the mobile device list."""
+    elapsed = max(0, int(time.time()) - max(0, int(timestamp or 0)))
+    if elapsed < 60:
+        return "Сейчас"
+    if elapsed < 3600:
+        return f"{elapsed // 60} мин. назад"
+    if elapsed < 86400:
+        return f"{elapsed // 3600} ч. назад"
+    return f"{elapsed // 86400} дн. назад"
+
+
+def _device_is_current(item: dict, request: Request) -> bool:
+    """Compare the client HWID with 3x-ui's short SHA-256 fingerprint in-process."""
+    hwid = request.headers.get("x-hwid", "").strip()[:256]
+    fingerprint = str(item.get("fingerprint") or "").strip().lower()
+    if not hwid or not fingerprint or len(fingerprint) > 64:
+        return False
+    if not re.fullmatch(r"[0-9a-f]+", fingerprint):
+        return False
+    digest = hashlib.sha256(hwid.encode("utf-8")).hexdigest()
+    return hmac.compare_digest(digest[:len(fingerprint)], fingerprint)
+
+
+def _device_metadata_matches(item: dict, request: Request) -> bool:
+    model = request.headers.get("x-device-model", "").strip()[:120]
+    platform = request.headers.get("x-device-os", "").strip()[:80]
+    os_version = request.headers.get("x-ver-os", "").strip()[:80]
+    user_agent = request.headers.get("user-agent", "").strip()[:160]
+    return bool(
+        model and platform and os_version and user_agent
+        and str(item.get("model") or "").strip() == model
+        and str(item.get("os") or "").strip().casefold() == platform.casefold()
+        and str(item.get("os_version") or "").strip() == os_version
+        and str(item.get("user_agent") or "").strip() == user_agent
+    )
+
+
 @api_router.get("/devices")
-async def get_devices(user_id: int = Depends(get_current_user_id)):
+async def get_devices(request: Request, user_id: int = Depends(get_current_user_id)):
+    try:
+        from xui_client import get_xui_devices
+
+        result = await get_xui_devices(user_id)
+    except Exception as exc:
+        logger.warning("Device list unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Список устройств временно недоступен") from None
+
+    raw_devices = result.get("devices", [])
+    has_hwid = bool(request.headers.get("x-hwid", "").strip())
+    metadata_matches = [item for item in raw_devices if _device_metadata_matches(item, request)]
+    devices = []
+    for item in raw_devices:
+        model = str(item.get("model") or "").strip()[:120]
+        platform = str(item.get("os") or "").strip()[:80]
+        devices.append({
+            "id": str(item["id"]),
+            "device_model": model or "Устройство",
+            "platform": platform or "Неизвестная система",
+            "last_active": _device_age_label(item.get("last_seen", 0)),
+            "is_current": (
+                _device_is_current(item, request)
+                if has_hwid else len(metadata_matches) == 1 and item is metadata_matches[0]
+            ),
+        })
     return {
-        "devices": [
-            {
-                "id": "current_device",
-                "device_model": "Android Phone",
-                "platform": "Android",
-                "last_active": "Сейчас онлайн",
-                "is_current": True,
-            }
-        ]
+        "devices": devices,
+        "device_limit": int(result.get("limit_hwid", 0)),
+        "devices_used": len(devices),
     }
 
 
 @api_router.delete("/devices/{device_id}")
 async def delete_device(device_id: str, user_id: int = Depends(get_current_user_id)):
+    if not device_id.isascii() or not device_id.isdecimal() or len(device_id) > 12:
+        raise HTTPException(status_code=400, detail="Некорректный идентификатор устройства")
+    parsed_id = int(device_id)
+    if parsed_id <= 0:
+        raise HTTPException(status_code=400, detail="Некорректный идентификатор устройства")
+    try:
+        from xui_client import delete_xui_hwid_device, get_xui_devices
+
+        # Verify ownership against this authenticated user's panel record before
+        # issuing deletion. The XUI endpoint itself is scoped by user_id too.
+        current = await get_xui_devices(user_id)
+        if not any(int(item.get("id", 0)) == parsed_id for item in current.get("devices", [])):
+            raise HTTPException(status_code=404, detail="Устройство не найдено")
+        removed = await delete_xui_hwid_device(user_id, parsed_id)
+        if not removed:
+            raise HTTPException(status_code=503, detail="Не удалось удалить устройство. Попробуйте позже")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Device deletion unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось удалить устройство. Попробуйте позже") from None
     return {"status": "ok"}
