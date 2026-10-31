@@ -26,13 +26,20 @@ class TestMobilePaymentContract(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(item["price_rub"], amount)
             self.assertEqual(item["days"], days)
             self.assertEqual(item["devices"], 2)
+            self.assertEqual(len(item["device_options"]), 3)
+            for choice in item["device_options"]:
+                self.assertEqual(
+                    (choice["price_rub"], choice["days"]),
+                    get_price_for_months(months, choice["devices"])
+                )
 
-    async def test_client_amount_days_and_device_values_are_ignored(self):
+    async def test_checkout_charges_exact_server_price_for_selected_device_count(self):
         reserved = {"plan_code": "3m", "provider": "yookassa", "payment_id": None, "confirmation_url": None, "generation": 0}
         created = {"payment_url": "https://pay.example.invalid/checkout", "payment_id": "invoice-123", "status": "pending"}
+        amount, days = get_price_for_months(3, 10)
         request = api_router.PaymentCreateRequest(
             plan_code="3m", request_id="12345678-1234-1234-1234-123456789012",
-            amount_rub=1, days=3, devices=10, provider="yookassa",
+            amount_rub=amount, days=days, devices=10, provider="yookassa",
         )
         with (
             patch.object(api_router.database, "ensure_mobile_payment_request", new=AsyncMock(return_value=reserved)),
@@ -40,13 +47,25 @@ class TestMobilePaymentContract(unittest.IsolatedAsyncioTestCase):
             patch("payments.create_yookassa_payment", new=AsyncMock(return_value=created)) as create,
         ):
             result = await api_router.api_create_payment(request, user_id=123)
-
         self.assertEqual(result["invoice_id"], "invoice-123")
         kwargs = create.await_args.kwargs
-        self.assertEqual(kwargs["amount_rub"], get_price_for_months(3, 2)[0])
-        self.assertEqual(kwargs["days"], get_price_for_months(3, 2)[1])
-        self.assertEqual(kwargs["devices"], 2)
+        self.assertEqual(kwargs["amount_rub"], amount)
+        self.assertEqual(kwargs["days"], days)
+        self.assertEqual(kwargs["devices"], 10)
         self.assertFalse(kwargs["save_payment_method"])
+
+    async def test_checkout_rejects_tampered_prices_and_days(self):
+        from fastapi import HTTPException
+        for overrides in ({"amount_rub": 1}, {"days": 9999}, {"devices": 100}):
+            request = api_router.PaymentCreateRequest(
+                plan_code="3m", request_id="12345678-1234-1234-1234-123456789012",
+                devices=2, **{key: val for key, val in overrides.items() if key != "devices"},
+            ) if "devices" not in overrides else api_router.PaymentCreateRequest(
+                plan_code="3m", request_id="12345678-1234-1234-1234-123456789012", devices=100,
+            )
+            with self.assertRaises(HTTPException) as error:
+                await api_router.api_create_payment(request, user_id=123)
+            self.assertEqual(error.exception.status_code, 422)
 
     async def test_repeated_request_returns_same_saved_invoice(self):
         reserved = {

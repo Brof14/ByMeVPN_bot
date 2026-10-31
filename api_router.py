@@ -293,7 +293,7 @@ def parse_single_node_line(line: str, index: int, fallback_uuid: Optional[str] =
             hp_parts = host_port.split(":")
             raw_host = hp_parts[0]
             port = int(hp_parts[1]) if len(hp_parts) > 1 else 443
-            server_ip = "2.27.120.247" if (raw_host == "bymevpn.duckdns.org" or not raw_host) else raw_host
+            server_ip = raw_host
 
             params = parse_qs(query_str)
             pbk = params.get("pbk", [""])[0]
@@ -361,7 +361,7 @@ def parse_single_node_line(line: str, index: int, fallback_uuid: Optional[str] =
             hp_parts = q_parts[0].split(":")
             raw_host = hp_parts[0]
             port = int(hp_parts[1]) if len(hp_parts) > 1 else 443
-            server_ip = "2.27.120.247" if (raw_host == "bymevpn.duckdns.org" or not raw_host) else raw_host
+            server_ip = raw_host
 
             query_str = q_parts[1] if len(q_parts) > 1 else ""
             params = parse_qs(query_str)
@@ -505,7 +505,7 @@ async def get_user_real_subscription(
         best_key = max(active_keys, key=lambda k: int(k.get("expiry", 0)))
         expiry_ts = int(best_key.get("expiry", 0))
         days_count = int(best_key.get("days", 30))
-        device_limit = int(best_key.get("limit_ip", 2))
+        device_limit = max(2, int(best_key.get("limit_ip") or 0))
         sub_uuid = best_key.get("uuid")
         key_content = best_key.get("key", "").strip()
         if key_content.startswith("http://") or key_content.startswith("https://"):
@@ -534,8 +534,8 @@ async def get_user_real_subscription(
         return None, [], {
             "status": "none",
             "plan_name": "Нет подписки",
-            "trial_available": True,
-            "max_devices": 5,
+            "trial_available": not await database.has_trial_used(user_id),
+            "max_devices": device_limit,
             "active_devices": 0,
             "subscription_url": None,
         }
@@ -931,32 +931,33 @@ async def activate_trial(req: TrialRequest, request: Request, user_id: int = Dep
 
 @api_router.get("/plans")
 async def get_plans():
-    from constants import get_price_for_months
+    """Server-owned pricing for all clients; retain legacy Android plan codes."""
+    from constants import get_price_for_months, VALID_DEVICE_LIMITS
 
     plan_catalog = [
-        ("1m", 1, "1 месяц", 0, False),
-        ("3m", 3, "4 месяца (3+1)", 11, True),
-        ("6m", 6, "8 месяцев (6+2)", 22, False),
-        ("12m", 12, "15 месяцев (12+3)", 34, False),
+        ("1m", "month", 1, "1 месяц", 0, False),
+        ("3m", "quarter", 3, "4 месяца (3+1)", 11, True),
+        ("6m", "half_year", 6, "8 месяцев (6+2)", 22, False),
+        ("12m", "year", 12, "15 месяцев (12+3)", 34, False),
     ]
-    plans = [
-        {
-            "code": code,
-            "name": label,
-            "price": f"{get_price_for_months(months, 2)[0]} ₽",
-            "price_rub": get_price_for_months(months, 2)[0],
-            "days": get_price_for_months(months, 2)[1],
-            "devices": 2,
-            "discount_percent": discount,
-            "is_popular": popular,
-        }
-        for code, months, label, discount, popular in plan_catalog
-    ]
+    plans = []
+    for code, desktop_code, months, label, discount, popular in plan_catalog:
+        options = [
+            {"devices": devices, "price_rub": get_price_for_months(months, devices)[0],
+             "days": get_price_for_months(months, devices)[1]}
+            for devices in VALID_DEVICE_LIMITS
+        ]
+        plans.append({
+            "code": code, "desktop_code": desktop_code, "name": label,
+            "price": f"{options[0]['price_rub']} ₽", "price_rub": options[0]["price_rub"],
+            "days": options[0]["days"], "devices": 2, "device_options": options,
+            "discount_percent": discount, "is_popular": popular,
+        })
     return {
-        "trial": {"code": "trial", "name": "3 дня бесплатно", "price": "0 ₽", "price_rub": 0, "days": 3, "devices": 2},
+        "trial": {"code": "trial", "name": "3 дня бесплатно",
+                  "price": "0 ₽", "price_rub": 0, "days": 3, "devices": 2},
         "plans": plans,
     }
-
 
 # ---------------------------------------------------------------------------
 @api_router.post("/payment/create")
@@ -976,9 +977,15 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
     if not req.request_id or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", req.request_id):
         raise HTTPException(status_code=400, detail="Создайте новый запрос на оплату")
 
-    from constants import get_price_for_months
-    amount_rub, days = get_price_for_months(months, 2)
-    devices = 2
+    from constants import get_price_for_months, VALID_DEVICE_LIMITS
+    devices = 2 if req.devices is None else req.devices
+    if devices not in VALID_DEVICE_LIMITS:
+        raise HTTPException(status_code=422, detail="Недопустимое количество устройств")
+    amount_rub, days = get_price_for_months(months, devices)
+    if req.amount_rub is not None and req.amount_rub != amount_rub:
+        raise HTTPException(status_code=422, detail="Стоимость тарифа изменилась. Обновите тарифы")
+    if req.days is not None and req.days != days:
+        raise HTTPException(status_code=422, detail="Срок тарифа изменился. Обновите тарифы")
     reserved = await database.ensure_mobile_payment_request(
         user_id, req.request_id, req.plan_code, req.provider,
     )
@@ -1124,7 +1131,25 @@ async def create_vpn_session(req: SessionRequest, request: Request, user_id: int
             detail="Нет активной подписки или серверов. Оформите подписку или активируйте пробный период.",
         )
 
-    matched = next((s for s in servers if s.get("node_code") == req.node_code), servers[0])
+    def compatible_with_desktop(server: dict) -> bool:
+        conf = server.get("config") or {}
+        return (conf.get("protocol") == "vless"
+                and conf.get("security") == "reality"
+                and conf.get("network", "tcp") in ("tcp", "raw")
+                and bool(conf.get("public_key")))
+
+    is_windows = request.headers.get("x-device-os", "").casefold() == "windows"
+    if req.node_code == "auto":
+        choices = [node for node in servers if compatible_with_desktop(node)] if is_windows else servers
+        if not choices:
+            raise HTTPException(status_code=422, detail="Нет серверов с поддерживаемым протоколом для Windows")
+        matched = choices[0]
+    else:
+        matched = next((s for s in servers if s.get("node_code") == req.node_code), None)
+        if matched is None:
+            raise HTTPException(status_code=404, detail="Выбранный сервер больше не доступен")
+        if is_windows and not compatible_with_desktop(matched):
+            raise HTTPException(status_code=422, detail="Выбранный сервер не поддерживается Windows")
     config = matched.get("config")
     if not config or not config.get("uuid"):
         raise HTTPException(status_code=500, detail="Неполная конфигурация VPN-узла на сервере")
