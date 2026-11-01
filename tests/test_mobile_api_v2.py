@@ -1,6 +1,7 @@
 """Mobile v2 contract tests with isolated storage and mocked payment providers."""
 import os
 import secrets
+import time
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -21,6 +22,13 @@ class TestMobileApiV2(unittest.TestCase):
         app.dependency_overrides[api_router.get_current_user_id] = lambda: 987654321
         cls.client = TestClient(app)
 
+    def setUp(self):
+        self.payment_guard = patch.dict(os.environ, {"MOBILE_V2_WEBHOOK_GUARD_ENABLED": "1"})
+        self.payment_guard.start()
+
+    def tearDown(self):
+        self.payment_guard.stop()
+
     def test_catalog_uses_tier_bound_plan_codes_and_android_response_fields(self):
         expected_prices = {
             2: (89, 316, 552, 885),
@@ -35,7 +43,9 @@ class TestMobileApiV2(unittest.TestCase):
                 )
                 self.assertEqual(response.status_code, 200)
                 payload = response.json()
-                self.assertEqual(set(payload), {"trial", "plans"})
+                self.assertEqual(set(payload), {"trial", "plans", "payment_enabled", "purchase_enabled"})
+                self.assertTrue(payload["payment_enabled"])
+                self.assertTrue(payload["purchase_enabled"])
                 self.assertEqual(len(payload["plans"]), 4)
                 for plan, period, price, days in zip(
                     payload["plans"], ("1m", "3m", "6m", "12m"),
@@ -49,6 +59,52 @@ class TestMobileApiV2(unittest.TestCase):
                         {option["devices"] for option in plan["device_options"]},
                         {2, 5, 10},
                     )
+                    self.assertTrue(plan["purchase_enabled"])
+
+    def test_catalog_displays_server_prices_but_keeps_purchase_disabled_by_default(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("MOBILE_V2_WEBHOOK_GUARD_ENABLED", None)
+            response = self.client.get("/api/v1/mobile/v2/plans?devices=5")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["payment_enabled"])
+        self.assertFalse(body["purchase_enabled"])
+        self.assertEqual(body["plans"][0]["price_rub"], 109)
+        self.assertFalse(any(plan["purchase_enabled"] for plan in body["plans"]))
+
+    def test_mobile_checkout_route_is_closed_when_guard_is_not_enabled(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("MOBILE_V2_WEBHOOK_GUARD_ENABLED", None)
+            response = self.client.post("/api/v1/mobile/v2/payment/create", json={
+                "plan_code": "1m_d2", "request_id": "guard_off_12345", "provider": "yookassa",
+            })
+        self.assertEqual(response.status_code, 503)
+
+    def test_mobile_subscription_status_reflects_updated_bot_entitlement_and_devices(self):
+        now = int(time.time())
+        first = {"id": 1, "key": "https://sub.example.invalid/a", "remark": "Подписка",
+                 "uuid": "safe-test-uuid", "short_id": "", "days": 30, "limit_ip": 2,
+                 "created": now - 100, "expiry": now + 7200}
+        updated = {**first, "days": 120, "limit_ip": 5, "expiry": now + 120 * 86400}
+        with patch.object(api_router.database, "get_user_keys", new=AsyncMock(side_effect=[[first], [updated]])), \
+             patch.object(api_router, "fetch_and_parse_real_nodes", new=AsyncMock(return_value=[])), \
+             patch("xui_client.get_xui_devices", new=AsyncMock(side_effect=[
+                 {"limit_hwid": 2, "devices": [{"id": 1}]},
+                 {"limit_hwid": 5, "devices": [{"id": 1}, {"id": 2}]},
+             ])):
+            first_response = self.client.get("/api/v1/subscription/status")
+            second_response = self.client.get("/api/v1/subscription/status")
+        self.assertEqual(first_response.status_code, 200, first_response.text)
+        self.assertEqual(second_response.status_code, 200, second_response.text)
+        first_body, second_body = first_response.json(), second_response.json()
+        self.assertEqual(first_body["status"], "active")
+        self.assertEqual(first_body["max_devices"], 2)
+        self.assertEqual(first_body["active_devices"], 1)
+        self.assertIn("server_time", first_body)
+        self.assertGreater(second_body["seconds_remaining"], first_body["seconds_remaining"])
+        self.assertEqual(second_body["max_devices"], 5)
+        self.assertEqual(second_body["active_devices"], 2)
+        self.assertEqual(second_body["plan_code"], "3m_d5")
 
     def test_create_derives_price_term_and_hwid_tier_from_plan_code(self):
         reservation = {

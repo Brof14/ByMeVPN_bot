@@ -73,8 +73,12 @@ class LegacyMobileV2HttpTests(unittest.TestCase):
         os.unlink(self.path)
 
     def test_catalog_returns_authoritative_prices_days_and_device_tiers(self):
-        response = self.client.get("/api/v1/mobile/v2/plans")
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("MOBILE_V2_WEBHOOK_GUARD_ENABLED", None)
+            response = self.client.get("/api/v1/mobile/v2/plans")
         self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["payment_enabled"])
+        self.assertFalse(response.json()["purchase_enabled"])
         plans = response.json()["plans"]
         expected = {
             2: (89, 316, 552, 885),
@@ -87,6 +91,7 @@ class LegacyMobileV2HttpTests(unittest.TestCase):
                 self.assertEqual(option, {"plan_code": f"{period}_d{devices}", "devices": devices,
                                           "price_rub": prices[index],
                                           "days": (30, 120, 240, 450)[index]})
+        self.assertTrue(all(plan["purchase_enabled"] is False for plan in plans))
 
         selected = self.client.get("/api/v1/mobile/v2/plans?devices=10").json()["plans"]
         self.assertEqual([(p["code"], p["devices"]) for p in selected],
