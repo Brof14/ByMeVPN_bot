@@ -113,7 +113,7 @@ class TestMobileApiV2(unittest.TestCase):
                      ]},
                  ])), patch.dict(os.environ, {
                      "MOBILE_ENTITLEMENT_ES256_PRIVATE_KEY_FILE": str(signing_key_path),
-                 }):
+                 }), patch("entitlements.load_private_key", return_value=signer):
                 first_response = self.client.get(
                     "/api/v1/subscription/status", headers={"X-HWID": hwid},
                 )

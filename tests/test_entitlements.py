@@ -203,9 +203,12 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
         self.devices_patch.start()
         self.env_patch = patch.dict(os.environ, {PRIVATE_KEY_FILE_ENV: str(self.key_path)})
         self.env_patch.start()
+        self.key_loader_patch = patch("entitlements.load_private_key", return_value=self.private_key)
+        self.key_loader_patch.start()
 
     def tearDown(self):
         self.env_patch.stop()
+        self.key_loader_patch.stop()
         self.devices_patch.stop()
         self.subscription_patch.stop()
         self.temp.cleanup()
@@ -237,8 +240,7 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
         self.assertEqual(unregistered.status_code, 403)
 
     def test_http_status_fails_closed_without_signing_configuration(self):
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop(PRIVATE_KEY_FILE_ENV, None)
+        with patch("entitlements.load_private_key", side_effect=EntitlementSigningError("not configured")):
             response = self.client.get(
                 "/api/v1/subscription/status",
                 headers={"X-HWID": self.hwid},
