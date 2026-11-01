@@ -74,7 +74,9 @@ except Exception as _router_err:
     raise RuntimeError("Required ByMeVPN API failed to initialize; check server configuration") from _router_err
 
 from update_site import router as update_site_router
+from download_routes import router as download_router
 app.include_router(update_site_router)
+app.include_router(download_router)
 
 
 
@@ -109,27 +111,6 @@ async def readiness_check():
         logger.error("Readiness check failed: local dependency unavailable (%s)", type(exc).__name__)
         raise HTTPException(status_code=503, detail="local dependency unavailable") from exc
     return {"status": "ready"}
-
-
-@app.get("/download")
-@app.get("/download/app.apk")
-async def download_app_apk():
-    """Direct APK download redirect for mobile devices."""
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse(
-        url="https://github.com/Brof14/ByMeVPN-app/releases/download/v1.0.9/ByMeVPN-v1.0.9.apk",
-        status_code=302,
-    )
-
-
-@app.get("/download/debug")
-async def download_debug_apk():
-    """Direct debug APK download redirect for troubleshooting."""
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse(
-        url="https://github.com/Brof14/ByMeVPN-app/releases/download/v1.0.9/ByMeVPN-v1.0.9-debug.apk",
-        status_code=302,
-    )
 
 
 @app.get("/app/login")
