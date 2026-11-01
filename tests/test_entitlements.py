@@ -362,6 +362,17 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 403)
 
+    def test_new_telegram_login_fails_closed_without_signer(self):
+        with patch.object(api_router.database, "poll_mobile_auth_session", new=AsyncMock(return_value={
+            "status": "authenticated", "user_id": 7654321,
+            "username": "test_user", "full_name": "Test User",
+        })), patch("entitlements.load_private_key", side_effect=EntitlementSigningError("not configured")):
+            response = self.client.get(
+                "/api/v1/auth/telegram/check-session", params={"token": "auth_test-state"},
+                headers={"X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1"},
+            )
+        self.assertEqual(response.status_code, 503)
+
     def test_legacy_telegram_login_keeps_legacy_subscription_shape(self):
         with patch.object(api_router.database, "poll_mobile_auth_session", new=AsyncMock(return_value={
             "status": "authenticated", "user_id": 7654321,
@@ -447,31 +458,31 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
             ))
 
     def test_legacy_payment_check_has_no_entitlement(self):
-        with patch.object(
-            api_router.database, "get_mobile_payment_record",
-            new=AsyncMock(return_value={"user_id": 7654321, "status": "success"}),
-        ):
-            response = self.client.get(
-                "/api/v1/payment/check",
-                params={"invoice_id": "test-invoice-123", "provider": "yookassa"},
-                headers={"X-HWID": self.hwid},
-            )
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertNotIn("entitlement", response.json()["subscription"])
+        for path in ("/api/v1/payment/check", "/api/v1/mobile/v2/payment/check"):
+            with self.subTest(path=path), patch.object(
+                api_router.database, "get_mobile_payment_record",
+                new=AsyncMock(return_value={"user_id": 7654321, "status": "success"}),
+            ):
+                response = self.client.get(
+                    path, params={"invoice_id": "test-invoice-123", "provider": "yookassa"},
+                    headers={"X-HWID": self.hwid},
+                )
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertNotIn("entitlement", response.json()["subscription"])
         self.devices_mock.assert_not_awaited()
 
     def test_mobile_payment_check_fails_closed_without_signer(self):
-        with patch.object(
-            api_router.database, "get_mobile_payment_record",
-            new=AsyncMock(return_value={"user_id": 7654321, "status": "success"}),
-        ), patch("entitlements.load_private_key", side_effect=EntitlementSigningError("not configured")):
-            response = self.client.get(
-                "/api/v1/mobile/v2/payment/check",
-                params={"invoice_id": "test-invoice-123", "provider": "yookassa"},
-                headers={"X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1"},
-            )
-        self.assertEqual(response.status_code, 503)
-        self.assertNotIn("entitlement", response.json().get("subscription") or {})
+        for path in ("/api/v1/payment/check", "/api/v1/mobile/v2/payment/check"):
+            with self.subTest(path=path), patch.object(
+                api_router.database, "get_mobile_payment_record",
+                new=AsyncMock(return_value={"user_id": 7654321, "status": "success"}),
+            ), patch("entitlements.load_private_key", side_effect=EntitlementSigningError("not configured")):
+                response = self.client.get(
+                    path, params={"invoice_id": "test-invoice-123", "provider": "yookassa"},
+                    headers={"X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1"},
+                )
+            self.assertEqual(response.status_code, 503)
+            self.assertNotIn("entitlement", response.json().get("subscription") or {})
 
     def test_trial_without_signer_fails_before_consuming_trial(self):
         from fastapi import HTTPException
