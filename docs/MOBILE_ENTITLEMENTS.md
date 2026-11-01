@@ -1,10 +1,13 @@
 # Mobile subscription entitlements
 
-Authenticated subscription snapshots from `/api/v1/subscription/status`,
-Telegram/email login, trial activation, and successful payment checks return an
-ES256 compact JWT in `subscription.entitlement` for an active, trial, or grace
-subscription. The signature uses JOSE format (`base64url(r) || base64url(s)`,
-32 bytes each), compatible with Android `SHA256withECDSA` verification.
+Clients opt in by sending `X-Entitlement-Version: es256-v1` on authenticated
+subscription status, Telegram/email login, trial activation, and payment-check
+requests. Only that version receives an ES256 compact JWT in
+`subscription.entitlement` for an active, trial, or grace subscription. Clients
+without the header retain the legacy response shape and never receive the token.
+An explicitly unsupported version is rejected. The signature uses JOSE format
+(`base64url(r) || base64url(s)`, 32 bytes each), compatible with Android
+`SHA256withECDSA` verification.
 
 The signed claims are:
 
@@ -20,11 +23,14 @@ The signed claims are:
 
 An entitlement is issued only when the request has an HWID and the 3x-ui
 device list for the authenticated account contains that device fingerprint.
-The status and payment-check endpoints refuse active subscription status with
-HTTP 503 if the signing key is missing, unsafe, or invalid. Login snapshots
-degrade to `unknown` (never unsigned active status), and trial activation checks
-signer readiness before consuming the trial. The backend never falls back to an
-unsigned entitlement. Non-active responses contain `entitlement: null`.
+The user identity always comes from server authentication, not a client field.
+For opted-in clients, status/payment checks and active login snapshots fail
+closed if signing is unavailable or the device cannot be confirmed. Trial
+activation checks signer readiness and registered-device ownership before
+claiming the one-time trial. If an installation has no registered panel HWID,
+the opted-in trial request is refused without consuming the trial. Legacy trial
+requests keep their prior flow and do not receive an entitlement. Opted-in
+non-active responses contain `entitlement: null`.
 
 ## Runtime key configuration
 
@@ -61,7 +67,7 @@ login or alter payment flags.
    status response without logging the token. Keep the prior backend release and
    configuration for rollback.
 
-The key is intentionally not generated or configured by this PR. Until the
-runtime key and matching Android public-key variable are configured, active
-mobile subscription status will fail closed if this backend version is
-deployed; existing Telegram bot operations do not depend on the signer.
+The PR does not configure the runtime key. Until the runtime key and matching
+Android public-key variable are configured, opted-in active mobile subscription
+status fails closed if this backend version is deployed; clients that omit the
+opt-in header and existing Telegram bot operations do not depend on the signer.

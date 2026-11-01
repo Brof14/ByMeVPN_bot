@@ -115,10 +115,14 @@ class TestMobileApiV2(unittest.TestCase):
                      "MOBILE_ENTITLEMENT_ES256_PRIVATE_KEY_FILE": str(signing_key_path),
                  }), patch("entitlements.load_private_key", return_value=signer):
                 first_response = self.client.get(
-                    "/api/v1/subscription/status", headers={"X-HWID": hwid},
+                    "/api/v1/subscription/status", headers={
+                        "X-HWID": hwid, "X-Entitlement-Version": "es256-v1",
+                    },
                 )
                 second_response = self.client.get(
-                    "/api/v1/subscription/status", headers={"X-HWID": hwid},
+                    "/api/v1/subscription/status", headers={
+                        "X-HWID": hwid, "X-Entitlement-Version": "es256-v1",
+                    },
                 )
             self.assertEqual(first_response.status_code, 200, first_response.text)
             self.assertEqual(second_response.status_code, 200, second_response.text)

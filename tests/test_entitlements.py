@@ -200,23 +200,37 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
             "xui_client.get_xui_devices", new=AsyncMock(return_value=self.device_state),
         )
         self.subscription_patch.start()
-        self.devices_patch.start()
+        self.devices_mock = self.devices_patch.start()
         self.env_patch = patch.dict(os.environ, {PRIVATE_KEY_FILE_ENV: str(self.key_path)})
         self.env_patch.start()
         self.key_loader_patch = patch("entitlements.load_private_key", return_value=self.private_key)
         self.key_loader_patch.start()
+        self.api_key_loader_patch = patch.object(api_router, "load_private_key", return_value=self.private_key)
+        self.api_key_loader_patch.start()
 
     def tearDown(self):
         self.env_patch.stop()
+        self.api_key_loader_patch.stop()
         self.key_loader_patch.stop()
         self.devices_patch.stop()
         self.subscription_patch.stop()
         self.temp.cleanup()
 
+    def make_request(self, path, *, method="POST", headers=None):
+        from starlette.requests import Request
+
+        raw_headers = [(key.lower().encode(), value.encode()) for key, value in (headers or {}).items()]
+        return Request({
+            "type": "http", "http_version": "1.1", "method": method,
+            "scheme": "https", "path": path, "raw_path": path.encode(),
+            "query_string": b"", "headers": raw_headers,
+            "client": ("127.0.0.1", 1), "server": ("test.invalid", 443),
+        })
+
     def test_http_status_contains_signed_entitlement_for_authenticated_registered_device(self):
         response = self.client.get(
             "/api/v1/subscription/status",
-            headers={"X-HWID": self.hwid},
+            headers={"X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1"},
         )
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
@@ -230,42 +244,247 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
         self.assertNotIn(self.hwid, body["entitlement"])
 
     def test_http_status_refuses_an_unregistered_or_missing_device(self):
-        missing = self.client.get("/api/v1/subscription/status")
+        headers = {"X-Entitlement-Version": "es256-v1"}
+        missing = self.client.get("/api/v1/subscription/status", headers=headers)
         self.assertEqual(missing.status_code, 422)
         self.device_state["devices"] = []
         unregistered = self.client.get(
             "/api/v1/subscription/status",
-            headers={"X-HWID": self.hwid},
+            headers={"X-HWID": self.hwid, **headers},
         )
         self.assertEqual(unregistered.status_code, 403)
+
+    def test_http_status_rejects_short_panel_fingerprint(self):
+        self.device_state["devices"] = [{"fingerprint": hashlib.sha256(self.hwid.encode()).hexdigest()[:8]}]
+        response = self.client.get(
+            "/api/v1/subscription/status",
+            headers={"X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1"},
+        )
+        self.assertEqual(response.status_code, 403)
 
     def test_http_status_fails_closed_without_signing_configuration(self):
         with patch("entitlements.load_private_key", side_effect=EntitlementSigningError("not configured")):
             response = self.client.get(
                 "/api/v1/subscription/status",
-                headers={"X-HWID": self.hwid},
+                headers={"X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1"},
             )
         self.assertEqual(response.status_code, 503)
         self.assertNotIn("entitlement", response.json())
 
+    def test_legacy_status_keeps_response_shape_without_entitlement_or_device_lookup(self):
+        response = self.client.get("/api/v1/subscription/status", headers={"X-HWID": self.hwid})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertNotIn("entitlement", response.json())
+        self.devices_mock.assert_not_awaited()
+
+    def test_unsupported_entitlement_version_is_rejected(self):
+        response = self.client.get(
+            "/api/v1/subscription/status",
+            headers={"X-HWID": self.hwid, "X-Entitlement-Version": "es256-v2"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertNotIn("entitlement", response.json())
+
+    def test_new_email_login_returns_signed_entitlement_only_for_opted_in_device(self):
+        class Cursor:
+            async def fetchone(self):
+                return (7654321, "stored-hash", "stored-salt", "Test User")
+
+        class DB:
+            async def execute(self, *_args):
+                return Cursor()
+
+        with patch.object(api_router, "_ensure_auth_db", new=AsyncMock()), \
+                patch.object(api_router.database, "get_db", new=AsyncMock(return_value=DB())), \
+                patch.object(api_router, "hash_password", return_value="stored-hash"), \
+                patch.object(api_router, "create_simple_jwt", return_value="test-access-token"):
+            response = self.client.post(
+                "/api/v1/auth/login", json={"email": "test@example.invalid", "password": "test-password"},
+                headers={"X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1"},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()["subscription"]
+        self.assertIsNotNone(verify_entitlement(
+            body["entitlement"], self.public_key, expected_user_id=7654321,
+            expected_hwid=self.hwid,
+        ))
+
+    def test_new_email_login_fails_closed_when_signer_is_unavailable(self):
+        class Cursor:
+            async def fetchone(self):
+                return (7654321, "stored-hash", "stored-salt", "Test User")
+
+        class DB:
+            async def execute(self, *_args):
+                return Cursor()
+
+        with patch.object(api_router, "_ensure_auth_db", new=AsyncMock()), \
+                patch.object(api_router.database, "get_db", new=AsyncMock(return_value=DB())), \
+                patch.object(api_router, "hash_password", return_value="stored-hash"), \
+                patch.object(api_router, "create_simple_jwt", return_value="test-access-token"), \
+                patch("entitlements.load_private_key", side_effect=EntitlementSigningError("not configured")):
+            response = self.client.post(
+                "/api/v1/auth/login", json={"email": "test@example.invalid", "password": "test-password"},
+                headers={"X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1"},
+            )
+        self.assertEqual(response.status_code, 503)
+
+    def test_legacy_email_login_has_no_entitlement_or_panel_lookup(self):
+        class Cursor:
+            async def fetchone(self):
+                return (7654321, "stored-hash", "stored-salt", "Test User")
+
+        class DB:
+            async def execute(self, *_args):
+                return Cursor()
+
+        with patch.object(api_router, "_ensure_auth_db", new=AsyncMock()), \
+                patch.object(api_router.database, "get_db", new=AsyncMock(return_value=DB())), \
+                patch.object(api_router, "hash_password", return_value="stored-hash"), \
+                patch.object(api_router, "create_simple_jwt", return_value="test-access-token"):
+            response = self.client.post(
+                "/api/v1/auth/login", json={"email": "test@example.invalid", "password": "test-password"},
+                headers={"X-HWID": self.hwid},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertNotIn("entitlement", response.json()["subscription"])
+        self.devices_mock.assert_not_awaited()
+
+    def test_new_telegram_login_rejects_unregistered_device(self):
+        with patch.object(api_router.database, "poll_mobile_auth_session", new=AsyncMock(return_value={
+            "status": "authenticated", "user_id": 7654321,
+            "username": "test_user", "full_name": "Test User",
+        })):
+            self.device_state["devices"] = []
+            response = self.client.get(
+                "/api/v1/auth/telegram/check-session", params={"token": "auth_test-state"},
+                headers={"X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1"},
+            )
+        self.assertEqual(response.status_code, 403)
+
+    def test_legacy_telegram_login_keeps_legacy_subscription_shape(self):
+        with patch.object(api_router.database, "poll_mobile_auth_session", new=AsyncMock(return_value={
+            "status": "authenticated", "user_id": 7654321,
+            "username": "test_user", "full_name": "Test User",
+        })), patch.object(
+            api_router.database, "get_db", new=AsyncMock(side_effect=RuntimeError("isolated test")),
+        ):
+            response = self.client.get(
+                "/api/v1/auth/telegram/check-session", params={"token": "auth_test-state"},
+                headers={"X-HWID": self.hwid},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertNotIn("entitlement", response.json()["subscription"])
+
+    def test_legacy_trial_does_not_require_signer_or_emit_entitlement(self):
+        request = self.make_request("/api/v1/subscription/trial", headers={"X-HWID": self.hwid})
+        with patch.object(api_router.database, "has_trial_used", new=AsyncMock(return_value=False)), \
+                patch.object(api_router.database, "get_user_keys", new=AsyncMock(return_value=[])), \
+                patch.object(api_router.database, "try_claim_trial", new=AsyncMock(return_value=True)), \
+                patch.object(api_router.database, "add_key", new=AsyncMock(return_value=True)), \
+                patch("xui_client.get_xui_client_details", new=AsyncMock(return_value=None)), \
+                patch("xui_client.create_xui_user", new=AsyncMock(return_value={
+                    "subscription_url": "https://example.invalid/trial", "uuid": "test-uuid",
+                })), \
+                patch.object(api_router, "fetch_and_parse_real_nodes", new=AsyncMock(return_value=[])), \
+                patch.object(api_router, "load_private_key", side_effect=AssertionError("legacy path loaded signer")):
+            result = asyncio.run(api_router.activate_trial(api_router.TrialRequest(), request, user_id=7654321))
+        self.assertEqual(result["status"], "trial")
+        self.assertNotIn("entitlement", result)
+
+    def test_new_trial_without_registered_device_does_not_consume_trial(self):
+        request = self.make_request("/api/v1/subscription/trial", headers={
+            "X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1",
+        })
+        with patch("xui_client.get_xui_devices", new=AsyncMock(return_value={
+            "limit_hwid": 2, "devices": [],
+        })), patch.object(
+            api_router.database, "has_trial_used", new=AsyncMock(return_value=False),
+        ) as trial_used, patch.object(
+            api_router.database, "try_claim_trial", new=AsyncMock(return_value=True),
+        ) as claim_trial:
+            with self.assertRaises(Exception) as raised:
+                asyncio.run(api_router.activate_trial(api_router.TrialRequest(), request, user_id=7654321))
+        self.assertEqual(getattr(raised.exception, "status_code", None), 403)
+        trial_used.assert_not_awaited()
+        claim_trial.assert_not_awaited()
+
+    def test_new_trial_with_registered_device_returns_signed_entitlement(self):
+        request = self.make_request("/api/v1/subscription/trial", headers={
+            "X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1",
+        })
+        with patch("xui_client.get_xui_devices", new=AsyncMock(return_value=self.device_state)), \
+                patch.object(api_router.database, "has_trial_used", new=AsyncMock(return_value=False)), \
+                patch.object(api_router.database, "get_user_keys", new=AsyncMock(return_value=[])), \
+                patch.object(api_router.database, "try_claim_trial", new=AsyncMock(return_value=True)), \
+                patch.object(api_router.database, "add_key", new=AsyncMock(return_value=True)), \
+                patch("xui_client.get_xui_client_details", new=AsyncMock(return_value=None)), \
+                patch("xui_client.create_xui_user", new=AsyncMock(return_value={
+                    "subscription_url": "https://example.invalid/trial", "uuid": "test-uuid",
+                })), \
+                patch.object(api_router, "fetch_and_parse_real_nodes", new=AsyncMock(return_value=[])):
+            result = asyncio.run(api_router.activate_trial(api_router.TrialRequest(), request, user_id=7654321))
+        self.assertIsNotNone(verify_entitlement(
+            result["entitlement"], self.public_key, expected_user_id=7654321,
+            expected_hwid=self.hwid,
+        ))
+
+    def test_payment_check_adds_entitlement_only_for_opted_in_registered_device(self):
+        record = {"user_id": 7654321, "status": "success"}
+        for path in ("/api/v1/payment/check", "/api/v1/mobile/v2/payment/check"):
+            with self.subTest(path=path), patch.object(
+                api_router.database, "get_mobile_payment_record", new=AsyncMock(return_value=record),
+            ):
+                response = self.client.get(
+                    path, params={"invoice_id": "test-invoice-123", "provider": "yookassa"},
+                    headers={"X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1"},
+                )
+            self.assertEqual(response.status_code, 200, response.text)
+            subscription = response.json()["subscription"]
+            self.assertIsNotNone(verify_entitlement(
+                subscription["entitlement"], self.public_key, expected_user_id=7654321,
+                expected_hwid=self.hwid,
+            ))
+
+    def test_legacy_payment_check_has_no_entitlement(self):
+        with patch.object(
+            api_router.database, "get_mobile_payment_record",
+            new=AsyncMock(return_value={"user_id": 7654321, "status": "success"}),
+        ):
+            response = self.client.get(
+                "/api/v1/payment/check",
+                params={"invoice_id": "test-invoice-123", "provider": "yookassa"},
+                headers={"X-HWID": self.hwid},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertNotIn("entitlement", response.json()["subscription"])
+        self.devices_mock.assert_not_awaited()
+
+    def test_mobile_payment_check_fails_closed_without_signer(self):
+        with patch.object(
+            api_router.database, "get_mobile_payment_record",
+            new=AsyncMock(return_value={"user_id": 7654321, "status": "success"}),
+        ), patch("entitlements.load_private_key", side_effect=EntitlementSigningError("not configured")):
+            response = self.client.get(
+                "/api/v1/mobile/v2/payment/check",
+                params={"invoice_id": "test-invoice-123", "provider": "yookassa"},
+                headers={"X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1"},
+            )
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("entitlement", response.json().get("subscription") or {})
+
     def test_trial_without_signer_fails_before_consuming_trial(self):
         from fastapi import HTTPException
-        from starlette.requests import Request
 
-        request = Request({
-            "type": "http", "http_version": "1.1", "method": "POST",
-            "scheme": "https", "path": "/api/v1/subscription/trial",
-            "raw_path": b"/api/v1/subscription/trial", "query_string": b"",
-            "headers": [(b"x-hwid", self.hwid.encode())],
-            "client": ("127.0.0.1", 1), "server": ("test.invalid", 443),
+        request = self.make_request("/api/v1/subscription/trial", headers={
+            "X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1",
         })
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop(PRIVATE_KEY_FILE_ENV, None)
-            with patch.object(api_router.database, "has_trial_used", new=AsyncMock()) as trial_check:
-                with self.assertRaises(HTTPException) as raised:
-                    asyncio.run(api_router.activate_trial(
-                        api_router.TrialRequest(), request, user_id=7654321,
-                    ))
+        with patch.object(api_router, "load_private_key", side_effect=EntitlementSigningError("not configured")), \
+                patch.object(api_router.database, "has_trial_used", new=AsyncMock()) as trial_check:
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(api_router.activate_trial(
+                    api_router.TrialRequest(), request, user_id=7654321,
+                ))
         self.assertEqual(raised.exception.status_code, 503)
         trial_check.assert_not_awaited()
 
