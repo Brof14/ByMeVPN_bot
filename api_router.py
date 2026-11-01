@@ -23,6 +23,7 @@ import re
 import secrets
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -488,6 +489,7 @@ async def fetch_and_parse_real_nodes(
 async def get_user_real_subscription(
     user_id: int,
     request_headers: Optional[Dict[str, str]] = None,
+    include_device_count: bool = False,
 ) -> Tuple[Optional[str], List[Dict[str, Any]], Dict[str, Any]]:
     """
     Looks up user's active keys from DB or 3x-ui, fetches the real subscription,
@@ -500,6 +502,7 @@ async def get_user_real_subscription(
     expiry_ts = 0
     days_count = 30
     device_limit = 2
+    best_key = None
 
     # 1. Check local keys table
     user_keys = await database.get_user_keys(user_id)
@@ -508,7 +511,8 @@ async def get_user_real_subscription(
         best_key = max(active_keys, key=lambda k: int(k.get("expiry", 0)))
         expiry_ts = int(best_key.get("expiry", 0))
         days_count = int(best_key.get("days", 30))
-        device_limit = max(2, int(best_key.get("limit_ip") or 0))
+        from constants import validate_device_limit
+        device_limit = validate_device_limit(best_key.get("limit_ip"))
         sub_uuid = best_key.get("uuid")
         key_content = best_key.get("key", "").strip()
         if key_content.startswith("http://") or key_content.startswith("https://"):
@@ -520,9 +524,10 @@ async def get_user_real_subscription(
             from xui_client import get_xui_client_details, get_user_subscription_links
             client_details = await get_xui_client_details(user_id)
             if client_details:
+                from constants import validate_device_limit
                 sub_uuid = client_details.get("uuid") or sub_uuid
                 sub_url = client_details.get("subscription_url")
-                device_limit = int(client_details.get("limit_hwid", 0))
+                device_limit = validate_device_limit(client_details.get("limit_hwid", 0))
                 if not expiry_ts:
                     expiry_ts = int(client_details.get("expiry_time", 0)) // 1000
             if not sub_url:
@@ -536,10 +541,12 @@ async def get_user_real_subscription(
     if not sub_url or (expiry_ts and expiry_ts <= now):
         return None, [], {
             "status": "none",
+            "plan_code": None,
             "plan_name": "Нет подписки",
             "trial_available": not await database.has_trial_used(user_id),
             "max_devices": device_limit,
             "active_devices": 0,
+            "server_time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "subscription_url": None,
         }
 
@@ -549,15 +556,34 @@ async def get_user_real_subscription(
     seconds_remaining = max(0, expiry_ts - now) if expiry_ts else 30 * 86400
     expires_at = time.strftime("%Y-%m-%d %H:%M", time.localtime(expiry_ts)) if expiry_ts else None
 
+    period_code = {30: "1m", 120: "3m", 240: "6m", 450: "12m"}.get(days_count)
+    plan_code = f"{period_code}_d{device_limit}" if period_code else None
+    active_devices = None
+    if include_device_count:
+        try:
+            from xui_client import get_xui_devices
+            device_state = await get_xui_devices(user_id)
+            panel_limit = int(device_state.get("limit_hwid") or 0)
+            if panel_limit in (2, 5, 10):
+                device_limit = panel_limit
+                period_code = {30: "1m", 120: "3m", 240: "6m", 450: "12m"}.get(days_count)
+                plan_code = f"{period_code}_d{device_limit}" if period_code else None
+            active_devices = len(device_state.get("devices") or [])
+        except Exception as exc:
+            logger.warning("Device count unavailable for subscription status (%s)", type(exc).__name__)
+    is_trial = bool(best_key and "пробн" in str(best_key.get("remark") or "").casefold())
     sub_dict = {
-        "status": "active",
+        "status": "trial" if is_trial else "active",
+        "plan_code": plan_code,
         "plan_name": f"Подписка ByMeVPN ({days_count} дн.)",
         "expires_at": expires_at,
         "seconds_remaining": seconds_remaining,
-        "subscription_url": sub_url,
+        "server_time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "max_devices": device_limit,
-        "active_devices": 1,
+        "subscription_url": sub_url,
     }
+    if active_devices is not None:
+        sub_dict["active_devices"] = active_devices
 
     return sub_url, servers, sub_dict
 
@@ -897,7 +923,7 @@ async def delete_me(user_id: int = Depends(get_current_user_id)):
 @api_router.get("/subscription/status")
 async def get_subscription_status(request: Request, user_id: int = Depends(get_current_user_id)):
     sub_url, servers, sub_dict = await get_user_real_subscription(
-        user_id, _subscription_headers_from_request(request)
+        user_id, _subscription_headers_from_request(request), include_device_count=True
     )
     return sub_dict
 
@@ -1288,6 +1314,7 @@ async def get_mobile_v2_plans(devices: int = 2):
 
     if devices not in VALID_DEVICE_LIMITS:
         raise HTTPException(status_code=400, detail="Выберите 2, 5 или 10 устройств")
+    payment_enabled = os.getenv("MOBILE_V2_WEBHOOK_GUARD_ENABLED") == "1"
     catalog = [
         ("1m", "month", 1, "1 месяц", 0, False),
         ("3m", "quarter", 3, "4 месяца (3+1)", 11, True),
@@ -1317,12 +1344,15 @@ async def get_mobile_v2_plans(devices: int = 2):
             "device_options": options,
             "discount_percent": discount,
             "is_popular": popular,
+            "purchase_enabled": payment_enabled,
         })
     return {
         "trial": {
             "code": "trial", "name": "3 дня бесплатно", "price": "0 ₽",
             "price_rub": 0, "days": 3, "devices": 2,
         },
+        "payment_enabled": payment_enabled,
+        "purchase_enabled": payment_enabled,
         "plans": plans,
     }
 
@@ -1332,6 +1362,8 @@ async def create_mobile_v2_payment(
     req: MobileV2PaymentCreateRequest,
     user_id: int = Depends(get_current_user_id),
 ):
+    if os.getenv("MOBILE_V2_WEBHOOK_GUARD_ENABLED") != "1":
+        raise HTTPException(status_code=503, detail="Мобильная оплата временно недоступна")
     match = re.fullmatch(r"(1m|3m|6m|12m)_d(2|5|10)", req.plan_code)
     if not match:
         raise HTTPException(status_code=400, detail="Неизвестный тариф")

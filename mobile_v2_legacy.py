@@ -88,6 +88,7 @@ async def _db():
 
 
 def _catalog_response(devices: int = 2) -> dict[str, Any]:
+    payment_enabled = os.getenv("MOBILE_V2_WEBHOOK_GUARD_ENABLED") == "1"
     labels = {"1m": ("month", "1 месяц", 0, False),
               "3m": ("quarter", "4 месяца (3+1)", 11, True),
               "6m": ("half_year", "8 месяцев (6+2)", 22, False),
@@ -102,9 +103,11 @@ def _catalog_response(devices: int = 2) -> dict[str, Any]:
                       "name": name, "price": f"{selected['price_rub']} ₽",
                       "price_rub": selected["price_rub"], "days": selected["days"],
                       "devices": devices, "device_options": options,
-                      "discount_percent": discount, "is_popular": popular})
+                      "discount_percent": discount, "is_popular": popular,
+                      "purchase_enabled": payment_enabled})
     return {"trial": {"code": "trial", "name": "3 дня бесплатно", "price": "0 ₽",
-                       "price_rub": 0, "days": 3, "devices": 2}, "plans": plans}
+                       "price_rub": 0, "days": 3, "devices": 2}, "plans": plans,
+            "payment_enabled": payment_enabled, "purchase_enabled": payment_enabled}
 
 
 def create_router() -> APIRouter:

@@ -73,6 +73,9 @@ try:
 except Exception as _router_err:
     raise RuntimeError("Required ByMeVPN API failed to initialize; check server configuration") from _router_err
 
+from update_site import router as update_site_router
+app.include_router(update_site_router)
+
 
 
 @app.get("/healthz")
