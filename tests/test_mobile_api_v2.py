@@ -1,9 +1,15 @@
 """Mobile v2 contract tests with isolated storage and mocked payment providers."""
 import os
 import secrets
+import hashlib
+import tempfile
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -82,29 +88,51 @@ class TestMobileApiV2(unittest.TestCase):
 
     def test_mobile_subscription_status_reflects_updated_bot_entitlement_and_devices(self):
         now = int(time.time())
-        first = {"id": 1, "key": "https://sub.example.invalid/a", "remark": "Подписка",
-                 "uuid": "safe-test-uuid", "short_id": "", "days": 30, "limit_ip": 2,
-                 "created": now - 100, "expiry": now + 7200}
-        updated = {**first, "days": 120, "limit_ip": 5, "expiry": now + 120 * 86400}
-        with patch.object(api_router.database, "get_user_keys", new=AsyncMock(side_effect=[[first], [updated]])), \
-             patch.object(api_router, "fetch_and_parse_real_nodes", new=AsyncMock(return_value=[])), \
-             patch("xui_client.get_xui_devices", new=AsyncMock(side_effect=[
-                 {"limit_hwid": 2, "devices": [{"id": 1}]},
-                 {"limit_hwid": 5, "devices": [{"id": 1}, {"id": 2}]},
-             ])):
-            first_response = self.client.get("/api/v1/subscription/status")
-            second_response = self.client.get("/api/v1/subscription/status")
-        self.assertEqual(first_response.status_code, 200, first_response.text)
-        self.assertEqual(second_response.status_code, 200, second_response.text)
-        first_body, second_body = first_response.json(), second_response.json()
-        self.assertEqual(first_body["status"], "active")
-        self.assertEqual(first_body["max_devices"], 2)
-        self.assertEqual(first_body["active_devices"], 1)
-        self.assertIn("server_time", first_body)
-        self.assertGreater(second_body["seconds_remaining"], first_body["seconds_remaining"])
-        self.assertEqual(second_body["max_devices"], 5)
-        self.assertEqual(second_body["active_devices"], 2)
-        self.assertEqual(second_body["plan_code"], "3m_d5")
+        hwid = "test-installation-hwid-987654321"
+        current_fingerprint = hashlib.sha256(hwid.encode()).hexdigest()[:16]
+        signer = ec.generate_private_key(ec.SECP256R1())
+        with tempfile.TemporaryDirectory() as directory:
+            signing_key_path = Path(directory) / "entitlement.pem"
+            signing_key_path.write_bytes(signer.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            ))
+            signing_key_path.chmod(0o600)
+            first = {"id": 1, "key": "https://sub.example.invalid/a", "remark": "Подписка",
+                     "uuid": "safe-test-uuid", "short_id": "", "days": 30, "limit_ip": 2,
+                     "created": now - 100, "expiry": now + 7200}
+            updated = {**first, "days": 120, "limit_ip": 5, "expiry": now + 120 * 86400}
+            with patch.object(api_router.database, "get_user_keys", new=AsyncMock(side_effect=[[first], [updated]])), \
+                 patch.object(api_router, "fetch_and_parse_real_nodes", new=AsyncMock(return_value=[])), \
+                 patch("xui_client.get_xui_devices", new=AsyncMock(side_effect=[
+                     {"limit_hwid": 2, "devices": [{"id": 1, "fingerprint": current_fingerprint}]},
+                     {"limit_hwid": 5, "devices": [
+                         {"id": 1, "fingerprint": current_fingerprint},
+                         {"id": 2, "fingerprint": "other-device-fingerprint"},
+                     ]},
+                 ])), patch.dict(os.environ, {
+                     "MOBILE_ENTITLEMENT_ES256_PRIVATE_KEY_FILE": str(signing_key_path),
+                 }):
+                first_response = self.client.get(
+                    "/api/v1/subscription/status", headers={"X-HWID": hwid},
+                )
+                second_response = self.client.get(
+                    "/api/v1/subscription/status", headers={"X-HWID": hwid},
+                )
+            self.assertEqual(first_response.status_code, 200, first_response.text)
+            self.assertEqual(second_response.status_code, 200, second_response.text)
+            first_body, second_body = first_response.json(), second_response.json()
+            self.assertEqual(first_body["status"], "active")
+            self.assertEqual(first_body["max_devices"], 2)
+            self.assertEqual(first_body["active_devices"], 1)
+            self.assertIn("server_time", first_body)
+            self.assertTrue(first_body["entitlement"])
+            self.assertGreater(second_body["seconds_remaining"], first_body["seconds_remaining"])
+            self.assertEqual(second_body["max_devices"], 5)
+            self.assertEqual(second_body["active_devices"], 2)
+            self.assertEqual(second_body["plan_code"], "3m_d5")
+            self.assertTrue(second_body["entitlement"])
 
     def test_create_derives_price_term_and_hwid_tier_from_plan_code(self):
         reservation = {
