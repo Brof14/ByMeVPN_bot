@@ -12,9 +12,9 @@ import os
 import re
 import time
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from constants import get_price_for_months
@@ -48,11 +48,12 @@ def _runtime():
     return database, config
 
 
-async def current_user_id() -> int:
+async def current_user_id(authorization: Optional[str] = Header(default=None)) -> int:
     # Deferred import avoids a cycle when the legacy api_router includes this
-    # router at the bottom of the module.
+    # router at the bottom of the module. Forward FastAPI's parsed header value;
+    # calling the dependency with no argument passes the Header marker itself.
     from api_router import get_current_user_id
-    return await get_current_user_id()
+    return await get_current_user_id(authorization)
 
 
 async def _db():
