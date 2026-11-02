@@ -50,6 +50,7 @@ if not JWT_SECRET or len(JWT_SECRET.encode("utf-8")) < 32:
 
 JWT_ISSUER = "bymevpn-api"
 JWT_AUDIENCE = "bymevpn-mobile"
+MOBILE_TRIAL_BOOTSTRAP_TTL_SECONDS = 10 * 60
 
 
 async def _ensure_auth_db():
@@ -554,13 +555,16 @@ async def get_user_real_subscription(
                 elif not _entitlement_requested(request_headers or {}):
                     trial_available = True
                     trial_reason = None
-                elif not panel_client:
-                    # The panel only reports an HWID after the client has
-                    # connected, but the current signed-trial flow requires
-                    # that panel proof before provisioning any trial access.
-                    trial_reason = "device_confirmation_required"
                 else:
-                    await _require_registered_entitlement_device(user_id, request_headers or {})
+                    # First-time clients cannot have panel HWID evidence until
+                    # after their first tunnel connection. Eligibility only
+                    # validates the signed-client identity and signer here;
+                    # the bounded bootstrap path verifies the panel client and
+                    # its 2/0 limits before allowing that first connection.
+                    headers = request_headers or {}
+                    hwid = str(headers.get("X-HWID") or "").strip()
+                    device_binding(user_id, hwid)
+                    load_private_key()
                     trial_available = True
                     trial_reason = None
             except Exception as exc:
@@ -636,7 +640,31 @@ async def _attach_signed_entitlement(
         return subscription
 
     hwid = str(headers.get("X-HWID") or "").strip()
-    device_state = await _require_registered_entitlement_device(user_id, headers)
+    try:
+        device_state = await _require_registered_entitlement_device(user_id, headers)
+    except HTTPException as exc:
+        if exc.status_code != 403:
+            raise
+        bootstrap_expiry = await _validated_trial_bootstrap_expiry(user_id, headers)
+        if bootstrap_expiry is None:
+            # The panel may have learned the HWID between the first read and
+            # bootstrap validation. Re-read once so that race upgrades directly
+            # to the ordinary entitlement instead of returning a false denial.
+            device_state = await _require_registered_entitlement_device(user_id, headers)
+        else:
+            remaining_bootstrap = bootstrap_expiry - int(time.time())
+            if remaining_bootstrap <= 0:
+                raise HTTPException(status_code=403, detail="Первичное подключение истекло") from None
+            subscription["max_devices"] = 2
+            subscription["active_devices"] = 0
+            bootstrap_status = dict(subscription)
+            bootstrap_status["seconds_remaining"] = min(
+                int(subscription.get("seconds_remaining") or 0), remaining_bootstrap,
+            )
+            subscription["entitlement"] = create_entitlement(user_id, hwid, bootstrap_status)
+            subscription["entitlement_bootstrap"] = True
+            subscription["entitlement_expires_at"] = bootstrap_expiry
+            return subscription
     devices = device_state["devices"]
 
     try:
@@ -645,9 +673,20 @@ async def _attach_signed_entitlement(
         raise EntitlementSigningError("Subscription device limit is unavailable") from exc
     if device_limit not in (2, 5, 10):
         raise EntitlementSigningError("Subscription device limit is unavailable")
+    if subscription.get("status") == "trial":
+        try:
+            ip_limit = int(device_state.get("limit_ip") or 0)
+        except (TypeError, ValueError) as exc:
+            raise EntitlementSigningError("Trial panel limits are unavailable") from exc
+        if device_limit != 2 or ip_limit != 0:
+            raise EntitlementSigningError("Trial panel limits do not match the server catalog")
     subscription["max_devices"] = device_limit
     subscription["active_devices"] = len(devices)
     subscription["entitlement"] = create_entitlement(user_id, hwid, subscription)
+    try:
+        await database.delete_mobile_trial_bootstrap(user_id)
+    except Exception as exc:
+        logger.warning("Confirmed trial bootstrap cleanup failed (%s)", type(exc).__name__)
     return subscription
 
 
@@ -686,18 +725,60 @@ async def _require_registered_entitlement_device(
 
     if not isinstance(device_state, dict) or not isinstance(device_state.get("devices"), list):
         raise HTTPException(status_code=503, detail="Не удалось проверить устройство подписки")
+    registered = _panel_state_contains_hwid(user_id, hwid, device_state)
+    if not registered:
+        raise HTTPException(status_code=403, detail="Устройство не подтверждено для этой подписки")
+    return device_state
+
+
+def _panel_state_contains_hwid(user_id: int, hwid: str, device_state: Dict[str, Any]) -> bool:
     current_fingerprint = hashlib.sha256(hwid.encode("utf-8")).hexdigest()
-    registered = any(
+    return any(
         isinstance(item, dict)
         and (fingerprint := str(item.get("fingerprint") or "").strip().lower())
         and 16 <= len(fingerprint) <= 64
         and re.fullmatch(r"[0-9a-f]+", fingerprint)
         and hmac.compare_digest(current_fingerprint[:len(fingerprint)], fingerprint)
-        for item in device_state["devices"]
+        for item in device_state.get("devices", [])
     )
-    if not registered:
-        raise HTTPException(status_code=403, detail="Устройство не подтверждено для этой подписки")
-    return device_state
+
+
+async def _validated_trial_bootstrap_expiry(
+    user_id: int, headers: Dict[str, str],
+) -> Optional[int]:
+    """Check a fixed, short first-connect grant against the account and live panel state."""
+    hwid = str(headers.get("X-HWID") or "").strip()
+    try:
+        fingerprint = device_binding(user_id, hwid)
+    except EntitlementSigningError:
+        return None
+    try:
+        expiry = await database.get_mobile_trial_bootstrap(user_id, fingerprint)
+        if expiry is None or expiry <= int(time.time()):
+            return None
+        if not await database.has_trial_used(user_id):
+            return None
+        from xui_client import get_xui_client_details, get_xui_devices, has_xui_client
+        if not await has_xui_client(user_id):
+            return None
+        panel_client, device_state = await asyncio.gather(
+            get_xui_client_details(user_id, strict=True),
+            get_xui_devices(user_id),
+        )
+        panel_expiry = int((panel_client or {}).get("expiry_time") or 0) // 1000
+        if (panel_expiry <= int(time.time()) or not isinstance(device_state, dict)
+                or int(device_state.get("limit_hwid") or 0) != 2
+                or int(device_state.get("limit_ip") or 0) != 0
+                or not isinstance(device_state.get("devices"), list)):
+            return None
+        # If the panel has already learned this device, stop using bootstrap.
+        if _panel_state_contains_hwid(user_id, hwid, device_state):
+            await database.delete_mobile_trial_bootstrap(user_id)
+            return None
+        return int(expiry)
+    except Exception as exc:
+        logger.warning("Trial bootstrap panel validation failed (%s)", type(exc).__name__)
+        return None
 
 
 async def _require_opted_in_device_access(user_id: int, request: Request) -> Dict[str, str]:
@@ -710,7 +791,14 @@ async def _require_opted_in_device_access(user_id: int, request: Request) -> Dic
     except EntitlementSigningError as exc:
         logger.error("Entitlement signer unavailable (%s)", type(exc).__name__)
         raise HTTPException(status_code=503, detail="Не удалось подтвердить состояние подписки") from None
-    await _require_registered_entitlement_device(user_id, headers)
+    try:
+        await _require_registered_entitlement_device(user_id, headers)
+    except HTTPException as exc:
+        if exc.status_code != 403:
+            raise
+        if await _validated_trial_bootstrap_expiry(user_id, headers) is None:
+            # Retry once because panel state may change between reads.
+            await _require_registered_entitlement_device(user_id, headers)
     return headers
 
 
@@ -1175,9 +1263,17 @@ async def activate_trial(req: TrialRequest, request: Request, user_id: int = Dep
         except EntitlementSigningError as exc:
             logger.error("Trial entitlement signer unavailable (%s)", type(exc).__name__)
             raise HTTPException(status_code=503, detail="Не удалось подтвердить состояние подписки") from None
-        # Do this before reserving the one-time trial. A request carrying a
-        # client HWID is not sufficient proof that the panel registered it.
-        await _require_registered_entitlement_device(user_id, headers)
+        # Validate identity and the client/server binding, but do not require
+        # panel registration yet: 3x-ui learns an installation HWID only after
+        # its first VPN connection. A fixed ten-minute bootstrap below enables
+        # that first connection; it is never treated as panel confirmation.
+        hwid = str(headers.get("X-HWID") or "").strip()
+        try:
+            device_binding(user_id, hwid)
+        except EntitlementSigningError:
+            raise HTTPException(status_code=422, detail="Не удалось подтвердить это устройство") from None
+        if req.install_id and not hmac.compare_digest(req.install_id.strip(), hwid):
+            raise HTTPException(status_code=422, detail="Данные устройства не совпадают")
     if await database.has_trial_used(user_id):
         raise HTTPException(status_code=409, detail="Пробный период уже использован")
     current_keys = await database.get_user_keys(user_id)
@@ -1268,6 +1364,26 @@ async def activate_trial(req: TrialRequest, request: Request, user_id: int = Dep
     except Exception as exc:
         logger.error("Trial database save failed (%s)", type(exc).__name__)
         raise HTTPException(status_code=503, detail="Пробный период создан, но его статус не сохранился. Напишите в поддержку") from None
+
+    if wants_entitlement:
+        hwid = str(headers.get("X-HWID") or "").strip()
+        if _panel_state_contains_hwid(user_id, hwid, panel_devices):
+            await database.delete_mobile_trial_bootstrap(user_id)
+        else:
+            # The trial claim is already atomically reserved and the panel has
+            # confirmed the 2-HWID / unlimited-IP client. Bind a fixed window
+            # to this account + installation digest. It cannot be renewed by
+            # retrying the trial request or by changing the request header.
+            bootstrap_expiry = int(time.time()) + MOBILE_TRIAL_BOOTSTRAP_TTL_SECONDS
+            try:
+                reserved = await database.create_mobile_trial_bootstrap(
+                    user_id, device_binding(user_id, hwid), bootstrap_expiry,
+                )
+            except Exception as exc:
+                logger.error("Trial bootstrap persistence failed (%s)", type(exc).__name__)
+                raise HTTPException(status_code=503, detail="Не удалось подтвердить первое подключение") from None
+            if not reserved:
+                raise HTTPException(status_code=409, detail="Пробный период уже использован")
 
     servers = await fetch_and_parse_real_nodes(
         sub_url, request_headers=_subscription_headers_from_request(request)

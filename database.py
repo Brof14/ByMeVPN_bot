@@ -416,10 +416,27 @@ CREATE TABLE IF NOT EXISTS google_accounts (
 );
 """
 
+_MOBILE_TRIAL_BOOTSTRAP_SCHEMA = """
+CREATE TABLE IF NOT EXISTS mobile_trial_bootstrap (
+    user_id INTEGER PRIMARY KEY,
+    device_hash TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_mobile_trial_bootstrap_expiry
+    ON mobile_trial_bootstrap(expires_at);
+"""
+
 
 async def ensure_mobile_google_schema(db: aiosqlite.Connection) -> None:
     """Apply the additive, repeatable Google nonce/identity schema migration."""
     await db.executescript(_MOBILE_GOOGLE_SCHEMA)
+
+
+async def ensure_mobile_trial_bootstrap_schema(db: aiosqlite.Connection) -> None:
+    """Create the additive storage for a short, device-bound first-connect grant."""
+    await db.executescript(_MOBILE_TRIAL_BOOTSTRAP_SCHEMA)
 
 
 async def get_db() -> aiosqlite.Connection:
@@ -441,6 +458,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
     # migration rather than part of the base schema so existing SQLite files
     # are upgraded explicitly and can be verified independently before rollout.
     await ensure_mobile_google_schema(db)
+    await ensure_mobile_trial_bootstrap_schema(db)
 
     # Provisioning intents make paid-key retries idempotent across restarts.
     await db.execute(
@@ -1203,6 +1221,53 @@ async def consume_mobile_google_nonce(nonce_hash: str) -> bool:
         )
         await db.commit()
     return cursor.rowcount == 1
+
+
+async def create_mobile_trial_bootstrap(
+    user_id: int, device_hash: str, expires_at: int,
+) -> bool:
+    """Reserve at most one bounded first-connect grant for an already claimed trial.
+
+    The expiry is fixed at insertion time; retries cannot extend the bootstrap.
+    Only a digest of the installation identifier is stored.
+    """
+    db = await get_db()
+    now = int(time.time())
+    if int(expires_at) <= now:
+        return False
+    async with _db_semaphore:
+        await db.execute("DELETE FROM mobile_trial_bootstrap WHERE expires_at<=?", (now,))
+        cursor = await db.execute(
+            """INSERT OR IGNORE INTO mobile_trial_bootstrap
+               (user_id,device_hash,expires_at,created_at) VALUES(?,?,?,?)""",
+            (int(user_id), str(device_hash), int(expires_at), now),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+
+
+async def get_mobile_trial_bootstrap(
+    user_id: int, device_hash: str,
+) -> Optional[int]:
+    """Return the fixed expiry for this account/device bootstrap, if still live."""
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        cursor = await db.execute(
+            """SELECT expires_at FROM mobile_trial_bootstrap
+               WHERE user_id=? AND device_hash=? AND expires_at>?""",
+            (int(user_id), str(device_hash), now),
+        )
+        row = await cursor.fetchone()
+        return int(row[0]) if row else None
+
+
+async def delete_mobile_trial_bootstrap(user_id: int) -> None:
+    """Remove a bootstrap once panel-confirmed device access is available."""
+    db = await get_db()
+    async with _db_semaphore:
+        await db.execute("DELETE FROM mobile_trial_bootstrap WHERE user_id=?", (int(user_id),))
+        await db.commit()
 
 
 async def get_or_create_google_account(google_sub: str, email: str, name: str) -> dict:
