@@ -11,11 +11,14 @@ provides an explicit cancellation path; the older GET and POST check routes
 remain available for compatibility. The access token is returned in the JSON
 body, never in the Telegram deep link.
 
-The current Android `ByMeApiClient.checkTelegramSession` still polls with GET
-and places the short-lived `auth_...` state in the query string. That value is
-not the issued bearer access token, but proxy access logs could still capture
-it. The API's POST check endpoint is already available; the Android client
-should move to a JSON body before query-based polling is retired.
+Android PR #25 polls with `POST /api/v1/auth/telegram/check-session` and JSON
+`{"token":"auth_..."}`. The backend branch for this PR implements that
+contract and an HTTP integration test verifies its method, path, JSON field,
+state lookup, and response. The GET route remains for older clients. A public
+production probe on 2026-11-02 returned `405 Method Not Allowed` with
+`Allow: GET` for POST, while the legacy GET probe returned `200`; therefore the
+currently observed production runtime does not yet support the Android PR #25
+contract and must not be described as deployed-compatible.
 
 For an opted-in client, an unavailable signer or unconfirmed device leaves the
 account login successful but returns an `unknown` subscription snapshot without
@@ -34,13 +37,31 @@ one-time trial claim; panel errors do not consume the claim. The provisioned
 period remains exactly three days.
 
 There is no safe first-use path for an opted-in app user who has no existing
-3x-ui client: this panel integration learns an HWID only after a VPN client
-connects, while the current API requires panel confirmation before it will
-issue signed access. The server therefore reports the trial unavailable for
-that case and does not weaken the entitlement check. A panel-supported
-pre-registration/bootstrap handshake, or an explicitly reviewed onboarding
-protocol that preserves the same device proof, is required before automatic
-trials can work for brand-new app users.
+3x-ui client: the current panel integration learns an HWID only after a VPN
+client connects, and its API adapter can list or delete HWIDs but has no
+pre-registration operation. The API therefore reports the trial unavailable
+for that case and refuses activation before claiming the one-time trial or
+provisioning a client. Client-supplied `X-HWID` alone is not panel proof.
+
+The safe bootstrap contract is deliberately conditional on panel support:
+authenticate the account; bind the requested HWID to that account's own panel
+client using a panel-native registration operation; read the panel record back
+and verify its owner and HWID fingerprint; then atomically reserve the trial,
+provision a client with `limitHwid=2`, `limitIp=0` and a hard expiry exactly
+259,200 seconds from issuance, and return the signed entitlement only after
+the provisioned client and device record are confirmed. Repeated requests must
+return the same expiry and never extend it. A panel refusal or failed readback
+must issue no entitlement/configuration and must not consume the trial. An
+ambiguous provisioning outcome must be reconciled against the panel before any
+retry; it must never blindly extend the expiry. The current 3x-ui integration
+does not expose the required native registration call, so this PR keeps the
+flow closed and tests the fail-closed behavior until an isolated panel confirms
+the API and its owner/limit semantics.
+
+Tests cover a successful first trial for an already panel-confirmed device
+(exactly three days), a repeated request (409, no reprovision/extension), an
+unconfirmed HWID (403, no claim/provision), and panel read failure (503, no
+claim/provision). These are mocked panel checks, not end-to-end panel proof.
 
 ## YooKassa and Google
 
