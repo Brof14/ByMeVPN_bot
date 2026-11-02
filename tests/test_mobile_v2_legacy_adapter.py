@@ -17,6 +17,7 @@ class FakeDatabase:
         self.path = path
         self.DB_FILE = path
         self.connection = None
+        self.deleted_yookassa_pending = []
 
     async def get_db(self):
         if self.connection is None:
@@ -26,6 +27,9 @@ class FakeDatabase:
 
     async def add_yookassa_pending(self, *args):
         return None
+
+    async def delete_yookassa_pending(self, invoice_id):
+        self.deleted_yookassa_pending.append(str(invoice_id))
 
     async def add_crypto_pending(self, *args):
         return None
@@ -185,6 +189,7 @@ class LegacyMobileV2HttpTests(unittest.TestCase):
             response = self.client.post("/api/v1/mobile/v2/payment/create", json={
                 "plan_code": "1m_d2", "request_id": "early_yk_12345", "provider": "yookassa"})
         self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.db.deleted_yookassa_pending, ["yk-early"])
         check = self.client.get("/api/v1/mobile/v2/payment/check",
                                 params={"invoice_id": "yk-early", "provider": "yookassa"})
         self.assertTrue(check.json()["is_active"])
