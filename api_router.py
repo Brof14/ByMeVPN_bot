@@ -35,6 +35,7 @@ import database
 from entitlements import EntitlementSigningError, create_entitlement, device_binding, load_private_key
 from config import XUI_SUB_PATH, XUI_URL
 from telegram_post_compat import TelegramSessionTokenBody, register_telegram_check_post
+from google_signin import GoogleIdTokenError, verify_google_id_token
 
 logger = logging.getLogger(__name__)
 
@@ -786,6 +787,7 @@ class LoginRequest(BaseModel):
 
 class GoogleLoginRequest(BaseModel):
     id_token: str
+    nonce: str
     install_id: Optional[str] = None
 
 
@@ -984,15 +986,76 @@ async def login(req: LoginRequest, request: Request):
     }
 
 
+def _google_signin_configured() -> bool:
+    return (
+        os.getenv("GOOGLE_SIGNIN_ENABLED") == "1"
+        and bool(os.getenv("GOOGLE_WEB_CLIENT_ID", "").strip())
+    )
+
+
+@api_router.post("/auth/google/nonce")
+async def create_google_nonce():
+    """Issue a short-lived server nonce only when Google login is configured."""
+    if not _google_signin_configured():
+        raise HTTPException(status_code=503, detail="Вход через Google временно недоступен")
+    nonce = secrets.token_urlsafe(32)
+    nonce_hash = hashlib.sha256(nonce.encode("utf-8")).hexdigest()
+    try:
+        await database.create_mobile_google_nonce(nonce_hash, int(time.time()) + 300)
+    except Exception as exc:
+        logger.error("Google sign-in challenge storage unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось начать вход через Google") from None
+    return {"nonce": nonce}
+
+
 @api_router.post("/auth/google")
 async def login_google(req: GoogleLoginRequest, request: Request):
-    # The former implementation decoded claims without checking the signature,
-    # audience, verified-email flag or nonce. Keep the endpoint closed until a
-    # Google client ID and nonce-bound native flow are configured and tested.
-    raise HTTPException(
-        status_code=503,
-        detail="Вход через Google временно недоступен",
+    if not _google_signin_configured():
+        raise HTTPException(status_code=503, detail="Вход через Google временно недоступен")
+
+    expected_audience = os.getenv("GOOGLE_WEB_CLIENT_ID", "").strip()
+    try:
+        claims = await asyncio.to_thread(verify_google_id_token, req.id_token, expected_audience)
+    except GoogleIdTokenError:
+        raise HTTPException(status_code=401, detail="Не удалось подтвердить аккаунт Google") from None
+
+    if not hmac.compare_digest(claims["nonce"], req.nonce):
+        raise HTTPException(status_code=401, detail="Не удалось подтвердить запрос входа")
+    nonce_hash = hashlib.sha256(req.nonce.encode("utf-8")).hexdigest()
+    try:
+        consumed = await database.consume_mobile_google_nonce(nonce_hash)
+    except Exception as exc:
+        logger.error("Google sign-in challenge validation unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось подтвердить запрос входа") from None
+    if not consumed:
+        raise HTTPException(status_code=401, detail="Запрос входа истёк или уже использован")
+
+    try:
+        await _ensure_auth_db()
+        identity = await database.get_or_create_google_account(
+            claims["sub"], claims["email"], claims["name"],
+        )
+    except Exception as exc:
+        logger.error("Google account storage unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось открыть аккаунт") from None
+
+    user_id = int(identity["user_id"])
+    jwt_token = create_simple_jwt(user_id, identity["email"])
+    _, servers, sub_dict = await _auth_subscription_snapshot(
+        user_id, _subscription_headers_from_request(request)
     )
+    return {
+        "access": jwt_token,
+        "refresh": f"ref_{jwt_token}",
+        "user": {
+            "id": str(user_id),
+            "email": identity["email"],
+            "name": identity["name"],
+            "is_google": True,
+        },
+        "subscription": sub_dict,
+        "servers": servers,
+    }
 
 
 @api_router.post("/auth/refresh")
@@ -1046,10 +1109,17 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
     # @bymevpn.app address for signed-in desktop accounts.
     db = await database.get_db()
     try:
-        cursor = await db.execute("SELECT email,name FROM app_users WHERE user_id=?", (user_id,))
+        cursor = await db.execute("SELECT email,name FROM google_accounts WHERE user_id=?", (user_id,))
         row = await cursor.fetchone()
     except Exception:
         row = None  # Telegram identities do not necessarily have app_users rows.
+    is_google = bool(row)
+    if not row:
+        try:
+            cursor = await db.execute("SELECT email,name FROM app_users WHERE user_id=?", (user_id,))
+            row = await cursor.fetchone()
+        except Exception:
+            row = None
     email = str(row[0]) if row else ""
     display_name = str(row[1] or "") if row else ""
     return {
@@ -1057,7 +1127,7 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
             "id": str(user_id),
             "email": email,
             "name": display_name or username or f"User {user_id}",
-            "is_google": False,
+            "is_google": is_google,
         }
     }
 

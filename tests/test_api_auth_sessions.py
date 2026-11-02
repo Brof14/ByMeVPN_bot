@@ -125,7 +125,9 @@ class TestGoogleLoginClosed(unittest.IsolatedAsyncioTestCase):
         })
         forged = "x.eyJlbWFpbCI6ImF0dGFja2VyQGV4YW1wbGUuaW52YWxpZCJ9.x"
         with self.assertRaises(HTTPException) as result:
-            await api_router.login_google(api_router.GoogleLoginRequest(id_token=forged), request)
+            await api_router.login_google(
+                api_router.GoogleLoginRequest(id_token=forged, nonce="untrusted"), request
+            )
         self.assertEqual(result.exception.status_code, 503)
 
 
