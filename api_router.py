@@ -34,6 +34,7 @@ from pydantic import BaseModel
 import database
 from entitlements import EntitlementSigningError, create_entitlement, device_binding, load_private_key
 from config import XUI_SUB_PATH, XUI_URL
+from telegram_post_compat import TelegramSessionTokenBody, register_telegram_check_post
 
 logger = logging.getLogger(__name__)
 
@@ -762,8 +763,8 @@ class TelegramCheckResponse(BaseModel):
     servers: Optional[List[Dict[str, Any]]] = None
 
 
-class TelegramSessionCheckRequest(BaseModel):
-    token: str
+# Keep the model name available to existing unit callers and adapters.
+TelegramSessionCheckRequest = TelegramSessionTokenBody
 
 
 class TelegramSessionCancelRequest(BaseModel):
@@ -878,12 +879,9 @@ async def check_telegram_session(token: str, request: Request):
     )
 
 
-@api_router.post("/auth/telegram/check-session", response_model=TelegramCheckResponse)
-async def check_telegram_session_body(req: TelegramSessionCheckRequest, request: Request):
-    """Poll Telegram login state in the request body to keep it out of URL logs."""
-    if not req.token or len(req.token) > 256:
-        return TelegramCheckResponse(status="expired")
-    return await check_telegram_session(req.token, request)
+check_telegram_session_body = register_telegram_check_post(
+    api_router, check_telegram_session, TelegramCheckResponse
+)
 
 
 @api_router.post("/auth/telegram/cancel-session")

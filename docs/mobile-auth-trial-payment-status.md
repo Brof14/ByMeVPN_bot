@@ -13,12 +13,27 @@ body, never in the Telegram deep link.
 
 Android PR #25 polls with `POST /api/v1/auth/telegram/check-session` and JSON
 `{"token":"auth_..."}`. The backend branch for this PR implements that
-contract and an HTTP integration test verifies its method, path, JSON field,
-state lookup, and response. The GET route remains for older clients. A public
+contract through an additive adapter which delegates to the existing GET
+handler. HTTP tests verify the method, path, JSON field, state lookup, and
+response. The GET route remains for older clients. A public
 production probe on 2026-11-02 returned `405 Method Not Allowed` with
 `Allow: GET` for POST, while the legacy GET probe returned `200`; therefore the
 currently observed production runtime does not yet support the Android PR #25
 contract and must not be described as deployed-compatible.
+
+For a GET-only runtime with the same handler/response names, the isolated patch
+is: add `telegram_post_compat.py`, import
+`register_telegram_check_post`, then call
+`register_telegram_check_post(api_router, check_telegram_session,
+TelegramCheckResponse)` immediately after the existing GET handler. This adds
+only POST and leaves GET behavior untouched. Rollback is to remove the helper,
+its import, and that registration call; there is no database migration. The
+server's observed ED25519 host-key fingerprint matched the previously trusted
+key for the old address when checked with strict verification, but SSH
+authentication was denied (`Permission denied (publickey,password)`). The
+actual VPS source therefore could not be read; this is a tested additive patch
+for the observed GET-only contract, not a verified diff against the mounted
+production file. It has not been applied.
 
 For an opted-in client, an unavailable signer or unconfirmed device leaves the
 account login successful but returns an `unknown` subscription snapshot without
