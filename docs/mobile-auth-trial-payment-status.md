@@ -11,6 +11,12 @@ provides an explicit cancellation path; the older GET and POST check routes
 remain available for compatibility. The access token is returned in the JSON
 body, never in the Telegram deep link.
 
+The current Android `ByMeApiClient.checkTelegramSession` still polls with GET
+and places the short-lived `auth_...` state in the query string. That value is
+not the issued bearer access token, but proxy access logs could still capture
+it. The API's POST check endpoint is already available; the Android client
+should move to a JSON body before query-based polling is retired.
+
 For an opted-in client, an unavailable signer or unconfirmed device leaves the
 account login successful but returns an `unknown` subscription snapshot without
 VPN nodes or an entitlement. Opted-in `/servers` and `/vpn/session` requests
