@@ -540,11 +540,40 @@ async def get_user_real_subscription(
 
     # If no active subscription or expired: return none and empty servers (NO FAKE SERVERS)
     if not sub_url or (expiry_ts and expiry_ts <= now):
+        trial_available = False
+        trial_reason = "trial_already_used"
+        if not await database.has_trial_used(user_id) and not active_keys:
+            try:
+                from xui_client import get_xui_client_details
+                panel_client = await get_xui_client_details(user_id, strict=True)
+                panel_expiry = int((panel_client or {}).get("expiry_time") or 0) // 1000
+                if panel_client and (panel_expiry <= 0 or panel_expiry > now):
+                    trial_reason = "existing_panel_subscription"
+                elif not _entitlement_requested(request_headers or {}):
+                    trial_available = True
+                    trial_reason = None
+                elif not panel_client:
+                    # The panel only reports an HWID after the client has
+                    # connected, but the current signed-trial flow requires
+                    # that panel proof before provisioning any trial access.
+                    trial_reason = "device_confirmation_required"
+                else:
+                    await _require_registered_entitlement_device(user_id, request_headers or {})
+                    trial_available = True
+                    trial_reason = None
+            except Exception as exc:
+                logger.warning("Trial eligibility lookup unavailable (%s)", type(exc).__name__)
+                trial_reason = (
+                    "device_confirmation_required"
+                    if _entitlement_requested(request_headers or {})
+                    else "eligibility_check_unavailable"
+                )
         return None, [], {
             "status": "none",
             "plan_code": None,
             "plan_name": "Нет подписки",
-            "trial_available": not await database.has_trial_used(user_id),
+            "trial_available": trial_available,
+            "trial_unavailable_reason": trial_reason,
             "max_devices": device_limit,
             "active_devices": 0,
             "server_time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -581,6 +610,7 @@ async def get_user_real_subscription(
         "seconds_remaining": seconds_remaining,
         "server_time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "max_devices": device_limit,
+        "trial_available": False,
         "subscription_url": sub_url,
     }
     if active_devices is not None:
@@ -642,8 +672,12 @@ async def _require_registered_entitlement_device(
         raise HTTPException(status_code=422, detail="Не удалось подтвердить это устройство") from None
 
     try:
-        from xui_client import get_xui_devices
+        from xui_client import get_xui_devices, has_xui_client
+        if not await has_xui_client(user_id):
+            raise HTTPException(status_code=403, detail="Устройство не подтверждено для этой подписки")
         device_state = await get_xui_devices(user_id)
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.warning("Entitlement device check unavailable (%s)", type(exc).__name__)
         raise HTTPException(status_code=503, detail="Не удалось проверить устройство подписки") from None
@@ -664,28 +698,40 @@ async def _require_registered_entitlement_device(
     return device_state
 
 
+async def _require_opted_in_device_access(user_id: int, request: Request) -> Dict[str, str]:
+    """Gate signed-client subscription/config routes on signer and panel HWID proof."""
+    headers = _subscription_headers_from_request(request)
+    if not _entitlement_requested(headers):
+        return headers
+    try:
+        load_private_key()
+    except EntitlementSigningError as exc:
+        logger.error("Entitlement signer unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось подтвердить состояние подписки") from None
+    await _require_registered_entitlement_device(user_id, headers)
+    return headers
+
+
 async def _auth_subscription_snapshot(user_id: int, headers: Dict[str, str]):
     """Keep login independent from 3x-ui subscription availability."""
-    wants_entitlement = _entitlement_requested(headers)
+    _entitlement_requested(headers)
     try:
         sub_url, servers, sub_dict = await get_user_real_subscription(user_id, headers)
         sub_dict = await _attach_signed_entitlement(user_id, headers, sub_dict)
         return sub_url, servers, sub_dict
     except HTTPException as exc:
-        if wants_entitlement:
-            raise
-        logger.warning("Subscription lookup unavailable during legacy login (HTTP %s)", exc.status_code)
+        logger.warning("Subscription snapshot unavailable during login (HTTP %s)", exc.status_code)
         return None, [], {
             "status": "unknown", "plan_name": "Проверяем подписку",
-            "trial_available": False, "max_devices": 0, "active_devices": 0,
+            "trial_available": False, "trial_unavailable_reason": "subscription_check_unavailable",
+            "max_devices": 0, "active_devices": 0,
         }
     except Exception as exc:
         logger.warning("Subscription lookup unavailable during login (%s)", type(exc).__name__)
-        if wants_entitlement:
-            raise HTTPException(status_code=503, detail="Не удалось подтвердить состояние подписки") from None
         return None, [], {
             "status": "unknown", "plan_name": "Проверяем подписку",
-            "trial_available": False, "max_devices": 0, "active_devices": 0,
+            "trial_available": False, "trial_unavailable_reason": "subscription_check_unavailable",
+            "max_devices": 0, "active_devices": 0,
         }
 
 
@@ -717,6 +763,10 @@ class TelegramCheckResponse(BaseModel):
 
 
 class TelegramSessionCheckRequest(BaseModel):
+    token: str
+
+
+class TelegramSessionCancelRequest(BaseModel):
     token: str
 
 
@@ -793,7 +843,9 @@ async def check_telegram_session(token: str, request: Request):
     if not state or len(state) > 256:
         return TelegramCheckResponse(status="expired")
     state_hash = hashlib.sha256(state.encode("utf-8")).hexdigest()
-    session = await database.poll_mobile_auth_session(state_hash)
+    # Do not burn the single-use Telegram state before JWT and subscription
+    # preparation finishes. A transient panel/signer failure must be retryable.
+    session = await database.get_mobile_auth_session(state_hash)
     if not session or session.get("status") == "expired":
         return TelegramCheckResponse(status="expired")
     if session.get("status") == "pending":
@@ -807,6 +859,9 @@ async def check_telegram_session(token: str, request: Request):
     sub_url, servers, sub_dict = await _auth_subscription_snapshot(
         user_id, _subscription_headers_from_request(request)
     )
+
+    if not await database.consume_mobile_auth_session(state_hash):
+        return TelegramCheckResponse(status="expired")
 
     return TelegramCheckResponse(
         status="authenticated",
@@ -829,6 +884,17 @@ async def check_telegram_session_body(req: TelegramSessionCheckRequest, request:
     if not req.token or len(req.token) > 256:
         return TelegramCheckResponse(status="expired")
     return await check_telegram_session(req.token, request)
+
+
+@api_router.post("/auth/telegram/cancel-session")
+async def cancel_telegram_session(req: TelegramSessionCancelRequest):
+    """Cancel a short-lived login state without exposing it in a URL."""
+    state = req.token.removeprefix("auth_") if req.token else ""
+    if not state or len(state) > 256:
+        return {"status": "expired"}
+    state_hash = hashlib.sha256(state.encode("utf-8")).hexdigest()
+    canceled = await database.cancel_mobile_auth_session(state_hash)
+    return {"status": "cancelled" if canceled else "expired"}
 
 
 # ---------------------------------------------------------------------------
@@ -1049,7 +1115,9 @@ async def activate_trial(req: TrialRequest, request: Request, user_id: int = Dep
         raise HTTPException(status_code=409, detail="У вас уже есть действующая подписка")
     try:
         from xui_client import get_xui_client_details
-        if await get_xui_client_details(user_id):
+        panel_client = await get_xui_client_details(user_id, strict=True)
+        panel_expiry = int((panel_client or {}).get("expiry_time") or 0) // 1000
+        if panel_client and (panel_expiry <= 0 or panel_expiry > now):
             raise HTTPException(status_code=409, detail="Для этого аккаунта уже создана подписка")
     except HTTPException:
         raise
@@ -1527,8 +1595,9 @@ api_router.include_router(mobile_v2_router, prefix="/mobile/v2")
 
 @api_router.get("/servers")
 async def get_servers(request: Request, user_id: int = Depends(get_current_user_id)):
+    headers = await _require_opted_in_device_access(user_id, request)
     sub_url, servers, sub_dict = await get_user_real_subscription(
-        user_id, _subscription_headers_from_request(request)
+        user_id, headers
     )
     return {
         "servers": servers,
@@ -1538,8 +1607,9 @@ async def get_servers(request: Request, user_id: int = Depends(get_current_user_
 
 @api_router.post("/vpn/session")
 async def create_vpn_session(req: SessionRequest, request: Request, user_id: int = Depends(get_current_user_id)):
+    headers = await _require_opted_in_device_access(user_id, request)
     sub_url, servers, sub_dict = await get_user_real_subscription(
-        user_id, _subscription_headers_from_request(request)
+        user_id, headers
     )
     if not servers:
         raise HTTPException(

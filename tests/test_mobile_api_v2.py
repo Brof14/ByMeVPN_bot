@@ -105,6 +105,7 @@ class TestMobileApiV2(unittest.TestCase):
             updated = {**first, "days": 120, "limit_ip": 5, "expiry": now + 120 * 86400}
             with patch.object(api_router.database, "get_user_keys", new=AsyncMock(side_effect=[[first], [updated]])), \
                  patch.object(api_router, "fetch_and_parse_real_nodes", new=AsyncMock(return_value=[])), \
+                 patch("xui_client.has_xui_client", new=AsyncMock(return_value=True)), \
                  patch("xui_client.get_xui_devices", new=AsyncMock(side_effect=[
                      {"limit_hwid": 2, "devices": [{"id": 1, "fingerprint": current_fingerprint}]},
                      {"limit_hwid": 5, "devices": [

@@ -94,8 +94,10 @@ class DesktopSessionContract(unittest.IsolatedAsyncioTestCase):
             "username": "tester", "full_name": "Test User",
         }
         with (
-            patch.object(api_router.database, "poll_mobile_auth_session",
+            patch.object(api_router.database, "get_mobile_auth_session",
                          new=AsyncMock(return_value=session)),
+            patch.object(api_router.database, "consume_mobile_auth_session",
+                         new=AsyncMock(return_value=True)),
             patch.object(api_router, "get_user_real_subscription",
                          new=AsyncMock(side_effect=RuntimeError("3x-ui offline"))),
         ):
