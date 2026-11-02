@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+from fastapi import HTTPException
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
@@ -528,20 +529,48 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
                 patch.object(api_router.database, "has_trial_used", new=AsyncMock(return_value=False)), \
                 patch.object(api_router.database, "get_user_keys", new=AsyncMock(return_value=[])), \
                 patch.object(api_router.database, "try_claim_trial", new=AsyncMock(return_value=True)), \
-                patch.object(api_router.database, "add_key", new=AsyncMock(return_value=True)), \
+                patch.object(api_router.database, "add_key", new=AsyncMock(return_value=True)) as add_key, \
+                patch("xui_client.get_xui_client_details", new=AsyncMock(return_value={
+                    "expiry_time": (int(api_router.time.time()) - 100) * 1000,
+                })), \
+                patch("xui_client.create_xui_user", new=AsyncMock(return_value={
+                    "subscription_url": "https://example.invalid/trial", "uuid": "test-uuid",
+                })) as create_panel_client, \
+                patch.object(api_router, "fetch_and_parse_real_nodes", new=AsyncMock(return_value=[])):
+            result = asyncio.run(api_router.activate_trial(api_router.TrialRequest(), request, user_id=7654321))
+        create_panel_client.assert_awaited_once_with(
+            user_id=7654321, days=3, limit_ip=0, limit_hwid=2,
+        )
+        self.assertEqual(add_key.await_args.kwargs["days"], 3)
+        # Legacy DB column `limit_ip` stores the bot's device allowance;
+        # actual panel IP access remains unlimited (limitIp=0).
+        self.assertEqual(add_key.await_args.kwargs["limit_ip"], 2)
+        self.assertIsNotNone(verify_entitlement(
+            result["entitlement"], self.public_key, expected_user_id=7654321,
+            expected_hwid=self.hwid,
+        ))
+        self.assertEqual(result["seconds_remaining"], 3 * 24 * 60 * 60)
+        self.assertEqual(result["max_devices"], 2)
+        self.assertEqual(result["active_devices"], 1)
+
+    def test_trial_refuses_to_report_access_when_panel_limit_readback_differs(self):
+        request = self.make_request("/api/v1/subscription/trial")
+        wrong_panel_limits = {"limit_hwid": 5, "limit_ip": 0, "devices": []}
+        with patch.object(api_router.database, "has_trial_used", new=AsyncMock(return_value=False)), \
+                patch.object(api_router.database, "get_user_keys", new=AsyncMock(return_value=[])), \
+                patch.object(api_router.database, "try_claim_trial", new=AsyncMock(return_value=True)), \
+                patch.object(api_router.database, "add_key", new=AsyncMock()) as add_key, \
                 patch("xui_client.get_xui_client_details", new=AsyncMock(return_value={
                     "expiry_time": (int(api_router.time.time()) - 100) * 1000,
                 })), \
                 patch("xui_client.create_xui_user", new=AsyncMock(return_value={
                     "subscription_url": "https://example.invalid/trial", "uuid": "test-uuid",
                 })), \
-                patch.object(api_router, "fetch_and_parse_real_nodes", new=AsyncMock(return_value=[])):
-            result = asyncio.run(api_router.activate_trial(api_router.TrialRequest(), request, user_id=7654321))
-        self.assertIsNotNone(verify_entitlement(
-            result["entitlement"], self.public_key, expected_user_id=7654321,
-            expected_hwid=self.hwid,
-        ))
-        self.assertEqual(result["seconds_remaining"], 3 * 24 * 60 * 60)
+                patch("xui_client.get_xui_devices", new=AsyncMock(return_value=wrong_panel_limits)):
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(api_router.activate_trial(api_router.TrialRequest(), request, user_id=7654321))
+        self.assertEqual(ctx.exception.status_code, 503)
+        add_key.assert_not_awaited()
 
     def test_trial_repeat_returns_conflict_without_reprovisioning_or_extending(self):
         request = self.make_request("/api/v1/subscription/trial", headers={

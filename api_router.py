@@ -1163,7 +1163,10 @@ async def get_subscription_status(request: Request, user_id: int = Depends(get_c
 @api_router.post("/subscription/trial")
 async def activate_trial(req: TrialRequest, request: Request, user_id: int = Depends(get_current_user_id)):
     """Atomically grant one free 3-day trial to a user without a subscription."""
-    trial_days = 3
+    from constants import DEFAULT_DEVICE_LIMIT, TRIAL_DAYS
+
+    trial_days = TRIAL_DAYS
+    trial_device_limit = DEFAULT_DEVICE_LIMIT
     headers = _subscription_headers_from_request(request)
     wants_entitlement = _entitlement_requested(headers)
     if wants_entitlement:
@@ -1217,7 +1220,12 @@ async def activate_trial(req: TrialRequest, request: Request, user_id: int = Dep
 
     try:
         from xui_client import create_xui_user
-        res = await create_xui_user(user_id=user_id, days=trial_days, limit_ip=0, limit_hwid=2)
+        res = await create_xui_user(
+            user_id=user_id,
+            days=trial_days,
+            limit_ip=0,
+            limit_hwid=trial_device_limit,
+        )
     except Exception as exc:
         logger.error("Trial provisioning failed (%s)", type(exc).__name__)
         await release_trial_only_when_panel_confirms_no_active_access()
@@ -1225,6 +1233,26 @@ async def activate_trial(req: TrialRequest, request: Request, user_id: int = Dep
     if not res or not res.get("subscription_url"):
         await release_trial_only_when_panel_confirms_no_active_access()
         raise HTTPException(status_code=503, detail="Не удалось подключить пробный период. Напишите в поддержку")
+
+    # Do not persist or report a trial until the panel confirms the actual
+    # HWID/IP limits. The legacy DB column is named `limit_ip`, but the bot
+    # stores the device allowance there; the panel itself must keep IPs open.
+    try:
+        from xui_client import get_xui_devices
+        panel_devices = await get_xui_devices(user_id)
+        if (
+            not isinstance(panel_devices, dict)
+            or int(panel_devices.get("limit_hwid") or 0) != trial_device_limit
+            or int(panel_devices.get("limit_ip") or 0) != 0
+            or not isinstance(panel_devices.get("devices"), list)
+        ):
+            raise RuntimeError("Panel trial limits did not match the server catalog")
+    except Exception as exc:
+        # The panel may already have created a client. Keep the atomic claim
+        # reserved on an uncertain readback; retrying must not extend access.
+        logger.warning("Trial panel readback failed (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось подтвердить параметры пробного периода") from None
+
     sub_url = res["subscription_url"]
     expiry_ts = int(time.time()) + trial_days * 86400
     try:
@@ -1234,7 +1262,7 @@ async def activate_trial(req: TrialRequest, request: Request, user_id: int = Dep
             remark="Пробный период — 3 дня",
             uuid=str(res.get("uuid") or ""),
             days=trial_days,
-            limit_ip=0,
+            limit_ip=trial_device_limit,
             expiry=expiry_ts,
         )
     except Exception as exc:
@@ -1251,8 +1279,8 @@ async def activate_trial(req: TrialRequest, request: Request, user_id: int = Dep
         "expires_at": time.strftime("%Y-%m-%d %H:%M", time.localtime(expiry_ts)),
         "seconds_remaining": trial_days * 86400,
         "subscription_url": sub_url,
-        "max_devices": 2,
-        "active_devices": 1,
+        "max_devices": trial_device_limit,
+        "active_devices": len(panel_devices["devices"]),
         "servers": servers,
     }
     try:
