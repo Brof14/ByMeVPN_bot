@@ -220,6 +220,19 @@ def create_router() -> APIRouter:
             await database.delete_yookassa_pending(invoice_id)
         elif req.provider == "yookassa":
             await database.add_yookassa_pending(invoice_id, user_id, plan["days"], plan["devices"], plan["price_rub"])
+            # Close the remaining race where the webhook fulfills immediately
+            # after the first read but before the legacy pending row is added.
+            db = await _db()
+            try:
+                cur = await db.execute(
+                    "SELECT state FROM mobile_v2_orders WHERE user_id=? AND request_id=?",
+                    (user_id, req.request_id),
+                )
+                latest_state = await cur.fetchone()
+            finally:
+                await db.close()
+            if latest_state and latest_state[0] == "fulfilled":
+                await database.delete_yookassa_pending(invoice_id)
         else:
             await database.add_crypto_pending(invoice_id, user_id, plan["days"], plan["devices"], plan["price_rub"])
         return {"payment_url": payment_url, "invoice_id": invoice_id,
