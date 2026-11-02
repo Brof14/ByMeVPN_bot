@@ -568,12 +568,14 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
         self.assertEqual(getattr(raised.exception, "status_code", None), 409)
         create_panel_client.assert_awaited_once()
 
-    def test_first_trial_refuses_panel_unconfirmed_hwid_without_claiming_or_provisioning(self):
+    def test_first_trial_refuses_a_second_unregistered_hwid_without_claiming_or_provisioning(self):
         request = self.make_request("/api/v1/subscription/trial", headers={
             "X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1",
         })
         with patch("xui_client.has_xui_client", new=AsyncMock(return_value=True)), \
-                patch("xui_client.get_xui_devices", new=AsyncMock(return_value={"limit_hwid": 2, "devices": []})), \
+                patch("xui_client.get_xui_devices", new=AsyncMock(return_value={
+                    "limit_hwid": 1, "devices": [{"fingerprint": "0" * 64}],
+                })), \
                 patch.object(api_router.database, "has_trial_used", new=AsyncMock(return_value=False)), \
                 patch.object(api_router.database, "try_claim_trial", new=AsyncMock(return_value=True)) as claim_trial, \
                 patch("xui_client.create_xui_user", new=AsyncMock()) as create_panel_client:
@@ -608,6 +610,36 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
                 asyncio.run(api_router.activate_trial(api_router.TrialRequest(), request, user_id=7654321))
         self.assertEqual(getattr(raised.exception, "status_code", None), 503)
         claim_trial.assert_not_awaited()
+
+    def test_confirmed_no_access_after_provisioning_failure_releases_trial_claim(self):
+        request = self.make_request("/api/v1/subscription/trial", headers={"X-HWID": self.hwid})
+        with patch.object(api_router.database, "has_trial_used", new=AsyncMock(return_value=False)), \
+                patch.object(api_router.database, "get_user_keys", new=AsyncMock(return_value=[])), \
+                patch.object(api_router.database, "try_claim_trial", new=AsyncMock(return_value=True)) as claim_trial, \
+                patch.object(api_router.database, "reset_trial_for_user", new=AsyncMock()) as reset_trial, \
+                patch("xui_client.get_xui_client_details", new=AsyncMock(side_effect=[None, None])), \
+                patch("xui_client.create_xui_user", new=AsyncMock(return_value=None)) as create_panel_client:
+            with self.assertRaises(Exception) as raised:
+                asyncio.run(api_router.activate_trial(api_router.TrialRequest(), request, user_id=7654321))
+
+        self.assertEqual(getattr(raised.exception, "status_code", None), 503)
+        claim_trial.assert_awaited_once()
+        create_panel_client.assert_awaited_once()
+        reset_trial.assert_awaited_once_with(7654321)
+
+    def test_ambiguous_panel_readback_keeps_trial_reserved_after_provisioning_error(self):
+        request = self.make_request("/api/v1/subscription/trial", headers={"X-HWID": self.hwid})
+        with patch.object(api_router.database, "has_trial_used", new=AsyncMock(return_value=False)), \
+                patch.object(api_router.database, "get_user_keys", new=AsyncMock(return_value=[])), \
+                patch.object(api_router.database, "try_claim_trial", new=AsyncMock(return_value=True)), \
+                patch.object(api_router.database, "reset_trial_for_user", new=AsyncMock()) as reset_trial, \
+                patch("xui_client.get_xui_client_details", new=AsyncMock(side_effect=[None, RuntimeError("panel unavailable")])), \
+                patch("xui_client.create_xui_user", new=AsyncMock(return_value=None)):
+            with self.assertRaises(Exception) as raised:
+                asyncio.run(api_router.activate_trial(api_router.TrialRequest(), request, user_id=7654321))
+
+        self.assertEqual(getattr(raised.exception, "status_code", None), 503)
+        reset_trial.assert_not_awaited()
 
     def test_payment_check_adds_entitlement_only_for_opted_in_registered_device(self):
         record = {"user_id": 7654321, "status": "success"}

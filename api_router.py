@@ -1195,15 +1195,35 @@ async def activate_trial(req: TrialRequest, request: Request, user_id: int = Dep
 
     if not await database.try_claim_trial(user_id):
         raise HTTPException(status_code=409, detail="Пробный период уже использован")
+
+    async def release_trial_only_when_panel_confirms_no_active_access() -> None:
+        """Undo a claim only when panel readback proves no active client exists.
+
+        A timeout or unavailable readback is ambiguous: keep the claim reserved
+        so a retry cannot extend a client that may have been created remotely.
+        """
+        try:
+            from xui_client import get_xui_client_details
+            panel_client = await get_xui_client_details(user_id, strict=True)
+            panel_expiry = int((panel_client or {}).get("expiry_time") or 0) // 1000
+        except Exception as exc:
+            logger.warning("Trial failure state remains reserved because panel readback failed (%s)", type(exc).__name__)
+            return
+        if not panel_client or panel_expiry <= int(time.time()):
+            try:
+                await database.reset_trial_for_user(user_id)
+            except Exception as exc:
+                logger.warning("Trial claim remains reserved because reset failed (%s)", type(exc).__name__)
+
     try:
         from xui_client import create_xui_user
         res = await create_xui_user(user_id=user_id, days=trial_days, limit_ip=0, limit_hwid=2)
     except Exception as exc:
         logger.error("Trial provisioning failed (%s)", type(exc).__name__)
+        await release_trial_only_when_panel_confirms_no_active_access()
         raise HTTPException(status_code=503, detail="Не удалось подключить пробный период. Напишите в поддержку") from None
     if not res or not res.get("subscription_url"):
-        # The claim stays consumed when panel provisioning has an ambiguous
-        # outcome; this prevents retries from extending a partially created key.
+        await release_trial_only_when_panel_confirms_no_active_access()
         raise HTTPException(status_code=503, detail="Не удалось подключить пробный период. Напишите в поддержку")
     sub_url = res["subscription_url"]
     expiry_ts = int(time.time()) + trial_days * 86400

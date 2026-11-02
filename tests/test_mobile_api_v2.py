@@ -50,6 +50,7 @@ class TestMobileApiV2(unittest.TestCase):
                 self.assertEqual(response.status_code, 200)
                 payload = response.json()
                 self.assertEqual(set(payload), {"trial", "plans", "payment_enabled", "purchase_enabled"})
+                self.assertEqual(payload["trial"]["devices"], 2)
                 self.assertTrue(payload["payment_enabled"])
                 self.assertTrue(payload["purchase_enabled"])
                 self.assertEqual(len(payload["plans"]), 4)
