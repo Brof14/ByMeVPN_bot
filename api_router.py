@@ -34,6 +34,8 @@ from pydantic import BaseModel
 import database
 from entitlements import EntitlementSigningError, create_entitlement, device_binding, load_private_key
 from config import XUI_SUB_PATH, XUI_URL
+from telegram_post_compat import TelegramSessionTokenBody, register_telegram_check_post
+from google_signin import GoogleIdTokenError, verify_google_id_token
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,7 @@ if not JWT_SECRET or len(JWT_SECRET.encode("utf-8")) < 32:
 
 JWT_ISSUER = "bymevpn-api"
 JWT_AUDIENCE = "bymevpn-mobile"
+MOBILE_TRIAL_BOOTSTRAP_TTL_SECONDS = 10 * 60
 
 
 async def _ensure_auth_db():
@@ -552,13 +555,16 @@ async def get_user_real_subscription(
                 elif not _entitlement_requested(request_headers or {}):
                     trial_available = True
                     trial_reason = None
-                elif not panel_client:
-                    # The panel only reports an HWID after the client has
-                    # connected, but the current signed-trial flow requires
-                    # that panel proof before provisioning any trial access.
-                    trial_reason = "device_confirmation_required"
                 else:
-                    await _require_registered_entitlement_device(user_id, request_headers or {})
+                    # First-time clients cannot have panel HWID evidence until
+                    # after their first tunnel connection. Eligibility only
+                    # validates the signed-client identity and signer here;
+                    # the bounded bootstrap path verifies the panel client and
+                    # its 2/0 limits before allowing that first connection.
+                    headers = request_headers or {}
+                    hwid = str(headers.get("X-HWID") or "").strip()
+                    device_binding(user_id, hwid)
+                    load_private_key()
                     trial_available = True
                     trial_reason = None
             except Exception as exc:
@@ -634,7 +640,31 @@ async def _attach_signed_entitlement(
         return subscription
 
     hwid = str(headers.get("X-HWID") or "").strip()
-    device_state = await _require_registered_entitlement_device(user_id, headers)
+    try:
+        device_state = await _require_registered_entitlement_device(user_id, headers)
+    except HTTPException as exc:
+        if exc.status_code != 403:
+            raise
+        bootstrap_expiry = await _validated_trial_bootstrap_expiry(user_id, headers)
+        if bootstrap_expiry is None:
+            # The panel may have learned the HWID between the first read and
+            # bootstrap validation. Re-read once so that race upgrades directly
+            # to the ordinary entitlement instead of returning a false denial.
+            device_state = await _require_registered_entitlement_device(user_id, headers)
+        else:
+            remaining_bootstrap = bootstrap_expiry - int(time.time())
+            if remaining_bootstrap <= 0:
+                raise HTTPException(status_code=403, detail="Первичное подключение истекло") from None
+            subscription["max_devices"] = 2
+            subscription["active_devices"] = 0
+            bootstrap_status = dict(subscription)
+            bootstrap_status["seconds_remaining"] = min(
+                int(subscription.get("seconds_remaining") or 0), remaining_bootstrap,
+            )
+            subscription["entitlement"] = create_entitlement(user_id, hwid, bootstrap_status)
+            subscription["entitlement_bootstrap"] = True
+            subscription["entitlement_expires_at"] = bootstrap_expiry
+            return subscription
     devices = device_state["devices"]
 
     try:
@@ -643,9 +673,20 @@ async def _attach_signed_entitlement(
         raise EntitlementSigningError("Subscription device limit is unavailable") from exc
     if device_limit not in (2, 5, 10):
         raise EntitlementSigningError("Subscription device limit is unavailable")
+    if subscription.get("status") == "trial":
+        try:
+            ip_limit = int(device_state.get("limit_ip") or 0)
+        except (TypeError, ValueError) as exc:
+            raise EntitlementSigningError("Trial panel limits are unavailable") from exc
+        if device_limit != 2 or ip_limit != 0:
+            raise EntitlementSigningError("Trial panel limits do not match the server catalog")
     subscription["max_devices"] = device_limit
     subscription["active_devices"] = len(devices)
     subscription["entitlement"] = create_entitlement(user_id, hwid, subscription)
+    try:
+        await database.delete_mobile_trial_bootstrap(user_id)
+    except Exception as exc:
+        logger.warning("Confirmed trial bootstrap cleanup failed (%s)", type(exc).__name__)
     return subscription
 
 
@@ -684,18 +725,60 @@ async def _require_registered_entitlement_device(
 
     if not isinstance(device_state, dict) or not isinstance(device_state.get("devices"), list):
         raise HTTPException(status_code=503, detail="Не удалось проверить устройство подписки")
+    registered = _panel_state_contains_hwid(user_id, hwid, device_state)
+    if not registered:
+        raise HTTPException(status_code=403, detail="Устройство не подтверждено для этой подписки")
+    return device_state
+
+
+def _panel_state_contains_hwid(user_id: int, hwid: str, device_state: Dict[str, Any]) -> bool:
     current_fingerprint = hashlib.sha256(hwid.encode("utf-8")).hexdigest()
-    registered = any(
+    return any(
         isinstance(item, dict)
         and (fingerprint := str(item.get("fingerprint") or "").strip().lower())
         and 16 <= len(fingerprint) <= 64
         and re.fullmatch(r"[0-9a-f]+", fingerprint)
         and hmac.compare_digest(current_fingerprint[:len(fingerprint)], fingerprint)
-        for item in device_state["devices"]
+        for item in device_state.get("devices", [])
     )
-    if not registered:
-        raise HTTPException(status_code=403, detail="Устройство не подтверждено для этой подписки")
-    return device_state
+
+
+async def _validated_trial_bootstrap_expiry(
+    user_id: int, headers: Dict[str, str],
+) -> Optional[int]:
+    """Check a fixed, short first-connect grant against the account and live panel state."""
+    hwid = str(headers.get("X-HWID") or "").strip()
+    try:
+        fingerprint = device_binding(user_id, hwid)
+    except EntitlementSigningError:
+        return None
+    try:
+        expiry = await database.get_mobile_trial_bootstrap(user_id, fingerprint)
+        if expiry is None or expiry <= int(time.time()):
+            return None
+        if not await database.has_trial_used(user_id):
+            return None
+        from xui_client import get_xui_client_details, get_xui_devices, has_xui_client
+        if not await has_xui_client(user_id):
+            return None
+        panel_client, device_state = await asyncio.gather(
+            get_xui_client_details(user_id, strict=True),
+            get_xui_devices(user_id),
+        )
+        panel_expiry = int((panel_client or {}).get("expiry_time") or 0) // 1000
+        if (panel_expiry <= int(time.time()) or not isinstance(device_state, dict)
+                or int(device_state.get("limit_hwid") or 0) != 2
+                or int(device_state.get("limit_ip") or 0) != 0
+                or not isinstance(device_state.get("devices"), list)):
+            return None
+        # If the panel has already learned this device, stop using bootstrap.
+        if _panel_state_contains_hwid(user_id, hwid, device_state):
+            await database.delete_mobile_trial_bootstrap(user_id)
+            return None
+        return int(expiry)
+    except Exception as exc:
+        logger.warning("Trial bootstrap panel validation failed (%s)", type(exc).__name__)
+        return None
 
 
 async def _require_opted_in_device_access(user_id: int, request: Request) -> Dict[str, str]:
@@ -708,7 +791,14 @@ async def _require_opted_in_device_access(user_id: int, request: Request) -> Dic
     except EntitlementSigningError as exc:
         logger.error("Entitlement signer unavailable (%s)", type(exc).__name__)
         raise HTTPException(status_code=503, detail="Не удалось подтвердить состояние подписки") from None
-    await _require_registered_entitlement_device(user_id, headers)
+    try:
+        await _require_registered_entitlement_device(user_id, headers)
+    except HTTPException as exc:
+        if exc.status_code != 403:
+            raise
+        if await _validated_trial_bootstrap_expiry(user_id, headers) is None:
+            # Retry once because panel state may change between reads.
+            await _require_registered_entitlement_device(user_id, headers)
     return headers
 
 
@@ -762,8 +852,8 @@ class TelegramCheckResponse(BaseModel):
     servers: Optional[List[Dict[str, Any]]] = None
 
 
-class TelegramSessionCheckRequest(BaseModel):
-    token: str
+# Keep the model name available to existing unit callers and adapters.
+TelegramSessionCheckRequest = TelegramSessionTokenBody
 
 
 class TelegramSessionCancelRequest(BaseModel):
@@ -785,6 +875,7 @@ class LoginRequest(BaseModel):
 
 class GoogleLoginRequest(BaseModel):
     id_token: str
+    nonce: str
     install_id: Optional[str] = None
 
 
@@ -878,12 +969,9 @@ async def check_telegram_session(token: str, request: Request):
     )
 
 
-@api_router.post("/auth/telegram/check-session", response_model=TelegramCheckResponse)
-async def check_telegram_session_body(req: TelegramSessionCheckRequest, request: Request):
-    """Poll Telegram login state in the request body to keep it out of URL logs."""
-    if not req.token or len(req.token) > 256:
-        return TelegramCheckResponse(status="expired")
-    return await check_telegram_session(req.token, request)
+check_telegram_session_body = register_telegram_check_post(
+    api_router, check_telegram_session, TelegramCheckResponse
+)
 
 
 @api_router.post("/auth/telegram/cancel-session")
@@ -986,15 +1074,76 @@ async def login(req: LoginRequest, request: Request):
     }
 
 
+def _google_signin_configured() -> bool:
+    return (
+        os.getenv("GOOGLE_SIGNIN_ENABLED") == "1"
+        and bool(os.getenv("GOOGLE_WEB_CLIENT_ID", "").strip())
+    )
+
+
+@api_router.post("/auth/google/nonce")
+async def create_google_nonce():
+    """Issue a short-lived server nonce only when Google login is configured."""
+    if not _google_signin_configured():
+        raise HTTPException(status_code=503, detail="Вход через Google временно недоступен")
+    nonce = secrets.token_urlsafe(32)
+    nonce_hash = hashlib.sha256(nonce.encode("utf-8")).hexdigest()
+    try:
+        await database.create_mobile_google_nonce(nonce_hash, int(time.time()) + 300)
+    except Exception as exc:
+        logger.error("Google sign-in challenge storage unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось начать вход через Google") from None
+    return {"nonce": nonce}
+
+
 @api_router.post("/auth/google")
 async def login_google(req: GoogleLoginRequest, request: Request):
-    # The former implementation decoded claims without checking the signature,
-    # audience, verified-email flag or nonce. Keep the endpoint closed until a
-    # Google client ID and nonce-bound native flow are configured and tested.
-    raise HTTPException(
-        status_code=503,
-        detail="Вход через Google временно недоступен",
+    if not _google_signin_configured():
+        raise HTTPException(status_code=503, detail="Вход через Google временно недоступен")
+
+    expected_audience = os.getenv("GOOGLE_WEB_CLIENT_ID", "").strip()
+    try:
+        claims = await asyncio.to_thread(verify_google_id_token, req.id_token, expected_audience)
+    except GoogleIdTokenError:
+        raise HTTPException(status_code=401, detail="Не удалось подтвердить аккаунт Google") from None
+
+    if not hmac.compare_digest(claims["nonce"], req.nonce):
+        raise HTTPException(status_code=401, detail="Не удалось подтвердить запрос входа")
+    nonce_hash = hashlib.sha256(req.nonce.encode("utf-8")).hexdigest()
+    try:
+        consumed = await database.consume_mobile_google_nonce(nonce_hash)
+    except Exception as exc:
+        logger.error("Google sign-in challenge validation unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось подтвердить запрос входа") from None
+    if not consumed:
+        raise HTTPException(status_code=401, detail="Запрос входа истёк или уже использован")
+
+    try:
+        await _ensure_auth_db()
+        identity = await database.get_or_create_google_account(
+            claims["sub"], claims["email"], claims["name"],
+        )
+    except Exception as exc:
+        logger.error("Google account storage unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось открыть аккаунт") from None
+
+    user_id = int(identity["user_id"])
+    jwt_token = create_simple_jwt(user_id, identity["email"])
+    _, servers, sub_dict = await _auth_subscription_snapshot(
+        user_id, _subscription_headers_from_request(request)
     )
+    return {
+        "access": jwt_token,
+        "refresh": f"ref_{jwt_token}",
+        "user": {
+            "id": str(user_id),
+            "email": identity["email"],
+            "name": identity["name"],
+            "is_google": True,
+        },
+        "subscription": sub_dict,
+        "servers": servers,
+    }
 
 
 @api_router.post("/auth/refresh")
@@ -1048,10 +1197,17 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
     # @bymevpn.app address for signed-in desktop accounts.
     db = await database.get_db()
     try:
-        cursor = await db.execute("SELECT email,name FROM app_users WHERE user_id=?", (user_id,))
+        cursor = await db.execute("SELECT email,name FROM google_accounts WHERE user_id=?", (user_id,))
         row = await cursor.fetchone()
     except Exception:
         row = None  # Telegram identities do not necessarily have app_users rows.
+    is_google = bool(row)
+    if not row:
+        try:
+            cursor = await db.execute("SELECT email,name FROM app_users WHERE user_id=?", (user_id,))
+            row = await cursor.fetchone()
+        except Exception:
+            row = None
     email = str(row[0]) if row else ""
     display_name = str(row[1] or "") if row else ""
     return {
@@ -1059,7 +1215,7 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
             "id": str(user_id),
             "email": email,
             "name": display_name or username or f"User {user_id}",
-            "is_google": False,
+            "is_google": is_google,
         }
     }
 
@@ -1095,7 +1251,10 @@ async def get_subscription_status(request: Request, user_id: int = Depends(get_c
 @api_router.post("/subscription/trial")
 async def activate_trial(req: TrialRequest, request: Request, user_id: int = Depends(get_current_user_id)):
     """Atomically grant one free 3-day trial to a user without a subscription."""
-    trial_days = 3
+    from constants import DEFAULT_DEVICE_LIMIT, TRIAL_DAYS
+
+    trial_days = TRIAL_DAYS
+    trial_device_limit = DEFAULT_DEVICE_LIMIT
     headers = _subscription_headers_from_request(request)
     wants_entitlement = _entitlement_requested(headers)
     if wants_entitlement:
@@ -1104,9 +1263,17 @@ async def activate_trial(req: TrialRequest, request: Request, user_id: int = Dep
         except EntitlementSigningError as exc:
             logger.error("Trial entitlement signer unavailable (%s)", type(exc).__name__)
             raise HTTPException(status_code=503, detail="Не удалось подтвердить состояние подписки") from None
-        # Do this before reserving the one-time trial. A request carrying a
-        # client HWID is not sufficient proof that the panel registered it.
-        await _require_registered_entitlement_device(user_id, headers)
+        # Validate identity and the client/server binding, but do not require
+        # panel registration yet: 3x-ui learns an installation HWID only after
+        # its first VPN connection. A fixed ten-minute bootstrap below enables
+        # that first connection; it is never treated as panel confirmation.
+        hwid = str(headers.get("X-HWID") or "").strip()
+        try:
+            device_binding(user_id, hwid)
+        except EntitlementSigningError:
+            raise HTTPException(status_code=422, detail="Не удалось подтвердить это устройство") from None
+        if req.install_id and not hmac.compare_digest(req.install_id.strip(), hwid):
+            raise HTTPException(status_code=422, detail="Данные устройства не совпадают")
     if await database.has_trial_used(user_id):
         raise HTTPException(status_code=409, detail="Пробный период уже использован")
     current_keys = await database.get_user_keys(user_id)
@@ -1127,16 +1294,61 @@ async def activate_trial(req: TrialRequest, request: Request, user_id: int = Dep
 
     if not await database.try_claim_trial(user_id):
         raise HTTPException(status_code=409, detail="Пробный период уже использован")
+
+    async def release_trial_only_when_panel_confirms_no_active_access() -> None:
+        """Undo a claim only when panel readback proves no active client exists.
+
+        A timeout or unavailable readback is ambiguous: keep the claim reserved
+        so a retry cannot extend a client that may have been created remotely.
+        """
+        try:
+            from xui_client import get_xui_client_details
+            panel_client = await get_xui_client_details(user_id, strict=True)
+            panel_expiry = int((panel_client or {}).get("expiry_time") or 0) // 1000
+        except Exception as exc:
+            logger.warning("Trial failure state remains reserved because panel readback failed (%s)", type(exc).__name__)
+            return
+        if not panel_client or panel_expiry <= int(time.time()):
+            try:
+                await database.reset_trial_for_user(user_id)
+            except Exception as exc:
+                logger.warning("Trial claim remains reserved because reset failed (%s)", type(exc).__name__)
+
     try:
         from xui_client import create_xui_user
-        res = await create_xui_user(user_id=user_id, days=trial_days, limit_ip=0, limit_hwid=2)
+        res = await create_xui_user(
+            user_id=user_id,
+            days=trial_days,
+            limit_ip=0,
+            limit_hwid=trial_device_limit,
+        )
     except Exception as exc:
         logger.error("Trial provisioning failed (%s)", type(exc).__name__)
+        await release_trial_only_when_panel_confirms_no_active_access()
         raise HTTPException(status_code=503, detail="Не удалось подключить пробный период. Напишите в поддержку") from None
     if not res or not res.get("subscription_url"):
-        # The claim stays consumed when panel provisioning has an ambiguous
-        # outcome; this prevents retries from extending a partially created key.
+        await release_trial_only_when_panel_confirms_no_active_access()
         raise HTTPException(status_code=503, detail="Не удалось подключить пробный период. Напишите в поддержку")
+
+    # Do not persist or report a trial until the panel confirms the actual
+    # HWID/IP limits. The legacy DB column is named `limit_ip`, but the bot
+    # stores the device allowance there; the panel itself must keep IPs open.
+    try:
+        from xui_client import get_xui_devices
+        panel_devices = await get_xui_devices(user_id)
+        if (
+            not isinstance(panel_devices, dict)
+            or int(panel_devices.get("limit_hwid") or 0) != trial_device_limit
+            or int(panel_devices.get("limit_ip") or 0) != 0
+            or not isinstance(panel_devices.get("devices"), list)
+        ):
+            raise RuntimeError("Panel trial limits did not match the server catalog")
+    except Exception as exc:
+        # The panel may already have created a client. Keep the atomic claim
+        # reserved on an uncertain readback; retrying must not extend access.
+        logger.warning("Trial panel readback failed (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось подтвердить параметры пробного периода") from None
+
     sub_url = res["subscription_url"]
     expiry_ts = int(time.time()) + trial_days * 86400
     try:
@@ -1146,12 +1358,32 @@ async def activate_trial(req: TrialRequest, request: Request, user_id: int = Dep
             remark="Пробный период — 3 дня",
             uuid=str(res.get("uuid") or ""),
             days=trial_days,
-            limit_ip=0,
+            limit_ip=trial_device_limit,
             expiry=expiry_ts,
         )
     except Exception as exc:
         logger.error("Trial database save failed (%s)", type(exc).__name__)
         raise HTTPException(status_code=503, detail="Пробный период создан, но его статус не сохранился. Напишите в поддержку") from None
+
+    if wants_entitlement:
+        hwid = str(headers.get("X-HWID") or "").strip()
+        if _panel_state_contains_hwid(user_id, hwid, panel_devices):
+            await database.delete_mobile_trial_bootstrap(user_id)
+        else:
+            # The trial claim is already atomically reserved and the panel has
+            # confirmed the 2-HWID / unlimited-IP client. Bind a fixed window
+            # to this account + installation digest. It cannot be renewed by
+            # retrying the trial request or by changing the request header.
+            bootstrap_expiry = int(time.time()) + MOBILE_TRIAL_BOOTSTRAP_TTL_SECONDS
+            try:
+                reserved = await database.create_mobile_trial_bootstrap(
+                    user_id, device_binding(user_id, hwid), bootstrap_expiry,
+                )
+            except Exception as exc:
+                logger.error("Trial bootstrap persistence failed (%s)", type(exc).__name__)
+                raise HTTPException(status_code=503, detail="Не удалось подтвердить первое подключение") from None
+            if not reserved:
+                raise HTTPException(status_code=409, detail="Пробный период уже использован")
 
     servers = await fetch_and_parse_real_nodes(
         sub_url, request_headers=_subscription_headers_from_request(request)
@@ -1163,8 +1395,8 @@ async def activate_trial(req: TrialRequest, request: Request, user_id: int = Dep
         "expires_at": time.strftime("%Y-%m-%d %H:%M", time.localtime(expiry_ts)),
         "seconds_remaining": trial_days * 86400,
         "subscription_url": sub_url,
-        "max_devices": 2,
-        "active_devices": 1,
+        "max_devices": trial_device_limit,
+        "active_devices": len(panel_devices["devices"]),
         "servers": servers,
     }
     try:

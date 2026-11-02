@@ -312,6 +312,28 @@ async def _mobile_yookassa_order_matches(
     ))
 
 
+async def _mobile_v2_yookassa_order_matches(payment: dict) -> bool:
+    """Validate the additive legacy-runtime V2 ledger before bot fulfillment."""
+    if payment.get("status") != "succeeded":
+        return False
+    try:
+        from mobile_v2_legacy import validate_yookassa_mobile_payment
+        return bool(await validate_yookassa_mobile_payment(payment))
+    except Exception as exc:
+        logger.error("Mobile V2 YooKassa order validation unavailable (%s)", type(exc).__name__)
+        return False
+
+
+async def _mark_mobile_v2_yookassa_fulfilled(payment_id: str) -> bool:
+    """Record V2 fulfillment only after subscription delivery succeeded."""
+    try:
+        from mobile_v2_legacy import mark_mobile_order_fulfilled
+        return bool(await mark_mobile_order_fulfilled("yookassa", payment_id))
+    except Exception as exc:
+        logger.error("Mobile V2 YooKassa fulfillment record unavailable (%s)", type(exc).__name__)
+        return False
+
+
 async def _mobile_crypto_order_matches(invoice_id: str, pending: dict) -> bool:
     """Verify a settled app Crypto Pay invoice against its durable request."""
     from database import get_mobile_payment_request_by_invoice
@@ -434,13 +456,18 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
         # that exact owner/request and recompute its terms from our catalog.
         # Telegram bot payments do not carry app_payment=1 and retain their
         # existing fulfillment contract.
-        if metadata.get("mobile_api_checkout") == "1" or metadata.get("mobile_v2") == "1":
-            if not await _mobile_yookassa_order_matches(
+        if metadata.get("mobile_v2") == "1":
+            mobile_order_valid = await _mobile_v2_yookassa_order_matches(payment)
+        elif metadata.get("mobile_api_checkout") == "1":
+            mobile_order_valid = await _mobile_yookassa_order_matches(
                 payment_id, user_id, days, devices, amount_rub, metadata,
-            ):
-                logger.error("Mobile YooKassa invoice does not match its server-owned checkout terms")
-                await _notify_admin(bot, "⚠️ Данные мобильного платежа не совпали с сохранённым тарифом. Автоматическая выдача остановлена.")
-                return
+            )
+        else:
+            mobile_order_valid = True
+        if not mobile_order_valid:
+            logger.error("Mobile YooKassa invoice did not match its durable server-owned order")
+            await _notify_admin(bot, "⚠️ Данные мобильного платежа не совпали с сохранённым тарифом. Автоматическая выдача остановлена.")
+            return
 
         logger.info(
             "Webhook: processing payment %s — user=%d days=%d devices=%d amount=%d",
@@ -553,6 +580,10 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
         )
 
         if success:
+            if metadata.get("mobile_v2") == "1" and not await _mark_mobile_v2_yookassa_fulfilled(payment_id):
+                await update_payment_status(pay_db_id, "recovery_required")
+                await _notify_admin(bot, "⚠️ Подписка выдана, но мобильный статус платежа не удалось сохранить. Нужна ручная сверка.")
+                return
             await update_payment_status(pay_db_id, "success")
             await mark_yookassa_processed(payment_id)
             try:

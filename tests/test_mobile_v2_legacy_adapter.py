@@ -17,6 +17,8 @@ class FakeDatabase:
         self.path = path
         self.DB_FILE = path
         self.connection = None
+        self.deleted_yookassa_pending = []
+        self.on_add_yookassa_pending = None
 
     async def get_db(self):
         if self.connection is None:
@@ -25,7 +27,12 @@ class FakeDatabase:
         return self.connection
 
     async def add_yookassa_pending(self, *args):
+        if self.on_add_yookassa_pending:
+            await self.on_add_yookassa_pending(*args)
         return None
+
+    async def delete_yookassa_pending(self, invoice_id):
+        self.deleted_yookassa_pending.append(str(invoice_id))
 
     async def add_crypto_pending(self, *args):
         return None
@@ -185,8 +192,31 @@ class LegacyMobileV2HttpTests(unittest.TestCase):
             response = self.client.post("/api/v1/mobile/v2/payment/create", json={
                 "plan_code": "1m_d2", "request_id": "early_yk_12345", "provider": "yookassa"})
         self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.db.deleted_yookassa_pending, ["yk-early"])
         check = self.client.get("/api/v1/mobile/v2/payment/check",
                                 params={"invoice_id": "yk-early", "provider": "yookassa"})
+        self.assertTrue(check.json()["is_active"])
+
+    def test_yookassa_webhook_during_pending_insert_cleans_stale_pending_row(self):
+        async def provider_create(config, plan, user_id, description, order_hash):
+            payment = {"id": "yk-racing", "status": "succeeded",
+                       "amount": {"value": "89.00", "currency": "RUB"},
+                       "metadata": {"mobile_v2": "1", "mobile_order": order_hash,
+                                    "user_id": str(user_id), "days": "30", "devices": "2",
+                                    "plan_code": "1m_d2", "months": "1"}}
+            self.assertTrue(await legacy.validate_yookassa_mobile_payment(payment))
+            async def finish_after_pending(*_):
+                await legacy.mark_mobile_order_fulfilled("yookassa", payment["id"])
+            self.db.on_add_yookassa_pending = finish_after_pending
+            return {"id": payment["id"], "url": "https://pay.invalid/racing"}
+
+        with patch.object(legacy, "_create_yookassa", provider_create):
+            response = self.client.post("/api/v1/mobile/v2/payment/create", json={
+                "plan_code": "1m_d2", "request_id": "racing_yk_12345", "provider": "yookassa"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.db.deleted_yookassa_pending, ["yk-racing"])
+        check = self.client.get("/api/v1/mobile/v2/payment/check",
+                                params={"invoice_id": "yk-racing", "provider": "yookassa"})
         self.assertTrue(check.json()["is_active"])
 
     def test_crypto_early_webhook_binds_order_and_duplicate_is_safe(self):

@@ -2,6 +2,7 @@
 Database operations for ByMeVPN bot.
 Uses aiosqlite with WAL mode for better concurrency and connection pooling.
 """
+import hashlib
 import os
 import time
 import json
@@ -396,6 +397,47 @@ CREATE INDEX IF NOT EXISTS idx_ars_user ON auto_renew_subscriptions(user_id);
 CREATE INDEX IF NOT EXISTS idx_ars_status ON auto_renew_subscriptions(status);
 """
 
+_MOBILE_GOOGLE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS mobile_google_nonces (
+    nonce_hash TEXT PRIMARY KEY,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mobile_google_nonces_expiry
+    ON mobile_google_nonces(expires_at);
+
+CREATE TABLE IF NOT EXISTS google_accounts (
+    google_sub TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL UNIQUE,
+    email TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(user_id)
+);
+"""
+
+_MOBILE_TRIAL_BOOTSTRAP_SCHEMA = """
+CREATE TABLE IF NOT EXISTS mobile_trial_bootstrap (
+    user_id INTEGER PRIMARY KEY,
+    device_hash TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_mobile_trial_bootstrap_expiry
+    ON mobile_trial_bootstrap(expires_at);
+"""
+
+
+async def ensure_mobile_google_schema(db: aiosqlite.Connection) -> None:
+    """Apply the additive, repeatable Google nonce/identity schema migration."""
+    await db.executescript(_MOBILE_GOOGLE_SCHEMA)
+
+
+async def ensure_mobile_trial_bootstrap_schema(db: aiosqlite.Connection) -> None:
+    """Create the additive storage for a short, device-bound first-connect grant."""
+    await db.executescript(_MOBILE_TRIAL_BOOTSTRAP_SCHEMA)
+
 
 async def get_db() -> aiosqlite.Connection:
     """Get database connection from pool or create new one."""
@@ -412,6 +454,12 @@ async def get_db() -> aiosqlite.Connection:
 
 async def _run_migrations(db: aiosqlite.Connection) -> None:
     """Run database migrations."""
+    # Additive storage for the opt-in Google flow. This is deliberately a
+    # migration rather than part of the base schema so existing SQLite files
+    # are upgraded explicitly and can be verified independently before rollout.
+    await ensure_mobile_google_schema(db)
+    await ensure_mobile_trial_bootstrap_schema(db)
+
     # Provisioning intents make paid-key retries idempotent across restarts.
     await db.execute(
         """CREATE TABLE IF NOT EXISTS provisioning_intents (
@@ -1147,6 +1195,148 @@ async def ensure_user(user_id: int, username: Optional[str] = None) -> None:
         (user_id, username),
     )
     await db.commit()
+
+
+async def create_mobile_google_nonce(nonce_hash: str, expires_at: int) -> None:
+    """Persist only a hash of a short-lived Google sign-in challenge."""
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        await db.execute("DELETE FROM mobile_google_nonces WHERE expires_at<=?", (now,))
+        await db.execute(
+            "INSERT INTO mobile_google_nonces(nonce_hash,created_at,expires_at) VALUES(?,?,?)",
+            (nonce_hash, now, int(expires_at)),
+        )
+        await db.commit()
+
+
+async def consume_mobile_google_nonce(nonce_hash: str) -> bool:
+    """Atomically consume a still-live Google nonce exactly once."""
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        cursor = await db.execute(
+            "DELETE FROM mobile_google_nonces WHERE nonce_hash=? AND expires_at>?",
+            (nonce_hash, now),
+        )
+        await db.commit()
+    return cursor.rowcount == 1
+
+
+async def create_mobile_trial_bootstrap(
+    user_id: int, device_hash: str, expires_at: int,
+) -> bool:
+    """Reserve at most one bounded first-connect grant for an already claimed trial.
+
+    The expiry is fixed at insertion time; retries cannot extend the bootstrap.
+    Only a digest of the installation identifier is stored.
+    """
+    db = await get_db()
+    now = int(time.time())
+    if int(expires_at) <= now:
+        return False
+    async with _db_semaphore:
+        await db.execute("DELETE FROM mobile_trial_bootstrap WHERE expires_at<=?", (now,))
+        cursor = await db.execute(
+            """INSERT OR IGNORE INTO mobile_trial_bootstrap
+               (user_id,device_hash,expires_at,created_at) VALUES(?,?,?,?)""",
+            (int(user_id), str(device_hash), int(expires_at), now),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+
+
+async def get_mobile_trial_bootstrap(
+    user_id: int, device_hash: str,
+) -> Optional[int]:
+    """Return the fixed expiry for this account/device bootstrap, if still live."""
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        cursor = await db.execute(
+            """SELECT expires_at FROM mobile_trial_bootstrap
+               WHERE user_id=? AND device_hash=? AND expires_at>?""",
+            (int(user_id), str(device_hash), now),
+        )
+        row = await cursor.fetchone()
+        return int(row[0]) if row else None
+
+
+async def delete_mobile_trial_bootstrap(user_id: int) -> None:
+    """Remove a bootstrap once panel-confirmed device access is available."""
+    db = await get_db()
+    async with _db_semaphore:
+        await db.execute("DELETE FROM mobile_trial_bootstrap WHERE user_id=?", (int(user_id),))
+        await db.commit()
+
+
+async def get_or_create_google_account(google_sub: str, email: str, name: str) -> dict:
+    """Resolve Google identities only by `sub`; never link by email."""
+    import secrets
+
+    db = await get_db()
+    sub_hash = hashlib.sha256(google_sub.encode("utf-8")).hexdigest()
+    internal_email = f"google-{sub_hash[:40]}@identity.bymevpn.invalid"
+    normalized_name = str(name or "Google user").strip()[:160] or "Google user"
+    async with _db_semaphore:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = await db.execute(
+                "SELECT user_id FROM google_accounts WHERE google_sub=?", (google_sub,),
+            )
+            row = await cursor.fetchone()
+            if row:
+                user_id = int(row[0])
+                await db.execute(
+                    "UPDATE google_accounts SET email=?,name=? WHERE google_sub=?",
+                    (email[:320], normalized_name, google_sub),
+                )
+                await db.execute(
+                    "UPDATE users SET username=? WHERE user_id=?", (normalized_name, user_id),
+                )
+                await db.execute(
+                    "UPDATE app_users SET name=? WHERE user_id=?", (normalized_name, user_id),
+                )
+                await db.commit()
+                return {"user_id": user_id, "email": email[:320], "name": normalized_name}
+
+            user_id = 0
+            for _ in range(16):
+                candidate = secrets.randbelow(2**62 - 1) + 1
+                cursor = await db.execute(
+                    "SELECT 1 FROM users WHERE user_id=? UNION ALL "
+                    "SELECT 1 FROM app_users WHERE user_id=? LIMIT 1",
+                    (candidate, candidate),
+                )
+                if not await cursor.fetchone():
+                    user_id = candidate
+                    break
+            if not user_id:
+                raise RuntimeError("Unable to allocate mobile account id")
+
+            now = int(time.time())
+            salt = secrets.token_hex(16)
+            # Google accounts cannot use password login with this random verifier.
+            password_hash = secrets.token_hex(32)
+            await db.execute(
+                "INSERT INTO users(user_id,username) VALUES(?,?)",
+                (user_id, normalized_name),
+            )
+            await db.execute(
+                "INSERT INTO app_users(user_id,email,password_hash,salt,name,created_at) "
+                "VALUES(?,?,?,?,?,?)",
+                (user_id, internal_email, password_hash, salt, normalized_name, now),
+            )
+            await db.execute(
+                "INSERT INTO google_accounts(google_sub,user_id,email,name,created_at) "
+                "VALUES(?,?,?,?,?)",
+                (google_sub, user_id, email[:320], normalized_name, now),
+            )
+            await db.commit()
+            return {"user_id": user_id, "email": email[:320], "name": normalized_name}
+        except Exception:
+            await db.rollback()
+            raise
 
 
 async def get_referrer(user_id: int) -> Optional[int]:

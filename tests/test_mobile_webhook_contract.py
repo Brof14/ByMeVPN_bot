@@ -11,6 +11,40 @@ import webhook
 
 
 class TestMobileWebhookContract(unittest.IsolatedAsyncioTestCase):
+    async def test_v2_yookassa_uses_legacy_runtime_order_ledger(self):
+        payment = {
+            "id": "invoice-v2-test",
+            "status": "succeeded",
+            "metadata": {"mobile_v2": "1"},
+        }
+        with patch(
+            "mobile_v2_legacy.validate_yookassa_mobile_payment",
+            new=AsyncMock(return_value=True),
+        ) as validate:
+            self.assertTrue(await webhook._mobile_v2_yookassa_order_matches(payment))
+        validate.assert_awaited_once_with(payment)
+
+    async def test_v2_yookassa_does_not_validate_unsettled_payment(self):
+        payment = {
+            "id": "invoice-v2-test",
+            "status": "pending",
+            "metadata": {"mobile_v2": "1"},
+        }
+        with patch(
+            "mobile_v2_legacy.validate_yookassa_mobile_payment",
+            new=AsyncMock(return_value=True),
+        ) as validate:
+            self.assertFalse(await webhook._mobile_v2_yookassa_order_matches(payment))
+        validate.assert_not_awaited()
+
+    async def test_v2_fulfillment_status_requires_matching_order(self):
+        with patch(
+            "mobile_v2_legacy.mark_mobile_order_fulfilled",
+            new=AsyncMock(return_value=False),
+        ) as mark:
+            self.assertFalse(await webhook._mark_mobile_v2_yookassa_fulfilled("invoice-v2-test"))
+        mark.assert_awaited_once_with("yookassa", "invoice-v2-test")
+
     async def test_yookassa_accepts_only_exact_owner_plan_and_server_terms(self):
         order = {
             "user_id": 987654321, "request_id": "request-test", "plan_code": "3m",

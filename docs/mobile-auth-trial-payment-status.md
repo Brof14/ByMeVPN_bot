@@ -11,11 +11,12 @@ provides an explicit cancellation path; the older GET and POST check routes
 remain available for compatibility. The access token is returned in the JSON
 body, never in the Telegram deep link.
 
-The current Android `ByMeApiClient.checkTelegramSession` still polls with GET
-and places the short-lived `auth_...` state in the query string. That value is
-not the issued bearer access token, but proxy access logs could still capture
-it. The API's POST check endpoint is already available; the Android client
-should move to a JSON body before query-based polling is retired.
+Android PR #25 polls with `POST /api/v1/auth/telegram/check-session` and JSON
+`{"token":"auth_..."}`. The backend preserves the legacy GET route and adds
+the POST form through an additive adapter. HTTP tests cover the request
+contract. A production request with a synthetic nonexistent token returned
+HTTP 200 and the expected `expired` state on 2026-11-02; no real session was
+used.
 
 For an opted-in client, an unavailable signer or unconfirmed device leaves the
 account login successful but returns an `unknown` subscription snapshot without
@@ -25,32 +26,44 @@ owner's 3x-ui record. Legacy clients keep the existing behavior.
 
 ## Three-day trial
 
-Trial eligibility is server-owned. Active keys, a previously used trial, a
+Trial eligibility is server-owned and shared with Telegram through the
+atomic `users.trial_used` claim. Active keys, a previously used trial, a
 currently active panel client, or an unavailable eligibility check do not
-produce a positive `trial_available` result. An opted-in client can use a
-trial against an expired panel client only when its current HWID is already
-registered there. Eligibility, signer, and device checks happen before the
-one-time trial claim; panel errors do not consume the claim. The provisioned
-period remains exactly three days.
+produce a positive `trial_available` result. The provisioned period remains
+exactly three days.
 
-There is no safe first-use path for an opted-in app user who has no existing
-3x-ui client: this panel integration learns an HWID only after a VPN client
-connects, while the current API requires panel confirmation before it will
-issue signed access. The server therefore reports the trial unavailable for
-that case and does not weaken the entitlement check. A panel-supported
-pre-registration/bootstrap handshake, or an explicitly reviewed onboarding
-protocol that preserves the same device proof, is required before automatic
-trials can work for brand-new app users.
+The legacy panel cannot pre-register an HWID. For an opted-in client with no
+panel device yet, the runtime uses a bounded two-step bootstrap: it atomically
+claims the shared `users.trial_used` flag, provisions the owner's panel client
+for three days with `limitHwid=2` and `limitIp=0`, reads the client and limits
+back, and requests the subscription once with the install HWID. A matching
+panel fingerprint gets a normal entitlement immediately. If the panel learns
+the HWID only after the first VPN connection, the API issues a user-and-device
+bound ES256 bootstrap entitlement lasting at most ten minutes. `/servers` and
+`/vpn/session` accept only that same bound device during this window. Once
+3x-ui reports its fingerprint, normal entitlement replaces the bootstrap and
+the grant is removed. A client-supplied header alone never proves registration.
+
+Repeated requests return the existing trial and cannot extend the panel expiry
+or bootstrap window. Panel readback must confirm ownership, expiry and exact
+2/0 limits before any entitlement is issued. Errors fail closed; an ambiguous
+provisioning result keeps the shared claim reserved rather than risking a
+second trial. Paid clients with 5/10 devices remain accepted by the shared
+device gate. These behaviors have isolated HTTP/unit coverage; the first
+real-device handshake and subsequent panel fingerprint refresh still require
+a release app/test account and are not established by mocks.
 
 ## YooKassa and Google
 
-Mobile payment catalog and checkout remain closed unless
-`MOBILE_V2_WEBHOOK_GUARD_ENABLED` is explicitly enabled. This repository
-contains no evidence of a configured YooKassa test shop, and no provider calls
-were made. Do not set the production guard until provider final-status lookup,
-webhook validation, invoice ownership, idempotency, and panel provisioning
-have all passed against a test shop and isolated 3x-ui client.
+The deployed mobile checkout guard is enabled. The runtime uses server-side
+plan prices, owner-scoped invoices, provider final-status lookup and guarded,
+idempotent webhook fulfillment. The merchant callback was confirmed by the
+owner. No invoice or payment was created during this work, so a successful
+provider transaction was not exercised end-to-end.
 
-`POST /api/v1/auth/google` remains closed (503) until the backend verifies
-Google signatures and claims with the approved audience and a nonce-bound
-client flow. A client ID or a decodable JWT alone is insufficient.
+Google nonce and signature verification are deployed for the owner-provided
+Web Client ID. The server checks Google signature, issuer, audience, expiry,
+verified email and one-time nonce, and links accounts only by `sub`. The
+public nonce route and rejection of a fake token were checked; a successful
+release-app login still requires the Android nonce-flow change to ship and be
+tested on a device.

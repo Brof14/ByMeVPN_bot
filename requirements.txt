@@ -8,3 +8,4 @@ cachetools==5.5.0
 py3xui==0.7.0
 redis==5.2.1
 cryptography>=41.0.7,<51.0.0
+google-auth==2.62.0
