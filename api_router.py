@@ -32,6 +32,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
 import database
+from entitlements import EntitlementSigningError, create_entitlement, device_binding, load_private_key
 from config import XUI_SUB_PATH, XUI_URL
 
 logger = logging.getLogger(__name__)
@@ -588,12 +589,100 @@ async def get_user_real_subscription(
     return sub_url, servers, sub_dict
 
 
+async def _attach_signed_entitlement(
+    user_id: int,
+    headers: Dict[str, str],
+    subscription: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Attach an ES256 snapshot only to clients that explicitly opt in."""
+    if not _entitlement_requested(headers):
+        # Preserve the legacy response shape so old clients never receive a
+        # token they do not know how to validate.
+        return subscription
+    if subscription.get("status") not in ("active", "trial", "grace"):
+        subscription["entitlement"] = None
+        return subscription
+
+    hwid = str(headers.get("X-HWID") or "").strip()
+    device_state = await _require_registered_entitlement_device(user_id, headers)
+    devices = device_state["devices"]
+
+    try:
+        device_limit = int(device_state.get("limit_hwid") or 0)
+    except (TypeError, ValueError) as exc:
+        raise EntitlementSigningError("Subscription device limit is unavailable") from exc
+    if device_limit not in (2, 5, 10):
+        raise EntitlementSigningError("Subscription device limit is unavailable")
+    subscription["max_devices"] = device_limit
+    subscription["active_devices"] = len(devices)
+    subscription["entitlement"] = create_entitlement(user_id, hwid, subscription)
+    return subscription
+
+
+SUPPORTED_ENTITLEMENT_VERSION = "es256-v1"
+
+
+def _entitlement_requested(headers: Dict[str, str]) -> bool:
+    value = next((v for k, v in headers.items() if k.casefold() == "x-entitlement-version"), None)
+    if value is None:
+        return False
+    if value.strip() != SUPPORTED_ENTITLEMENT_VERSION:
+        raise HTTPException(status_code=400, detail="Версия проверки подписки не поддерживается")
+    return True
+
+
+async def _require_registered_entitlement_device(
+    user_id: int, headers: Dict[str, str],
+) -> Dict[str, Any]:
+    """Require an authenticated account's HWID to exist in its 3x-ui record."""
+    hwid = str(next((v for k, v in headers.items() if k.casefold() == "x-hwid"), "") or "").strip()
+    try:
+        device_binding(user_id, hwid)
+    except EntitlementSigningError:
+        raise HTTPException(status_code=422, detail="Не удалось подтвердить это устройство") from None
+
+    try:
+        from xui_client import get_xui_devices
+        device_state = await get_xui_devices(user_id)
+    except Exception as exc:
+        logger.warning("Entitlement device check unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось проверить устройство подписки") from None
+
+    if not isinstance(device_state, dict) or not isinstance(device_state.get("devices"), list):
+        raise HTTPException(status_code=503, detail="Не удалось проверить устройство подписки")
+    current_fingerprint = hashlib.sha256(hwid.encode("utf-8")).hexdigest()
+    registered = any(
+        isinstance(item, dict)
+        and (fingerprint := str(item.get("fingerprint") or "").strip().lower())
+        and 16 <= len(fingerprint) <= 64
+        and re.fullmatch(r"[0-9a-f]+", fingerprint)
+        and hmac.compare_digest(current_fingerprint[:len(fingerprint)], fingerprint)
+        for item in device_state["devices"]
+    )
+    if not registered:
+        raise HTTPException(status_code=403, detail="Устройство не подтверждено для этой подписки")
+    return device_state
+
+
 async def _auth_subscription_snapshot(user_id: int, headers: Dict[str, str]):
     """Keep login independent from 3x-ui subscription availability."""
+    wants_entitlement = _entitlement_requested(headers)
     try:
-        return await get_user_real_subscription(user_id, headers)
+        sub_url, servers, sub_dict = await get_user_real_subscription(user_id, headers)
+        sub_dict = await _attach_signed_entitlement(user_id, headers, sub_dict)
+        return sub_url, servers, sub_dict
+    except HTTPException as exc:
+        if wants_entitlement:
+            raise
+        logger.warning("Subscription lookup unavailable during legacy login (HTTP %s)", exc.status_code)
+        return None, [], {
+            "status": "unknown", "plan_name": "Проверяем подписку",
+            "trial_available": False, "max_devices": 0, "active_devices": 0,
+        }
     except Exception as exc:
         logger.warning("Subscription lookup unavailable during login (%s)", type(exc).__name__)
+        if wants_entitlement:
+            raise HTTPException(status_code=503, detail="Не удалось подтвердить состояние подписки") from None
         return None, [], {
             "status": "unknown", "plan_name": "Проверяем подписку",
             "trial_available": False, "max_devices": 0, "active_devices": 0,
@@ -602,7 +691,10 @@ async def _auth_subscription_snapshot(user_id: int, headers: Dict[str, str]):
 
 def _subscription_headers_from_request(request: Request) -> Dict[str, str]:
     """Forward only device metadata required by the subscription HWID gate."""
-    names = ("X-HWID", "X-Device-OS", "X-Ver-OS", "X-Device-Model", "User-Agent")
+    names = (
+        "X-HWID", "X-Device-OS", "X-Ver-OS", "X-Device-Model", "User-Agent",
+        "X-Entitlement-Version",
+    )
     return {name: value for name in names if (value := request.headers.get(name))}
 
 
@@ -922,9 +1014,15 @@ async def delete_me(user_id: int = Depends(get_current_user_id)):
 
 @api_router.get("/subscription/status")
 async def get_subscription_status(request: Request, user_id: int = Depends(get_current_user_id)):
+    headers = _subscription_headers_from_request(request)
     sub_url, servers, sub_dict = await get_user_real_subscription(
-        user_id, _subscription_headers_from_request(request), include_device_count=True
+        user_id, headers, include_device_count=False
     )
+    try:
+        sub_dict = await _attach_signed_entitlement(user_id, headers, sub_dict)
+    except EntitlementSigningError as exc:
+        logger.error("Entitlement signing unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось подтвердить состояние подписки") from None
     return sub_dict
 
 
@@ -932,6 +1030,17 @@ async def get_subscription_status(request: Request, user_id: int = Depends(get_c
 async def activate_trial(req: TrialRequest, request: Request, user_id: int = Depends(get_current_user_id)):
     """Atomically grant one free 3-day trial to a user without a subscription."""
     trial_days = 3
+    headers = _subscription_headers_from_request(request)
+    wants_entitlement = _entitlement_requested(headers)
+    if wants_entitlement:
+        try:
+            load_private_key()
+        except EntitlementSigningError as exc:
+            logger.error("Trial entitlement signer unavailable (%s)", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="Не удалось подтвердить состояние подписки") from None
+        # Do this before reserving the one-time trial. A request carrying a
+        # client HWID is not sufficient proof that the panel registered it.
+        await _require_registered_entitlement_device(user_id, headers)
     if await database.has_trial_used(user_id):
         raise HTTPException(status_code=409, detail="Пробный период уже использован")
     current_keys = await database.get_user_keys(user_id)
@@ -980,7 +1089,7 @@ async def activate_trial(req: TrialRequest, request: Request, user_id: int = Dep
         sub_url, request_headers=_subscription_headers_from_request(request)
     )
 
-    return {
+    trial_status = {
         "status": "trial",
         "plan_name": "Пробный период (3 дня)",
         "expires_at": time.strftime("%Y-%m-%d %H:%M", time.localtime(expiry_ts)),
@@ -990,6 +1099,13 @@ async def activate_trial(req: TrialRequest, request: Request, user_id: int = Dep
         "active_devices": 1,
         "servers": servers,
     }
+    try:
+        return await _attach_signed_entitlement(
+            user_id, _subscription_headers_from_request(request), trial_status
+        )
+    except EntitlementSigningError as exc:
+        logger.error("Trial entitlement signing unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось подтвердить состояние подписки") from None
 
 
 @api_router.get("/plans")
@@ -1268,6 +1384,8 @@ async def api_check_payment(
     user_id: int = Depends(get_current_user_id),
 ):
     """Check one owned invoice; provider success alone never grants access."""
+    headers = _subscription_headers_from_request(request)
+    _entitlement_requested(headers)  # Reject explicitly unsupported versions on every path.
     if not invoice_id:
         recent = await database.list_recent_mobile_invoice_refs(user_id)
         if len(recent) != 1:
@@ -1295,9 +1413,15 @@ async def api_check_payment(
                 "is_active": False, "subscription": None}
 
     sub_url, servers, sub_dict = await get_user_real_subscription(
-        user_id, _subscription_headers_from_request(request)
+        user_id, headers
     )
     active = sub_dict.get("status") in ("active", "trial", "grace")
+    if active:
+        try:
+            sub_dict = await _attach_signed_entitlement(user_id, headers, sub_dict)
+        except EntitlementSigningError as exc:
+            logger.error("Payment-check entitlement signing unavailable (%s)", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="Не удалось подтвердить состояние подписки") from None
     return {"status": "succeeded" if active else "processing", "is_active": active,
             "subscription": sub_dict if active else None}
 
