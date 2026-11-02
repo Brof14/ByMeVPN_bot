@@ -5,6 +5,7 @@ import json
 import os
 import secrets
 import sys
+import tempfile
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -39,6 +40,39 @@ def _clean_db():
             os.remove(TEST_DB_PATH + suffix)
         except FileNotFoundError:
             pass
+
+
+class TestGoogleSchemaMigration(unittest.IsolatedAsyncioTestCase):
+    async def test_migration_is_additive_and_repeatable_for_legacy_sqlite(self):
+        import aiosqlite
+
+        with tempfile.TemporaryDirectory(prefix="bymevpn-google-migration-") as temp_dir:
+            path = os.path.join(temp_dir, "legacy.sqlite3")
+            async with aiosqlite.connect(path) as db:
+                await db.execute("CREATE TABLE users (user_id INTEGER PRIMARY KEY, username TEXT)")
+                await db.commit()
+                await database.ensure_mobile_google_schema(db)
+                await database.ensure_mobile_google_schema(db)
+
+                tables = {
+                    row[0]
+                    for row in await (await db.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )).fetchall()
+                }
+                indexes = {
+                    row[0]
+                    for row in await (await db.execute(
+                        "SELECT name FROM sqlite_master WHERE type='index'"
+                    )).fetchall()
+                }
+                fk_rows = await (await db.execute(
+                    "PRAGMA foreign_key_list(google_accounts)"
+                )).fetchall()
+
+        self.assertTrue({"users", "mobile_google_nonces", "google_accounts"} <= tables)
+        self.assertIn("idx_mobile_google_nonces_expiry", indexes)
+        self.assertEqual(fk_rows[0][2:4], ("users", "user_id"))
 
 
 def _b64(value: bytes) -> str:

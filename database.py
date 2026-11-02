@@ -89,23 +89,6 @@ CREATE TABLE IF NOT EXISTS mobile_auth_sessions (
 CREATE INDEX IF NOT EXISTS idx_mobile_auth_sessions_expiry
     ON mobile_auth_sessions(expires_at);
 
-CREATE TABLE IF NOT EXISTS mobile_google_nonces (
-    nonce_hash TEXT PRIMARY KEY,
-    created_at INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_mobile_google_nonces_expiry
-    ON mobile_google_nonces(expires_at);
-
-CREATE TABLE IF NOT EXISTS google_accounts (
-    google_sub TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL UNIQUE,
-    email TEXT NOT NULL,
-    name TEXT NOT NULL DEFAULT '',
-    created_at INTEGER NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(user_id)
-);
-
 CREATE TABLE IF NOT EXISTS known_hwid_devices (
     user_id INTEGER NOT NULL,
     device_id INTEGER NOT NULL,
@@ -414,6 +397,30 @@ CREATE INDEX IF NOT EXISTS idx_ars_user ON auto_renew_subscriptions(user_id);
 CREATE INDEX IF NOT EXISTS idx_ars_status ON auto_renew_subscriptions(status);
 """
 
+_MOBILE_GOOGLE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS mobile_google_nonces (
+    nonce_hash TEXT PRIMARY KEY,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mobile_google_nonces_expiry
+    ON mobile_google_nonces(expires_at);
+
+CREATE TABLE IF NOT EXISTS google_accounts (
+    google_sub TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL UNIQUE,
+    email TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(user_id)
+);
+"""
+
+
+async def ensure_mobile_google_schema(db: aiosqlite.Connection) -> None:
+    """Apply the additive, repeatable Google nonce/identity schema migration."""
+    await db.executescript(_MOBILE_GOOGLE_SCHEMA)
+
 
 async def get_db() -> aiosqlite.Connection:
     """Get database connection from pool or create new one."""
@@ -430,6 +437,11 @@ async def get_db() -> aiosqlite.Connection:
 
 async def _run_migrations(db: aiosqlite.Connection) -> None:
     """Run database migrations."""
+    # Additive storage for the opt-in Google flow. This is deliberately a
+    # migration rather than part of the base schema so existing SQLite files
+    # are upgraded explicitly and can be verified independently before rollout.
+    await ensure_mobile_google_schema(db)
+
     # Provisioning intents make paid-key retries idempotent across restarts.
     await db.execute(
         """CREATE TABLE IF NOT EXISTS provisioning_intents (
