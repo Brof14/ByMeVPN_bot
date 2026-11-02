@@ -205,9 +205,20 @@ def create_router() -> APIRouter:
             "WHERE user_id=? AND request_id=? AND plan_code=? AND provider=?",
             (invoice_id, payment_url, payload, int(time.time()), user_id, req.request_id, req.plan_code, req.provider),
         )
+        cur = await db.execute(
+            "SELECT state FROM mobile_v2_orders WHERE user_id=? AND request_id=?",
+            (user_id, req.request_id),
+        )
+        state_row = await cur.fetchone()
+        order_fulfilled = bool(state_row and state_row[0] == "fulfilled")
         await db.commit()
         await db.close()
-        if req.provider == "yookassa":
+        if req.provider == "yookassa" and order_fulfilled:
+            # A very fast verified webhook can fulfill the order before the
+            # provider response is persisted here. Do not recreate the legacy
+            # pending row after the webhook has already removed it.
+            await database.delete_yookassa_pending(invoice_id)
+        elif req.provider == "yookassa":
             await database.add_yookassa_pending(invoice_id, user_id, plan["days"], plan["devices"], plan["price_rub"])
         else:
             await database.add_crypto_pending(invoice_id, user_id, plan["days"], plan["devices"], plan["price_rub"])
@@ -376,9 +387,15 @@ async def validate_crypto_mobile_invoice(invoice: dict) -> bool:
         await db.close()
 
 
-async def mark_mobile_order_fulfilled(provider: str, invoice_id: str) -> None:
+async def mark_mobile_order_fulfilled(provider: str, invoice_id: str) -> bool:
     db = await _db()
-    await db.execute("UPDATE mobile_v2_orders SET state='fulfilled',updated_at=? WHERE provider=? AND payment_id=? AND state='pending'",
-                     (int(time.time()), provider, str(invoice_id)))
-    await db.commit()
-    await db.close()
+    try:
+        cur = await db.execute(
+            "UPDATE mobile_v2_orders SET state='fulfilled',updated_at=? "
+            "WHERE provider=? AND payment_id=? AND state IN ('pending','fulfilled')",
+            (int(time.time()), provider, str(invoice_id)),
+        )
+        await db.commit()
+        return cur.rowcount == 1
+    finally:
+        await db.close()
