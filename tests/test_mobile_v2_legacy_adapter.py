@@ -72,6 +72,22 @@ class LegacyMobileV2HttpTests(unittest.TestCase):
             asyncio.run(self.db.connection.close())
         os.unlink(self.path)
 
+    def test_payment_routes_forward_authorization_header_to_legacy_dependency(self):
+        auth_app = FastAPI()
+        auth_app.include_router(legacy.create_router(), prefix="/api/v1/mobile/v2")
+        client = TestClient(auth_app)
+        body = {"plan_code": "1m_d2", "request_id": "auth_probe_123", "provider": "yookassa"}
+
+        missing_create = client.post("/api/v1/mobile/v2/payment/create", json=body)
+        missing_check = client.get("/api/v1/mobile/v2/payment/check",
+                                   params={"invoice_id": "invoice_probe", "provider": "yookassa"})
+        invalid = client.post("/api/v1/mobile/v2/payment/create", json=body,
+                              headers={"Authorization": "Bearer invalid"})
+
+        self.assertEqual(missing_create.status_code, 401)
+        self.assertEqual(missing_check.status_code, 401)
+        self.assertEqual(invalid.status_code, 401)
+
     def test_catalog_returns_authoritative_prices_days_and_device_tiers(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("MOBILE_V2_WEBHOOK_GUARD_ENABLED", None)
