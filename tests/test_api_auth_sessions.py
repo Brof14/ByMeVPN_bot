@@ -171,7 +171,58 @@ class TestTelegramAuthSessions(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(result.status, "authenticated")
         self.assertEqual(api_router.verify_simple_jwt(result.access_token), 98765)
-        self.assertEqual((await database.poll_mobile_auth_session(state_hash))["status"], "expired")
+        self.assertEqual((await database.get_mobile_auth_session(state_hash))["status"], "expired")
+        replay = await api_router.check_telegram_session_body(
+            api_router.TelegramSessionCheckRequest(token=state), request
+        )
+        self.assertEqual(replay.status, "expired")
+        self.assertIsNone(replay.access_token)
+
+    async def test_retryable_snapshot_failure_does_not_consume_confirmed_state(self):
+        from starlette.requests import Request
+
+        state = "auth_" + secrets.token_urlsafe(32)
+        state_hash = hashlib.sha256(state.removeprefix("auth_").encode()).hexdigest()
+        await database.create_mobile_auth_session(state_hash, int(api_router.time.time()) + 60)
+        await database.confirm_mobile_auth_session(state_hash, 98765, "test-user", "Test User")
+        request = Request({
+            "type": "http", "http_version": "1.1", "method": "POST",
+            "scheme": "https", "path": "/api/v1/auth/telegram/check-session",
+            "raw_path": b"/api/v1/auth/telegram/check-session", "query_string": b"",
+            "headers": [], "client": ("127.0.0.1", 1), "server": ("test.invalid", 443),
+        })
+        with patch.object(
+            api_router, "_auth_subscription_snapshot",
+            new=AsyncMock(side_effect=RuntimeError("isolated snapshot failure")),
+        ):
+            with self.assertRaises(RuntimeError):
+                await api_router.check_telegram_session_body(
+                    api_router.TelegramSessionCheckRequest(token=state), request
+                )
+        self.assertEqual((await database.get_mobile_auth_session(state_hash))["status"], "authenticated")
+
+    async def test_cancelled_state_cannot_be_confirmed_or_exchanged(self):
+        state_hash = hashlib.sha256(secrets.token_urlsafe(32).encode()).hexdigest()
+        await database.create_mobile_auth_session(state_hash, int(api_router.time.time()) + 60)
+        self.assertTrue(await database.cancel_mobile_auth_session(state_hash))
+        self.assertFalse(await database.confirm_mobile_auth_session(state_hash, 98765, "test", "Test"))
+        self.assertEqual((await database.get_mobile_auth_session(state_hash))["status"], "expired")
+
+    async def test_cancel_endpoint_returns_no_session_or_access_token(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        state = "auth_" + secrets.token_urlsafe(32)
+        state_hash = hashlib.sha256(state.removeprefix("auth_").encode()).hexdigest()
+        await database.create_mobile_auth_session(state_hash, int(api_router.time.time()) + 60)
+        app = FastAPI()
+        app.include_router(api_router.api_router, prefix="/api/v1")
+        response = TestClient(app).post(
+            "/api/v1/auth/telegram/cancel-session", json={"token": state},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "cancelled"})
+        self.assertEqual((await database.get_mobile_auth_session(state_hash))["status"], "expired")
 
     async def test_state_is_persisted_and_consumed_once(self):
         state_hash = hashlib.sha256(secrets.token_urlsafe(32).encode()).hexdigest()

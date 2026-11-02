@@ -863,6 +863,13 @@ async def get_xui_devices(user_id: int) -> Dict[str, Any]:
     }
 
 
+async def has_xui_client(user_id: int) -> bool:
+    """Check client presence without swallowing panel errors as "not found"."""
+    api = await _get_api()
+    client = await _api_call_with_retry(api.client.get_by_email, str(int(user_id)))
+    return bool(client and getattr(client, "uuid", None))
+
+
 async def get_xui_online_user_ids() -> set[int]:
     """Return numeric Telegram IDs with an active VPN connection."""
     api = await _get_api()
@@ -1076,7 +1083,9 @@ async def update_xui_user_expiry(
     return res is not None
 
 
-async def get_xui_client_details(user_id: int) -> Optional[Dict[str, Any]]:
+async def get_xui_client_details(
+    user_id: int, *, strict: bool = False,
+) -> Optional[Dict[str, Any]]:
     """Get full details of client in 3x-ui including UUID and sub_id."""
     email = str(user_id)
     try:
@@ -1103,6 +1112,8 @@ async def get_xui_client_details(user_id: int) -> Optional[Dict[str, Any]]:
         }
     except Exception as e:
         logger.debug("get_xui_client_details failed for user %d: %s", user_id, e)
+        if strict:
+            raise
         return None
 
 

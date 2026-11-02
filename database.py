@@ -1845,6 +1845,58 @@ async def poll_mobile_auth_session(state_hash: str) -> Optional[dict]:
         }
 
 
+async def get_mobile_auth_session(state_hash: str) -> Optional[dict]:
+    """Read a login state without consuming it, so transient auth work can retry."""
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        cur = await db.execute(
+            "SELECT status,user_id,username,full_name,expires_at FROM mobile_auth_sessions WHERE state_hash=?",
+            (state_hash,),
+        )
+        row = await cur.fetchone()
+    if not row or int(row[4]) <= now or row[0] in ("consumed", "cancelled"):
+        return {"status": "expired"}
+    if row[0] == "pending":
+        return {"status": "pending"}
+    if row[0] != "authenticated" or not row[1]:
+        return {"status": "expired"}
+    return {
+        "status": "authenticated",
+        "user_id": int(row[1]),
+        "username": row[2],
+        "full_name": row[3],
+    }
+
+
+async def consume_mobile_auth_session(state_hash: str) -> bool:
+    """Atomically consume a confirmed login state after its response is ready."""
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        cur = await db.execute(
+            "UPDATE mobile_auth_sessions SET status='consumed' "
+            "WHERE state_hash=? AND status='authenticated' AND expires_at>?",
+            (state_hash, now),
+        )
+        await db.commit()
+    return cur.rowcount == 1
+
+
+async def cancel_mobile_auth_session(state_hash: str) -> bool:
+    """Cancel a still-live login state using the existing terminal status."""
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        cur = await db.execute(
+            "UPDATE mobile_auth_sessions SET status='consumed' "
+            "WHERE state_hash=? AND status IN ('pending','authenticated') AND expires_at>?",
+            (state_hash, now),
+        )
+        await db.commit()
+    return cur.rowcount == 1
+
+
 async def is_mobile_jwt_revoked(jti: str) -> bool:
     """Check whether one JWT session has been explicitly logged out."""
     db = await get_db()
