@@ -191,7 +191,7 @@ class LegacyTrialBootstrapTests(unittest.IsolatedAsyncioTestCase):
                 database.create_count += 1
                 panel_client["client"] = SimpleNamespace(uuid=client_uuid, expiry_time=panel_expiry)
                 return {"subscription_url": "https://subscription.invalid/test", "uuid": client_uuid,
-                        "expiry_time": panel_expiry}
+                        "created_new_client": True}
 
             async def panel_devices(_user_id):
                 return dict(panel_client["state"])

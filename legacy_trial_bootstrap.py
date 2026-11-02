@@ -443,9 +443,7 @@ def install_legacy_trial_bootstrap(router: Any, namespace: dict[str, Any]) -> No
                 pass
             raise HTTPException(status_code=503, detail="Не удалось подключить пробный период. Попробуйте позже")
         sub_url = str(result["subscription_url"])
-        expiry_ts = int(result.get("expiry_time") or 0) // 1000
-        if expiry_ts <= now or abs((expiry_ts - now) - trial_days * 86400) > 2:
-            raise HTTPException(status_code=503, detail="Не удалось получить срок VPN-доступа")
+        result_expiry_ms = int(result.get("expiry_time") or 0)
         # Initial subscription request carries the installation identity. Only
         # the subsequent panel readback can prove that the panel registered it.
         servers = await _fetch_nodes(sub_url, headers, namespace["parse_single_node_line"])
@@ -460,8 +458,14 @@ def install_legacy_trial_bootstrap(router: Any, namespace: dict[str, Any]) -> No
             if not created_uuid or not panel_uuid or not hmac.compare_digest(created_uuid, panel_uuid):
                 raise RuntimeError("Panel client identity did not match the provisioned account")
             panel_expiry = int(getattr(verified_client, "expiry_time", 0) or 0) // 1000
-            if panel_expiry <= now or abs(panel_expiry - expiry_ts) > 2:
+            if (panel_expiry <= now
+                    or abs((panel_expiry - now) - trial_days * 86400) > 2
+                    or (result_expiry_ms and abs(panel_expiry * 1000 - result_expiry_ms) > 2000)):
                 raise RuntimeError("Panel trial expiry did not match the provisioned expiry")
+            # The legacy create method does not return expiry_time for a new
+            # client. The owner-scoped panel readback is the authoritative
+            # source, and is required to be exactly three days from issuance.
+            expiry_ts = panel_expiry
         except Exception as exc:
             namespace["logger"].warning("Trial panel ownership verification failed (%s)", type(exc).__name__)
             raise HTTPException(status_code=503, detail="Не удалось подтвердить пробный период в панели") from None
