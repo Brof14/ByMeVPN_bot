@@ -11,6 +11,8 @@ from urllib.parse import urlparse, quote
 from ipaddress import ip_address
 import asyncio
 
+import httpx
+
 from py3xui import AsyncApi, Client
 
 from config import (
@@ -914,9 +916,21 @@ async def delete_xui_hwid_device(user_id: int, device_id: int) -> bool:
 
     async def remove() -> bool:
         url = client_api._url(f"panel/api/clients/hwids/{email}/{device_id}")
-        response = await client_api._request_with_retry(
-            "DELETE", url, {"Accept": "application/json"},
-        )
+        # py3xui 0.7.0's _request_with_retry only dispatches GET and POST;
+        # passing DELETE raises ValueError("Invalid method: DELETE") before
+        # any request reaches 3x-ui. Reuse the SDK's active auth headers,
+        # session cookies and TLS settings for this one unsupported verb.
+        verify = client_api.use_tls_verify
+        if verify and client_api.custom_certificate_path:
+            verify = client_api.custom_certificate_path
+        headers = client_api._generate_headers({"Accept": "application/json"})
+        async with httpx.AsyncClient(
+            cookies=client_api.cookies,
+            verify=verify,
+            follow_redirects=True,
+            timeout=15.0,
+        ) as client:
+            response = await client.delete(url, headers=headers)
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict) or not payload.get("success"):

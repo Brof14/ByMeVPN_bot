@@ -93,7 +93,10 @@ def _fingerprint_matches(user_id: int, hwid: str, state: dict[str, Any]) -> bool
         if not isinstance(item, dict):
             continue
         fingerprint = str(item.get("fingerprint") or "").strip().lower()
-        if (16 <= len(fingerprint) <= 64 and re.fullmatch(r"[0-9a-f]+", fingerprint)
+        # 3x-ui 3.11 exposes the SHA-256-derived HWID fingerprint truncated to
+        # 12 hex characters. Match that documented panel format; a shorter
+        # prefix would be too collision-prone for a device binding.
+        if (12 <= len(fingerprint) <= 64 and re.fullmatch(r"[0-9a-f]+", fingerprint)
                 and hmac.compare_digest(digest[:len(fingerprint)], fingerprint)):
             return True
     return False

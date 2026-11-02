@@ -126,6 +126,17 @@ class TestGoogleIdTokenVerification(unittest.TestCase):
         self.assertEqual(result["aud"], WEB_CLIENT_ID)
         self.assertEqual(result["nonce"], "nonce-value")
 
+    def test_safe_error_codes_distinguish_verifier_stages(self):
+        with self.assertRaises(GoogleIdTokenError) as wrong_audience:
+            self._verify(aud="another-client.apps.googleusercontent.com")
+        self.assertEqual(wrong_audience.exception.code, "wrong_audience")
+        with self.assertRaises(GoogleIdTokenError) as expired:
+            self._verify(exp=int(time.time()) - 60)
+        self.assertEqual(expired.exception.code, "invalid_expiration")
+        with self.assertRaises(GoogleIdTokenError) as unverified:
+            self._verify(email_verified=False)
+        self.assertEqual(unverified.exception.code, "email_unverified")
+
     def test_modified_payload_or_signature_is_rejected(self):
         token = _signed_google_token(self.private_key, self.certificate)
         header, payload, signature = token.split(".")
@@ -134,8 +145,9 @@ class TestGoogleIdTokenVerification(unittest.TestCase):
             with self.assertRaises(GoogleIdTokenError):
                 verify_google_id_token(f"{header}.{changed_payload}.{signature}", WEB_CLIENT_ID)
             bad_signature = ("A" if signature[0] != "A" else "B") + signature[1:]
-            with self.assertRaises(GoogleIdTokenError):
+            with self.assertRaises(GoogleIdTokenError) as rejected:
                 verify_google_id_token(f"{header}.{payload}.{bad_signature}", WEB_CLIENT_ID)
+            self.assertEqual(rejected.exception.code, "invalid_signature_or_key")
 
     def test_expired_token_is_rejected(self):
         with self.assertRaises(GoogleIdTokenError):
@@ -234,6 +246,23 @@ class TestGoogleSignInHttp(unittest.IsolatedAsyncioTestCase):
         db = await database.get_db()
         count = await (await db.execute("SELECT COUNT(*) FROM google_accounts")).fetchone()
         self.assertEqual(count[0], 0)
+
+    async def test_rejection_returns_correlation_id_and_logs_only_safe_code(self):
+        nonce = (await self.client.post("/api/v1/auth/google/nonce", json={})).json()["nonce"]
+        with patch.object(
+            api_router, "verify_google_id_token",
+            side_effect=GoogleIdTokenError("invalid_signature"),
+        ), self.assertLogs(api_router.logger, level="WARNING") as captured:
+            response = await self.client.post(
+                "/api/v1/auth/google", json={"id_token": "sensitive-token-value", "nonce": nonce},
+            )
+        self.assertEqual(response.status_code, 401)
+        correlation_id = response.headers.get("x-correlation-id")
+        self.assertRegex(correlation_id or "", r"^[a-f0-9]{16}$")
+        log_text = "\n".join(captured.output)
+        self.assertIn("stage=id_token code=invalid_signature", log_text)
+        self.assertIn(correlation_id, log_text)
+        self.assertNotIn("sensitive-token-value", log_text)
 
     async def test_success_consumes_nonce_and_replay_fails(self):
         nonce = (await self.client.post("/api/v1/auth/google/nonce", json={})).json()["nonce"]
