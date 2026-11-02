@@ -215,10 +215,15 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
         self.key_loader_patch.start()
         self.api_key_loader_patch = patch.object(api_router, "load_private_key", return_value=self.private_key)
         self.api_key_loader_patch.start()
+        self.bootstrap_delete_patch = patch.object(
+            api_router.database, "delete_mobile_trial_bootstrap", new=AsyncMock(),
+        )
+        self.bootstrap_delete_patch.start()
 
     def tearDown(self):
         self.env_patch.stop()
         self.api_key_loader_patch.stop()
+        self.bootstrap_delete_patch.stop()
         self.key_loader_patch.stop()
         self.devices_patch.stop()
         self.panel_presence_patch.stop()
@@ -528,7 +533,8 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
             }),
         ), patch.object(api_router, "fetch_and_parse_real_nodes", new=AsyncMock(return_value=[])):
             result = asyncio.run(api_router.activate_trial(api_router.TrialRequest(), request, user_id=7654321))
-        trial_used.assert_awaited_once_with(7654321)
+        self.assertEqual(trial_used.await_count, 2)
+        self.assertEqual([call.args for call in trial_used.await_args_list], [(7654321,), (7654321,)])
         claim_trial.assert_awaited_once_with(7654321)
         create_bootstrap.assert_awaited_once_with(
             7654321, device_binding(7654321, self.hwid), bootstrap_expiry,
@@ -657,6 +663,7 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
                     "expiry_time": (int(api_router.time.time()) - 100) * 1000,
                 })), \
                 patch("xui_client.create_xui_user", new=create_panel_client), \
+                patch.object(api_router.database, "delete_mobile_trial_bootstrap", new=AsyncMock()), \
                 patch.object(api_router, "fetch_and_parse_real_nodes", new=AsyncMock(return_value=[])):
             first = asyncio.run(api_router.activate_trial(api_router.TrialRequest(), request, user_id=7654321))
             with self.assertRaises(Exception) as raised:
@@ -682,20 +689,27 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
         claim_trial.assert_not_awaited()
         create_panel_client.assert_not_awaited()
 
-    def test_first_trial_panel_read_failure_does_not_claim_or_provision(self):
+    def test_panel_read_failure_after_provisioning_keeps_trial_claim_reserved(self):
         request = self.make_request("/api/v1/subscription/trial", headers={
             "X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1",
         })
-        with patch("xui_client.has_xui_client", new=AsyncMock(return_value=True)), \
+        with patch("xui_client.get_xui_client_details", new=AsyncMock(side_effect=[
+                    None, {"expiry_time": (int(api_router.time.time()) + 3 * 86400) * 1000},
+                ])), \
                 patch("xui_client.get_xui_devices", new=AsyncMock(side_effect=RuntimeError("panel unavailable"))), \
                 patch.object(api_router.database, "has_trial_used", new=AsyncMock(return_value=False)), \
+                patch.object(api_router.database, "get_user_keys", new=AsyncMock(return_value=[])), \
                 patch.object(api_router.database, "try_claim_trial", new=AsyncMock(return_value=True)) as claim_trial, \
-                patch("xui_client.create_xui_user", new=AsyncMock()) as create_panel_client:
+                patch("xui_client.create_xui_user", new=AsyncMock(return_value={
+                    "subscription_url": "https://example.invalid/trial", "uuid": "test-uuid",
+                })) as create_panel_client, \
+                patch.object(api_router.database, "reset_trial_for_user", new=AsyncMock()) as reset_trial:
             with self.assertRaises(Exception) as raised:
                 asyncio.run(api_router.activate_trial(api_router.TrialRequest(), request, user_id=7654321))
         self.assertEqual(getattr(raised.exception, "status_code", None), 503)
-        claim_trial.assert_not_awaited()
-        create_panel_client.assert_not_awaited()
+        claim_trial.assert_awaited_once_with(7654321)
+        create_panel_client.assert_awaited_once()
+        reset_trial.assert_not_awaited()
 
     def test_trial_does_not_claim_when_panel_lookup_fails(self):
         request = self.make_request("/api/v1/subscription/trial", headers={"X-HWID": self.hwid})
