@@ -17,6 +17,7 @@ from legacy_trial_bootstrap import (
     _create_grant,
     _fingerprint_matches,
     _grant_expiry,
+    _panel_client_not_found,
     _trial_panel_limits_match,
     _valid_panel_device_state,
     install_legacy_trial_bootstrap,
@@ -144,6 +145,10 @@ class LegacyTrialBootstrapTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(_trial_panel_limits_match({"devices": [], "limit_hwid": 2, "limit_ip": 0}))
         self.assertFalse(_valid_panel_device_state({"devices": [], "limit_hwid": 2, "limit_ip": 1}))
 
+    def test_panel_record_not_found_is_distinguished_from_panel_failure(self):
+        self.assertTrue(_panel_client_not_found(ValueError("Obtain (record not found)")))
+        self.assertFalse(_panel_client_not_found(TimeoutError("panel request timed out")))
+
     def test_api_overlay_patch_is_additive_and_idempotent(self):
         source = '''api_router = APIRouter()\nclass TrialRequest(BaseModel):\n    pass\nclass SessionRequest(BaseModel):\n    pass\n@api_router.post("/subscription/trial")\nasync def activate_trial():\n    pass\n@api_router.get("/servers")\nasync def get_servers():\n    pass\n@api_router.post("/vpn/session")\nasync def create_vpn_session():\n    pass\ndef _subscription_headers_from_request(request):\n    pass\ndef _entitlement_requested(headers):\n    pass\ndef parse_single_node_line(line, index, user):\n    pass\n'''
         patched = patched_text(source)
@@ -184,6 +189,8 @@ class LegacyTrialBootstrapTests(unittest.IsolatedAsyncioTestCase):
             client_uuid = "test-panel-client-uuid"
 
             async def get_by_email(_email):
+                if panel_client["client"] is None:
+                    raise ValueError("Obtain (record not found)")
                 return panel_client["client"]
 
             async def panel_create(*, user_id, days, limit_ip):

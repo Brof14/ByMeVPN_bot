@@ -127,6 +127,10 @@ def _normalized_headers(headers: dict[str, str]) -> dict[str, str]:
     return {str(key).casefold(): str(value) for key, value in headers.items() if value is not None}
 
 
+def _panel_client_not_found(exc: Exception) -> bool:
+    return "record not found" in str(exc).casefold()
+
+
 async def _fetch_nodes(sub_url: str, headers: dict[str, str], parser: Any) -> list[dict[str, Any]]:
     parsed = urlparse(sub_url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -256,7 +260,12 @@ def install_legacy_trial_bootstrap(router: Any, namespace: dict[str, Any]) -> No
     async def strict_panel_client(user_id: int) -> Any:
         import xui_client
         api = await xui_client._get_api()
-        return await xui_client._api_call_with_retry(api.client.get_by_email, str(int(user_id)))
+        try:
+            return await xui_client._api_call_with_retry(api.client.get_by_email, str(int(user_id)))
+        except Exception as exc:
+            if _panel_client_not_found(exc):
+                return None
+            raise
 
     async def valid_bootstrap(user_id: int, headers: dict[str, str], panel_state: dict[str, Any]) -> int | None:
         from entitlements import EntitlementSigningError, device_binding
