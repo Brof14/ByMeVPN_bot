@@ -54,3 +54,23 @@ class TestTelegramPostCompatibility(unittest.TestCase):
         self.assertEqual(oversized.status_code, 200)
         self.assertEqual(oversized.json(), {"status": "expired"})
         self.assertEqual(self.seen_tokens, [])
+
+    def test_rollback_to_get_only_router_restores_original_method_surface(self):
+        router = APIRouter()
+
+        @router.get("/auth/telegram/check-session", response_model=CheckResponse)
+        async def legacy_get_check_session(token: str):
+            return CheckResponse(status="pending")
+
+        app = FastAPI()
+        app.include_router(router, prefix="/api/v1")
+        client = TestClient(app)
+        post = client.post(
+            "/api/v1/auth/telegram/check-session", json={"token": "auth_safe-body"},
+        )
+        get = client.get(
+            "/api/v1/auth/telegram/check-session", params={"token": "auth_legacy-query"},
+        )
+        self.assertEqual(post.status_code, 405)
+        self.assertEqual(post.headers.get("allow"), "GET")
+        self.assertEqual(get.status_code, 200)
