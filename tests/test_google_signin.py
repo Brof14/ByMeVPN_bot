@@ -8,13 +8,10 @@ import sys
 import tempfile
 import time
 import unittest
-from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
-from cryptography.x509.oid import NameOID
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
@@ -79,7 +76,11 @@ def _b64(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
 
 
-def _signed_google_token(key, certificate_pem: bytes, **overrides) -> str:
+def _b64_int(value: int) -> str:
+    return _b64(value.to_bytes((value.bit_length() + 7) // 8, "big"))
+
+
+def _signed_google_token(key, **overrides) -> str:
     now = int(time.time())
     claims = {
         "iss": "https://accounts.google.com",
@@ -102,22 +103,15 @@ class TestGoogleIdTokenVerification(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "local test signer")])
-        now = datetime.now(timezone.utc)
-        cls.certificate = (
-            x509.CertificateBuilder()
-            .subject_name(subject)
-            .issuer_name(issuer)
-            .public_key(cls.private_key.public_key())
-            .serial_number(x509.random_serial_number())
-            .not_valid_before(now - timedelta(minutes=1))
-            .not_valid_after(now + timedelta(days=1))
-            .sign(cls.private_key, hashes.SHA256())
-        ).public_bytes(serialization.Encoding.PEM)
+        public_numbers = cls.private_key.public_key().public_numbers()
+        cls.jwks = {"keys": [{
+            "kty": "RSA", "use": "sig", "alg": "RS256", "kid": "test-key",
+            "n": _b64_int(public_numbers.n), "e": _b64_int(public_numbers.e),
+        }]}
 
     def _verify(self, **claims):
-        token = _signed_google_token(self.private_key, self.certificate, **claims)
-        with patch("google.oauth2.id_token._fetch_certs", return_value={"test-key": self.certificate}):
+        token = _signed_google_token(self.private_key, **claims)
+        with patch("google.oauth2.id_token._fetch_certs", return_value=self.jwks):
             return verify_google_id_token(token, WEB_CLIENT_ID)
 
     def test_valid_signed_token_is_verified_with_google_auth(self):
@@ -132,22 +126,22 @@ class TestGoogleIdTokenVerification(unittest.TestCase):
         self.assertEqual(wrong_audience.exception.code, "wrong_audience")
         with self.assertRaises(GoogleIdTokenError) as expired:
             self._verify(exp=int(time.time()) - 60)
-        self.assertEqual(expired.exception.code, "invalid_expiration")
+        self.assertEqual(expired.exception.code, "expired_token")
         with self.assertRaises(GoogleIdTokenError) as unverified:
             self._verify(email_verified=False)
         self.assertEqual(unverified.exception.code, "email_unverified")
 
     def test_modified_payload_or_signature_is_rejected(self):
-        token = _signed_google_token(self.private_key, self.certificate)
+        token = _signed_google_token(self.private_key)
         header, payload, signature = token.split(".")
         changed_payload = _b64(json.dumps({"iss": "https://accounts.google.com", "aud": WEB_CLIENT_ID}).encode())
-        with patch("google.oauth2.id_token._fetch_certs", return_value={"test-key": self.certificate}):
+        with patch("google.oauth2.id_token._fetch_certs", return_value=self.jwks):
             with self.assertRaises(GoogleIdTokenError):
                 verify_google_id_token(f"{header}.{changed_payload}.{signature}", WEB_CLIENT_ID)
             bad_signature = ("A" if signature[0] != "A" else "B") + signature[1:]
             with self.assertRaises(GoogleIdTokenError) as rejected:
                 verify_google_id_token(f"{header}.{payload}.{bad_signature}", WEB_CLIENT_ID)
-            self.assertEqual(rejected.exception.code, "invalid_signature_or_key")
+            self.assertEqual(rejected.exception.code, "invalid_signature")
 
     def test_expired_token_is_rejected(self):
         with self.assertRaises(GoogleIdTokenError):
