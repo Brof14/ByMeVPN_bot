@@ -274,6 +274,56 @@ class TestGoogleSignInHttp(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(response.json()["user"]["is_google"])
         self.assertEqual(replay.status_code, 401)
 
+    async def test_google_session_can_claim_the_shared_three_day_two_device_trial(self):
+        """A Google-issued JWT uses the same users.trial_used claim as other logins."""
+        nonce = (await self.client.post("/api/v1/auth/google/nonce", json={})).json()["nonce"]
+        with (
+            patch.object(
+                api_router, "verify_google_id_token",
+                return_value=self._claims(sub="google-trial-test", nonce=nonce),
+            ),
+            patch.object(
+                api_router, "_auth_subscription_snapshot", new=AsyncMock(
+                    return_value=(None, [], {"status": "inactive", "trial_available": True}),
+                ),
+            ),
+        ):
+            login = await self.client.post(
+                "/api/v1/auth/google", json={"id_token": "isolated-test-token", "nonce": nonce},
+            )
+        self.assertEqual(login.status_code, 200, login.text)
+        access_token = login.json()["access"]
+
+        with (
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value=None)),
+            patch("xui_client.create_xui_user", new=AsyncMock(return_value={
+                "subscription_url": "https://subscription.invalid/google-trial-test",
+                "uuid": "isolated-test-client",
+            })) as create_client,
+            patch("xui_client.get_xui_devices", new=AsyncMock(return_value={
+                "devices": [], "limit_hwid": 2, "limit_ip": 0,
+            })),
+            patch.object(api_router, "fetch_and_parse_real_nodes", new=AsyncMock(return_value=[])),
+        ):
+            trial = await self.client.post(
+                "/api/v1/subscription/trial", json={},
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            retry = await self.client.post(
+                "/api/v1/subscription/trial", json={},
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+
+        self.assertEqual(trial.status_code, 200, trial.text)
+        self.assertEqual(trial.json()["status"], "trial")
+        self.assertEqual(trial.json()["seconds_remaining"], 3 * 86400)
+        self.assertEqual(trial.json()["max_devices"], 2)
+        self.assertEqual(retry.status_code, 409)
+        create_client.assert_awaited_once_with(
+            user_id=int(login.json()["user"]["id"]), days=3, limit_ip=0, limit_hwid=2,
+        )
+        self.assertTrue(await database.has_trial_used(int(login.json()["user"]["id"])))
+
     async def test_two_subjects_with_same_email_are_not_merged(self):
         ids = []
         for sub in ("subject-a", "subject-b"):

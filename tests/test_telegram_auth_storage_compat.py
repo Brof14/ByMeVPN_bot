@@ -100,6 +100,66 @@ class TelegramLegacyStorageHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "authenticated")
 
+    async def test_bot_start_waits_for_confirmation_before_android_can_exchange(self):
+        """The bot must persist confirmation before sending its success message."""
+        from handlers.start import cmd_start
+
+        token = await self._create_pending_state()
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(
+                id=981234, username="test-user", full_name="Test User", first_name="Test",
+            ),
+            text=f"/start {token}",
+            answer=AsyncMock(),
+        )
+        with (
+            patch("handlers.start.find_user_by_id", new=AsyncMock(return_value={"user_id": 981234})),
+            patch("handlers.start.ensure_user", new=AsyncMock()),
+        ):
+            await cmd_start(message, SimpleNamespace(), SimpleNamespace())
+
+        message.answer.assert_awaited_once()
+        self.assertIn("Вход в приложение ByMeVPN подтверждён", message.answer.await_args.args[0])
+        with patch.object(
+            api_router, "_auth_subscription_snapshot",
+            new=AsyncMock(return_value=("", [], {"status": "inactive"})),
+        ):
+            exchange = await self.client.post(
+                "/api/v1/auth/telegram/check-session", json={"token": token},
+            )
+        self.assertEqual(exchange.status_code, 200)
+        self.assertEqual(exchange.json()["status"], "authenticated")
+        self.assertTrue(exchange.json().get("access_token"))
+
+    async def test_bot_does_not_claim_success_when_confirmation_fails(self):
+        from handlers.start import cmd_start
+
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(
+                id=981234, username="test-user", full_name="Test User", first_name="Test",
+            ),
+            text="/start auth_test-state",
+            answer=AsyncMock(),
+        )
+        with (
+            patch("handlers.start.find_user_by_id", new=AsyncMock(return_value={"user_id": 981234})),
+            patch("handlers.start.ensure_user", new=AsyncMock()),
+            patch.object(api_router, "confirm_telegram_session", new=AsyncMock(return_value=False)) as confirm,
+        ):
+            await cmd_start(message, SimpleNamespace(), SimpleNamespace())
+
+        confirm.assert_awaited_once()
+        message.answer.assert_awaited_once()
+        self.assertIn("уже использована или истекла", message.answer.await_args.args[0])
+        self.assertNotIn("подтверждён", message.answer.await_args.args[0])
+
+    async def _create_pending_state(self) -> str:
+        response = await self.client.post(
+            "/api/v1/auth/telegram/create-session", json={},
+        )
+        self.assertEqual(response.status_code, 200)
+        return response.json()["session_token"]
+
     async def test_profile_snapshot_failure_is_correlated_and_state_remains_retryable(self):
         import hashlib
 

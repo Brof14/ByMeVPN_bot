@@ -36,6 +36,25 @@ def main() -> None:
         raise SystemExit(
             "database.py missing mobile compatibility functions: " + ",".join(missing)
         )
+
+    start_path = ROOT / "handlers" / "start.py"
+    start_tree = ast.parse(start_path.read_text(encoding="utf-8"))
+    start_handler = next(
+        (node for node in start_tree.body
+         if isinstance(node, ast.AsyncFunctionDef) and node.name == "cmd_start"),
+        None,
+    )
+    if start_handler is None:
+        raise SystemExit("Telegram /start handler missing from image")
+    confirms_session_awaited = any(
+        isinstance(node, ast.Await)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "confirm_telegram_session"
+        for node in ast.walk(start_handler)
+    )
+    if not confirms_session_awaited:
+        raise SystemExit("Telegram /start handler must await session confirmation")
     try:
         from jwt.api_jwk import PyJWKSet  # noqa: F401
         from jwt.exceptions import PyJWKClientError  # noqa: F401

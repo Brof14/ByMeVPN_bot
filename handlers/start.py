@@ -292,6 +292,8 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext) -> None:
         auth_token = args[1].strip()
         try:
             from api_router import confirm_telegram_session
+            # This function persists the bot confirmation asynchronously. Do
+            # not tell the user it succeeded until that write has completed.
             confirmed = await confirm_telegram_session(
                 token=auth_token,
                 user_id=user_id,
