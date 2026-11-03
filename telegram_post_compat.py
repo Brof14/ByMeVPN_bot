@@ -1,8 +1,9 @@
 """Add JSON-body Telegram polling to a legacy GET-only FastAPI router."""
 
+import hashlib
 from typing import Any, Awaitable, Callable, Type
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel
 
 
@@ -27,9 +28,17 @@ def register_telegram_check_post(
     if any(path == route.path and "POST" in (route.methods or set()) for route in router.routes):
         raise RuntimeError("Telegram check-session POST route is already registered")
 
-    async def check_session_body(body: TelegramSessionTokenBody, request: Request):
+    async def check_session_body(
+        body: TelegramSessionTokenBody, request: Request, response: Response = None,
+    ):
         if not body.token or len(body.token) > 256:
             return response_model(status="expired")
+        state = body.token.removeprefix("auth_")
+        correlation_id = hashlib.sha256(
+            state.encode("utf-8")
+        ).hexdigest()[:16] if state else ""
+        if correlation_id and response is not None:
+            response.headers["X-Correlation-ID"] = correlation_id
         return await legacy_check(body.token, request)
 
     router.add_api_route(

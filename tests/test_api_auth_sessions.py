@@ -181,6 +181,7 @@ class TestTelegramAuthSessions(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(replay.access_token)
 
     async def test_retryable_snapshot_failure_does_not_consume_confirmed_state(self):
+        from fastapi import HTTPException
         from starlette.requests import Request
 
         state = "auth_" + secrets.token_urlsafe(32)
@@ -197,10 +198,14 @@ class TestTelegramAuthSessions(unittest.IsolatedAsyncioTestCase):
             api_router, "_auth_subscription_snapshot",
             new=AsyncMock(side_effect=RuntimeError("isolated snapshot failure")),
         ):
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises(HTTPException) as result:
                 await api_router.check_telegram_session_body(
                     api_router.TelegramSessionCheckRequest(token=state), request
                 )
+        self.assertEqual(result.exception.status_code, 503)
+        self.assertEqual(
+            result.exception.headers.get("X-Correlation-ID"), state_hash[:16],
+        )
         self.assertEqual((await database.get_mobile_auth_session(state_hash))["status"], "authenticated")
 
     async def test_cancelled_state_cannot_be_confirmed_or_exchanged(self):

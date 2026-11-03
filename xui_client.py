@@ -1125,6 +1125,12 @@ async def get_xui_client_details(
             "enable": client.enable,
         }
     except Exception as e:
+        # The installed 3x-ui client raises ValueError("...record not found")
+        # for a normal absent client instead of returning None. Treat only
+        # that explicit response as absence so a first-time trial can proceed;
+        # strict callers must still fail closed on transport/auth/API errors.
+        if isinstance(e, ValueError) and "record not found" in str(e).lower():
+            return None
         logger.debug("get_xui_client_details failed for user %d: %s", user_id, e)
         if strict:
             raise

@@ -57,6 +57,33 @@ class TestXuiClientPool(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(xui_client._is_vless_inbound(SimpleNamespace(protocol="vless")))
         self.assertFalse(xui_client._is_vless_inbound(SimpleNamespace(protocol="hysteria")))
 
+    async def test_strict_client_details_treat_explicit_not_found_as_absence(self):
+        api = SimpleNamespace(client=SimpleNamespace(get_by_email=AsyncMock()))
+        api.client.get_by_email.side_effect = ValueError("Obtain (record not found)")
+
+        async def passthrough(method, *args, **kwargs):
+            return await method(*args, **kwargs)
+
+        with (
+            patch("xui_client._get_api", new=AsyncMock(return_value=api)),
+            patch("xui_client._api_call_with_retry", new=passthrough),
+        ):
+            result = await xui_client.get_xui_client_details(12345, strict=True)
+
+        self.assertIsNone(result)
+
+    async def test_strict_client_details_still_raises_panel_failures(self):
+        async def panel_failure(*_args, **_kwargs):
+            raise TimeoutError("panel unavailable")
+
+        api = SimpleNamespace(client=SimpleNamespace(get_by_email=AsyncMock()))
+        with (
+            patch("xui_client._get_api", new=AsyncMock(return_value=api)),
+            patch("xui_client._api_call_with_retry", new=panel_failure),
+        ):
+            with self.assertRaises(TimeoutError):
+                await xui_client.get_xui_client_details(12345, strict=True)
+
     async def test_failed_login_is_not_published_and_next_login_recovers(self):
         failed = _FakeApi(RuntimeError("temporary login failure"))
         recovered = _FakeApi()
