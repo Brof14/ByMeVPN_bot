@@ -174,9 +174,27 @@ class TestXuiClientPool(unittest.IsolatedAsyncioTestCase):
 
         client = SimpleNamespace(
             _url=lambda path: path,
-            _request_with_retry=AsyncMock(return_value=Response()),
+            cookies={"3x-ui": "session-cookie"},
+            use_tls_verify=True,
+            custom_certificate_path="/tmp/test-ca.pem",
+            _generate_headers=lambda headers: {**headers, "X-CSRF-Token": "test-csrf"},
         )
         api = SimpleNamespace(client=client)
+
+        class HttpClient:
+            def __init__(self, **kwargs):
+                self.options = kwargs
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def delete(self, url, *, headers):
+                self.url = url
+                self.headers = headers
+                return Response()
 
         async def passthrough(func, *args, **kwargs):
             return await func(*args, **kwargs)
@@ -185,12 +203,12 @@ class TestXuiClientPool(unittest.IsolatedAsyncioTestCase):
             patch("xui_client.get_xui_devices", new=AsyncMock(side_effect=listed)) as get_devices,
             patch("xui_client._get_api", new=AsyncMock(return_value=api)),
             patch("xui_client._api_call_with_retry", new=passthrough),
+            patch("xui_client.httpx.AsyncClient", HttpClient),
         ):
             self.assertTrue(await xui_client.delete_xui_hwid_device(123, 42))
 
         self.assertEqual(get_devices.await_count, 2)
-        client._request_with_retry.assert_awaited_once()
-        self.assertIn("/hwids/123/42", client._request_with_retry.await_args.args[1])
+        self.assertEqual(client.cookies, {"3x-ui": "session-cookie"})
 
         with (
             patch("xui_client.get_xui_devices", new=AsyncMock(return_value={
@@ -204,12 +222,23 @@ class TestXuiClientPool(unittest.IsolatedAsyncioTestCase):
     async def test_hwid_delete_returns_false_when_panel_keeps_device(self):
         client = SimpleNamespace(
             _url=lambda path: path,
-            _request_with_retry=AsyncMock(return_value=SimpleNamespace(
-                raise_for_status=lambda: None,
-                json=lambda: {"success": True},
-            )),
+            cookies={}, use_tls_verify=True, custom_certificate_path=None,
+            _generate_headers=lambda headers: headers,
         )
         api = SimpleNamespace(client=client)
+
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"success": True}
+
+        class HttpClient:
+            def __init__(self, **kwargs): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return None
+            async def delete(self, url, *, headers): return Response()
 
         async def passthrough(func, *args, **kwargs):
             return await func(*args, **kwargs)
@@ -221,8 +250,47 @@ class TestXuiClientPool(unittest.IsolatedAsyncioTestCase):
             patch("xui_client._get_api", new=AsyncMock(return_value=api)),
             patch("xui_client._api_call_with_retry", new=passthrough),
             patch("xui_client.asyncio.sleep", new=AsyncMock()),
+            patch("xui_client.httpx.AsyncClient", HttpClient),
         ):
             self.assertFalse(await xui_client.delete_xui_hwid_device(123, 42))
+
+    async def test_hwid_delete_sends_authenticated_delete_with_panel_tls_settings(self):
+        device = {"id": 42}
+        class Response:
+            def raise_for_status(self): return None
+            def json(self): return {"success": True}
+        class HttpClient:
+            instances = []
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                self.__class__.instances.append(self)
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return None
+            async def delete(self, url, *, headers):
+                self.url, self.headers = url, headers
+                return Response()
+        client_api = SimpleNamespace(
+            _url=lambda path: f"https://panel.invalid/{path}",
+            cookies={"session": "cookie"}, use_tls_verify=True,
+            custom_certificate_path="/etc/ssl/test-ca.pem",
+            _generate_headers=lambda headers: {**headers, "Authorization": "Bearer mock"},
+        )
+        api = SimpleNamespace(client=client_api)
+        async def passthrough(func, *args, **kwargs): return await func(*args, **kwargs)
+        with (
+            patch("xui_client.get_xui_devices", new=AsyncMock(side_effect=[
+                {"devices": [device], "limit_hwid": 2, "limit_ip": 0},
+                {"devices": [], "limit_hwid": 2, "limit_ip": 0},
+            ])),
+            patch("xui_client._get_api", new=AsyncMock(return_value=api)),
+            patch("xui_client._api_call_with_retry", new=passthrough),
+            patch("xui_client.httpx.AsyncClient", HttpClient),
+        ):
+            self.assertTrue(await xui_client.delete_xui_hwid_device(123, 42))
+        options = HttpClient.instances[-1].kwargs
+        self.assertEqual(options["cookies"], {"session": "cookie"})
+        self.assertEqual(options["verify"], "/etc/ssl/test-ca.pem")
+        self.assertEqual(options["timeout"], 15.0)
 
     async def test_new_device_notice_explains_full_limit_but_not_unlimited(self):
         user_id = 123

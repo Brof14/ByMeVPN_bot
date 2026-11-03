@@ -325,8 +325,8 @@ async def cb_key_device_delete(callback: CallbackQuery, bot: Bot):
         return
     try:
         removed = await delete_xui_hwid_device(callback.from_user.id, device_id)
-    except Exception:
-        logger.exception("Could not remove device %s for user %s", device_id, callback.from_user.id)
+    except Exception as exc:
+        logger.warning("Device deletion failed (%s)", type(exc).__name__)
         await safe_answer(callback, "Не удалось подтвердить удаление устройства. Попробуйте ещё раз.", alert=True)
         return
     if not removed:
@@ -340,8 +340,8 @@ async def cb_key_device_delete(callback: CallbackQuery, bot: Bot):
     try:
         text, keyboard = await _key_devices_view(callback.from_user.id, key)
         await send_or_edit(bot, callback, text, keyboard)
-    except Exception:
-        logger.exception("Could not refresh device list after deleting for user %s", callback.from_user.id)
+    except Exception as exc:
+        logger.warning("Device list refresh failed after deletion (%s)", type(exc).__name__)
         await send_or_edit(bot, callback, "Устройство удалено.", key_devices_kb(key_id))
 
 

@@ -134,6 +134,7 @@ class LegacyTrialBootstrapTests(unittest.IsolatedAsyncioTestCase):
     def test_panel_fingerprint_must_match_the_full_server_hwid_hash_prefix(self):
         hwid = "install-id-for-this-test-device"
         fingerprint = hashlib.sha256(hwid.encode()).hexdigest()
+        self.assertTrue(_fingerprint_matches(41, hwid, {"devices": [{"fingerprint": fingerprint[:12]}]}))
         self.assertTrue(_fingerprint_matches(41, hwid, {"devices": [{"fingerprint": fingerprint[:16]}]}))
         self.assertFalse(_fingerprint_matches(41, hwid, {"devices": [{"fingerprint": "0" * 16}]}))
         self.assertFalse(_fingerprint_matches(41, hwid, {"devices": [{"fingerprint": fingerprint[:8]}]}))

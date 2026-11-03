@@ -151,29 +151,41 @@ class TestSubscriptionHwidForwarding(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("fingerprint", result["devices"][0])
         self.assertNotIn("install_id", result["devices"][0])
 
-    async def test_device_delete_checks_owner_scoped_panel_list(self):
-        panel = {"devices": [{"id": 42}], "limit_hwid": 2, "limit_ip": 0}
+    def test_current_device_match_requires_panel_minimum_fingerprint_length(self):
+        hwid = "current-install-id"
+        digest = hashlib.sha256(hwid.encode()).hexdigest()
+        request = _request({"X-HWID": hwid})
+        self.assertTrue(api_router._device_is_current({"fingerprint": digest[:12]}, request))
+        self.assertFalse(api_router._device_is_current({"fingerprint": digest[:8]}, request))
+
+    async def test_device_delete_delegates_owner_check_and_delete_to_panel_adapter(self):
         with (
-            patch("xui_client.get_xui_devices", new=AsyncMock(return_value=panel)) as get_devices,
             patch("xui_client.delete_xui_hwid_device", new=AsyncMock(return_value=True)) as delete_device,
         ):
             result = await api_router.delete_device("42", user_id=123)
 
         self.assertEqual(result, {"status": "ok"})
-        get_devices.assert_awaited_once_with(123)
         delete_device.assert_awaited_once_with(123, 42)
 
-    async def test_device_delete_rejects_unknown_device_and_bad_id(self):
+    async def test_device_delete_is_idempotent_for_missing_and_rejects_bad_id(self):
         from fastapi import HTTPException
 
-        with patch("xui_client.get_xui_devices", new=AsyncMock(return_value={"devices": []})):
-            with self.assertRaises(HTTPException) as missing:
-                await api_router.delete_device("42", user_id=123)
-        self.assertEqual(missing.exception.status_code, 404)
+        with patch("xui_client.delete_xui_hwid_device", new=AsyncMock(return_value=True)) as delete:
+            result = await api_router.delete_device("42", user_id=123)
+        self.assertEqual(result, {"status": "ok"})
+        delete.assert_awaited_once_with(123, 42)
 
         with self.assertRaises(HTTPException) as malformed:
             await api_router.delete_device("../42", user_id=123)
         self.assertEqual(malformed.exception.status_code, 400)
+
+    async def test_device_delete_panel_failure_is_reported_as_retryable(self):
+        from fastapi import HTTPException
+
+        with patch("xui_client.delete_xui_hwid_device", new=AsyncMock(side_effect=TimeoutError)):
+            with self.assertRaises(HTTPException) as failed:
+                await api_router.delete_device("42", user_id=123)
+        self.assertEqual(failed.exception.status_code, 503)
 
 
 if __name__ == "__main__":

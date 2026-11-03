@@ -1098,25 +1098,41 @@ async def create_google_nonce():
 
 @api_router.post("/auth/google")
 async def login_google(req: GoogleLoginRequest, request: Request):
+    correlation_id = secrets.token_hex(8)
+
+    def reject(stage: str, code: str, status_code: int, detail: str) -> None:
+        # Only fixed, non-sensitive stage/code values and a random correlation
+        # ID enter logs. Never log provider exception text or token claims.
+        logger.warning(
+            "Google sign-in rejected stage=%s code=%s correlation_id=%s",
+            stage, code, correlation_id,
+        )
+        raise HTTPException(
+            status_code=status_code, detail=detail,
+            headers={"X-Correlation-ID": correlation_id},
+        )
+
     if not _google_signin_configured():
-        raise HTTPException(status_code=503, detail="Вход через Google временно недоступен")
+        reject("configuration", "google_signin_unavailable", 503,
+               "Вход через Google временно недоступен")
 
     expected_audience = os.getenv("GOOGLE_WEB_CLIENT_ID", "").strip()
     try:
         claims = await asyncio.to_thread(verify_google_id_token, req.id_token, expected_audience)
-    except GoogleIdTokenError:
-        raise HTTPException(status_code=401, detail="Не удалось подтвердить аккаунт Google") from None
+    except GoogleIdTokenError as exc:
+        reject("id_token", exc.code, 401, "Не удалось подтвердить аккаунт Google")
 
     if not hmac.compare_digest(claims["nonce"], req.nonce):
-        raise HTTPException(status_code=401, detail="Не удалось подтвердить запрос входа")
+        reject("nonce", "nonce_mismatch", 401, "Не удалось подтвердить запрос входа")
     nonce_hash = hashlib.sha256(req.nonce.encode("utf-8")).hexdigest()
     try:
         consumed = await database.consume_mobile_google_nonce(nonce_hash)
     except Exception as exc:
-        logger.error("Google sign-in challenge validation unavailable (%s)", type(exc).__name__)
-        raise HTTPException(status_code=503, detail="Не удалось подтвердить запрос входа") from None
+        reject("nonce", "nonce_store_unavailable", 503,
+               "Не удалось подтвердить запрос входа")
     if not consumed:
-        raise HTTPException(status_code=401, detail="Запрос входа истёк или уже использован")
+        reject("nonce", "nonce_expired_or_replayed", 401,
+               "Запрос входа истёк или уже использован")
 
     try:
         await _ensure_auth_db()
@@ -1124,8 +1140,8 @@ async def login_google(req: GoogleLoginRequest, request: Request):
             claims["sub"], claims["email"], claims["name"],
         )
     except Exception as exc:
-        logger.error("Google account storage unavailable (%s)", type(exc).__name__)
-        raise HTTPException(status_code=503, detail="Не удалось открыть аккаунт") from None
+        reject("account", "account_store_unavailable", 503,
+               "Не удалось открыть аккаунт")
 
     user_id = int(identity["user_id"])
     jwt_token = create_simple_jwt(user_id, identity["email"])
@@ -1902,7 +1918,7 @@ def _device_is_current(item: dict, request: Request) -> bool:
     """Compare the client HWID with 3x-ui's short SHA-256 fingerprint in-process."""
     hwid = request.headers.get("x-hwid", "").strip()[:256]
     fingerprint = str(item.get("fingerprint") or "").strip().lower()
-    if not hwid or not fingerprint or len(fingerprint) > 64:
+    if not hwid or not fingerprint or not 12 <= len(fingerprint) <= 64:
         return False
     if not re.fullmatch(r"[0-9a-f]+", fingerprint):
         return False
@@ -1966,13 +1982,11 @@ async def delete_device(device_id: str, user_id: int = Depends(get_current_user_
     if parsed_id <= 0:
         raise HTTPException(status_code=400, detail="Некорректный идентификатор устройства")
     try:
-        from xui_client import delete_xui_hwid_device, get_xui_devices
+        from xui_client import delete_xui_hwid_device
 
-        # Verify ownership against this authenticated user's panel record before
-        # issuing deletion. The XUI endpoint itself is scoped by user_id too.
-        current = await get_xui_devices(user_id)
-        if not any(int(item.get("id", 0)) == parsed_id for item in current.get("devices", [])):
-            raise HTTPException(status_code=404, detail="Устройство не найдено")
+        # The helper first checks the authenticated user's panel list and sends
+        # a user-scoped delete only for an exact panel ID. Missing/stale IDs are
+        # idempotent success, while panel errors remain a service failure.
         removed = await delete_xui_hwid_device(user_id, parsed_id)
         if not removed:
             raise HTTPException(status_code=503, detail="Не удалось удалить устройство. Попробуйте позже")
