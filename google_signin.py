@@ -47,13 +47,14 @@ def verify_google_id_token(token: str, expected_audience: str) -> dict[str, Any]
                     url, method=method, body=body, headers=headers, timeout=5, **kwargs
                 )
 
-        # Verify against Google's published signing keys and standard temporal
-        # claims first. Audience and issuer are then checked explicitly below,
-        # so the failure can be reported as a safe, precise diagnostic code.
+        # Google now publishes a JWK set. google-auth delegates this format to
+        # PyJWT; pass the exact configured audience so PyJWT can validate it
+        # during signature verification. The explicit check below keeps the
+        # accepted contract narrow and gives a stable, safe failure code.
         claims: Mapping[str, Any] = id_token.verify_token(
             token,
             BoundedGoogleRequest(),
-            audience=None,
+            audience=expected_audience,
             certs_url="https://www.googleapis.com/oauth2/v3/certs",
             clock_skew_in_seconds=0,
         )
@@ -65,6 +66,8 @@ def verify_google_id_token(token: str, expected_audience: str) -> dict[str, Any]
         error_name = type(exc).__name__
         safe_codes = {
             "InvalidSignatureError": "invalid_signature",
+            "InvalidAudienceError": "wrong_audience",
+            "InvalidIssuerError": "wrong_issuer",
             "ExpiredSignatureError": "expired_token",
             # google.auth.jwt reports malformed/expired temporal claims as
             # InvalidValue after the signature has been checked.

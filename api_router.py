@@ -35,9 +35,15 @@ import database
 from entitlements import EntitlementSigningError, create_entitlement, device_binding, load_private_key
 from config import XUI_SUB_PATH, XUI_URL
 from telegram_post_compat import TelegramSessionTokenBody, register_telegram_check_post
+from telegram_auth_storage_compat import install_telegram_auth_storage_compat
 from google_signin import GoogleIdTokenError, verify_google_id_token
 
 logger = logging.getLogger(__name__)
+
+# Older production deployments use a narrow bind-mounted database.py shim.
+# Fill only missing Telegram session helpers; native DB implementations stay
+# authoritative when present.
+install_telegram_auth_storage_compat(database)
 
 api_router = APIRouter()
 

@@ -11,6 +11,12 @@ REQUIRED_DATABASE_FUNCTIONS = {
     "create_mobile_trial_bootstrap",
     "get_mobile_trial_bootstrap",
     "delete_mobile_trial_bootstrap",
+    "create_mobile_auth_session",
+    "confirm_mobile_auth_session",
+    "poll_mobile_auth_session",
+    "get_mobile_auth_session",
+    "consume_mobile_auth_session",
+    "cancel_mobile_auth_session",
 }
 
 
@@ -30,6 +36,11 @@ def main() -> None:
         raise SystemExit(
             "database.py missing mobile compatibility functions: " + ",".join(missing)
         )
+    try:
+        from jwt.api_jwk import PyJWKSet  # noqa: F401
+        from jwt.exceptions import PyJWKClientError  # noqa: F401
+    except ImportError as exc:
+        raise SystemExit("PyJWT JWK support is required for Google's published signing keys") from exc
 
 
 if __name__ == "__main__":

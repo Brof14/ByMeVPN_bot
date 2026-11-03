@@ -26,6 +26,12 @@ class TestRuntimeCompatibility(unittest.TestCase):
             "create_mobile_trial_bootstrap",
             "get_mobile_trial_bootstrap",
             "delete_mobile_trial_bootstrap",
+            "create_mobile_auth_session",
+            "confirm_mobile_auth_session",
+            "poll_mobile_auth_session",
+            "get_mobile_auth_session",
+            "consume_mobile_auth_session",
+            "cancel_mobile_auth_session",
         )
         missing = [name for name in required if not callable(getattr(database, name, None))]
         self.assertEqual(missing, [])
