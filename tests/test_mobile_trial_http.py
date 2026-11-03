@@ -51,7 +51,10 @@ class MobileTrialHttpTests(unittest.IsolatedAsyncioTestCase):
             response = await self.client.post(
                 "/api/v1/subscription/trial",
                 json={"install_id": "test-install-id", "device_model": "test-device"},
-                headers={"X-HWID": "test-install-id"},
+                headers={
+                    "X-HWID": "test-install-id",
+                    "X-Correlation-ID": "trial-safe-correlation-123",
+                },
             )
 
         self.assertEqual(response.status_code, 200)
@@ -59,6 +62,7 @@ class MobileTrialHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["status"], "trial")
         self.assertEqual(body["max_devices"], 2)
         self.assertEqual(body["seconds_remaining"], 3 * 86400)
+        self.assertEqual(response.headers.get("X-Correlation-ID"), "trial-safe-correlation-123")
         claim.assert_awaited_once_with(987654)
         create_client.assert_awaited_once_with(
             user_id=987654, days=3, limit_ip=0, limit_hwid=2,
@@ -79,7 +83,47 @@ class MobileTrialHttpTests(unittest.IsolatedAsyncioTestCase):
                 headers={"X-HWID": "test-install-id"},
             )
         self.assertEqual(response.status_code, 503)
+        self.assertEqual(len(response.headers.get("X-Correlation-ID", "")), 16)
         claim.assert_not_awaited()
+
+    async def test_first_trial_accepts_explicit_panel_record_not_found(self):
+        from types import SimpleNamespace
+
+        api = SimpleNamespace(client=SimpleNamespace(get_by_email=AsyncMock()))
+
+        async def not_found(*_args, **_kwargs):
+            raise ValueError("Obtain (record not found)")
+
+        with (
+            patch.object(api_router.database, "has_trial_used", new=AsyncMock(return_value=False)),
+            patch.object(api_router.database, "get_user_keys", new=AsyncMock(return_value=[])),
+            patch.object(api_router.database, "try_claim_trial", new=AsyncMock(return_value=True)) as claim,
+            patch.object(api_router.database, "add_key", new=AsyncMock()) as add_key,
+            patch("xui_client._get_api", new=AsyncMock(return_value=api)),
+            patch("xui_client._api_call_with_retry", new=not_found),
+            patch("xui_client.create_xui_user", new=AsyncMock(return_value={
+                "subscription_url": "https://subscription.invalid/test",
+                "uuid": "test-client-id",
+            })) as create_client,
+            patch("xui_client.get_xui_devices", new=AsyncMock(return_value={
+                "devices": [], "limit_hwid": 2, "limit_ip": 0,
+            })),
+            patch.object(api_router, "fetch_and_parse_real_nodes", new=AsyncMock(return_value=[])),
+        ):
+            response = await self.client.post(
+                "/api/v1/subscription/trial", json={},
+                headers={"X-Correlation-ID": "trial-new-panel-client"},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["status"], "trial")
+        self.assertEqual(response.json()["max_devices"], 2)
+        self.assertEqual(response.json()["seconds_remaining"], 3 * 86400)
+        claim.assert_awaited_once_with(987654)
+        create_client.assert_awaited_once_with(
+            user_id=987654, days=3, limit_ip=0, limit_hwid=2,
+        )
+        self.assertEqual(add_key.await_args.kwargs["days"], 3)
 
 
 if __name__ == "__main__":

@@ -57,10 +57,13 @@ class TelegramLegacyStorageHttpTests(unittest.IsolatedAsyncioTestCase):
             "/api/v1/auth/telegram/create-session", json={},
         )
         self.assertEqual(response.status_code, 200)
+        correlation_id = response.headers.get("X-Correlation-ID")
+        self.assertRegex(correlation_id or "", r"^[a-f0-9]{16}$")
         token = response.json()["session_token"]
         self.assertTrue(await api_router.confirm_telegram_session(
             token, user_id=981234, username="test-user", full_name="Test User",
         ))
+        self.created_correlation_id = correlation_id
         return token
 
     async def test_post_json_exchange_succeeds_once_and_replay_expires(self):
@@ -78,8 +81,10 @@ class TelegramLegacyStorageHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first.status_code, 200)
         self.assertEqual(first.json()["status"], "authenticated")
         self.assertTrue(first.json().get("access_token"))
+        self.assertEqual(first.headers.get("X-Correlation-ID"), self.created_correlation_id)
         self.assertEqual(replay.status_code, 200)
         self.assertEqual(replay.json()["status"], "expired")
+        self.assertEqual(replay.headers.get("X-Correlation-ID"), self.created_correlation_id)
 
     async def test_legacy_get_remains_compatible(self):
         from urllib.parse import urlencode
@@ -94,6 +99,25 @@ class TelegramLegacyStorageHttpTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "authenticated")
+
+    async def test_profile_snapshot_failure_is_correlated_and_state_remains_retryable(self):
+        import hashlib
+
+        token = await self._create_confirmed_state()
+        state_hash = hashlib.sha256(token.removeprefix("auth_").encode()).hexdigest()
+        with patch.object(
+            api_router, "_auth_subscription_snapshot",
+            new=AsyncMock(side_effect=RuntimeError("isolated snapshot failure")),
+        ):
+            response = await self.client.post(
+                "/api/v1/auth/telegram/check-session", json={"token": token},
+            )
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.headers.get("X-Correlation-ID"), state_hash[:16])
+        self.assertEqual(
+            (await api_router.database.get_mobile_auth_session(state_hash))["status"],
+            "authenticated",
+        )
 
 
 if __name__ == "__main__":
