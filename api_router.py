@@ -924,6 +924,23 @@ class TrialRequest(BaseModel):
     device_model: Optional[str] = None
 
 
+async def _require_trial_user_id(
+    request: Request, authorization: Optional[str] = Header(None),
+) -> int:
+    """Authenticate trial requests while attaching a safe diagnostic ID."""
+    correlation_id = _request_correlation_id(request)
+    try:
+        return await get_current_user_id(authorization)
+    except HTTPException as exc:
+        code = "unauthorized" if exc.status_code == 401 else "session_check_unavailable"
+        logger.warning(
+            "Trial failure stage=authorization code=%s correlation_id=%s",
+            code, correlation_id,
+        )
+        detail = exc.detail if isinstance(exc.detail, str) else "Не удалось проверить сессию"
+        raise _correlated_http_error(exc.status_code, detail, correlation_id) from None
+
+
 class PaymentCreateRequest(BaseModel):
     plan_code: str
     request_id: Optional[str] = None
@@ -1375,7 +1392,7 @@ async def get_subscription_status(request: Request, user_id: int = Depends(get_c
 @api_router.post("/subscription/trial")
 async def activate_trial(
     req: TrialRequest, request: Request, response: Response = None,
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(_require_trial_user_id),
 ):
     """Atomically grant one free 3-day trial to a user without a subscription."""
     from constants import DEFAULT_DEVICE_LIMIT, TRIAL_DAYS
@@ -1386,7 +1403,16 @@ async def activate_trial(
     trial_days = TRIAL_DAYS
     trial_device_limit = DEFAULT_DEVICE_LIMIT
     headers = _subscription_headers_from_request(request)
-    wants_entitlement = _entitlement_requested(headers)
+    try:
+        wants_entitlement = _entitlement_requested(headers)
+    except HTTPException as exc:
+        logger.warning(
+            "Trial failure stage=client_contract code=unsupported_entitlement_version correlation_id=%s",
+            correlation_id,
+        )
+        raise _correlated_http_error(
+            exc.status_code, "Версия проверки подписки не поддерживается", correlation_id,
+        ) from None
     if wants_entitlement:
         try:
             load_private_key()
@@ -1406,13 +1432,27 @@ async def activate_trial(
         try:
             device_binding(user_id, hwid)
         except EntitlementSigningError:
+            logger.warning(
+                "Trial failure stage=device_binding code=invalid_device_identifier correlation_id=%s",
+                correlation_id,
+            )
             raise _correlated_http_error(
                 422, "Не удалось подтвердить это устройство", correlation_id,
             ) from None
         if req.install_id and not hmac.compare_digest(req.install_id.strip(), hwid):
-            raise _correlated_http_error(422, "Данные устройства не совпадают", correlation_id)
+            logger.warning(
+                "Trial failure stage=device_binding code=install_identifier_mismatch correlation_id=%s",
+                correlation_id,
+            )
+            raise _correlated_http_error(
+                422, "Данные устройства не совпадают", correlation_id,
+            )
     try:
         if await database.has_trial_used(user_id):
+            logger.info(
+                "Trial failure stage=eligibility code=trial_already_used correlation_id=%s",
+                correlation_id,
+            )
             raise _correlated_http_error(
                 409, "Пробный период уже использован", correlation_id,
             )
@@ -1441,6 +1481,10 @@ async def activate_trial(
             503, "Не удалось проверить доступность пробного периода", correlation_id,
         ) from None
     if has_active_subscription:
+        logger.info(
+            "Trial failure stage=eligibility code=active_subscription_exists correlation_id=%s",
+            correlation_id,
+        )
         raise _correlated_http_error(
             409, "У вас уже есть действующая подписка", correlation_id,
         )
@@ -1468,6 +1512,10 @@ async def activate_trial(
             503, "Не удалось проверить доступность пробного периода", correlation_id,
         ) from None
     if panel_client and (panel_expiry <= 0 or panel_expiry > now):
+        logger.info(
+            "Trial failure stage=eligibility code=panel_subscription_exists correlation_id=%s",
+            correlation_id,
+        )
         raise _correlated_http_error(
             409, "Для этого аккаунта уже создана подписка", correlation_id,
         )
@@ -1483,6 +1531,10 @@ async def activate_trial(
             503, "Не удалось активировать пробный период", correlation_id,
         ) from None
     if not claimed:
+        logger.info(
+            "Trial failure stage=trial_claim code=already_claimed correlation_id=%s",
+            correlation_id,
+        )
         raise _correlated_http_error(
             409, "Пробный период уже использован", correlation_id,
         )
