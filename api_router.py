@@ -1088,6 +1088,14 @@ class GoogleLoginRequest(BaseModel):
     install_id: Optional[str] = None
 
 
+class GoogleDesktopCodeRequest(BaseModel):
+    code: str
+    code_verifier: str
+    redirect_uri: str
+    nonce: str
+    install_id: Optional[str] = None
+
+
 class RefreshRequest(BaseModel):
     refresh: str
 
@@ -1398,7 +1406,10 @@ async def get_google_desktop_client():
     if (not client_id.endswith(".apps.googleusercontent.com")
             or not re.fullmatch(r"[A-Za-z0-9_-]+\.apps\.googleusercontent\.com", client_id)):
         raise HTTPException(status_code=503, detail="Google OAuth для Windows ещё не настроен")
-    return {"client_id": client_id}
+    return {
+        "client_id": client_id,
+        "server_code_exchange": bool(os.getenv("GOOGLE_DESKTOP_CLIENT_SECRET", "").strip()),
+    }
 
 
 @api_router.post("/auth/google/nonce")
@@ -1414,6 +1425,82 @@ async def create_google_nonce():
         logger.error("Google sign-in challenge storage unavailable (%s)", type(exc).__name__)
         raise HTTPException(status_code=503, detail="Не удалось начать вход через Google") from None
     return {"nonce": nonce}
+
+
+@api_router.post("/auth/google/desktop-exchange")
+async def exchange_google_desktop_code(req: GoogleDesktopCodeRequest, request: Request):
+    """Exchange PKCE authorization code server-side without distributing the
+    desktop OAuth client secret in the Windows executable. The normal
+    Google ID-token and single-use nonce checks still run in login_google.
+    """
+    if not _google_signin_configured():
+        raise HTTPException(status_code=503, detail="Вход через Google временно недоступен")
+    client_id = os.getenv("GOOGLE_DESKTOP_CLIENT_ID", "").strip()
+    client_secret = os.getenv("GOOGLE_DESKTOP_CLIENT_SECRET", "").strip()
+    if not client_secret or not re.fullmatch(r"[A-Za-z0-9_-]+\.apps\.googleusercontent\.com", client_id):
+        raise HTTPException(status_code=503, detail="Обмен Google Desktop OAuth ещё не настроен")
+
+    callback = urlparse(req.redirect_uri)
+    # Only native loopback callbacks created by our Windows app are valid.
+    try:
+        valid_port = callback.port is not None and 1 <= callback.port <= 65535
+    except ValueError:
+        valid_port = False
+    if (callback.scheme != "http" or callback.hostname != "127.0.0.1"
+            or not valid_port or callback.path != "/oauth2/callback"
+            or callback.username or callback.password or callback.query or callback.fragment
+            or callback.params or len(req.redirect_uri) > 180):
+        raise HTTPException(status_code=400, detail="Некорректный адрес возврата Google")
+    if (not (12 <= len(req.code) <= 2048)
+            or any(c.isspace() for c in req.code)
+            or not re.fullmatch(r"[A-Za-z0-9._~-]{43,128}", req.code_verifier)
+            or not (24 <= len(req.nonce) <= 256)
+            or (req.install_id is not None and len(req.install_id) > 128)):
+        raise HTTPException(status_code=400, detail="Некорректный запрос Google OAuth")
+
+    try:
+        async with httpx.AsyncClient(timeout=12.0, follow_redirects=False) as client:
+            response = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "code": req.code,
+                    "code_verifier": req.code_verifier,
+                    "redirect_uri": req.redirect_uri,
+                    "grant_type": "authorization_code",
+                },
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=503, detail="Google OAuth временно недоступен") from None
+
+    if response.status_code != 200:
+        # Provider responses and credentials are never exposed or logged.
+        try:
+            provider_code = response.json().get("error", "")
+        except ValueError:
+            provider_code = ""
+        allowed_codes = {
+            "invalid_client", "invalid_grant", "invalid_request",
+            "redirect_uri_mismatch", "unauthorized_client", "access_denied",
+        }
+        safe_code = provider_code if provider_code in allowed_codes else "provider_error"
+        logger.warning("Desktop Google code exchange rejected code=%s", safe_code)
+        raise HTTPException(status_code=401, detail=f"Google OAuth: {safe_code}")
+
+    try:
+        token_data = response.json()
+    except ValueError:
+        raise HTTPException(status_code=502, detail="Некорректный ответ Google OAuth") from None
+    token = token_data.get("id_token")
+    if not isinstance(token, str) or len(token) > 16_384 or token.count(".") != 2:
+        raise HTTPException(status_code=502, detail="Google не вернул ID-токен")
+    # This invokes exactly the same signature/audience/nonce/account verifier
+    # used by Android and the original Windows token-based endpoint.
+    return await login_google(
+        GoogleLoginRequest(id_token=token, nonce=req.nonce, install_id=req.install_id),
+        request,
+    )
 
 
 @api_router.post("/auth/google")

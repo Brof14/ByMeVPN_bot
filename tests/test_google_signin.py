@@ -208,7 +208,7 @@ class TestGoogleSignInHttp(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"GOOGLE_DESKTOP_CLIENT_ID": desktop_id}):
             response = await self.client.get("/api/v1/auth/google/desktop-client")
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json(), {"client_id": desktop_id})
+            self.assertEqual(response.json(), {"client_id": desktop_id, "server_code_exchange": False})
         with patch.dict(os.environ, {"GOOGLE_DESKTOP_CLIENT_ID": "attacker.invalid"}):
             self.assertEqual((await self.client.get("/api/v1/auth/google/desktop-client")).status_code, 503)
 
