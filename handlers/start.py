@@ -25,6 +25,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from database import (
     ensure_user, set_referrer, find_user_by_id, get_referrer,
     has_trial_used,
+    get_trial_claim_reservation, reserve_trial_claim, complete_trial_claim,
+    release_trial_claim,
     has_active_subscription,
     has_ever_had_key, get_user_keys,
 )
@@ -528,6 +530,35 @@ async def _start_free_trial(bot: Bot, callback: CallbackQuery, ref_id: int | Non
             "Не удалось проверить доступность пробного периода. Попробуйте позже или напишите в поддержку."
         )
         return
+    pending = await get_trial_claim_reservation(user_id)
+    if pending:
+        if int(time.time()) - int(pending.get("created_at") or 0) < 120:
+            await callback.message.answer(
+                "Пробный период уже проверяется. Обновите статус через минуту."
+            )
+            return
+        try:
+            from xui_client import get_xui_client_details, get_xui_devices
+            panel_client = await get_xui_client_details(user_id, strict=True)
+            expiry = int((panel_client or {}).get("expiry_time") or 0) // 1000
+            if panel_client and expiry > int(time.time()) and panel_client.get("enable") is not False:
+                panel_devices = await get_xui_devices(user_id)
+                if (int(panel_devices.get("limit_hwid") or 0) == 2
+                        and int(panel_devices.get("limit_ip") or 0) == 0
+                        and isinstance(panel_devices.get("devices"), list)):
+                    await complete_trial_claim(user_id, pending["claim_id"])
+                await callback.message.answer(
+                    "Для аккаунта уже найдена активная подписка. Откройте приложение и обновите её статус."
+                )
+                return
+            await release_trial_claim(user_id, pending["claim_id"])
+        except Exception as exc:
+            logger.warning("Free trial reservation reconciliation failed (%s)", type(exc).__name__)
+            await callback.message.answer(
+                "Не удалось проверить предыдущую попытку. Попробуйте позже или напишите в поддержку."
+            )
+            return
+
     if panel_client:
         await callback.message.answer(
             "Бесплатный пробный период доступен один раз для новых пользователей. "
@@ -535,13 +566,16 @@ async def _start_free_trial(bot: Bot, callback: CallbackQuery, ref_id: int | Non
         )
         return
 
-    from database import try_claim_trial
-    if not await try_claim_trial(user_id):
-        await callback.message.answer("Бесплатный пробный период уже использован.")
+    claim_id = await reserve_trial_claim(user_id)
+    if not claim_id:
+        await callback.message.answer(
+            "Пробный период уже использован или его активация ещё проверяется."
+        )
         return
 
     try:
         from subscription import deliver_key
+        trial_started_at = int(time.time())
         delivered = await deliver_key(
             bot=bot,
             user_id=user_id,
@@ -563,6 +597,31 @@ async def _start_free_trial(bot: Bot, callback: CallbackQuery, ref_id: int | Non
         return
 
     if not delivered:
+        return
+
+    # ``deliver_key`` only returns true after the panel create/update call and
+    # key persistence succeed. Confirm the exact trial limits once more before
+    # spending the shared trial flag used by mobile and Telegram.
+    try:
+        from xui_client import get_xui_client_details, get_xui_devices
+        panel_client = await get_xui_client_details(user_id, strict=True)
+        panel_state = await get_xui_devices(user_id)
+        expiry = int((panel_client or {}).get("expiry_time") or 0) // 1000
+        if (not isinstance(panel_client, dict) or panel_client.get("enable") is False
+                or expiry <= int(time.time())
+                or abs(expiry - (trial_started_at + 3 * 86400)) > 5
+                or not isinstance(panel_state, dict)
+                or int(panel_state.get("limit_hwid") or 0) != 2
+                or int(panel_state.get("limit_ip") or 0) != 0
+                or not isinstance(panel_state.get("devices"), list)):
+            raise RuntimeError("Trial panel state is not confirmed")
+        if not await complete_trial_claim(user_id, claim_id):
+            raise RuntimeError("Trial reservation could not be completed")
+    except Exception as exc:
+        logger.warning("Free trial panel confirmation failed (%s)", type(exc).__name__)
+        await callback.message.answer(
+            "Пробный период создан, но проверка доступа ещё не завершена. Обновите статус позже."
+        )
         return
 
     try:

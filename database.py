@@ -4,6 +4,7 @@ Uses aiosqlite with WAL mode for better concurrency and connection pooling.
 """
 import hashlib
 import os
+import secrets
 import time
 import json
 import logging
@@ -442,6 +443,15 @@ CREATE INDEX IF NOT EXISTS idx_mobile_device_bootstraps_capacity
     ON mobile_device_bootstraps(user_id, subscription_expiry, expires_at);
 """
 
+_TRIAL_CLAIM_RESERVATION_SCHEMA = """
+CREATE TABLE IF NOT EXISTS trial_claim_reservations (
+    user_id INTEGER PRIMARY KEY,
+    claim_id TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(user_id)
+);
+"""
+
 
 async def ensure_mobile_google_schema(db: aiosqlite.Connection) -> None:
     """Apply the additive, repeatable Google nonce/identity schema migration."""
@@ -456,6 +466,11 @@ async def ensure_mobile_trial_bootstrap_schema(db: aiosqlite.Connection) -> None
 async def ensure_mobile_device_bootstrap_schema(db: aiosqlite.Connection) -> None:
     """Create additive storage for bounded first-connect grants on paid/trial plans."""
     await db.executescript(_MOBILE_DEVICE_BOOTSTRAP_SCHEMA)
+
+
+async def ensure_trial_claim_reservation_schema(db: aiosqlite.Connection) -> None:
+    """Create shared pending-trial reservations without marking trials used."""
+    await db.executescript(_TRIAL_CLAIM_RESERVATION_SCHEMA)
 
 
 async def get_db() -> aiosqlite.Connection:
@@ -479,6 +494,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
     await ensure_mobile_google_schema(db)
     await ensure_mobile_trial_bootstrap_schema(db)
     await ensure_mobile_device_bootstrap_schema(db)
+    await ensure_trial_claim_reservation_schema(db)
 
     # Provisioning intents make paid-key retries idempotent across restarts.
     await db.execute(
@@ -1488,20 +1504,20 @@ async def has_trial_used(user_id: int) -> bool:
 
 async def set_trial_used(user_id: int) -> None:
     db = await get_db()
-    await db.execute(
-        "UPDATE users SET trial_used=1 WHERE user_id=?", (user_id,)
-    )
-    await db.commit()
+    async with _db_semaphore:
+        await db.execute("UPDATE users SET trial_used=1 WHERE user_id=?", (user_id,))
+        await db.execute("DELETE FROM trial_claim_reservations WHERE user_id=?", (user_id,))
+        await db.commit()
     invalidate_user_cache(user_id)
 
 
 async def reset_trial_for_user(user_id: int) -> None:
     """Reset trial usage for user (admin function)."""
     db = await get_db()
-    await db.execute(
-        "UPDATE users SET trial_used=0 WHERE user_id=?", (user_id,)
-    )
-    await db.commit()
+    async with _db_semaphore:
+        await db.execute("UPDATE users SET trial_used=0 WHERE user_id=?", (user_id,))
+        await db.execute("DELETE FROM trial_claim_reservations WHERE user_id=?", (user_id,))
+        await db.commit()
     # Invalidate ALL user cache entries multiple times to ensure fresh data
     invalidate_user_cache(user_id)
 
@@ -3597,19 +3613,113 @@ async def has_paid_subscription(user_id: int) -> bool:
 
 async def try_claim_trial(user_id: int) -> bool:
     """Atomically claim trial using single SQL statement to prevent race conditions."""
+    async with _db_semaphore:
+        async with aiosqlite.connect(DB_FILE, timeout=30.0) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            await db.execute("INSERT OR IGNORE INTO users(user_id, trial_used) VALUES(?, 0)", (user_id,))
+            pending = await db.execute(
+                "SELECT 1 FROM trial_claim_reservations WHERE user_id=?", (user_id,),
+            )
+            if await pending.fetchone():
+                await db.rollback()
+                return False
+            cur = await db.execute("UPDATE users SET trial_used=1 WHERE user_id=? AND trial_used=0", (user_id,))
+            await db.commit()
+            success = cur.rowcount > 0
+    if success:
+        invalidate_user_cache(user_id)
+    return success
+
+
+async def reserve_trial_claim(user_id: int) -> Optional[str]:
+    """Reserve one shared trial attempt without spending ``users.trial_used``.
+
+    The reservation serializes the Telegram and mobile entry points while the
+    panel operation is in flight. Only ``complete_trial_claim`` marks the
+    attempt used, after a caller has authoritative panel confirmation.
+    """
+    claim_id = secrets.token_urlsafe(24)
+    async with _db_semaphore:
+        async with aiosqlite.connect(DB_FILE, timeout=30.0) as db:
+            try:
+                await db.execute("BEGIN IMMEDIATE")
+                await db.execute("INSERT OR IGNORE INTO users(user_id, trial_used) VALUES(?, 0)", (int(user_id),))
+                cursor = await db.execute("SELECT trial_used FROM users WHERE user_id=?", (int(user_id),))
+                row = await cursor.fetchone()
+                pending = await db.execute(
+                    "SELECT 1 FROM trial_claim_reservations WHERE user_id=?", (int(user_id),),
+                )
+                if not row or bool(row[0]) or await pending.fetchone():
+                    await db.rollback()
+                    return None
+                inserted = await db.execute(
+                    "INSERT OR IGNORE INTO trial_claim_reservations(user_id, claim_id, created_at) VALUES(?, ?, ?)",
+                    (int(user_id), claim_id, int(time.time())),
+                )
+                if inserted.rowcount != 1:
+                    await db.rollback()
+                    return None
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+    invalidate_user_cache(int(user_id))
+    return claim_id
+
+
+async def get_trial_claim_reservation(user_id: int) -> Optional[dict]:
     db = await get_db()
     async with _db_semaphore:
-        # Ensure user row exists with trial_used=0
-        await db.execute("INSERT OR IGNORE INTO users(user_id, trial_used) VALUES(?, 0)", (user_id,))
-        cur = await db.execute(
-            "UPDATE users SET trial_used = 1 WHERE user_id = ? AND trial_used = 0",
-            (user_id,)
+        cursor = await db.execute(
+            "SELECT claim_id, created_at FROM trial_claim_reservations WHERE user_id=?",
+            (int(user_id),),
+        )
+        row = await cursor.fetchone()
+    if not row:
+        return None
+    return {"claim_id": str(row[0]), "created_at": int(row[1])}
+
+
+async def has_trial_claim_reservation(user_id: int) -> bool:
+    return await get_trial_claim_reservation(user_id) is not None
+
+
+async def complete_trial_claim(user_id: int, claim_id: str) -> bool:
+    """Atomically mark the shared trial used after authoritative panel success."""
+    async with _db_semaphore:
+        async with aiosqlite.connect(DB_FILE, timeout=30.0) as db:
+            try:
+                await db.execute("BEGIN IMMEDIATE")
+                cursor = await db.execute(
+                    "SELECT claim_id FROM trial_claim_reservations WHERE user_id=?",
+                    (int(user_id),),
+                )
+                row = await cursor.fetchone()
+                if not row or not secrets.compare_digest(str(row[0]), str(claim_id)):
+                    await db.rollback()
+                    return False
+                await db.execute("UPDATE users SET trial_used=1 WHERE user_id=?", (int(user_id),))
+                await db.execute("DELETE FROM trial_claim_reservations WHERE user_id=?", (int(user_id),))
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+    invalidate_user_cache(int(user_id))
+    return True
+
+
+async def release_trial_claim(user_id: int, claim_id: str) -> bool:
+    """Release a reservation only after the caller proves no client exists."""
+    db = await get_db()
+    async with _db_semaphore:
+        cursor = await db.execute(
+            "DELETE FROM trial_claim_reservations WHERE user_id=? AND claim_id=?",
+            (int(user_id), str(claim_id)),
         )
         await db.commit()
-        success = cur.rowcount > 0
-        if success:
-            invalidate_user_cache(user_id)
-        return success
+    if cursor.rowcount:
+        invalidate_user_cache(int(user_id))
+    return cursor.rowcount > 0
 
 
 async def get_all_payments(limit: int = 50, offset: int = 0, method: str = None) -> list[dict]:

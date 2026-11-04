@@ -26,13 +26,21 @@ class TestFreeTrialFlow(unittest.IsolatedAsyncioTestCase):
             patch("handlers.start.safe_answer", new=AsyncMock()),
             patch("handlers.start.has_trial_used", new=AsyncMock(return_value=False)),
             patch("handlers.start.get_user_keys", new=AsyncMock(return_value=[])),
-            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value=None)),
-            patch("database.try_claim_trial", new=AsyncMock(return_value=True)) as claim,
+            patch("handlers.start.get_trial_claim_reservation", new=AsyncMock(return_value=None)),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(side_effect=[
+                None, {"enable": True, "expiry_time": (int(start.time.time()) + 3 * 86400) * 1000},
+            ])),
+            patch("xui_client.get_xui_devices", new=AsyncMock(return_value={
+                "limit_hwid": 2, "limit_ip": 0, "devices": [],
+            })),
+            patch("handlers.start.reserve_trial_claim", new=AsyncMock(return_value="claim-1")) as reserve,
+            patch("handlers.start.complete_trial_claim", new=AsyncMock(return_value=True)) as complete,
             patch("subscription.deliver_key", new=AsyncMock(return_value=True)) as deliver,
         ):
             await start._start_free_trial(bot, callback)
 
-        claim.assert_awaited_once_with(987650)
+        reserve.assert_awaited_once_with(987650)
+        complete.assert_awaited_once_with(987650, "claim-1")
         deliver.assert_awaited_once()
         args = deliver.await_args.kwargs
         self.assertEqual(args["days"], 3)
@@ -49,13 +57,14 @@ class TestFreeTrialFlow(unittest.IsolatedAsyncioTestCase):
             patch("handlers.start.safe_answer", new=AsyncMock()),
             patch("handlers.start.has_trial_used", new=AsyncMock(return_value=False)),
             patch("handlers.start.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("handlers.start.get_trial_claim_reservation", new=AsyncMock(return_value=None)),
             patch("xui_client.get_xui_client_details", new=AsyncMock(return_value={"id": "existing"})),
-            patch("database.try_claim_trial", new=AsyncMock()) as claim,
+            patch("handlers.start.reserve_trial_claim", new=AsyncMock()) as reserve,
             patch("subscription.deliver_key", new=AsyncMock()) as deliver,
         ):
             await start._start_free_trial(bot, callback)
 
-        claim.assert_not_awaited()
+        reserve.assert_not_awaited()
         deliver.assert_not_awaited()
         callback.message.answer.assert_awaited_once()
 
