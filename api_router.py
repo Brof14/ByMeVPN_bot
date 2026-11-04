@@ -1437,7 +1437,7 @@ async def exchange_google_desktop_code(req: GoogleDesktopCodeRequest, request: R
         raise HTTPException(status_code=503, detail="Вход через Google временно недоступен")
     client_id = os.getenv("GOOGLE_DESKTOP_CLIENT_ID", "").strip()
     client_secret = os.getenv("GOOGLE_DESKTOP_CLIENT_SECRET", "").strip()
-    if not client_secret or not re.fullmatch(r"[A-Za-z0-9_-]+\\.apps\\.googleusercontent\\.com", client_id):
+    if not client_secret or not re.fullmatch(r"[A-Za-z0-9_-]+\.apps\.googleusercontent\.com", client_id):
         raise HTTPException(status_code=503, detail="Обмен Google Desktop OAuth ещё не настроен")
 
     callback = urlparse(req.redirect_uri)
