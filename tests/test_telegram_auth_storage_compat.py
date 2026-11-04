@@ -35,6 +35,8 @@ class TelegramLegacyStorageHttpTests(unittest.IsolatedAsyncioTestCase):
             "poll_mobile_auth_session", "get_mobile_auth_session",
             "consume_mobile_auth_session", "cancel_mobile_auth_session",
             "is_mobile_jwt_revoked", "revoke_mobile_jwt",
+            "ensure_mobile_device_bootstrap_schema", "get_mobile_device_bootstrap",
+            "reserve_mobile_device_bootstrap", "delete_mobile_device_bootstrap",
         })
         self.original_database = api_router.database
         api_router.database = self.legacy_database
@@ -74,6 +76,73 @@ class TelegramLegacyStorageHttpTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["status"], "none")
+
+    async def test_legacy_http_status_bootstraps_active_subscription_additively(self):
+        expiry = int(api_router.time.time()) + 86_400
+        fixed_bootstrap_expiry = int(api_router.time.time()) + 600
+        with (
+            patch.object(
+                api_router, "get_user_real_subscription",
+                new=AsyncMock(return_value=(None, [], {
+                    "status": "active", "seconds_remaining": 86_400,
+                    "max_devices": 2, "plan_code": "1m_d2",
+                })),
+            ),
+            patch("xui_client.has_xui_client", new=AsyncMock(return_value=True)),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value={
+                "enable": True, "expiry_time": expiry * 1000,
+            })),
+            patch("xui_client.get_xui_devices", new=AsyncMock(return_value={
+                "limit_hwid": 2, "limit_ip": 0, "devices": [],
+            })),
+            patch.object(api_router, "device_binding", return_value="isolated-device-hash"),
+            patch.object(api_router, "create_entitlement", return_value="isolated-signed-entitlement"),
+        ):
+            token = api_router.create_simple_jwt(981234, "isolated@example.invalid")
+            response = await self.client.get(
+                "/api/v1/subscription/status",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "X-HWID": "isolated-device",
+                    "X-Entitlement-Version": "es256-v1",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["status"], "active")
+        self.assertEqual(body["max_devices"], 2)
+        self.assertTrue(body["entitlement_bootstrap"])
+        self.assertLessEqual(body["entitlement_expires_at"], fixed_bootstrap_expiry)
+        self.assertEqual(body["entitlement"], "isolated-signed-entitlement")
+        schema = await self._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='mobile_device_bootstraps'"
+        )
+        self.assertIsNotNone(await schema.fetchone())
+
+    async def test_legacy_bootstrap_reservation_is_idempotent_and_enforces_capacity(self):
+        subscription_expiry = int(api_router.time.time()) + 86_400
+        fixed_expiry = int(api_router.time.time()) + 600
+        first = await self.legacy_database.reserve_mobile_device_bootstrap(
+            981234, "device-a", subscription_expiry, fixed_expiry, 0, 2,
+        )
+        retry = await self.legacy_database.reserve_mobile_device_bootstrap(
+            981234, "device-a", subscription_expiry, fixed_expiry + 300, 0, 2,
+        )
+        second = await self.legacy_database.reserve_mobile_device_bootstrap(
+            981234, "device-b", subscription_expiry, fixed_expiry, 0, 2,
+        )
+        full = await self.legacy_database.reserve_mobile_device_bootstrap(
+            981234, "device-c", subscription_expiry, fixed_expiry, 1, 2,
+        )
+        self.assertEqual(first, fixed_expiry)
+        self.assertEqual(retry, fixed_expiry)
+        self.assertEqual(second, fixed_expiry)
+        self.assertIsNone(full)
+        await self.legacy_database.delete_mobile_device_bootstrap(981234, "device-a")
+        self.assertIsNone(await self.legacy_database.get_mobile_device_bootstrap(
+            981234, "device-a", subscription_expiry,
+        ))
 
     async def asyncTearDown(self):
         api_router.database = self.original_database
