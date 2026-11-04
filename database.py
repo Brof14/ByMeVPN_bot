@@ -428,6 +428,20 @@ CREATE INDEX IF NOT EXISTS idx_mobile_trial_bootstrap_expiry
     ON mobile_trial_bootstrap(expires_at);
 """
 
+_MOBILE_DEVICE_BOOTSTRAP_SCHEMA = """
+CREATE TABLE IF NOT EXISTS mobile_device_bootstraps (
+    user_id INTEGER NOT NULL,
+    device_hash TEXT NOT NULL,
+    subscription_expiry INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, device_hash, subscription_expiry),
+    FOREIGN KEY (user_id) REFERENCES users(user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_mobile_device_bootstraps_capacity
+    ON mobile_device_bootstraps(user_id, subscription_expiry, expires_at);
+"""
+
 
 async def ensure_mobile_google_schema(db: aiosqlite.Connection) -> None:
     """Apply the additive, repeatable Google nonce/identity schema migration."""
@@ -437,6 +451,11 @@ async def ensure_mobile_google_schema(db: aiosqlite.Connection) -> None:
 async def ensure_mobile_trial_bootstrap_schema(db: aiosqlite.Connection) -> None:
     """Create the additive storage for a short, device-bound first-connect grant."""
     await db.executescript(_MOBILE_TRIAL_BOOTSTRAP_SCHEMA)
+
+
+async def ensure_mobile_device_bootstrap_schema(db: aiosqlite.Connection) -> None:
+    """Create additive storage for bounded first-connect grants on paid/trial plans."""
+    await db.executescript(_MOBILE_DEVICE_BOOTSTRAP_SCHEMA)
 
 
 async def get_db() -> aiosqlite.Connection:
@@ -459,6 +478,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
     # are upgraded explicitly and can be verified independently before rollout.
     await ensure_mobile_google_schema(db)
     await ensure_mobile_trial_bootstrap_schema(db)
+    await ensure_mobile_device_bootstrap_schema(db)
 
     # Provisioning intents make paid-key retries idempotent across restarts.
     await db.execute(
@@ -1267,6 +1287,94 @@ async def delete_mobile_trial_bootstrap(user_id: int) -> None:
     db = await get_db()
     async with _db_semaphore:
         await db.execute("DELETE FROM mobile_trial_bootstrap WHERE user_id=?", (int(user_id),))
+        await db.commit()
+
+
+async def get_mobile_device_bootstrap(
+    user_id: int, device_hash: str, subscription_expiry: int,
+) -> Optional[int]:
+    """Return a live fixed bootstrap expiry for one account/device/subscription."""
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        cursor = await db.execute(
+            """SELECT expires_at FROM mobile_device_bootstraps
+               WHERE user_id=? AND device_hash=? AND subscription_expiry=?""",
+            (int(user_id), str(device_hash), int(subscription_expiry)),
+        )
+        row = await cursor.fetchone()
+    if not row or int(row[0]) <= now or int(subscription_expiry) <= now:
+        return None
+    return int(row[0])
+
+
+async def reserve_mobile_device_bootstrap(
+    user_id: int,
+    device_hash: str,
+    subscription_expiry: int,
+    expires_at: int,
+    active_devices: int,
+    device_limit: int,
+) -> Optional[int]:
+    """Atomically reserve one free panel slot; never refresh an expired grant.
+
+    Repeating the same account/device/subscription request returns its original
+    expiry. Concurrent installations are counted as pending slots until expiry.
+    """
+    db = await get_db()
+    now = int(time.time())
+    if (int(subscription_expiry) <= now or int(expires_at) <= now
+            or int(active_devices) < 0 or int(device_limit) not in (2, 5, 10)):
+        return None
+    async with _db_semaphore:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            # Old subscription reservations can no longer authorize access.
+            await db.execute(
+                "DELETE FROM mobile_device_bootstraps WHERE subscription_expiry<=?",
+                (now,),
+            )
+            existing = await db.execute(
+                """SELECT expires_at FROM mobile_device_bootstraps
+                   WHERE user_id=? AND device_hash=? AND subscription_expiry=?""",
+                (int(user_id), str(device_hash), int(subscription_expiry)),
+            )
+            row = await existing.fetchone()
+            if row:
+                await db.commit()
+                original_expiry = int(row[0])
+                return original_expiry if original_expiry > now else None
+
+            pending = await db.execute(
+                """SELECT COUNT(*) FROM mobile_device_bootstraps
+                   WHERE user_id=? AND subscription_expiry=? AND expires_at>?""",
+                (int(user_id), int(subscription_expiry), now),
+            )
+            pending_count = int((await pending.fetchone())[0])
+            if int(active_devices) + pending_count >= int(device_limit):
+                await db.rollback()
+                return None
+            await db.execute(
+                """INSERT INTO mobile_device_bootstraps
+                   (user_id,device_hash,subscription_expiry,expires_at,created_at)
+                   VALUES(?,?,?,?,?)""",
+                (int(user_id), str(device_hash), int(subscription_expiry), int(expires_at), now),
+            )
+            await db.commit()
+            return int(expires_at)
+        except Exception:
+            await db.rollback()
+            raise
+
+
+async def delete_mobile_device_bootstrap(user_id: int, device_hash: str) -> None:
+    """Remove only this account/device's reservation after panel confirmation."""
+    db = await get_db()
+    async with _db_semaphore:
+        await db.execute(
+            "DELETE FROM mobile_device_bootstraps WHERE user_id=? AND device_hash=?",
+            (int(user_id), str(device_hash)),
+        )
         await db.commit()
 
 

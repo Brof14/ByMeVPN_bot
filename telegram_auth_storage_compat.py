@@ -1,4 +1,4 @@
-"""Additive storage compatibility for legacy deployments missing Telegram sessions.
+"""Additive storage compatibility for legacy mobile-auth/bootstrap deployments.
 
 The current database module is preferred. This adapter installs the small
 Telegram one-time-session API only when a legacy runtime does not export it.
@@ -37,6 +37,21 @@ _REVOKED_JWT_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_revoked_mobile_jwt_expiry
 ON revoked_mobile_jwt_sessions(expires_at)
 """
+_DEVICE_BOOTSTRAP_SCHEMA = """
+CREATE TABLE IF NOT EXISTS mobile_device_bootstraps (
+    user_id INTEGER NOT NULL,
+    device_hash TEXT NOT NULL,
+    subscription_expiry INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, device_hash, subscription_expiry),
+    FOREIGN KEY (user_id) REFERENCES users(user_id)
+)
+"""
+_DEVICE_BOOTSTRAP_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_mobile_device_bootstraps_capacity
+ON mobile_device_bootstraps(user_id, subscription_expiry, expires_at)
+"""
 
 
 def install_telegram_auth_storage_compat(database: Any) -> tuple[str, ...]:
@@ -50,6 +65,10 @@ def install_telegram_auth_storage_compat(database: Any) -> tuple[str, ...]:
         "cancel_mobile_auth_session",
         "is_mobile_jwt_revoked",
         "revoke_mobile_jwt",
+        "ensure_mobile_device_bootstrap_schema",
+        "get_mobile_device_bootstrap",
+        "reserve_mobile_device_bootstrap",
+        "delete_mobile_device_bootstrap",
     )
     missing = tuple(name for name in required if not callable(getattr(database, name, None)))
     if not missing:
@@ -66,6 +85,8 @@ def install_telegram_auth_storage_compat(database: Any) -> tuple[str, ...]:
             await db.execute(_SESSION_INDEX)
             await db.execute(_REVOKED_JWT_SCHEMA)
             await db.execute(_REVOKED_JWT_INDEX)
+            await db.execute(_DEVICE_BOOTSTRAP_SCHEMA)
+            await db.execute(_DEVICE_BOOTSTRAP_INDEX)
             await db.commit()
             return db
 
@@ -198,6 +219,90 @@ def install_telegram_auth_storage_compat(database: Any) -> tuple[str, ...]:
             )
             await db.commit()
 
+    async def ensure_mobile_device_bootstrap_schema(db: Any) -> None:
+        """Apply the bootstrap table/index additively on a legacy DB module."""
+        await db.execute(_DEVICE_BOOTSTRAP_SCHEMA)
+        await db.execute(_DEVICE_BOOTSTRAP_INDEX)
+        await db.commit()
+
+    async def get_mobile_device_bootstrap(
+        user_id: int, device_hash: str, subscription_expiry: int,
+    ) -> int | None:
+        db = await ensure_schema()
+        now = int(time.time())
+        async with db_lock():
+            cursor = await db.execute(
+                """SELECT expires_at FROM mobile_device_bootstraps
+                   WHERE user_id=? AND device_hash=? AND subscription_expiry=?""",
+                (int(user_id), str(device_hash), int(subscription_expiry)),
+            )
+            row = await cursor.fetchone()
+        if not row or int(row[0]) <= now or int(subscription_expiry) <= now:
+            return None
+        return int(row[0])
+
+    async def reserve_mobile_device_bootstrap(
+        user_id: int,
+        device_hash: str,
+        subscription_expiry: int,
+        expires_at: int,
+        active_devices: int,
+        device_limit: int,
+    ) -> int | None:
+        """Atomically reserve a free slot without extending any existing grant."""
+        db = await ensure_schema()
+        now = int(time.time())
+        if (int(subscription_expiry) <= now or int(expires_at) <= now
+                or int(active_devices) < 0 or int(device_limit) not in (2, 5, 10)):
+            return None
+        async with db_lock():
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                await db.execute(
+                    "DELETE FROM mobile_device_bootstraps WHERE subscription_expiry<=?",
+                    (now,),
+                )
+                existing = await db.execute(
+                    """SELECT expires_at FROM mobile_device_bootstraps
+                       WHERE user_id=? AND device_hash=? AND subscription_expiry=?""",
+                    (int(user_id), str(device_hash), int(subscription_expiry)),
+                )
+                row = await existing.fetchone()
+                if row:
+                    await db.commit()
+                    original_expiry = int(row[0])
+                    return original_expiry if original_expiry > now else None
+
+                pending = await db.execute(
+                    """SELECT COUNT(*) FROM mobile_device_bootstraps
+                       WHERE user_id=? AND subscription_expiry=? AND expires_at>?""",
+                    (int(user_id), int(subscription_expiry), now),
+                )
+                pending_count = int((await pending.fetchone())[0])
+                if int(active_devices) + pending_count >= int(device_limit):
+                    await db.rollback()
+                    return None
+                await db.execute(
+                    """INSERT INTO mobile_device_bootstraps
+                       (user_id,device_hash,subscription_expiry,expires_at,created_at)
+                       VALUES(?,?,?,?,?)""",
+                    (int(user_id), str(device_hash), int(subscription_expiry), int(expires_at), now),
+                )
+                await db.commit()
+                return int(expires_at)
+            except Exception:
+                await db.rollback()
+                raise
+
+    async def delete_mobile_device_bootstrap(user_id: int, device_hash: str) -> None:
+        db = await ensure_schema()
+        async with db_lock():
+            await db.execute(
+                "DELETE FROM mobile_device_bootstraps WHERE user_id=? AND device_hash=?",
+                (int(user_id), str(device_hash)),
+            )
+            await db.commit()
+
     implementations = {
         "create_mobile_auth_session": create_mobile_auth_session,
         "confirm_mobile_auth_session": confirm_mobile_auth_session,
@@ -207,6 +312,10 @@ def install_telegram_auth_storage_compat(database: Any) -> tuple[str, ...]:
         "cancel_mobile_auth_session": cancel_mobile_auth_session,
         "is_mobile_jwt_revoked": is_mobile_jwt_revoked,
         "revoke_mobile_jwt": revoke_mobile_jwt,
+        "ensure_mobile_device_bootstrap_schema": ensure_mobile_device_bootstrap_schema,
+        "get_mobile_device_bootstrap": get_mobile_device_bootstrap,
+        "reserve_mobile_device_bootstrap": reserve_mobile_device_bootstrap,
+        "delete_mobile_device_bootstrap": delete_mobile_device_bootstrap,
     }
     for name in missing:
         setattr(database, name, implementations[name])
