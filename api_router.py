@@ -1383,7 +1383,10 @@ def _configured_google_audiences() -> tuple[str, ...]:
     """Explicit Google clients only; never trust an audience supplied by a user."""
     web = os.getenv("GOOGLE_WEB_CLIENT_ID", "").strip()
     desktop = os.getenv("GOOGLE_DESKTOP_CLIENT_ID", "").strip()
-    return (web, desktop) if desktop and desktop != web else (web,)
+    valid_id = r"[A-Za-z0-9_-]+\.apps\.googleusercontent\.com"
+    if desktop != web and re.fullmatch(valid_id, desktop):
+        return (web, desktop)
+    return (web,)
 
 
 @api_router.get("/auth/google/desktop-client")
