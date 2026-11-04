@@ -57,6 +57,7 @@ if not JWT_SECRET or len(JWT_SECRET.encode("utf-8")) < 32:
 JWT_ISSUER = "bymevpn-api"
 JWT_AUDIENCE = "bymevpn-mobile"
 MOBILE_TRIAL_BOOTSTRAP_TTL_SECONDS = 10 * 60
+TRIAL_CLAIM_RECONCILE_AFTER_SECONDS = 120
 _SAFE_CORRELATION_ID = re.compile(r"^[A-Za-z0-9_-]{4,64}$")
 
 
@@ -68,12 +69,38 @@ def _request_correlation_id(request: Request) -> str:
     return secrets.token_hex(8)
 
 
-def _correlated_http_error(status_code: int, detail: str, correlation_id: str) -> HTTPException:
+def _correlated_http_error(
+    status_code: int,
+    detail: str,
+    correlation_id: str,
+    error_code: Optional[str] = None,
+) -> HTTPException:
+    headers = {"X-Correlation-ID": correlation_id}
+    if error_code:
+        headers["X-Error-Code"] = error_code
     return HTTPException(
         status_code=status_code,
         detail=detail,
-        headers={"X-Correlation-ID": correlation_id},
+        headers=headers,
     )
+
+
+async def _servers_user_id(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+) -> int:
+    """Authenticate /servers while preserving a safe correlation on refusals."""
+    try:
+        return await get_current_user_id(authorization)
+    except HTTPException as exc:
+        correlation_id = _request_correlation_id(request)
+        error_code = "authentication_required" if exc.status_code == 401 else "session_verification_unavailable"
+        logger.warning(
+            "Servers failure stage=authentication code=%s status=%s correlation_id=%s",
+            error_code, exc.status_code, correlation_id,
+        )
+        detail = "Войдите в аккаунт" if exc.status_code == 401 else "Не удалось проверить сессию"
+        raise _correlated_http_error(exc.status_code, detail, correlation_id, error_code) from None
 
 
 async def _ensure_auth_db():
@@ -583,26 +610,29 @@ async def get_user_real_subscription(
         trial_reason = "trial_already_used"
         if not await database.has_trial_used(user_id) and not active_keys:
             try:
-                from xui_client import get_xui_client_details
-                panel_client = await get_xui_client_details(user_id, strict=True)
-                panel_expiry = int((panel_client or {}).get("expiry_time") or 0) // 1000
-                if panel_client and (panel_expiry <= 0 or panel_expiry > now):
-                    trial_reason = "existing_panel_subscription"
-                elif not _entitlement_requested(request_headers or {}):
-                    trial_available = True
-                    trial_reason = None
+                pending_check = getattr(database, "has_trial_claim_reservation", None)
+                if pending_check and await pending_check(user_id):
+                    trial_reason = "trial_activation_pending"
                 else:
-                    # First-time clients cannot have panel HWID evidence until
-                    # after their first tunnel connection. Eligibility only
-                    # validates the signed-client identity and signer here;
-                    # the bounded bootstrap path verifies the panel client and
-                    # its 2/0 limits before allowing that first connection.
-                    headers = request_headers or {}
-                    hwid = str(headers.get("X-HWID") or "").strip()
-                    device_binding(user_id, hwid)
-                    load_private_key()
-                    trial_available = True
-                    trial_reason = None
+                    from xui_client import get_xui_client_details
+                    panel_client = await get_xui_client_details(user_id, strict=True)
+                    panel_expiry = int((panel_client or {}).get("expiry_time") or 0) // 1000
+                    if panel_client and (panel_expiry <= 0 or panel_expiry > now):
+                        trial_reason = "existing_panel_subscription"
+                    elif not _entitlement_requested(request_headers or {}):
+                        trial_available = True
+                        trial_reason = None
+                    else:
+                        # Panel HWID evidence appears only after first tunnel
+                        # connection. Eligibility checks the signed client
+                        # binding here; the bootstrap path separately verifies
+                        # the live panel client, limits and available slot.
+                        headers = request_headers or {}
+                        hwid = str(headers.get("X-HWID") or "").strip()
+                        device_binding(user_id, hwid)
+                        load_private_key()
+                        trial_available = True
+                        trial_reason = None
             except Exception as exc:
                 logger.warning("Trial eligibility lookup unavailable (%s)", type(exc).__name__)
                 trial_reason = (
@@ -1777,6 +1807,24 @@ async def activate_trial(
             409, "У вас уже есть действующая подписка", correlation_id,
         )
     try:
+        pending_claim = await database.get_trial_claim_reservation(user_id)
+    except Exception as exc:
+        logger.warning(
+            "Trial failure stage=trial_reservation_lookup code=%s correlation_id=%s",
+            type(exc).__name__, correlation_id,
+        )
+        raise _correlated_http_error(
+            503, "Не удалось проверить доступность пробного периода", correlation_id,
+        ) from None
+    if pending_claim and now - int(pending_claim.get("created_at") or now) < TRIAL_CLAIM_RECONCILE_AFTER_SECONDS:
+        logger.info(
+            "Trial failure stage=trial_reservation code=activation_in_progress correlation_id=%s",
+            correlation_id,
+        )
+        raise _correlated_http_error(
+            409, "Активация пробного периода уже выполняется", correlation_id,
+        )
+    try:
         from xui_client import get_xui_client_details
         panel_client = await get_xui_client_details(user_id, strict=True)
     except HTTPException:
@@ -1789,6 +1837,36 @@ async def activate_trial(
         raise _correlated_http_error(
             503, "Не удалось проверить доступность пробного периода", correlation_id,
         ) from None
+    if pending_claim:
+        # A stale reservation is reconciled only with an authoritative panel
+        # read. Active, correctly limited access completes the shared claim;
+        # a confirmed missing/expired client releases it for a safe retry.
+        try:
+            pending_expiry = int((panel_client or {}).get("expiry_time") or 0) // 1000
+            if panel_client and pending_expiry > now and panel_client.get("enable") is not False:
+                from xui_client import get_xui_devices
+                pending_devices = await get_xui_devices(user_id)
+                if (not isinstance(pending_devices, dict)
+                        or int(pending_devices.get("limit_hwid") or 0) != trial_device_limit
+                        or int(pending_devices.get("limit_ip") or 0) != 0
+                        or not isinstance(pending_devices.get("devices"), list)):
+                    raise RuntimeError("Pending trial panel state is not confirmed")
+                await database.complete_trial_claim(user_id, pending_claim["claim_id"])
+                raise _correlated_http_error(
+                    409, "Пробный период уже активирован", correlation_id,
+                )
+            await database.release_trial_claim(user_id, pending_claim["claim_id"])
+            panel_client = None
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Trial failure stage=trial_reconciliation code=%s correlation_id=%s",
+                type(exc).__name__, correlation_id,
+            )
+            raise _correlated_http_error(
+                503, "Не удалось подтвердить предыдущую попытку. Попробуйте позже", correlation_id,
+            ) from None
     try:
         panel_expiry = int((panel_client or {}).get("expiry_time") or 0) // 1000
     except (TypeError, ValueError):
@@ -1809,49 +1887,58 @@ async def activate_trial(
         )
 
     try:
-        claimed = await database.try_claim_trial(user_id)
+        claim_id = await database.reserve_trial_claim(user_id)
     except Exception as exc:
         logger.error(
-            "Trial failure stage=trial_claim code=%s correlation_id=%s",
+            "Trial failure stage=trial_reservation code=%s correlation_id=%s",
             type(exc).__name__, correlation_id,
         )
         raise _correlated_http_error(
             503, "Не удалось активировать пробный период", correlation_id,
         ) from None
-    if not claimed:
+    if not claim_id:
         logger.info(
-            "Trial failure stage=trial_claim code=already_claimed correlation_id=%s",
+            "Trial failure stage=trial_reservation code=already_claimed_or_pending correlation_id=%s",
             correlation_id,
         )
         raise _correlated_http_error(
             409, "Пробный период уже использован", correlation_id,
         )
 
-    async def release_trial_only_when_panel_confirms_no_active_access() -> None:
-        """Undo a claim only when panel readback proves no active client exists.
-
-        A timeout or unavailable readback is ambiguous: keep the claim reserved
-        so a retry cannot extend a client that may have been created remotely.
-        """
+    async def reconcile_trial_reservation_after_failure() -> None:
+        """Commit or release only after a definitive read of the panel state."""
         try:
-            from xui_client import get_xui_client_details
+            from xui_client import get_xui_client_details, get_xui_devices
             panel_client = await get_xui_client_details(user_id, strict=True)
             panel_expiry = int((panel_client or {}).get("expiry_time") or 0) // 1000
         except Exception as exc:
             logger.warning(
-                "Trial failure stage=claim_release_readback code=%s correlation_id=%s",
+                "Trial failure stage=reservation_readback code=%s correlation_id=%s",
                 type(exc).__name__, correlation_id,
             )
             return
-        if not panel_client or panel_expiry <= int(time.time()):
+        if not panel_client or panel_expiry <= int(time.time()) or panel_client.get("enable") is False:
             try:
-                await database.reset_trial_for_user(user_id)
+                await database.release_trial_claim(user_id, claim_id)
             except Exception as exc:
                 logger.warning(
-                    "Trial failure stage=claim_release code=%s correlation_id=%s",
+                    "Trial failure stage=reservation_release code=%s correlation_id=%s",
                     type(exc).__name__, correlation_id,
                 )
+            return
+        try:
+            state = await get_xui_devices(user_id)
+            if (isinstance(state, dict) and int(state.get("limit_hwid") or 0) == trial_device_limit
+                    and int(state.get("limit_ip") or 0) == 0
+                    and isinstance(state.get("devices"), list)):
+                await database.complete_trial_claim(user_id, claim_id)
+        except Exception as exc:
+            logger.warning(
+                "Trial failure stage=reservation_confirmation code=%s correlation_id=%s",
+                type(exc).__name__, correlation_id,
+            )
 
+    provision_started_at = time.time()
     try:
         from xui_client import create_xui_user
         res = await create_xui_user(
@@ -1865,12 +1952,12 @@ async def activate_trial(
             "Trial failure stage=panel_provision code=%s correlation_id=%s",
             type(exc).__name__, correlation_id,
         )
-        await release_trial_only_when_panel_confirms_no_active_access()
+        await reconcile_trial_reservation_after_failure()
         raise _correlated_http_error(
             503, "Не удалось подключить пробный период. Напишите в поддержку", correlation_id,
         ) from None
     if not res or not res.get("subscription_url"):
-        await release_trial_only_when_panel_confirms_no_active_access()
+        await reconcile_trial_reservation_after_failure()
         raise _correlated_http_error(
             503, "Не удалось подключить пробный период. Напишите в поддержку", correlation_id,
         )
@@ -1879,10 +1966,17 @@ async def activate_trial(
     # HWID/IP limits. The legacy DB column is named `limit_ip`, but the bot
     # stores the device allowance there; the panel itself must keep IPs open.
     try:
-        from xui_client import get_xui_devices
+        from xui_client import get_xui_client_details, get_xui_devices
+        panel_client = await get_xui_client_details(user_id, strict=True)
         panel_devices = await get_xui_devices(user_id)
+        confirmed_expiry = int((panel_client or {}).get("expiry_time") or 0) // 1000
+        expected_expiry = int(provision_started_at) + trial_days * 86400
         if (
-            not isinstance(panel_devices, dict)
+            not isinstance(panel_client, dict)
+            or panel_client.get("enable") is False
+            or confirmed_expiry <= int(time.time())
+            or abs(confirmed_expiry - expected_expiry) > 5
+            or not isinstance(panel_devices, dict)
             or int(panel_devices.get("limit_hwid") or 0) != trial_device_limit
             or int(panel_devices.get("limit_ip") or 0) != 0
             or not isinstance(panel_devices.get("devices"), list)
@@ -1899,8 +1993,21 @@ async def activate_trial(
             503, "Не удалось подтвердить параметры пробного периода", correlation_id,
         ) from None
 
+    try:
+        if not await database.complete_trial_claim(user_id, claim_id):
+            raise RuntimeError("Trial reservation is no longer owned by this request")
+    except Exception as exc:
+        logger.error(
+            "Trial failure stage=trial_commit code=%s correlation_id=%s",
+            type(exc).__name__, correlation_id,
+        )
+        raise _correlated_http_error(
+            503, "Панель подтвердила пробный период, но не удалось сохранить право. Напишите в поддержку",
+            correlation_id,
+        ) from None
+
     sub_url = res["subscription_url"]
-    expiry_ts = int(time.time()) + trial_days * 86400
+    expiry_ts = confirmed_expiry
     try:
         await database.add_key(
             user_id=user_id,
@@ -1964,7 +2071,7 @@ async def activate_trial(
         "status": "trial",
         "plan_name": "Пробный период (3 дня)",
         "expires_at": time.strftime("%Y-%m-%d %H:%M", time.localtime(expiry_ts)),
-        "seconds_remaining": trial_days * 86400,
+        "seconds_remaining": max(0, expiry_ts - int(time.time())),
         "subscription_url": sub_url,
         "max_devices": trial_device_limit,
         "active_devices": len(panel_devices["devices"]),
@@ -2407,20 +2514,87 @@ api_router.include_router(mobile_v2_router, prefix="/mobile/v2")
 # ---------------------------------------------------------------------------
 
 @api_router.get("/servers")
-async def get_servers(request: Request, user_id: int = Depends(get_current_user_id)):
-    headers = await _require_opted_in_device_access(user_id, request)
-    sub_url, servers, sub_dict = await get_user_real_subscription(
-        user_id, headers
-    )
+async def get_servers(
+    request: Request,
+    response: Response = None,
+    user_id: int = Depends(_servers_user_id),
+):
+    response = response or Response()
+    correlation_id = _request_correlation_id(request)
+    response.headers["X-Correlation-ID"] = correlation_id
+    try:
+        headers = await _require_opted_in_device_access(user_id, request)
+    except HTTPException as exc:
+        error_code = {
+            401: "authentication_required",
+            403: "device_confirmation_required",
+            422: "device_contract_invalid",
+            503: "device_validation_unavailable",
+        }.get(exc.status_code, "device_access_denied")
+        logger.warning(
+            "Servers failure stage=device_access code=%s correlation_id=%s",
+            error_code, correlation_id,
+        )
+        detail = (
+            "Войдите в аккаунт" if exc.status_code == 401 else
+            "Устройство ещё не подтверждено подпиской" if exc.status_code == 403 else
+            "Не удалось подтвердить устройство. Проверьте данные приложения" if exc.status_code == 422 else
+            "Не удалось проверить доступ. Попробуйте позже"
+        )
+        raise _correlated_http_error(exc.status_code, detail, correlation_id, error_code) from None
+    try:
+        sub_url, servers, sub_dict = await get_user_real_subscription(user_id, headers)
+    except HTTPException as exc:
+        error_code = "subscription_required" if exc.status_code == 403 else "subscription_lookup_failed"
+        logger.warning(
+            "Servers failure stage=subscription_lookup code=%s status=%s correlation_id=%s",
+            error_code, exc.status_code, correlation_id,
+        )
+        detail = "Подписка не найдена или истекла" if exc.status_code == 403 else "Не удалось обновить список серверов"
+        raise _correlated_http_error(exc.status_code, detail, correlation_id, error_code) from None
+    except Exception as exc:
+        logger.warning(
+            "Servers failure stage=subscription_lookup code=%s correlation_id=%s",
+            type(exc).__name__, correlation_id,
+        )
+        raise _correlated_http_error(
+            503, "Не удалось обновить список серверов", correlation_id, "subscription_lookup_failed",
+        ) from None
     payload = {
         "servers": servers,
         "subscription_url": sub_url,
     }
     if _entitlement_requested(headers):
-        sub_dict = await _attach_signed_entitlement(user_id, headers, sub_dict)
-        access_fields = _bootstrap_entitlement_fields(sub_dict)
-        if not access_fields:
-            raise HTTPException(status_code=403, detail="Устройство не подтверждено для этой подписки")
+        try:
+            sub_dict = await _attach_signed_entitlement(user_id, headers, sub_dict)
+            access_fields = _bootstrap_entitlement_fields(sub_dict)
+            if not access_fields:
+                logger.warning(
+                    "Servers failure stage=entitlement code=entitlement_missing correlation_id=%s",
+                    correlation_id,
+                )
+                raise _correlated_http_error(
+                    403, "Устройство ещё не подтверждено подпиской", correlation_id,
+                    "entitlement_missing",
+                )
+        except HTTPException as exc:
+            if exc.headers and exc.headers.get("X-Correlation-ID"):
+                raise
+            error_code = "device_confirmation_required" if exc.status_code == 403 else "entitlement_unavailable"
+            logger.warning(
+                "Servers failure stage=entitlement code=%s status=%s correlation_id=%s",
+                error_code, exc.status_code, correlation_id,
+            )
+            detail = "Устройство ещё не подтверждено подпиской" if exc.status_code == 403 else "Не удалось подтвердить подписку"
+            raise _correlated_http_error(exc.status_code, detail, correlation_id, error_code) from None
+        except Exception as exc:
+            logger.warning(
+                "Servers failure stage=entitlement code=%s correlation_id=%s",
+                type(exc).__name__, correlation_id,
+            )
+            raise _correlated_http_error(
+                503, "Не удалось подтвердить подписку", correlation_id, "entitlement_unavailable",
+            ) from None
         payload.update(access_fields)
     return payload
 

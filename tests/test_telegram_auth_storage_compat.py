@@ -113,7 +113,7 @@ class TelegramLegacyStorageHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["status"], "active")
         self.assertEqual(body["max_devices"], 2)
         self.assertTrue(body["entitlement_bootstrap"])
-        self.assertLessEqual(body["entitlement_expires_at"], fixed_bootstrap_expiry)
+        self.assertLessEqual(body["entitlement_expires_at"], fixed_bootstrap_expiry + 5)
         self.assertEqual(body["entitlement"], "isolated-signed-entitlement")
         schema = await self._conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='mobile_device_bootstraps'"

@@ -316,7 +316,10 @@ class TestGoogleSignInHttp(unittest.IsolatedAsyncioTestCase):
         access_token = login.json()["access"]
 
         with (
-            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value=None)),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(side_effect=[
+                None,
+                {"enable": True, "expiry_time": (int(api_router.time.time()) + 3 * 86400) * 1000},
+            ])),
             patch("xui_client.create_xui_user", new=AsyncMock(return_value={
                 "subscription_url": "https://subscription.invalid/google-trial-test",
                 "uuid": "isolated-test-client",
