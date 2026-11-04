@@ -1396,7 +1396,7 @@ async def get_google_desktop_client():
         raise HTTPException(status_code=503, detail="Вход через Google временно недоступен")
     client_id = os.getenv("GOOGLE_DESKTOP_CLIENT_ID", "").strip()
     if (not client_id.endswith(".apps.googleusercontent.com")
-            or not re.fullmatch(r"[A-Za-z0-9_-]+\\.apps\\.googleusercontent\\.com", client_id)):
+            or not re.fullmatch(r"[A-Za-z0-9_-]+\.apps\.googleusercontent\.com", client_id)):
         raise HTTPException(status_code=503, detail="Google OAuth для Windows ещё не настроен")
     return {"client_id": client_id}
 
