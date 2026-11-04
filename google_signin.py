@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 
 class GoogleIdTokenError(ValueError):
@@ -24,7 +24,7 @@ class GoogleIdTokenError(ValueError):
         super().__init__(self.code)
 
 
-def verify_google_id_token(token: str, expected_audience: str) -> dict[str, Any]:
+def verify_google_id_token(token: str, expected_audience: str | Sequence[str]) -> dict[str, Any]:
     """Verify a Google ID token against Google's published signing keys.
 
     The verifier performs the cryptographic signature, issuer, audience and
@@ -34,7 +34,12 @@ def verify_google_id_token(token: str, expected_audience: str) -> dict[str, Any]
     """
     if not isinstance(token, str) or not token or len(token) > 16_384:
         raise GoogleIdTokenError("invalid_token_format")
-    if not isinstance(expected_audience, str) or not expected_audience.strip():
+    audiences = (
+        (expected_audience,) if isinstance(expected_audience, str)
+        else tuple(expected_audience) if isinstance(expected_audience, (list, tuple))
+        else ()
+    )
+    if not audiences or any(not isinstance(a, str) or not a.strip() for a in audiences):
         raise GoogleIdTokenError("audience_not_configured")
 
     try:
@@ -54,7 +59,7 @@ def verify_google_id_token(token: str, expected_audience: str) -> dict[str, Any]
         claims: Mapping[str, Any] = id_token.verify_token(
             token,
             BoundedGoogleRequest(),
-            audience=expected_audience,
+            audience=audiences,
             certs_url="https://www.googleapis.com/oauth2/v3/certs",
             clock_skew_in_seconds=0,
         )
@@ -84,7 +89,7 @@ def verify_google_id_token(token: str, expected_audience: str) -> dict[str, Any]
     issuer = claims.get("iss")
     if issuer not in {"https://accounts.google.com", "accounts.google.com"}:
         raise GoogleIdTokenError("wrong_issuer")
-    if claims.get("aud") != expected_audience:
+    if claims.get("aud") not in audiences or not isinstance(claims.get("aud"), str):
         raise GoogleIdTokenError("wrong_audience")
 
     try:
@@ -115,5 +120,5 @@ def verify_google_id_token(token: str, expected_audience: str) -> dict[str, Any]
         "nonce": nonce,
         "exp": expires_at,
         "iss": issuer,
-        "aud": expected_audience,
+        "aud": claims["aud"],
     }

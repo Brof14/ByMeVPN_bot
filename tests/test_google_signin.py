@@ -131,6 +131,16 @@ class TestGoogleIdTokenVerification(unittest.TestCase):
             self._verify(email_verified=False)
         self.assertEqual(unverified.exception.code, "email_unverified")
 
+    def test_configured_desktop_audience_is_verified_and_other_clients_rejected(self):
+        desktop_id = "test-windows-desktop.apps.googleusercontent.com"
+        token = _signed_google_token(self.private_key, aud=desktop_id)
+        with patch("google.oauth2.id_token._fetch_certs", return_value=self.jwks):
+            claims = verify_google_id_token(token, (WEB_CLIENT_ID, desktop_id))
+            self.assertEqual(claims["aud"], desktop_id)
+            with self.assertRaises(GoogleIdTokenError) as failure:
+                verify_google_id_token(token, (WEB_CLIENT_ID,))
+            self.assertEqual(failure.exception.code, "wrong_audience")
+
     def test_modified_payload_or_signature_is_rejected(self):
         token = _signed_google_token(self.private_key)
         header, payload, signature = token.split(".")
@@ -190,6 +200,17 @@ class TestGoogleSignInHttp(unittest.IsolatedAsyncioTestCase):
             "iss": "https://accounts.google.com", "aud": WEB_CLIENT_ID,
             "exp": int(time.time()) + 300,
         }
+
+    async def test_desktop_client_endpoint_fails_closed_until_configured(self):
+        response = await self.client.get("/api/v1/auth/google/desktop-client")
+        self.assertEqual(response.status_code, 503)
+        desktop_id = "test-windows-desktop.apps.googleusercontent.com"
+        with patch.dict(os.environ, {"GOOGLE_DESKTOP_CLIENT_ID": desktop_id}):
+            response = await self.client.get("/api/v1/auth/google/desktop-client")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {"client_id": desktop_id})
+        with patch.dict(os.environ, {"GOOGLE_DESKTOP_CLIENT_ID": "attacker.invalid"}):
+            self.assertEqual((await self.client.get("/api/v1/auth/google/desktop-client")).status_code, 503)
 
     async def test_nonce_endpoint_returns_server_nonce_and_persists_only_its_hash(self):
         response = await self.client.post("/api/v1/auth/google/nonce", json={})
