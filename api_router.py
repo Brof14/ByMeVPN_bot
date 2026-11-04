@@ -671,6 +671,11 @@ async def _attach_signed_entitlement(
         # Preserve the legacy response shape so old clients never receive a
         # token they do not know how to validate.
         return subscription
+    # Callers may reuse an in-memory snapshot in a single request pipeline;
+    # never allow bootstrap markers from an earlier signing pass to leak into
+    # the confirmed-device response.
+    subscription.pop("entitlement_bootstrap", None)
+    subscription.pop("entitlement_expires_at", None)
     if subscription.get("status") not in ("active", "trial", "grace"):
         subscription["entitlement"] = None
         return subscription
@@ -681,14 +686,42 @@ async def _attach_signed_entitlement(
     except HTTPException as exc:
         if exc.status_code != 403:
             raise
-        bootstrap_expiry = await _validated_trial_bootstrap_expiry(user_id, headers)
-        if bootstrap_expiry is None:
-            # The panel may have learned the HWID between the first read and
-            # bootstrap validation. Re-read once so that race upgrades directly
-            # to the ordinary entitlement instead of returning a false denial.
-            device_state = await _require_registered_entitlement_device(user_id, headers)
-        else:
+        if subscription.get("status") == "trial":
+            trial_bootstrap_expiry = await _validated_trial_bootstrap_expiry(user_id, headers)
+            if trial_bootstrap_expiry is not None:
+                remaining_bootstrap = trial_bootstrap_expiry - int(time.time())
+                if remaining_bootstrap <= 0:
+                    raise HTTPException(status_code=403, detail="Первичное подключение истекло") from None
+                subscription["max_devices"] = 2
+                subscription["active_devices"] = 0
+                bootstrap_status = dict(subscription)
+                bootstrap_status["seconds_remaining"] = min(
+                    int(subscription.get("seconds_remaining") or 0), remaining_bootstrap,
+                )
+                subscription["entitlement"] = create_entitlement(user_id, hwid, bootstrap_status)
+                subscription["entitlement_bootstrap"] = True
+                subscription["entitlement_expires_at"] = trial_bootstrap_expiry
+                return subscription
+        bootstrap_expiry = await _validated_active_device_bootstrap_expiry(
+            user_id, headers, subscription, create_if_missing=True,
+        )
+        if bootstrap_expiry is not None:
             remaining_bootstrap = bootstrap_expiry - int(time.time())
+            if remaining_bootstrap <= 0:
+                raise HTTPException(status_code=403, detail="Первичное подключение истекло") from None
+            subscription["max_devices"] = int(subscription.get("max_devices") or 0)
+            subscription["active_devices"] = int(subscription.get("active_devices") or 0)
+            bootstrap_status = dict(subscription)
+            bootstrap_status["seconds_remaining"] = min(
+                int(subscription.get("seconds_remaining") or 0), remaining_bootstrap,
+            )
+            subscription["entitlement"] = create_entitlement(user_id, hwid, bootstrap_status)
+            subscription["entitlement_bootstrap"] = True
+            subscription["entitlement_expires_at"] = bootstrap_expiry
+            return subscription
+        trial_bootstrap_expiry = await _validated_trial_bootstrap_expiry(user_id, headers)
+        if trial_bootstrap_expiry is not None:
+            remaining_bootstrap = trial_bootstrap_expiry - int(time.time())
             if remaining_bootstrap <= 0:
                 raise HTTPException(status_code=403, detail="Первичное подключение истекло") from None
             subscription["max_devices"] = 2
@@ -699,8 +732,11 @@ async def _attach_signed_entitlement(
             )
             subscription["entitlement"] = create_entitlement(user_id, hwid, bootstrap_status)
             subscription["entitlement_bootstrap"] = True
-            subscription["entitlement_expires_at"] = bootstrap_expiry
+            subscription["entitlement_expires_at"] = trial_bootstrap_expiry
             return subscription
+        # The panel may have learned the HWID between reads. Retry once so the
+        # request upgrades directly to an ordinary entitlement on that race.
+        device_state = await _require_registered_entitlement_device(user_id, headers)
     devices = device_state["devices"]
 
     try:
@@ -719,6 +755,10 @@ async def _attach_signed_entitlement(
     subscription["max_devices"] = device_limit
     subscription["active_devices"] = len(devices)
     subscription["entitlement"] = create_entitlement(user_id, hwid, subscription)
+    try:
+        await database.delete_mobile_device_bootstrap(user_id, device_binding(user_id, hwid))
+    except Exception as exc:
+        logger.warning("Confirmed device bootstrap cleanup failed (%s)", type(exc).__name__)
     try:
         await database.delete_mobile_trial_bootstrap(user_id)
     except Exception as exc:
@@ -805,7 +845,8 @@ async def _validated_trial_bootstrap_expiry(
         if (panel_expiry <= int(time.time()) or not isinstance(device_state, dict)
                 or int(device_state.get("limit_hwid") or 0) != 2
                 or int(device_state.get("limit_ip") or 0) != 0
-                or not isinstance(device_state.get("devices"), list)):
+                or not isinstance(device_state.get("devices"), list)
+                or len(device_state.get("devices") or []) >= 2):
             return None
         # If the panel has already learned this device, stop using bootstrap.
         if _panel_state_contains_hwid(user_id, hwid, device_state):
@@ -815,6 +856,87 @@ async def _validated_trial_bootstrap_expiry(
     except Exception as exc:
         logger.warning("Trial bootstrap panel validation failed (%s)", type(exc).__name__)
         return None
+
+
+async def _validated_active_device_bootstrap_expiry(
+    user_id: int,
+    headers: Dict[str, str],
+    subscription: Dict[str, Any],
+    *,
+    create_if_missing: bool,
+) -> Optional[int]:
+    """Issue/resume one short signed bootstrap only for a verified active panel slot."""
+    hwid = str(headers.get("X-HWID") or "").strip()
+    try:
+        device_hash = device_binding(user_id, hwid)
+    except EntitlementSigningError:
+        return None
+    if subscription.get("status") not in ("active", "trial", "grace"):
+        return None
+    if subscription.get("status") == "trial" and not await database.has_trial_used(user_id):
+        return None
+    try:
+        subscription_seconds = int(subscription.get("seconds_remaining") or 0)
+        subscription_limit = int(subscription.get("max_devices") or 0)
+    except (TypeError, ValueError):
+        return None
+    if subscription_seconds <= 0:
+        return None
+
+    try:
+        from xui_client import get_xui_client_details, get_xui_devices, has_xui_client
+        if not await has_xui_client(user_id):
+            return None
+        panel_client, device_state = await asyncio.gather(
+            get_xui_client_details(user_id, strict=True),
+            get_xui_devices(user_id),
+        )
+        now = int(time.time())
+        panel_expiry = int((panel_client or {}).get("expiry_time") or 0) // 1000
+        panel_limit = int((device_state or {}).get("limit_hwid") or 0)
+        ip_limit = int((device_state or {}).get("limit_ip") or 0)
+        devices = (device_state or {}).get("devices")
+        if (not isinstance(panel_client, dict) or panel_client.get("enable") is False
+                or panel_expiry <= now or panel_limit not in (2, 5, 10)
+                or panel_limit != subscription_limit or ip_limit != 0
+                or not isinstance(devices, list)):
+            return None
+        if _panel_state_contains_hwid(user_id, hwid, device_state):
+            await database.delete_mobile_device_bootstrap(user_id, device_hash)
+            return None
+        if len(devices) >= panel_limit:
+            return None
+        # The panel expiry is a stable subscription generation identifier. The
+        # signed JWT below is still capped by the authoritative remaining time
+        # in the subscription snapshot, so a retry cannot move this anchor.
+        effective_subscription_expiry = panel_expiry
+        if effective_subscription_expiry <= now:
+            return None
+        subscription["max_devices"] = panel_limit
+        subscription["active_devices"] = len(devices)
+
+        existing = await database.get_mobile_device_bootstrap(
+            user_id, device_hash, effective_subscription_expiry,
+        )
+        if existing is not None:
+            return existing
+        if not create_if_missing:
+            return None
+        return await database.reserve_mobile_device_bootstrap(
+            user_id=user_id,
+            device_hash=device_hash,
+            subscription_expiry=effective_subscription_expiry,
+            expires_at=now + MOBILE_TRIAL_BOOTSTRAP_TTL_SECONDS,
+            active_devices=len(devices),
+            device_limit=panel_limit,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Device bootstrap panel validation failed (%s)", type(exc).__name__)
+        raise HTTPException(
+            status_code=503, detail="Не удалось проверить устройства подписки",
+        ) from None
 
 
 async def _require_opted_in_device_access(user_id: int, request: Request) -> Dict[str, str]:
@@ -832,10 +954,25 @@ async def _require_opted_in_device_access(user_id: int, request: Request) -> Dic
     except HTTPException as exc:
         if exc.status_code != 403:
             raise
-        if await _validated_trial_bootstrap_expiry(user_id, headers) is None:
+        _, _, subscription = await get_user_real_subscription(user_id, headers)
+        bootstrap_expiry = await _validated_active_device_bootstrap_expiry(
+            user_id, headers, subscription, create_if_missing=True,
+        )
+        if bootstrap_expiry is None and await _validated_trial_bootstrap_expiry(user_id, headers) is None:
             # Retry once because panel state may change between reads.
             await _require_registered_entitlement_device(user_id, headers)
     return headers
+
+
+def _bootstrap_entitlement_fields(subscription: Dict[str, Any]) -> Dict[str, Any]:
+    """Return only the signed access metadata required by the opted-in client."""
+    if not subscription.get("entitlement"):
+        return {}
+    return {
+        key: subscription[key]
+        for key in ("entitlement", "entitlement_bootstrap", "entitlement_expires_at")
+        if key in subscription
+    }
 
 
 async def _auth_subscription_snapshot(user_id: int, headers: Dict[str, str]):
@@ -2166,10 +2303,17 @@ async def get_servers(request: Request, user_id: int = Depends(get_current_user_
     sub_url, servers, sub_dict = await get_user_real_subscription(
         user_id, headers
     )
-    return {
+    payload = {
         "servers": servers,
         "subscription_url": sub_url,
     }
+    if _entitlement_requested(headers):
+        sub_dict = await _attach_signed_entitlement(user_id, headers, sub_dict)
+        access_fields = _bootstrap_entitlement_fields(sub_dict)
+        if not access_fields:
+            raise HTTPException(status_code=403, detail="Устройство не подтверждено для этой подписки")
+        payload.update(access_fields)
+    return payload
 
 
 @api_router.post("/vpn/session")
@@ -2209,7 +2353,14 @@ async def create_vpn_session(req: SessionRequest, request: Request, user_id: int
     if config.get("security") == "reality" and not config.get("public_key"):
         raise HTTPException(status_code=500, detail="Неполная конфигурация VPN-узла на сервере")
 
-    return config
+    response = dict(config)
+    if _entitlement_requested(headers):
+        sub_dict = await _attach_signed_entitlement(user_id, headers, sub_dict)
+        access_fields = _bootstrap_entitlement_fields(sub_dict)
+        if not access_fields:
+            raise HTTPException(status_code=403, detail="Устройство не подтверждено для этой подписки")
+        response.update(access_fields)
+    return response
 
 
 @api_router.delete("/vpn/session")

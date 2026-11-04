@@ -206,9 +206,16 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
         self.panel_presence_patch = patch(
             "xui_client.has_xui_client", new=AsyncMock(return_value=True),
         )
+        self.panel_details_patch = patch(
+            "xui_client.get_xui_client_details", new=AsyncMock(return_value={
+                "expiry_time": (int(api_router.time.time()) + 86400) * 1000,
+                "enable": True,
+            }),
+        )
         self.subscription_patch.start()
         self.devices_mock = self.devices_patch.start()
         self.panel_presence_mock = self.panel_presence_patch.start()
+        self.panel_details_mock = self.panel_details_patch.start()
         self.env_patch = patch.dict(os.environ, {PRIVATE_KEY_FILE_ENV: str(self.key_path)})
         self.env_patch.start()
         self.key_loader_patch = patch("entitlements.load_private_key", return_value=self.private_key)
@@ -219,6 +226,26 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
             api_router.database, "delete_mobile_trial_bootstrap", new=AsyncMock(),
         )
         self.bootstrap_delete_patch.start()
+        self.device_bootstrap_get_patch = patch.object(
+            api_router.database, "get_mobile_device_bootstrap", new=AsyncMock(return_value=None),
+        )
+        self.device_bootstrap_get_mock = self.device_bootstrap_get_patch.start()
+        self.device_bootstrap_reserve_patch = patch.object(
+            api_router.database, "reserve_mobile_device_bootstrap", new=AsyncMock(return_value=None),
+        )
+        self.device_bootstrap_reserve_mock = self.device_bootstrap_reserve_patch.start()
+        self.device_bootstrap_delete_patch = patch.object(
+            api_router.database, "delete_mobile_device_bootstrap", new=AsyncMock(),
+        )
+        self.device_bootstrap_delete_mock = self.device_bootstrap_delete_patch.start()
+        self.trial_bootstrap_get_patch = patch.object(
+            api_router.database, "get_mobile_trial_bootstrap", new=AsyncMock(return_value=None),
+        )
+        self.trial_bootstrap_get_patch.start()
+        self.trial_used_patch = patch.object(
+            api_router.database, "has_trial_used", new=AsyncMock(return_value=True),
+        )
+        self.trial_used_patch.start()
 
     def tearDown(self):
         self.env_patch.stop()
@@ -229,6 +256,12 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
         self.panel_presence_patch.stop()
         self.subscription_patch.stop()
         self.temp.cleanup()
+        self.panel_details_patch.stop()
+        self.device_bootstrap_get_patch.stop()
+        self.device_bootstrap_reserve_patch.stop()
+        self.device_bootstrap_delete_patch.stop()
+        self.trial_bootstrap_get_patch.stop()
+        self.trial_used_patch.stop()
 
     def make_request(self, path, *, method="POST", headers=None):
         from starlette.requests import Request
@@ -842,6 +875,169 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
                 ))
         self.assertEqual(raised.exception.status_code, 503)
         trial_check.assert_not_awaited()
+
+    def test_active_subscription_gets_signed_bootstrap_when_panel_confirms_free_slot(self):
+        self.device_state["devices"] = []
+        fixed_expiry = int(api_router.time.time()) + 600
+        self.device_bootstrap_reserve_mock.return_value = fixed_expiry
+        response = self.client.get(
+            "/api/v1/subscription/status",
+            headers={"X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["status"], "active")
+        self.assertEqual(body["max_devices"], 2)
+        self.assertEqual(body["active_devices"], 0)
+        self.assertTrue(body["entitlement_bootstrap"])
+        self.assertLessEqual(body["entitlement_expires_at"], fixed_expiry)
+        self.assertGreater(body["entitlement_expires_at"], int(api_router.time.time()))
+        claims = verify_entitlement(
+            body["entitlement"], self.public_key, expected_user_id=7654321,
+            expected_hwid=self.hwid,
+        )
+        self.assertIsNotNone(claims)
+        self.assertEqual(claims["status"], "active")
+        self.device_bootstrap_reserve_mock.assert_awaited_once()
+
+    def test_active_subscription_bootstrap_supports_server_limits_five_and_ten(self):
+        self.device_state["devices"] = []
+        for limit in (5, 10):
+            with self.subTest(limit=limit):
+                self.device_state["limit_hwid"] = limit
+                fixed_expiry = int(api_router.time.time()) + 600
+                self.device_bootstrap_get_mock.return_value = None
+                self.device_bootstrap_reserve_mock.return_value = fixed_expiry
+                plan = {**self.active, "max_devices": limit, "plan_code": f"1m_d{limit}"}
+                with patch.object(api_router, "get_user_real_subscription", new=AsyncMock(return_value=(
+                    "https://example.invalid/sub", [], dict(plan),
+                ))):
+                    response = self.client.get(
+                        "/api/v1/subscription/status",
+                        headers={"X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1"},
+                    )
+                self.assertEqual(response.status_code, 200, response.text)
+                body = response.json()
+                self.assertTrue(body["entitlement_bootstrap"])
+                claims = verify_entitlement(
+                    body["entitlement"], self.public_key, expected_user_id=7654321,
+                    expected_hwid=self.hwid,
+                )
+                self.assertIsNotNone(claims)
+                self.assertEqual(claims["max_devices"], limit)
+                self.device_bootstrap_reserve_mock.reset_mock()
+
+    def test_bootstrap_config_response_contains_signed_entitlement(self):
+        self.device_state["devices"] = []
+        fixed_expiry = int(api_router.time.time()) + 600
+        self.device_bootstrap_reserve_mock.return_value = fixed_expiry
+        self.device_bootstrap_get_mock.side_effect = [None, fixed_expiry]
+        node = {"node_code": "test-node", "config": {"server": "test.invalid", "uuid": "test-uuid"}}
+        with patch.object(api_router, "get_user_real_subscription", new=AsyncMock(return_value=(
+            "https://example.invalid/sub", [node], dict(self.active),
+        ))):
+            response = self.client.get(
+                "/api/v1/servers",
+                headers={"X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1"},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertTrue(body["entitlement_bootstrap"])
+        self.assertEqual(body["servers"][0]["node_code"], "test-node")
+        self.assertIsNotNone(verify_entitlement(
+            body["entitlement"], self.public_key, expected_user_id=7654321,
+            expected_hwid=self.hwid,
+        ))
+
+    def test_full_limit_and_expired_panel_client_never_receive_bootstrap(self):
+        headers = {"X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1"}
+        self.device_state["devices"] = [{"fingerprint": "1" * 16}, {"fingerprint": "2" * 16}]
+        full = self.client.get("/api/v1/subscription/status", headers=headers)
+        self.assertEqual(full.status_code, 200, full.text)
+        self.assertIsNone(full.json().get("entitlement"))
+        self.assertTrue(full.json()["device_confirmation_required"])
+        self.assertEqual(
+            self.client.get("/api/v1/servers", headers=headers).status_code,
+            403,
+        )
+
+        self.device_state["devices"] = []
+        self.panel_details_mock.return_value = {
+            "expiry_time": (int(api_router.time.time()) - 10) * 1000,
+            "enable": True,
+        }
+        expired = self.client.get("/api/v1/subscription/status", headers=headers)
+        self.assertEqual(expired.status_code, 200, expired.text)
+        self.assertIsNone(expired.json().get("entitlement"))
+        self.assertTrue(expired.json()["device_confirmation_required"])
+        self.device_bootstrap_reserve_mock.assert_not_awaited()
+
+        self.panel_details_mock.return_value = {
+            "expiry_time": (int(api_router.time.time()) + 86400) * 1000,
+            "enable": True,
+        }
+        self.device_state["limit_ip"] = 1
+        wrong_ip_limit = self.client.get("/api/v1/subscription/status", headers=headers)
+        self.assertIsNone(wrong_ip_limit.json().get("entitlement"))
+        self.assertTrue(wrong_ip_limit.json()["device_confirmation_required"])
+        self.device_state["limit_ip"] = 0
+        self.device_state["limit_hwid"] = 1
+        wrong_device_limit = self.client.get("/api/v1/subscription/status", headers=headers)
+        self.assertIsNone(wrong_device_limit.json().get("entitlement"))
+        self.device_state["limit_hwid"] = 2
+
+        self.panel_details_mock.return_value = {
+            "expiry_time": (int(api_router.time.time()) + 86400) * 1000,
+            "enable": False,
+        }
+        disabled = self.client.get("/api/v1/subscription/status", headers=headers)
+        self.assertIsNone(disabled.json().get("entitlement"))
+        self.device_bootstrap_reserve_mock.assert_not_awaited()
+
+    def test_panel_error_fails_closed_and_repeated_status_keeps_original_expiry(self):
+        headers = {"X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1"}
+        self.device_state["devices"] = []
+        self.panel_details_mock.side_effect = RuntimeError("panel unavailable")
+        failed = self.client.get("/api/v1/subscription/status", headers=headers)
+        self.assertEqual(failed.status_code, 503)
+        self.assertNotIn("entitlement", failed.json())
+
+        self.panel_details_mock.side_effect = None
+        self.panel_details_mock.return_value = {
+            "expiry_time": (int(api_router.time.time()) + 86400) * 1000,
+            "enable": True,
+        }
+        fixed_expiry = int(api_router.time.time()) + 500
+        self.device_bootstrap_get_mock.side_effect = [None, fixed_expiry]
+        self.device_bootstrap_reserve_mock.return_value = fixed_expiry
+        first = self.client.get("/api/v1/subscription/status", headers=headers)
+        second = self.client.get("/api/v1/subscription/status", headers=headers)
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(first.json()["entitlement_expires_at"], fixed_expiry)
+        self.assertEqual(second.json()["entitlement_expires_at"], fixed_expiry)
+        self.device_bootstrap_reserve_mock.assert_awaited_once()
+
+    def test_panel_confirmed_hwid_promotes_bootstrap_to_regular_entitlement(self):
+        self.device_state["devices"] = []
+        fixed_expiry = int(api_router.time.time()) + 600
+        self.device_bootstrap_reserve_mock.return_value = fixed_expiry
+        headers = {"X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1"}
+        first = self.client.get("/api/v1/subscription/status", headers=headers)
+        self.assertTrue(first.json()["entitlement_bootstrap"])
+        self.device_state["devices"] = [{
+            "fingerprint": hashlib.sha256(self.hwid.encode()).hexdigest()[:16],
+        }]
+        confirmed = self.client.get("/api/v1/subscription/status", headers=headers)
+        self.assertEqual(confirmed.status_code, 200, confirmed.text)
+        body = confirmed.json()
+        self.assertFalse(body.get("entitlement_bootstrap", False))
+        self.assertNotIn("entitlement_expires_at", body)
+        self.assertIsNotNone(verify_entitlement(
+            body["entitlement"], self.public_key, expected_user_id=7654321,
+            expected_hwid=self.hwid,
+        ))
+        self.device_bootstrap_delete_mock.assert_awaited()
 
 
 if __name__ == "__main__":
