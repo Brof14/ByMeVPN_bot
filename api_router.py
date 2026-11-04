@@ -1379,6 +1379,25 @@ def _google_signin_configured() -> bool:
     )
 
 
+def _configured_google_audiences() -> tuple[str, ...]:
+    """Explicit Google clients only; never trust an audience supplied by a user."""
+    web = os.getenv("GOOGLE_WEB_CLIENT_ID", "").strip()
+    desktop = os.getenv("GOOGLE_DESKTOP_CLIENT_ID", "").strip()
+    return (web, desktop) if desktop and desktop != web else (web,)
+
+
+@api_router.get("/auth/google/desktop-client")
+async def get_google_desktop_client():
+    """Public OAuth client ID only: desktop PKCE never ships a client secret."""
+    if not _google_signin_configured():
+        raise HTTPException(status_code=503, detail="Вход через Google временно недоступен")
+    client_id = os.getenv("GOOGLE_DESKTOP_CLIENT_ID", "").strip()
+    if (not client_id.endswith(".apps.googleusercontent.com")
+            or not re.fullmatch(r"[A-Za-z0-9_-]+\\.apps\\.googleusercontent\\.com", client_id)):
+        raise HTTPException(status_code=503, detail="Google OAuth для Windows ещё не настроен")
+    return {"client_id": client_id}
+
+
 @api_router.post("/auth/google/nonce")
 async def create_google_nonce():
     """Issue a short-lived server nonce only when Google login is configured."""
@@ -1414,9 +1433,9 @@ async def login_google(req: GoogleLoginRequest, request: Request):
         reject("configuration", "google_signin_unavailable", 503,
                "Вход через Google временно недоступен")
 
-    expected_audience = os.getenv("GOOGLE_WEB_CLIENT_ID", "").strip()
+    expected_audiences = _configured_google_audiences()
     try:
-        claims = await asyncio.to_thread(verify_google_id_token, req.id_token, expected_audience)
+        claims = await asyncio.to_thread(verify_google_id_token, req.id_token, expected_audiences)
     except GoogleIdTokenError as exc:
         reject("id_token", exc.code, 401, "Не удалось подтвердить аккаунт Google")
 
