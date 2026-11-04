@@ -27,6 +27,16 @@ _SESSION_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_mobile_auth_sessions_expiry
 ON mobile_auth_sessions(expires_at)
 """
+_REVOKED_JWT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS revoked_mobile_jwt_sessions (
+    jti TEXT PRIMARY KEY,
+    expires_at INTEGER NOT NULL
+)
+"""
+_REVOKED_JWT_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_revoked_mobile_jwt_expiry
+ON revoked_mobile_jwt_sessions(expires_at)
+"""
 
 
 def install_telegram_auth_storage_compat(database: Any) -> tuple[str, ...]:
@@ -38,6 +48,8 @@ def install_telegram_auth_storage_compat(database: Any) -> tuple[str, ...]:
         "get_mobile_auth_session",
         "consume_mobile_auth_session",
         "cancel_mobile_auth_session",
+        "is_mobile_jwt_revoked",
+        "revoke_mobile_jwt",
     )
     missing = tuple(name for name in required if not callable(getattr(database, name, None)))
     if not missing:
@@ -52,6 +64,8 @@ def install_telegram_auth_storage_compat(database: Any) -> tuple[str, ...]:
             await db.execute("PRAGMA busy_timeout=15000")
             await db.execute(_SESSION_SCHEMA)
             await db.execute(_SESSION_INDEX)
+            await db.execute(_REVOKED_JWT_SCHEMA)
+            await db.execute(_REVOKED_JWT_INDEX)
             await db.commit()
             return db
 
@@ -160,6 +174,30 @@ def install_telegram_auth_storage_compat(database: Any) -> tuple[str, ...]:
             await db.commit()
         return cur.rowcount == 1
 
+    async def is_mobile_jwt_revoked(jti: str) -> bool:
+        """Check the legacy runtime's additive JWT-revocation store."""
+        db = await ensure_schema()
+        async with db_lock():
+            cur = await db.execute(
+                "SELECT 1 FROM revoked_mobile_jwt_sessions WHERE jti=? AND expires_at>?",
+                (str(jti), int(time.time())),
+            )
+            return await cur.fetchone() is not None
+
+    async def revoke_mobile_jwt(jti: str, expires_at: int) -> None:
+        """Persist logout revocation until the access token's expiry."""
+        db = await ensure_schema()
+        now = int(time.time())
+        async with db_lock():
+            await db.execute(
+                "DELETE FROM revoked_mobile_jwt_sessions WHERE expires_at<=?", (now,),
+            )
+            await db.execute(
+                "INSERT OR REPLACE INTO revoked_mobile_jwt_sessions(jti,expires_at) VALUES(?,?)",
+                (str(jti), int(expires_at)),
+            )
+            await db.commit()
+
     implementations = {
         "create_mobile_auth_session": create_mobile_auth_session,
         "confirm_mobile_auth_session": confirm_mobile_auth_session,
@@ -167,6 +205,8 @@ def install_telegram_auth_storage_compat(database: Any) -> tuple[str, ...]:
         "get_mobile_auth_session": get_mobile_auth_session,
         "consume_mobile_auth_session": consume_mobile_auth_session,
         "cancel_mobile_auth_session": cancel_mobile_auth_session,
+        "is_mobile_jwt_revoked": is_mobile_jwt_revoked,
+        "revoke_mobile_jwt": revoke_mobile_jwt,
     }
     for name in missing:
         setattr(database, name, implementations[name])

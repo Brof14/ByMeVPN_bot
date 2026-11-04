@@ -34,6 +34,7 @@ class TelegramLegacyStorageHttpTests(unittest.IsolatedAsyncioTestCase):
             "create_mobile_auth_session", "confirm_mobile_auth_session",
             "poll_mobile_auth_session", "get_mobile_auth_session",
             "consume_mobile_auth_session", "cancel_mobile_auth_session",
+            "is_mobile_jwt_revoked", "revoke_mobile_jwt",
         })
         self.original_database = api_router.database
         api_router.database = self.legacy_database
@@ -45,6 +46,34 @@ class TelegramLegacyStorageHttpTests(unittest.IsolatedAsyncioTestCase):
 
     async def _get_db(self):
         return self._conn
+
+    async def test_legacy_jwt_revocation_helpers_create_store_and_expire_records(self):
+        token_id = "isolated-session-id"
+        self.assertFalse(await self.legacy_database.is_mobile_jwt_revoked(token_id))
+        await self.legacy_database.revoke_mobile_jwt(
+            token_id, int(api_router.time.time()) + 60,
+        )
+        self.assertTrue(await self.legacy_database.is_mobile_jwt_revoked(token_id))
+
+        await self._conn.execute(
+            "UPDATE revoked_mobile_jwt_sessions SET expires_at=? WHERE jti=?",
+            (int(api_router.time.time()) - 1, token_id),
+        )
+        await self._conn.commit()
+        self.assertFalse(await self.legacy_database.is_mobile_jwt_revoked(token_id))
+
+    async def test_authenticated_http_status_works_with_legacy_revocation_adapter(self):
+        token = api_router.create_simple_jwt(981234, "isolated@example.invalid")
+        with patch.object(
+            api_router, "get_user_real_subscription",
+            new=AsyncMock(return_value=(None, [], {"status": "none", "trial_available": True})),
+        ):
+            response = await self.client.get(
+                "/api/v1/subscription/status",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["status"], "none")
 
     async def asyncTearDown(self):
         api_router.database = self.original_database

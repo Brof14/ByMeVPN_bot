@@ -843,8 +843,6 @@ async def _auth_subscription_snapshot(user_id: int, headers: Dict[str, str]):
     _entitlement_requested(headers)
     try:
         sub_url, servers, sub_dict = await get_user_real_subscription(user_id, headers)
-        sub_dict = await _attach_signed_entitlement(user_id, headers, sub_dict)
-        return sub_url, servers, sub_dict
     except HTTPException as exc:
         logger.warning("Subscription snapshot unavailable during login (HTTP %s)", exc.status_code)
         return None, [], {
@@ -859,6 +857,44 @@ async def _auth_subscription_snapshot(user_id: int, headers: Dict[str, str]):
             "trial_available": False, "trial_unavailable_reason": "subscription_check_unavailable",
             "max_devices": 0, "active_devices": 0,
         }
+
+    try:
+        sub_dict = await _attach_signed_entitlement(user_id, headers, sub_dict)
+        return sub_url, servers, sub_dict
+    except HTTPException as exc:
+        if exc.status_code != 403:
+            logger.warning("Subscription snapshot unavailable during login (HTTP %s)", exc.status_code)
+            return None, [], {
+                "status": "unknown", "plan_name": "Проверяем подписку",
+                "trial_available": False, "trial_unavailable_reason": "subscription_check_unavailable",
+                "max_devices": 0, "active_devices": 0,
+            }
+        # A valid login must not be rewritten as "no subscription" merely
+        # because this installation has not yet been confirmed by 3x-ui. Keep
+        # only non-secret subscription facts; never return its URL or configs
+        # until the panel confirms this HWID and a signed entitlement is issued.
+        logger.info("Subscription snapshot stage=device_confirmation code=required")
+        return None, [], _device_confirmation_status_snapshot(sub_dict)
+    except Exception as exc:
+        logger.warning("Subscription lookup unavailable during login (%s)", type(exc).__name__)
+        return None, [], {
+            "status": "unknown", "plan_name": "Проверяем подписку",
+            "trial_available": False, "trial_unavailable_reason": "subscription_check_unavailable",
+            "max_devices": 0, "active_devices": 0,
+        }
+
+
+def _device_confirmation_status_snapshot(subscription: Dict[str, Any]) -> Dict[str, Any]:
+    """Return truthful status metadata without credentials for an unconfirmed device."""
+    visible_fields = (
+        "status", "plan_code", "plan_name", "expires_at", "seconds_remaining",
+        "server_time", "max_devices", "active_devices", "trial_available",
+    )
+    safe = {key: subscription[key] for key in visible_fields if key in subscription}
+    safe["entitlement"] = None
+    safe["device_confirmation_required"] = True
+    safe["subscription_url"] = None
+    return safe
 
 
 def _subscription_headers_from_request(request: Request) -> Dict[str, str]:
@@ -1386,6 +1422,12 @@ async def get_subscription_status(request: Request, user_id: int = Depends(get_c
     except EntitlementSigningError as exc:
         logger.error("Entitlement signing unavailable (%s)", type(exc).__name__)
         raise HTTPException(status_code=503, detail="Не удалось подтвердить состояние подписки") from None
+    except HTTPException as exc:
+        if exc.status_code != 403:
+            raise
+        # Preserve the account's real subscription state while withholding the
+        # URL, node credentials, and entitlement until panel HWID confirmation.
+        return _device_confirmation_status_snapshot(sub_dict)
     return sub_dict
 
 
