@@ -610,12 +610,30 @@ async def get_user_real_subscription(
         trial_reason = "trial_already_used"
         if not await database.has_trial_used(user_id) and not active_keys:
             try:
-                pending_check = getattr(database, "has_trial_claim_reservation", None)
-                if pending_check and await pending_check(user_id):
+                get_pending_claim = getattr(database, "get_trial_claim_reservation", None)
+                pending_claim = (
+                    await get_pending_claim(user_id)
+                    if get_pending_claim is not None
+                    else None
+                )
+                reservation_age = (
+                    max(0, now - int(pending_claim.get("created_at") or now))
+                    if isinstance(pending_claim, dict)
+                    else None
+                )
+                if (pending_claim is not None
+                        and reservation_age < TRIAL_CLAIM_RECONCILE_AFTER_SECONDS):
                     trial_reason = "trial_activation_pending"
                 else:
                     from xui_client import get_xui_client_details
-                    panel_client = await get_xui_client_details(user_id, strict=True)
+                    # The POST activation route reconciles stale reservations
+                    # before granting access. Keep GET read-only, but do not
+                    # leave an old reservation blocking the trial button
+                    # forever when an authoritative panel lookup confirms no
+                    # active client. An uncertain lookup still fails closed.
+                    panel_client = await get_xui_client_details(
+                        user_id, strict=pending_claim is not None,
+                    )
                     panel_expiry = int((panel_client or {}).get("expiry_time") or 0) // 1000
                     if panel_client and (panel_expiry <= 0 or panel_expiry > now):
                         trial_reason = "existing_panel_subscription"
