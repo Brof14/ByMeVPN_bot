@@ -128,7 +128,7 @@ class TestXuiClientPool(unittest.IsolatedAsyncioTestCase):
         api_call.assert_not_awaited()
 
     async def test_device_limit_update_changes_hwid_and_keeps_ip_unlimited(self):
-        state = {"client": {"email": "123", "limitIp": 2, "limitHwid": 0, "totalGB": 0, "custom": "preserve"}}
+        state = {"client": {"id": 42, "uuid": "ae72d624-2ffe-44d0-8415-21d48d357c61", "email": "123", "limitIp": 2, "limitHwid": 0, "totalGB": 0, "custom": "preserve"}}
 
         class Response:
             def __init__(self, data):
@@ -148,6 +148,8 @@ class TestXuiClientPool(unittest.IsolatedAsyncioTestCase):
                 return Response({"success": True, "obj": {"client": dict(state["client"])}})
 
             async def _post(self, url, headers, payload):
+                if not isinstance(payload.get("id"), str):
+                    raise ValueError("id must be a string")
                 state["client"] = dict(payload)
                 return Response({"success": True})
 
@@ -159,6 +161,7 @@ class TestXuiClientPool(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state["client"]["limitIp"], 0)
         self.assertEqual(state["client"]["limitHwid"], 5)
         self.assertEqual(state["client"]["custom"], "preserve")
+        self.assertEqual(state["client"]["id"], "ae72d624-2ffe-44d0-8415-21d48d357c61")
 
     async def test_client_lookup_fallback_scans_configured_inbounds(self):
         client = SimpleNamespace(get_by_email=AsyncMock(return_value=None))
