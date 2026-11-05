@@ -10,7 +10,7 @@ import database
 
 
 class MobileDeviceBootstrapStorageTests(unittest.TestCase):
-    def test_schema_is_repeatable_reservations_are_atomic_and_expiry_is_not_extended(self):
+    def test_schema_is_repeatable_live_retry_is_fixed_and_expired_same_device_can_retry(self):
         async def run():
             with tempfile.NamedTemporaryFile(suffix=".sqlite3") as tmp:
                 db = await aiosqlite.connect(tmp.name)
@@ -49,7 +49,7 @@ class MobileDeviceBootstrapStorageTests(unittest.TestCase):
                     self.assertEqual(retry, fixed_expiry)
                     self.assertEqual(second_device, fixed_expiry)
                     self.assertIsNone(full)
-                    self.assertIsNone(renewed)
+                    self.assertEqual(renewed, expired_now + 600)
                     self.assertEqual(
                         (await (await db.execute("PRAGMA integrity_check")).fetchone())[0], "ok",
                     )

@@ -139,6 +139,12 @@ class TelegramLegacyStorageHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(retry, fixed_expiry)
         self.assertEqual(second, fixed_expiry)
         self.assertIsNone(full)
+        expired_now = fixed_expiry + 1
+        with patch("telegram_auth_storage_compat.time.time", return_value=expired_now):
+            renewed = await self.legacy_database.reserve_mobile_device_bootstrap(
+                981234, "device-a", subscription_expiry, expired_now + 600, 0, 2,
+            )
+        self.assertEqual(renewed, expired_now + 600)
         await self.legacy_database.delete_mobile_device_bootstrap(981234, "device-a")
         self.assertIsNone(await self.legacy_database.get_mobile_device_bootstrap(
             981234, "device-a", subscription_expiry,
