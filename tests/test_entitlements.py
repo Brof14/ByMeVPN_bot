@@ -392,6 +392,31 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
                 asyncio.run(api_router._require_opted_in_device_access(7654321, request))
         self.assertEqual(ctx.exception.status_code, 403)
 
+    def test_http_status_accepts_panel_311_fingerprint_without_bootstrap(self):
+        self.device_state["devices"] = [{
+            "fingerprint": hashlib.sha256(self.hwid.encode()).hexdigest()[:12],
+        }]
+        response = self.client.get(
+            "/api/v1/subscription/status",
+            headers={"X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["entitlement"])
+        self.assertFalse(response.json().get("entitlement_bootstrap", False))
+        self.device_bootstrap_reserve_mock.assert_not_awaited()
+
+    def test_http_status_rejects_wrong_panel_311_fingerprint(self):
+        self.device_state["devices"] = [{
+            "fingerprint": hashlib.sha256(b"other-installation").hexdigest()[:12],
+        }]
+        response = self.client.get(
+            "/api/v1/subscription/status",
+            headers={"X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["device_confirmation_required"])
+        self.assertIsNone(response.json()["entitlement"])
+
     def test_http_status_rejects_short_panel_fingerprint(self):
         self.device_state["devices"] = [{"fingerprint": hashlib.sha256(self.hwid.encode()).hexdigest()[:8]}]
         response = self.client.get(
