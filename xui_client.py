@@ -191,6 +191,15 @@ async def update_xui_client_settings(
         if not isinstance(client, dict):
             raise RuntimeError("3x-ui client details are unavailable")
         payload = dict(client)
+        # 3x-ui 3.11 GET includes a numeric database id and a separate UUID.
+        # The update endpoint expects the protocol id as a string. Preserve
+        # that existing UUID; never let the panel generate a replacement.
+        if not isinstance(payload.get("id"), str):
+            existing_uuid = payload.get("uuid")
+            if not isinstance(existing_uuid, str) or not existing_uuid.strip():
+                raise RuntimeError("Panel client UUID is unavailable")
+            uuid_lib.UUID(existing_uuid)
+            payload["id"] = existing_uuid
         if limit_ip is not None:
             payload["limitIp"] = int(limit_ip)
         if limit_hwid is not None:

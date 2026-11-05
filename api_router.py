@@ -590,6 +590,28 @@ async def get_user_real_subscription(
         try:
             from xui_client import get_xui_client_details, get_user_subscription_links
             client_details = await get_xui_client_details(user_id)
+            # A failed trial may have created a panel client without finishing
+            # the atomic claim. Offer a retry instead of treating that partial
+            # client as a paid subscription. POST performs the actual repair.
+            pending = await database.get_trial_claim_reservation(user_id)
+            if pending and client_details and not await database.has_trial_used(user_id):
+                from constants import TRIAL_DAYS
+                created = int(pending.get("created_at") or now)
+                panel_expiry = int(client_details.get("expiry_time") or 0) // 1000
+                if (panel_expiry > now and client_details.get("enable") is not False
+                        and abs(panel_expiry - (created + TRIAL_DAYS * 86400)) <= 120):
+                    eligible = now - created >= TRIAL_CLAIM_RECONCILE_AFTER_SECONDS
+                    if eligible and _entitlement_requested(request_headers or {}):
+                        device_binding(user_id, str((request_headers or {}).get("X-HWID") or "").strip())
+                        load_private_key()
+                    return None, [], {
+                        "status": "none", "plan_code": None, "plan_name": "Нет подписки",
+                        "trial_available": eligible,
+                        "trial_unavailable_reason": None if eligible else "trial_activation_pending",
+                        "max_devices": device_limit, "active_devices": 0,
+                        "server_time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                        "subscription_url": None,
+                    }
             if client_details:
                 from constants import validate_device_limit
                 sub_uuid = client_details.get("uuid") or sub_uuid
@@ -1857,6 +1879,7 @@ async def activate_trial(
         raise _correlated_http_error(
             503, "Не удалось проверить доступность пробного периода", correlation_id,
         ) from None
+    recovered_result = None
     if pending_claim:
         # A stale reservation is reconciled only with an authoritative panel
         # read. Active, correctly limited access completes the shared claim;
@@ -1864,19 +1887,27 @@ async def activate_trial(
         try:
             pending_expiry = int((panel_client or {}).get("expiry_time") or 0) // 1000
             if panel_client and pending_expiry > now and panel_client.get("enable") is not False:
-                from xui_client import get_xui_devices
+                # Only recover the client created for this reservation. Never
+                # extend its expiry or adopt an unrelated active subscription.
+                expected_expiry = int(pending_claim["created_at"]) + trial_days * 86400
+                if abs(pending_expiry - expected_expiry) > 120:
+                    raise RuntimeError("Pending trial expiry does not match reservation")
+                from xui_client import get_xui_devices, set_xui_client_limits
                 pending_devices = await get_xui_devices(user_id)
                 if (not isinstance(pending_devices, dict)
-                        or int(pending_devices.get("limit_hwid") or 0) != trial_device_limit
                         or int(pending_devices.get("limit_ip") or 0) != 0
                         or not isinstance(pending_devices.get("devices"), list)):
                     raise RuntimeError("Pending trial panel state is not confirmed")
-                await database.complete_trial_claim(user_id, pending_claim["claim_id"])
-                raise _correlated_http_error(
-                    409, "Пробный период уже активирован", correlation_id,
-                )
-            await database.release_trial_claim(user_id, pending_claim["claim_id"])
-            panel_client = None
+                if int(pending_devices.get("limit_hwid") or 0) != trial_device_limit:
+                    if not await set_xui_client_limits(user_id, limit_ip=0, limit_hwid=trial_device_limit):
+                        raise RuntimeError("Pending trial device limit could not be repaired")
+                if not panel_client.get("subscription_url") or not panel_client.get("uuid"):
+                    raise RuntimeError("Pending trial client details are incomplete")
+                recovered_result = panel_client
+            else:
+                await database.release_trial_claim(user_id, pending_claim["claim_id"])
+                panel_client = None
+                pending_claim = None
         except HTTPException:
             raise
         except Exception as exc:
@@ -1897,7 +1928,7 @@ async def activate_trial(
         raise _correlated_http_error(
             503, "Не удалось проверить доступность пробного периода", correlation_id,
         ) from None
-    if panel_client and (panel_expiry <= 0 or panel_expiry > now):
+    if not recovered_result and panel_client and (panel_expiry <= 0 or panel_expiry > now):
         logger.info(
             "Trial failure stage=eligibility code=panel_subscription_exists correlation_id=%s",
             correlation_id,
@@ -1906,24 +1937,27 @@ async def activate_trial(
             409, "Для этого аккаунта уже создана подписка", correlation_id,
         )
 
-    try:
-        claim_id = await database.reserve_trial_claim(user_id)
-    except Exception as exc:
-        logger.error(
-            "Trial failure stage=trial_reservation code=%s correlation_id=%s",
-            type(exc).__name__, correlation_id,
-        )
-        raise _correlated_http_error(
-            503, "Не удалось активировать пробный период", correlation_id,
-        ) from None
-    if not claim_id:
-        logger.info(
-            "Trial failure stage=trial_reservation code=already_claimed_or_pending correlation_id=%s",
-            correlation_id,
-        )
-        raise _correlated_http_error(
-            409, "Пробный период уже использован", correlation_id,
-        )
+    if recovered_result:
+        claim_id = pending_claim["claim_id"]
+    else:
+        try:
+            claim_id = await database.reserve_trial_claim(user_id)
+        except Exception as exc:
+            logger.error(
+                "Trial failure stage=trial_reservation code=%s correlation_id=%s",
+                type(exc).__name__, correlation_id,
+            )
+            raise _correlated_http_error(
+                503, "Не удалось активировать пробный период", correlation_id,
+            ) from None
+        if not claim_id:
+            logger.info(
+                "Trial failure stage=trial_reservation code=already_claimed_or_pending correlation_id=%s",
+                correlation_id,
+            )
+            raise _correlated_http_error(
+                409, "Пробный период уже использован", correlation_id,
+            )
 
     async def reconcile_trial_reservation_after_failure() -> None:
         """Commit or release only after a definitive read of the panel state."""
@@ -1958,29 +1992,32 @@ async def activate_trial(
                 type(exc).__name__, correlation_id,
             )
 
-    provision_started_at = time.time()
-    try:
-        from xui_client import create_xui_user
-        res = await create_xui_user(
-            user_id=user_id,
-            days=trial_days,
-            limit_ip=0,
-            limit_hwid=trial_device_limit,
-        )
-    except Exception as exc:
-        logger.error(
-            "Trial failure stage=panel_provision code=%s correlation_id=%s",
-            type(exc).__name__, correlation_id,
-        )
-        await reconcile_trial_reservation_after_failure()
-        raise _correlated_http_error(
-            503, "Не удалось подключить пробный период. Напишите в поддержку", correlation_id,
-        ) from None
-    if not res or not res.get("subscription_url"):
-        await reconcile_trial_reservation_after_failure()
-        raise _correlated_http_error(
-            503, "Не удалось подключить пробный период. Напишите в поддержку", correlation_id,
-        )
+    provision_started_at = int(pending_claim["created_at"]) if recovered_result else time.time()
+    if recovered_result:
+        res = recovered_result
+    else:
+        try:
+            from xui_client import create_xui_user
+            res = await create_xui_user(
+                user_id=user_id,
+                days=trial_days,
+                limit_ip=0,
+                limit_hwid=trial_device_limit,
+            )
+        except Exception as exc:
+            logger.error(
+                "Trial failure stage=panel_provision code=%s correlation_id=%s",
+                type(exc).__name__, correlation_id,
+            )
+            await reconcile_trial_reservation_after_failure()
+            raise _correlated_http_error(
+                503, "Не удалось подключить пробный период. Напишите в поддержку", correlation_id,
+            ) from None
+        if not res or not res.get("subscription_url"):
+            await reconcile_trial_reservation_after_failure()
+            raise _correlated_http_error(
+                503, "Не удалось подключить пробный период. Напишите в поддержку", correlation_id,
+            )
 
     # Do not persist or report a trial until the panel confirms the actual
     # HWID/IP limits. The legacy DB column is named `limit_ip`, but the bot
@@ -1995,7 +2032,7 @@ async def activate_trial(
             not isinstance(panel_client, dict)
             or panel_client.get("enable") is False
             or confirmed_expiry <= int(time.time())
-            or abs(confirmed_expiry - expected_expiry) > 5
+            or abs(confirmed_expiry - expected_expiry) > (120 if recovered_result else 5)
             or not isinstance(panel_devices, dict)
             or int(panel_devices.get("limit_hwid") or 0) != trial_device_limit
             or int(panel_devices.get("limit_ip") or 0) != 0

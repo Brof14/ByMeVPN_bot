@@ -779,6 +779,33 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 503)
         add_key.assert_not_awaited()
 
+    def test_trial_recovers_reserved_panel_client_without_extending_expiry(self):
+        now = int(api_router.time.time())
+        created = now - 300
+        expiry = created + 3 * 86400
+        client = {"enable": True, "expiry_time": expiry * 1000,
+                  "subscription_url": "https://example.invalid/trial", "uuid": "test-uuid"}
+        request = self.make_request("/api/v1/subscription/trial")
+        with patch.object(api_router.database, "has_trial_used", new=AsyncMock(return_value=False)), \
+                patch.object(api_router.database, "get_user_keys", new=AsyncMock(return_value=[])), \
+                patch.object(api_router.database, "get_trial_claim_reservation", new=AsyncMock(return_value={"claim_id": "claim", "created_at": created})), \
+                patch.object(api_router.database, "complete_trial_claim", new=AsyncMock(return_value=True)), \
+                patch.object(api_router.database, "add_key", new=AsyncMock()) as add_key, \
+                patch("xui_client.get_xui_client_details", new=AsyncMock(return_value=client)), \
+                patch("xui_client.get_xui_devices", new=AsyncMock(side_effect=[
+                    {"limit_hwid": 0, "limit_ip": 0, "devices": []},
+                    {"limit_hwid": 2, "limit_ip": 0, "devices": []},
+                ])), \
+                patch("xui_client.set_xui_client_limits", new=AsyncMock(return_value=True)) as repair, \
+                patch("xui_client.create_xui_user", new=AsyncMock()) as create, \
+                patch.object(api_router, "fetch_and_parse_real_nodes", new=AsyncMock(return_value=[])):
+            result = asyncio.run(api_router.activate_trial(api_router.TrialRequest(), request, user_id=7654321))
+        self.assertEqual(result["status"], "trial")
+        self.assertLessEqual(result["seconds_remaining"], 3 * 86400 - 299)
+        repair.assert_awaited_once_with(7654321, limit_ip=0, limit_hwid=2)
+        create.assert_not_awaited()
+        self.assertEqual(add_key.await_args.kwargs["expiry"], expiry)
+
     def test_trial_repeat_returns_conflict_without_reprovisioning_or_extending(self):
         request = self.make_request("/api/v1/subscription/trial", headers={
             "X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1",
