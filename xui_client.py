@@ -200,6 +200,15 @@ async def update_xui_client_settings(
                 raise RuntimeError("Panel client UUID is unavailable")
             uuid_lib.UUID(existing_uuid)
             payload["id"] = existing_uuid
+        # ClientRecord stores WireGuard allowed IPs as comma-separated text;
+        # the update endpoint accepts the Client representation (a list).
+        allowed_ips = payload.get("allowedIPs")
+        if isinstance(allowed_ips, str):
+            payload["allowedIPs"] = [part.strip() for part in allowed_ips.split(",") if part.strip()]
+        elif allowed_ips is not None and (
+            not isinstance(allowed_ips, list) or not all(isinstance(item, str) for item in allowed_ips)
+        ):
+            raise RuntimeError("Panel client allowed IPs have an unsupported format")
         if limit_ip is not None:
             payload["limitIp"] = int(limit_ip)
         if limit_hwid is not None:
