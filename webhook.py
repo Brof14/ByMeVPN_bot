@@ -324,6 +324,38 @@ async def _mobile_v2_yookassa_order_matches(payment: dict) -> bool:
         return False
 
 
+async def _mobile_yookassa_order_matches_for_payment(
+    payment: dict,
+    payment_id: str,
+    user_id: int,
+    days: int,
+    devices: int,
+    amount_rub: int,
+    metadata: dict,
+) -> bool:
+    """Validate a mobile invoice against the ledger that created it.
+
+    The current JWT API persists in ``mobile_payment_requests`` and sets both
+    mobile markers for compatibility. Prefer that authoritative ledger when
+    ``mobile_api_checkout`` is present; the older V2 adapter owns a different
+    ``mobile_v2_orders`` table and remains only for invoices created by it.
+    """
+    if payment.get("status") != "succeeded":
+        return False
+    if metadata.get("mobile_api_checkout") == "1":
+        return await _mobile_yookassa_order_matches(
+            payment_id, user_id, days, devices, amount_rub, metadata,
+        )
+    if metadata.get("mobile_v2") == "1":
+        return await _mobile_v2_yookassa_order_matches(payment)
+    return True
+
+
+def _uses_legacy_mobile_v2_order_ledger(metadata: dict) -> bool:
+    """Only the legacy adapter needs its separate fulfilled-state marker."""
+    return metadata.get("mobile_v2") == "1" and metadata.get("mobile_api_checkout") != "1"
+
+
 async def _mark_mobile_v2_yookassa_fulfilled(payment_id: str) -> bool:
     """Record V2 fulfillment only after subscription delivery succeeded."""
     try:
@@ -456,14 +488,9 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
         # that exact owner/request and recompute its terms from our catalog.
         # Telegram bot payments do not carry app_payment=1 and retain their
         # existing fulfillment contract.
-        if metadata.get("mobile_v2") == "1":
-            mobile_order_valid = await _mobile_v2_yookassa_order_matches(payment)
-        elif metadata.get("mobile_api_checkout") == "1":
-            mobile_order_valid = await _mobile_yookassa_order_matches(
-                payment_id, user_id, days, devices, amount_rub, metadata,
-            )
-        else:
-            mobile_order_valid = True
+        mobile_order_valid = await _mobile_yookassa_order_matches_for_payment(
+            payment, payment_id, user_id, days, devices, amount_rub, metadata,
+        )
         if not mobile_order_valid:
             logger.error("Mobile YooKassa invoice did not match its durable server-owned order")
             await _notify_admin(bot, "⚠️ Данные мобильного платежа не совпали с сохранённым тарифом. Автоматическая выдача остановлена.")
@@ -580,7 +607,7 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
         )
 
         if success:
-            if metadata.get("mobile_v2") == "1" and not await _mark_mobile_v2_yookassa_fulfilled(payment_id):
+            if _uses_legacy_mobile_v2_order_ledger(metadata) and not await _mark_mobile_v2_yookassa_fulfilled(payment_id):
                 await update_payment_status(pay_db_id, "recovery_required")
                 await _notify_admin(bot, "⚠️ Подписка выдана, но мобильный статус платежа не удалось сохранить. Нужна ручная сверка.")
                 return

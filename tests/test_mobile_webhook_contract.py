@@ -11,6 +11,74 @@ import webhook
 
 
 class TestMobileWebhookContract(unittest.IsolatedAsyncioTestCase):
+    async def test_api_checkout_marker_uses_mobile_payment_request_ledger_first(self):
+        payment = {
+            "id": "api-invoice-test",
+            "status": "succeeded",
+            "metadata": {"mobile_v2": "1", "mobile_api_checkout": "1"},
+        }
+        with (
+            patch.object(webhook, "_mobile_yookassa_order_matches", new=AsyncMock(return_value=True)) as api_order,
+            patch.object(webhook, "_mobile_v2_yookassa_order_matches", new=AsyncMock(return_value=False)) as legacy_order,
+        ):
+            valid = await webhook._mobile_yookassa_order_matches_for_payment(
+                payment, "api-invoice-test", 987654321, 120, 5, 396,
+                {"mobile_v2": "1", "mobile_api_checkout": "1", "plan_code": "3m_d5"},
+            )
+        self.assertTrue(valid)
+        api_order.assert_awaited_once_with(
+            "api-invoice-test", 987654321, 120, 5, 396,
+            {"mobile_v2": "1", "mobile_api_checkout": "1", "plan_code": "3m_d5"},
+        )
+        legacy_order.assert_not_awaited()
+        self.assertFalse(webhook._uses_legacy_mobile_v2_order_ledger(
+            {"mobile_v2": "1", "mobile_api_checkout": "1"},
+        ))
+
+    async def test_only_legacy_v2_checkout_uses_legacy_validator_and_finalizer(self):
+        payment = {"status": "succeeded", "metadata": {"mobile_v2": "1"}}
+        with patch.object(
+            webhook, "_mobile_v2_yookassa_order_matches", new=AsyncMock(return_value=True),
+        ) as legacy_order:
+            valid = await webhook._mobile_yookassa_order_matches_for_payment(
+                payment, "legacy-invoice", 987654321, 30, 2, 99,
+                {"mobile_v2": "1"},
+            )
+        self.assertTrue(valid)
+        legacy_order.assert_awaited_once_with(payment)
+        self.assertTrue(webhook._uses_legacy_mobile_v2_order_ledger({"mobile_v2": "1"}))
+
+    async def test_telegram_payment_without_mobile_markers_keeps_legacy_fulfillment(self):
+        payment = {"status": "succeeded", "metadata": {"user_id": "987654321"}}
+        with (
+            patch.object(webhook, "_mobile_yookassa_order_matches", new=AsyncMock()) as api_order,
+            patch.object(webhook, "_mobile_v2_yookassa_order_matches", new=AsyncMock()) as legacy_v2_order,
+        ):
+            valid = await webhook._mobile_yookassa_order_matches_for_payment(
+                payment, "telegram-invoice", 987654321, 30, 2, 99,
+                payment["metadata"],
+            )
+        self.assertTrue(valid)
+        api_order.assert_not_awaited()
+        legacy_v2_order.assert_not_awaited()
+        self.assertFalse(webhook._uses_legacy_mobile_v2_order_ledger(payment["metadata"]))
+
+    async def test_modern_api_checkout_still_requires_final_provider_status(self):
+        payment = {
+            "id": "api-invoice-test",
+            "status": "pending",
+            "metadata": {"mobile_v2": "1", "mobile_api_checkout": "1"},
+        }
+        with patch.object(
+            webhook, "_mobile_yookassa_order_matches", new=AsyncMock(return_value=True),
+        ) as api_order:
+            valid = await webhook._mobile_yookassa_order_matches_for_payment(
+                payment, "api-invoice-test", 987654321, 120, 5, 396,
+                {"mobile_v2": "1", "mobile_api_checkout": "1"},
+            )
+        self.assertFalse(valid)
+        api_order.assert_not_awaited()
+
     async def test_v2_yookassa_uses_legacy_runtime_order_ledger(self):
         payment = {
             "id": "invoice-v2-test",
