@@ -860,7 +860,9 @@ def _panel_state_contains_hwid(user_id: int, hwid: str, device_state: Dict[str, 
     return any(
         isinstance(item, dict)
         and (fingerprint := str(item.get("fingerprint") or "").strip().lower())
-        and 16 <= len(fingerprint) <= 64
+        # 3x-ui 3.11 returns a 12-hex SHA-256 prefix. Longer supported
+        # fingerprints remain valid; unknown shorter formats do not.
+        and (len(fingerprint) == 12 or 16 <= len(fingerprint) <= 64)
         and re.fullmatch(r"[0-9a-f]+", fingerprint)
         and hmac.compare_digest(current_fingerprint[:len(fingerprint)], fingerprint)
         for item in device_state.get("devices", [])
