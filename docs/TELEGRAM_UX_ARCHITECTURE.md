@@ -96,3 +96,23 @@ Source: [Zulut30/premium-telegram-emoji — emoji-catalog.md @ 294d22c](https://
 - Shortened onboarding, tariff selection, help, device and referral copy without changing business data.
 - Added direct copy for referral links and dedicated help for payments/devices.
 - Retained compatibility callbacks and expanded regression testing.
+
+## November 7 UX refinement
+
+- "О ByMeVPN" and "Бесплатные дни" now explain reporting errors and useful suggestions; bonus days remain **manual and conditional**, not promised on every report.
+- Referrals and advertising remain distinct channels for bonuses.
+- Tariff buttons keep the exact 2 / 5 / 10 tiers, prices, bonus months and real term lengths. The 12+3-month option is labeled **Лучшая цена** because its monthly price is lowest; this is not an unverifiable "most popular" claim.
+- Premium gift icons use catalog ID `5301299389245985629` when the bot is entitled and `BOT_PREMIUM_BUTTON_ICONS=1`; payment method buttons have no duplicate Unicode emojis.
+- `bot_style.normalize_navigation` moves explicit Back/Cancel controls to separate final keyboard rows on central screen-rendering paths. Their callback payloads are unchanged.
+
+### Advertising: original forwards only
+
+1. A channel owner requests the bonus and, where needed, waits for channel verification.
+2. Open the original advertising post in `@ByMeVPN` and **forward** it into the approved target channel, without editing or adding your own advertising copy.
+3. Submit the link to the forwarded message from that same channel. The bot rejects a mismatched public-channel link and prevents pending applications from bypassing channel review.
+4. A human admin **must verify** the forwarded-from attribution and content before approving a bonus. Telegram Bot API cannot prove the original forwarding source from an arbitrary message URL alone.
+5. Keep the repost for 30 days, as required by the existing advertising program.
+
+The optional `AD_SOURCE_POST_URL=https://t.me/ByMeVPN/<message-id>` points directly at the canonical post. If unset, the UI links to the channel without inventing a specific post URL. Configure this exact link after the advertising post is published for a one-tap workflow. Links to other channels are rejected. Do not grant bonuses automatically based on link format alone.
+
+Release checks: all GitHub Actions green; manually verify premium emoji entitlement and the source advertising message in live Telegram before enabling production flags. No live VPS or database changes are part of this UI patch.

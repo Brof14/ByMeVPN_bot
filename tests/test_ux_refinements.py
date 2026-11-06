@@ -58,6 +58,63 @@ class AdForwardingTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(valid_ad_post_for_application("https://t.me/mychannel/42", application))
         self.assertFalse(valid_ad_post_for_application("https://t.me/otherchannel/42", application))
 
+    async def test_post_cannot_skip_channel_review(self):
+        from handlers.ad_program import msg_ad_post_url
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=123),
+            text="https://t.me/mychannel/55",
+            answer=AsyncMock(),
+        )
+        state = SimpleNamespace(
+            get_data=AsyncMock(return_value={"current_app_id": 7}),
+            clear=AsyncMock(),
+        )
+        app = {"id": 7, "user_id": 123, "status": "channel_pending", "channel_username": "mychannel"}
+        with (
+            patch("handlers.ad_program.get_ad_application_by_id", new=AsyncMock(return_value=app)),
+            patch("handlers.ad_program.update_ad_application", new=AsyncMock()) as update,
+        ):
+            await msg_ad_post_url(message, object(), state)
+        update.assert_not_awaited()
+        self.assertIn("Дождитесь проверки", message.answer.await_args.args[0])
+
+    async def test_post_url_from_another_channel_is_rejected(self):
+        from handlers.ad_program import msg_ad_post_url
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=123),
+            text="https://t.me/anotherchannel/55",
+            answer=AsyncMock(),
+        )
+        state = SimpleNamespace(
+            get_data=AsyncMock(return_value={"current_app_id": 7}),
+            clear=AsyncMock(),
+        )
+        app = {"id": 7, "user_id": 123, "status": "waiting_for_post", "channel_username": "mychannel"}
+        with (
+            patch("handlers.ad_program.get_ad_application_by_id", new=AsyncMock(return_value=app)),
+            patch("handlers.ad_program.update_ad_application", new=AsyncMock()) as update,
+        ):
+            await msg_ad_post_url(message, object(), state)
+        update.assert_not_awaited()
+        self.assertIn("канале из вашей заявки", message.answer.await_args.args[0])
+
+    async def test_about_and_free_days_offer_feedback_without_promising_automatic_bonus(self):
+        from handlers.start import cb_about, cb_free_vpn
+        callback = SimpleNamespace(from_user=SimpleNamespace(id=123))
+        for handler in (cb_about, cb_free_vpn):
+            with (
+                patch("handlers.start.safe_answer", new=AsyncMock()),
+                patch("handlers.start.send_with_photo", new=AsyncMock()) as send,
+            ):
+                await handler(callback, object())
+            text = send.await_args.args[2]
+            self.assertIn("ошибк", text)
+            self.assertIn("можем начислить", text)
+            kb = send.await_args.args[3]
+            feedback = next(b for b in buttons(kb) if b.text == "Сообщить об ошибке или идее")
+            self.assertTrue(feedback.url.startswith("https://t.me/ByMeVPNSupportBot"))
+            self.assertEqual(kb.inline_keyboard[-1][0].callback_data, "back_to_menu")
+
     async def test_get_post_displays_forward_instruction_not_template(self):
         from handlers.ad_program import cb_ad_get_post
         callback = SimpleNamespace(data="ad_get_post:7", from_user=SimpleNamespace(id=123))
