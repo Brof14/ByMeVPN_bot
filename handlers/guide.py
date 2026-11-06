@@ -271,7 +271,7 @@ async def _send_platform_guide(callback: CallbackQuery, bot: Bot, platform: str,
         *guide_rows,
         [InlineKeyboardButton(text="← Назад", callback_data=choose_callback)],
     ])
-    await send_or_edit(bot, callback, text, kb, photo=platform_photo)
+    await send_or_edit(bot, callback, text, kb)
 
 
 async def _track_guide_event(user_id: int, event_type: str, platform: str | None = None) -> None:
