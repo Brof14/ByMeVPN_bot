@@ -265,7 +265,7 @@ async def _send_platform_guide(callback: CallbackQuery, bot: Bot, platform: str,
             guide_rows.insert(0, [InlineKeyboardButton(
                 text="📋 Скопировать ссылку подписки",
                 copy_text={"text": key["key"]},
-                style="primary",
+                
             )])
     kb = InlineKeyboardMarkup(inline_keyboard=[
         *guide_rows,

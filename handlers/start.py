@@ -40,7 +40,7 @@ from utils import send_with_photo, safe_answer
 from async_utils import monitor_performance
 from cache import cache_subscription_data
 from bot_style import themed_button as InlineKeyboardButton
-from bot_assets import MENU, ABOUT, FREE_VPN
+from bot_assets import MENU, ABOUT
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -414,7 +414,7 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext) -> None:
                     "text": "Участвуй в ежемесячном конкурсе ByMeVPN: пригласи друзей и выиграй дни VPN.",
                 })
                 invite_kb = InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="🤝 Пригласить друга", url=share_url, style="primary")
+                    InlineKeyboardButton(text="🤝 Пригласить друга", url=share_url, )
                 ]])
 
                 referral_count = status["referral_count"]
@@ -716,7 +716,7 @@ async def cb_free_vpn(callback: CallbackQuery, bot: Bot):
         [InlineKeyboardButton(text="VPN за рекламу", callback_data="ad_program")],
         [InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu")],
     ])
-    await send_with_photo(bot, callback, text, kb, photo=None)
+    await send_with_photo(bot, callback, text, kb)
 
 
 

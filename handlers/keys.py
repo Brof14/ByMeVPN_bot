@@ -24,7 +24,6 @@ from utils import send_with_photo, send_or_edit, safe_answer
 from constants import format_timestamp as fmt_date, format_days_left as fmt_days_left
 from states import BuyFlow
 from bot_style import themed_button as InlineKeyboardButton
-from bot_assets import KEY, DEVICES, RENEWAL, CONNECTION, AUTO_RENEWAL
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -451,7 +450,6 @@ async def cb_card_toggle_check(callback: CallbackQuery, bot: Bot):
             card_title=card_title, is_checked=new_checked, key_id=key_id,
             has_card=bool(sub and sub.get("payment_method_id")), autorenew_active=bool(sub and sub.get("status") == "active"),
         ),
-        photo=AUTO_RENEWAL,
     )
 
 
@@ -573,7 +571,6 @@ async def cb_manage_payment_methods(callback: CallbackQuery, bot: Bot):
             card_title=card_title, is_checked=True, key_id=key_id,
             has_card=bool(sub and sub.get("payment_method_id")), autorenew_active=bool(sub and sub.get("status") == "active"),
         ),
-        photo=AUTO_RENEWAL,
     )
 
 
@@ -592,7 +589,6 @@ async def cmd_unsubscribe(message: Message, bot: Bot):
             card_title=card_title, is_checked=True, key_id=key_id,
             has_card=bool(card_title), autorenew_active=bool(sub and sub.get("status") == "active"),
         ),
-        photo=AUTO_RENEWAL,
     )
 
 

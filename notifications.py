@@ -154,7 +154,7 @@ async def _send_urgent_notification(bot: Bot, item: dict) -> None:
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Продлить подписку", callback_data="buy_vpn", style="primary")],
+        [InlineKeyboardButton(text="Продлить подписку", callback_data="buy_vpn", )],
         [InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn")],
         *([[InlineKeyboardButton(text="Применить промокод", callback_data=f"activate_promo:{promo_code}")]] if promo_expiry else []),
     ])
@@ -187,7 +187,7 @@ async def _send_warning_notification(bot: Bot, item: dict) -> None:
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Продлить подписку", callback_data="buy_vpn", style="primary")],
+        [InlineKeyboardButton(text="Продлить подписку", callback_data="buy_vpn", )],
         [InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn")],
         *([[InlineKeyboardButton(text="Применить промокод", callback_data=f"activate_promo:{promo_code}")]] if promo_expiry else []),
     ])
@@ -212,7 +212,7 @@ async def _send_early_notification(bot: Bot, item: dict) -> None:
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Посмотреть тарифы", callback_data="buy_vpn", style="primary")],
+        [InlineKeyboardButton(text="Посмотреть тарифы", callback_data="buy_vpn", )],
         [InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn")]
     ])
 

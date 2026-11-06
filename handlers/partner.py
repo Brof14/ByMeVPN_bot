@@ -11,7 +11,6 @@ from database import get_referral_stats_enhanced, get_referred_users_list
 from utils import send_with_photo, safe_answer
 from constants import format_timestamp, INTRO_TRIAL_DAYS, INTRO_TRIAL_PRICE_RUB, RECURRING_MONTHLY_PRICE, RECURRING_DAYS
 from bot_style import themed_button as InlineKeyboardButton
-from bot_assets import REFERRALS, MY_INVITATIONS
 
 router = Router()
 
@@ -23,7 +22,7 @@ def partner_main_kb(link: str) -> InlineKeyboardMarkup:
         f"{link}"
     )
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Поделиться", url=f"https://t.me/share/url?url={quote_plus(link)}&text={share_text}", style="primary")],
+        [InlineKeyboardButton(text="Поделиться", url=f"https://t.me/share/url?url={quote_plus(link)}&text={share_text}", )],
         [InlineKeyboardButton(text="Мои приглашения", callback_data="partner_referrals_list")],
         [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu")],
     ])

@@ -34,7 +34,6 @@ from database import (
 )
 from utils import send_with_photo, send_or_edit, safe_answer
 from bot_style import themed_button as InlineKeyboardButton
-from bot_assets import PLANS, RENEWAL, PAYMENT, PROMO_CODE
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -76,7 +75,6 @@ async def cb_buy_vpn(callback: CallbackQuery, bot: Bot, state: FSMContext):
         bot, callback,
         text,
         tariff_selection_kb(devices=devices, discount_percent=promo_discount),
-        photo=RENEWAL if renew_key_id else PLANS,
     )
 
 
@@ -112,7 +110,6 @@ async def cb_select_devtier(callback: CallbackQuery, bot: Bot, state: FSMContext
         bot, callback,
         text,
         tariff_selection_kb(devices=devices, discount_percent=promo_discount),
-        photo=RENEWAL if renew_key_id else PLANS,
     )
 
 
@@ -233,7 +230,6 @@ async def cb_select_period_legacy(callback: CallbackQuery, bot: Bot, state: FSMC
         bot, callback,
         "<b>Выберите срок подписки</b>\n\nЦена на кнопке указана за месяц. Итоговую сумму покажем перед оплатой.",
         tariff_selection_kb(),
-        photo=PLANS,
     )
 
 
@@ -354,7 +350,6 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
         f"Устройств: до {devices} одновременно\n\n"
         f"Подписка активируется после подтверждения оплаты.",
         kb,
-        photo=PAYMENT,
     )
 
 
@@ -413,7 +408,6 @@ async def cb_pay_crypto(callback: CallbackQuery, bot: Bot, state: FSMContext):
         f"Устройств: до {devices} одновременно\n\n"
         f"Подписка активируется после подтверждения оплаты.",
         kb,
-        photo=PAYMENT,
     )
 
 
@@ -607,7 +601,6 @@ async def cb_activate_promo(callback: CallbackQuery, state: FSMContext):
             "• Достигнут лимит использований\n"
             "• Код не существует\n"
             "• Код не начался ещё",
-            photo=PROMO_CODE,
         )
         return
 
@@ -616,7 +609,6 @@ async def cb_activate_promo(callback: CallbackQuery, state: FSMContext):
         await send_with_photo(callback.bot, callback,
             "<b>Промокод уже использован</b>\n\n"
             "Каждый промокод можно использовать только один раз.",
-            photo=PROMO_CODE,
         )
         return
 
@@ -648,7 +640,6 @@ async def cb_activate_promo(callback: CallbackQuery, state: FSMContext):
         f"Бонус автоматически применится при следующей покупке.\n\n"
         f"Выберите тариф — скидка применится автоматически.",
         reply_markup=_promo_purchase_keyboard(),
-        photo=PROMO_CODE,
     )
 
 
@@ -667,7 +658,6 @@ async def cmd_promo(message: Message, state: FSMContext):
                 "Введите: <code>/promo КОД</code>\n\n"
                 "Например: <code>/promo SALE20</code>\n\n"
                 "Промокод даст скидку при следующей покупке VPN.",
-                photo=PROMO_CODE,
             )
             return
 
@@ -684,7 +674,6 @@ async def cmd_promo(message: Message, state: FSMContext):
                 "• Достигнут лимит использований\n"
                 "• Код не существует\n"
                 "• Код не начался ещё",
-                photo=PROMO_CODE,
             )
             return
 
@@ -693,7 +682,6 @@ async def cmd_promo(message: Message, state: FSMContext):
             await send_with_photo(message.bot, message,
                 "<b>Промокод уже использован</b>\n\n"
                 "Каждый промокод можно использовать только один раз.",
-                photo=PROMO_CODE,
             )
             return
 
@@ -724,7 +712,7 @@ async def cmd_promo(message: Message, state: FSMContext):
             f"💰 Бонус: <b>{discount_text}</b>\n\n"
             f"Бонус автоматически применится при следующей покупке.\n\n"
             f"Выберите тариф — скидка применится автоматически.",
-            _promo_purchase_keyboard(), photo=PROMO_CODE,
+            _promo_purchase_keyboard(),
         )
 
     except Exception as e:
