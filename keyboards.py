@@ -354,26 +354,6 @@ def app_open_kb(redirect_url: str, deep_link: str = "") -> InlineKeyboardMarkup:
 # Partner / referral
 # ---------------------------------------------------------------------------
 
-def partner_kb(link: str) -> InlineKeyboardMarkup:
-    share_text = quote_plus(
-        "Попробуй ByMeVPN — VPN без сложных настроек.\n"
-        "3 дня бесплатно, без карты.\n"
-        f"{link}"
-    )
-
-    kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(
-        text="Поделиться ссылкой",
-        url=f"https://t.me/share/url?url={quote_plus(link)}&text={share_text}",
-    ))
-    kb.row(InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu"))
-    return kb.as_markup()
-
-
-# ---------------------------------------------------------------------------
-# Connection guide
-# ---------------------------------------------------------------------------
-
 def connection_guide_kb(key_id: int | None = None, subscription_url: str = "") -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     def platform_callback(name: str) -> str:
