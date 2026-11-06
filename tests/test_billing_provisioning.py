@@ -501,7 +501,8 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
             await _send_platform_guide(callback, bot, "android")
             android_markup = send_or_edit_mock.call_args.args[3]
             android_urls = {button.url for row in android_markup.inline_keyboard for button in row if button.url}
-            self.assertIn(HAPP_ANDROID_APK, android_urls)
+            self.assertIn("https://bymevpn.duckdns.org/app/", android_urls)
+        self.assertIn("https://play.google.com/store/apps/details?id=com.happproxy", android_urls)
 
     # ------------------------------------------------------------------------
     # Test 11: Switching between text and photo screens uses the right edit path
