@@ -25,25 +25,43 @@ def callbacks(markup):
 
 
 class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
+    def test_home_labels_for_subscriber(self):
+        menu = main_menu_with_keys(trial_used=True)
+        self.assertEqual(
+            [b.text for row in menu.inline_keyboard for b in row],
+            ["Подписка", "Тарифы", "Бесплатные дни", "О сервисе", "Поддержка"],
+        )
+
+    def test_device_tiers_and_periods_unchanged(self):
+        actions = callbacks(tariff_selection_kb(devices=5))
+        self.assertEqual(
+            [a for a in actions if a.startswith("tariff_")],
+            ["tariff_1_5", "tariff_3_5", "tariff_6_5", "tariff_12_5"],
+        )
+        self.assertEqual(
+            [a for a in actions if a.startswith("devtier_")],
+            ["devtier_2", "devtier_5", "devtier_10"],
+        )
+
     def test_users_without_a_subscription_do_not_see_connection_guide_or_account_switch(self):
         for markup in (main_menu_new_user(), main_menu_existing()):
             actions = callbacks(markup)
             self.assertNotIn("connection_guide", actions)
             self.assertNotIn("auth_existing_client", actions)
 
-    def test_main_menu_uses_compact_rows_and_consistent_semantic_colors(self):
+    def test_main_menu_uses_neutral_styles_and_compact_rows(self):
         for markup in (main_menu_new_user(), main_menu_existing(), main_menu_with_keys()):
             rows = markup.inline_keyboard
             self.assertEqual(rows[-1][0].text, "О сервисе")
             self.assertEqual(rows[-1][1].text, "Поддержка")
             self.assertEqual(rows[-1][1].callback_data, "trouble")
             buttons = [button for row in rows for button in row]
-            self.assertTrue(all(button.style in {"primary", "success", "danger"} for button in buttons))
+            self.assertTrue(all(button.style is None for button in buttons))
         menu = main_menu_with_keys()
         self.assertEqual([len(row) for row in menu.inline_keyboard], [1, 1, 1, 1, 2])
-        self.assertEqual(menu.inline_keyboard[0][0].style, "success")
-        self.assertEqual(menu.inline_keyboard[1][0].callback_data, "my_keys")
-        self.assertEqual(menu.inline_keyboard[1][0].style, "primary")
+        self.assertIsNone(menu.inline_keyboard[0][0].style)
+        self.assertEqual(menu.inline_keyboard[0][0].callback_data, "my_keys")
+        self.assertIsNone(menu.inline_keyboard[0][0].style)
         used_trial = main_menu_existing(trial_used=True)
         self.assertNotIn("trial_1r", callbacks(used_trial))
 
@@ -112,7 +130,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         self.assertIn("guide_ios", actions)
         self.assertIn("guide_android", actions)
         self.assertIn("guide_linux", actions)
-        self.assertNotIn("guide_more", actions)
+        self.assertIn("guide_more", actions)
         labels = [button.text for row in markup.inline_keyboard for button in row]
         self.assertEqual(labels[:4], ["iPhone / iPad", "Android", "Windows", "Linux"])
 
@@ -188,8 +206,8 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         ]
         three_months = next(button for button in tariff_buttons if button.callback_data == "tariff_3_2")
         self.assertIn("3 мес. + 1 мес. 🎁 — 79 ₽ / мес.", three_months.text)
-        self.assertEqual(three_months.style, "success")
-        self.assertTrue(all(button.style in {"primary", "success", "danger"} for button in tariff_buttons))
+        self.assertIsNone(three_months.style)
+        self.assertTrue(all(button.style is None for button in tariff_buttons))
 
     async def test_saved_sbp_method_without_title_is_still_manageable(self):
         sub = {
