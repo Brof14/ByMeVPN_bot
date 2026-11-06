@@ -86,20 +86,22 @@ def tariff_selection_kb(devices: int = DEFAULT_DEVICE_LIMIT, discount_percent: i
     # Keep the familiar monthly price on the duration chooser. The final
     # checkout screen shows the full amount before the user selects payment.
     tariff_rows = [
-        (1, ""),
-        (3, " + 1 мес. 🎁"),
-        (6, " + 2 мес. 🎁"),
-        (12, " + 3 мес. 🎁"),
+        (1, "1 месяц"),
+        (3, "3 мес. + 1 в подарок"),
+        (6, "6 мес. + 2 в подарок"),
+        (12, "12 мес. + 3 в подарок"),
     ]
 
     for months, bonus in tariff_rows:
         monthly_price = get_monthly_display(months, devices)
         if discount_percent > 0:
             monthly_price = round(monthly_price * (100 - discount_percent) / 100)
-            text = f"{months} мес.{bonus} — {monthly_price} ₽ / мес. (-{discount_percent}%)"
+            text = f"{bonus} — {monthly_price} ₽/мес. · −{discount_percent}%"
         else:
-            text = f"{months} мес.{bonus} — {monthly_price} ₽ / мес."
+            text = f"{bonus} — {monthly_price} ₽/мес."
 
+        if months == 12:
+            text += " · Лучшая цена"
         kb.row(InlineKeyboardButton(
             text=text,
             callback_data=f"tariff_{months}_{devices}",
@@ -114,18 +116,18 @@ def payment_kb(price_rub: int, days: int, devices: int = DEFAULT_DEVICE_LIMIT, y
     """Stars = rubles (1:1, intentional — covers Telegram commission)."""
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(
-        text=f"⭐ Telegram Stars ({price_rub} звёзд)",
+        text=f"Telegram Stars · {price_rub} зв.",
         callback_data="pay_stars",
     ))
     kb.row(InlineKeyboardButton(
-        text=f"💳 ЮKassa {price_rub} ₽",
+        text=f"ЮKassa · {price_rub} ₽",
         callback_data="pay_yookassa",
     ))
     kb.row(InlineKeyboardButton(
-        text=f"₿ CryptoBot {price_rub} ₽",
+        text=f"CryptoBot · {price_rub} ₽",
         callback_data="pay_crypto",
     ))
-    kb.row(InlineKeyboardButton(text="Назад", callback_data=f"devtier_{devices}"))
+    kb.row(InlineKeyboardButton(text="← Назад", callback_data=f"devtier_{devices}"))
     return kb.as_markup()
 
 

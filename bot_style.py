@@ -10,13 +10,16 @@ without that entitlement. The default leaves icons off, never buttons broken.
 """
 import os
 
-from aiogram.types import InlineKeyboardButton as TelegramInlineKeyboardButton
+from aiogram.types import InlineKeyboardButton as TelegramInlineKeyboardButton, InlineKeyboardMarkup
 
 # Stable catalog IDs. One semantic action always has the same icon.
 ICON_IDS: dict[str, str] = {
     "subscription": "6005570495603282482",  # key_bw
     "plans": "5927169041595634481",         # card
     "free": "5406756500108501710",          # free
+    "gift": "5301299389245985629",         # outlined present
+    "feedback": "5879841310902324730",     # pencil
+    "crypto": "5769403330761593044",       # wallet
     "referrals": "5942877472163892475",     # people
     "ads": "5771695636411847302",           # announce_bw
     "about": "5879785854284599288",         # info_bw
@@ -52,7 +55,7 @@ _DESTRUCTIVE_PREFIXES = (
 _ACTION_ICONS = {
     "my_keys": "subscription",
     "buy_vpn": "plans",
-    "free_vpn": "free",
+    "free_vpn": "gift",
     "trial_free": "free",
     "about": "about",
     "trouble": "support",
@@ -65,7 +68,7 @@ _ACTION_ICONS = {
     "connection_guide": "connect",
     "pay_yookassa": "card",
     "pay_stars": "stars",
-    "pay_crypto": "wallet",
+    "pay_crypto": "crypto",
     "key_history": "history",
     "admin_stats": "list",
     "admin_search": "search",
@@ -85,7 +88,7 @@ _PREFIX_ICONS = (
     ("autorenew_", "settings"),
     ("guide_", "connect"),
     ("support_topic:", "support"),
-    ("ad_get_post:", "ads"),
+    ("ad_get_post:", "share"),
     ("ad_submit_post:", "share"),
     ("ad_admin_", "ads"),
     ("admin_user", "profile"),
@@ -95,6 +98,9 @@ _PREFIX_ICONS = (
 # A fallback for external URLs and copy buttons without callback data.
 _LABEL_ICONS = (
     ("поделиться", "share"),
+    ("сообщить об ошибке", "feedback"),
+    ("предложить улучшение", "feedback"),
+    ("передать идею", "feedback"),
     ("написать в поддержку", "support"),
     ("скопировать", "copy"),
     ("установить", "download"),
@@ -141,6 +147,8 @@ def _icon_for(text: str, callback: str, *, copy: bool, destructive: bool, back: 
         return ICON_IDS["back"]
     if copy:
         return ICON_IDS["copy"]
+    if callback.startswith(("tariff_3_", "tariff_6_", "tariff_12_")):
+        return ICON_IDS["gift"]
     semantic = _ACTION_ICONS.get(callback)
     if semantic:
         return ICON_IDS[semantic]
@@ -198,3 +206,29 @@ def themed_button(*args, **kwargs) -> TelegramInlineKeyboardButton:
                 elif args:
                     args = (clean, *args[1:])
     return TelegramInlineKeyboardButton(*args, **kwargs)
+
+
+def normalize_navigation(keyboard: InlineKeyboardMarkup | None) -> InlineKeyboardMarkup | None:
+    """Keep back/cancel actions on the bottom, without changing their callbacks.
+
+    Pagination arrows and actions such as 'Отменить автопродление' are not back buttons.
+    """
+    if keyboard is None:
+        return None
+    rows: list[list[TelegramInlineKeyboardButton]] = []
+    navigation: list[TelegramInlineKeyboardButton] = []
+    for row in keyboard.inline_keyboard:
+        other = []
+        for button in row:
+            label = button.text.strip().lower()
+            is_back = (
+                label.startswith(("← ", "◀ ", "◀️ ", "🔙 ", "🏠 "))
+                or (label in {"назад", "отмена", "главное меню", "закрыть"} and not button.url)
+                or button.callback_data == "back_to_menu"
+            )
+            (navigation if is_back else other).append(button)
+        if other:
+            rows.append(other)
+    if not navigation:
+        return keyboard
+    return InlineKeyboardMarkup(inline_keyboard=rows + [[button] for button in navigation])
