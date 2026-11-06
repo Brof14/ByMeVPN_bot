@@ -17,6 +17,7 @@ from aiogram.exceptions import TelegramBadRequest
 from async_utils import monitor_performance, get_preloaded
 from constants import LOGO_URL  # Backward compatibility for existing handlers.
 from bot_assets import display_artwork
+from bot_style import normalize_navigation
 
 _photo_file_ids: dict[str, str] = {}
 _photo_cache_loaded = False
@@ -83,6 +84,7 @@ async def send_photo_message(
     reply_markup: InlineKeyboardMarkup | None = None,
 ) -> Message:
     """Send a local banner, caching Telegram's file_id for later sends."""
+    reply_markup = normalize_navigation(reply_markup)
     source, cache_key = await _photo_source(photo)
     try:
         sent = await bot.send_photo(
@@ -117,6 +119,7 @@ async def send_or_edit(
 ) -> Message:
     """Edit the current screen and reuse Telegram's file_id for local artwork."""
     photo = display_artwork(photo)
+    reply_markup = normalize_navigation(reply_markup)
     msg = target.message if isinstance(target, CallbackQuery) else target
     if photo:
         source, cache_key = await _photo_source(photo)
@@ -206,6 +209,7 @@ async def send_with_photo(
 ) -> Message:
     """Send or edit a screen with a locally stored, Telegram-cached banner."""
     photo = display_artwork(photo)
+    reply_markup = normalize_navigation(reply_markup)
     msg = target.message if isinstance(target, CallbackQuery) else target
     if isinstance(target, CallbackQuery):
         return await send_or_edit(bot, target, text, reply_markup, photo=photo)

@@ -37,3 +37,7 @@ Never commit Telegram bot tokens, panel credentials, payment secrets, VPN subscr
 The V3 UI keeps the bot's payment and subscription logic intact. Button styling and optional custom emoji IDs live in `bot_style.py`; brand image visibility is controlled by `bot_assets.py`. See [Telegram UX architecture and rollout](docs/TELEGRAM_UX_ARCHITECTURE.md).
 
 Premium button icons require eligibility under Telegram's Bot API rules. Set `BOT_PREMIUM_BUTTON_ICONS=1` **only after** the bot owner has Telegram Premium or the bot has an eligible purchased Fragment username. The default `0` keeps buttons working without icons.
+
+## Advertising repost setup
+
+To make the bonus workflow direct users to one exact original message, publish an advertising post in the official `@ByMeVPN` channel and configure `AD_SOURCE_POST_URL=https://t.me/ByMeVPN/<message-id>` in the bot's server environment. This is a public link, not a secret. Users forward that message to their own channel; copy-pasted advertisements do not meet the program's conditions. Admin review checks forwarding attribution before a reward is granted. Without the variable, the bot links to the channel rather than inventing a post ID.

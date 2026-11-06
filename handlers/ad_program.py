@@ -7,7 +7,8 @@ Flow (spec #23-29):
                     otherwise user provides the count) → application.
   private channel → invite link (t.me/+... or t.me/c/...) → manual subscriber
                     count → application pending manual review.
-  post            → user gets the ad post, publishes it, submits the post URL
+  post            → user forwards the official post from @ByMeVPN to their channel,
+                    then submits the public link to the forwarded post
                     (status post_submitted, 30-day retention clock starts).
   bonus           → granted immediately after an admin verifies the published
                     post. The post is separately checked after 30 days.
@@ -15,9 +16,11 @@ Flow (spec #23-29):
 Legacy status 'active_30_days' (older schema) is treated as post_submitted.
 """
 import logging
+import os
 import re
 import time
 from html import escape
+from urllib.parse import urlsplit
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
@@ -107,6 +110,33 @@ _PRIVATE_INVITE_RE = re.compile(r"^(?:https?://)?t\.me/(?:\+[\w-]{10,}|joinchat/
 _POST_URL_RE = re.compile(r"^(https?://)?t\.me/(?:[A-Za-z0-9_]{4,64}/\d+|c/\d+/\d+)(?:\?single)?/?$", re.IGNORECASE)
 
 
+OFFICIAL_AD_CHANNEL_URL = "https://t.me/ByMeVPN"
+
+
+def official_ad_post_url() -> str | None:
+    """Canonical advertising post, configured by the operator after publication."""
+    url = os.getenv("AD_SOURCE_POST_URL", "").strip().rstrip("/")
+    return url if re.fullmatch(r"https://t\.me/ByMeVPN/[1-9][0-9]*", url, re.I) else None
+
+
+def valid_ad_post_for_application(post_url: str, app: dict) -> bool:
+    """Reject a public post URL pointing at a different channel.
+
+    Telegram Bot API cannot inspect arbitrary channel messages via post URL,
+    so the admin must still verify the Telegram forwarded-from attribution.
+    """
+    if not _POST_URL_RE.fullmatch(post_url):
+        return False
+    public = str(app.get("channel_username") or "").lstrip("@").lower()
+    path = urlsplit(post_url if post_url.startswith("http") else "https://" + post_url).path.strip("/").split("/")
+    if public:
+        return len(path) >= 2 and path[0].lower() == public
+    channel_id = app.get("channel_id")
+    if channel_id and len(path) >= 3 and path[0] == "c":
+        return path[1] == str(channel_id).removeprefix("-100")
+    return True
+
+
 def _is_admin(user_id: int) -> bool:
     return bool(ADMIN_IDS) and user_id in ADMIN_IDS
 
@@ -127,8 +157,8 @@ async def cb_ad_program(callback: CallbackQuery, bot: Bot, state: FSMContext):
 
     text = (
         "<b>VPN за рекламу</b>\n\n"
-        "Разместите пост в своём Telegram-канале и получите бонусные месяцы.\n\n"
-        "Размер бонуса зависит от аудитории. Пост нужно сохранить на 30 дней."
+        "Перешлите пост из @ByMeVPN в свой канал и получите бонусные месяцы.\n\n"
+        "Не меняйте текст и не добавляйте своё. Сохраните репост на 30 дней."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Проверить канал", callback_data="ad_check_channel")],
@@ -323,7 +353,7 @@ async def _create_application_and_reply(
             f"Канал: <b>{escape(str(chat_title))}</b>\n"
             f"👥 Подписчиков: <b>{subscriber_count}</b>{' (указано вами)' if manual_count else ''}\n"
             f"Возможный бонус: <b>{bonus_months} мес.</b>\n\n"
-            "Заявку проверит администратор. После подтверждения вы получите рекламный пост."
+            "После проверки канала перешлите официальный пост из @ByMeVPN."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Мои заявки", callback_data="ad_my_applications")],
@@ -334,14 +364,12 @@ async def _create_application_and_reply(
             f"<b>Канал найден: {escape(str(chat_title))}</b>\n\n"
             f"👥 Подписчиков: <b>{subscriber_count}</b>\n"
             f"Ваш бонус: <b>{bonus_months} мес.</b>\n\n"
-            "<b>Что дальше:</b>\n"
-            "1. Получите рекламный пост\n"
-            "2. Опубликуйте его в канале\n"
-            "3. Отправьте ссылку на пост\n"
-            "4. После проверки публикации бонус начислится сразу. Оставьте пост в канале на 30 дней."
+            "1. Перешлите пост из @ByMeVPN в свой канал без изменений.\n"
+            "2. Отправьте ссылку на пересланное сообщение.\n"
+            "3. После проверки получите бонус. Сохраните репост на 30 дней."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📋 Получить рекламный пост", callback_data=f"ad_get_post:{app_id}")],
+            [InlineKeyboardButton(text="Открыть рекламный пост", callback_data=f"ad_get_post:{app_id}")],
             [InlineKeyboardButton(text="Мои заявки", callback_data="ad_my_applications")],
             [InlineKeyboardButton(text="← Назад", callback_data="ad_program")]
         ])
@@ -443,31 +471,35 @@ async def msg_ad_channel_input(message: Message, bot: Bot, state: FSMContext):
 
 @router.callback_query(F.data.startswith("ad_get_post:"))
 async def cb_ad_get_post(callback: CallbackQuery, bot: Bot):
-    """Show ad post template for user to copy."""
+    """Show the original-channel post link, never copy-paste advertising text."""
     await safe_answer(callback)
     app_id = int(callback.data.split(":")[1])
-
     app = await get_ad_application_by_id(app_id)
     if not app or app["user_id"] != callback.from_user.id:
-        await safe_answer(callback, "Заявка не найдена", alert=True)
+        await safe_answer(callback, "Заявка не найдена.", alert=True)
         return
-
+    if app["status"] not in ("waiting_for_post", "post_submitted", "active_30_days"):
+        await safe_answer(callback, "Сначала дождитесь проверки канала.", alert=True)
+        return
+    post_url = official_ad_post_url()
     text = (
         "<b>Рекламный пост</b>\n\n"
-        "Скопируйте и опубликуйте текст ниже:\n\n"
-        "ByMeVPN — VPN без сложных настроек.\n"
-        "Подключение на телефоне и компьютере.\n"
-        "3 дня бесплатно, без карты.\n\n"
-        "Начать: https://t.me/ByMeVPNbot\n\n"
-        "После публикации отправьте ссылку на пост. Не удаляйте его 30 дней."
+        "Перешлите официальный рекламный пост из @ByMeVPN в свой канал.\n"
+        "Не копируйте текст, не редактируйте пост и не добавляйте свою рекламу.\n\n"
+        "После публикации отправьте ссылку на пересланное сообщение. "
+        "Не удаляйте его 30 дней."
     )
-
+    if not post_url:
+        text += "\n\nПрямая ссылка на пост пока не задана. Откройте канал и найдите рекламную публикацию."
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📤 Отправить ссылку на пост", callback_data=f"ad_submit_post:{app_id}", )],
+        [InlineKeyboardButton(
+            text="Открыть исходный пост" if post_url else "Открыть @ByMeVPN",
+            url=post_url or OFFICIAL_AD_CHANNEL_URL,
+        )],
+        [InlineKeyboardButton(text="Отправить ссылку на репост", callback_data=f"ad_submit_post:{app_id}")],
         [InlineKeyboardButton(text="Мои заявки", callback_data="ad_my_applications")],
-        [InlineKeyboardButton(text="← Назад", callback_data="ad_program")]
+        [InlineKeyboardButton(text="← Назад", callback_data="ad_program")],
     ])
-
     await send_with_photo(bot, callback, text, kb)
 
 
@@ -482,12 +514,15 @@ async def cb_ad_submit_post(callback: CallbackQuery, bot: Bot, state: FSMContext
         await safe_answer(callback, "Заявка не найдена", alert=True)
         return
 
+    if app["status"] != "waiting_for_post":
+        await safe_answer(callback, "Дождитесь проверки канала.", alert=True)
+        return
+
     text = (
-        "<b>Ссылка на публикацию</b>\n\n"
-        "Ссылку на пост в вашем канале.\n\n"
-        "Примеры:\n"
-        "• <code>https://t.me/mychannel/123</code>\n"
-        "• <code>https://t.me/c/1234567890/5</code> (приватный канал)"
+        "<b>Ссылка на репост</b>\n\n"
+        "Отправьте ссылку на пересланное из @ByMeVPN сообщение в вашем канале.\n"
+        "Текст и оформление оригинала менять нельзя.\n\n"
+        "Пример: <code>https://t.me/mychannel/123</code>"
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -513,6 +548,12 @@ async def msg_ad_post_url(message: Message, bot: Bot, state: FSMContext):
         await state.clear()
         return
 
+    app = await get_ad_application_by_id(app_id)
+    if not app or app["user_id"] != user_id or app["status"] != "waiting_for_post":
+        await message.answer("Дождитесь проверки канала или откройте активную заявку.", reply_markup=back_to_menu())
+        await state.clear()
+        return
+
     post_match = _POST_URL_RE.fullmatch(post_url)
     if not post_match:
         await message.answer(
@@ -526,9 +567,18 @@ async def msg_ad_post_url(message: Message, bot: Bot, state: FSMContext):
     if not post_match.group(1):
         post_url = f"https://{post_url.lstrip('/')}"
 
+    if not valid_ad_post_for_application(post_url, app):
+        await message.answer(
+            "Ссылка должна вести на публикацию в канале из вашей заявки.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="← Назад", callback_data=f"ad_get_post:{app_id}")
+            ]]),
+        )
+        return
+
     updated = await update_ad_application(
         app_id, status="post_submitted", post_url=post_url,
-        expected_statuses=["waiting_for_post", "channel_pending"],
+        expected_statuses=["waiting_for_post"],
     )
     if not updated:
         await message.answer("Заявка уже закрыта или удалена. Откройте раздел «Мои заявки».", reply_markup=back_to_menu())
@@ -538,9 +588,10 @@ async def msg_ad_post_url(message: Message, bot: Bot, state: FSMContext):
     await log_ad_audit(user_id, "ad_post_submitted", f"app={app_id} url={post_url}")
 
     text = (
-        "<b>Ссылка на пост получена</b>\n\n"
-        "После проверки публикации бонус будет начислен сразу.\n\n"
-        "Не удаляйте пост в течение <b>30 дней</b> — затем мы проверим его сохранность."
+        "<b>Ссылка получена</b>\n\n"
+        "Проверим пересылку из @ByMeVPN и отсутствие изменений. "
+        "После подтверждения начислим бонус.\n\n"
+        "Сохраните публикацию на 30 дней."
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -593,7 +644,7 @@ async def cb_ad_my_applications(callback: CallbackQuery, bot: Bot, state: FSMCon
         if app["status"] == "channel_pending":
             text += "Канал проверяет администратор. После проверки здесь появится рекламный пост.\n"
         elif app["status"] == "waiting_for_post":
-            text += "Откройте рекламный пост кнопкой ниже, опубликуйте его и отправьте ссылку.\n"
+            text += "Перешлите пост из @ByMeVPN без изменений и отправьте ссылку.\n"
         if app["status"] in _ACTIVE_APP_STATUSES or app["status"] == "rejected":
             text += "Можно удалить эту заявку, пока бонус ещё не начислен.\n"
         text += "\n"
@@ -679,14 +730,14 @@ async def cmd_ad_submit_post(message: Message, bot: Bot, state: FSMContext):
     if not app or app["user_id"] != user_id:
         await message.answer("Заявка не найдена.", reply_markup=back_to_menu())
         return
-    if app["status"] not in ("waiting_for_post", "channel_pending"):
-        await message.answer("Для этой заявки пост уже отправлен или она закрыта.", reply_markup=back_to_menu())
+    if app["status"] != "waiting_for_post":
+        await message.answer("Дождитесь проверки канала или откройте активную заявку.", reply_markup=back_to_menu())
         return
 
     await state.set_state(AdProgramFlow.waiting_post_url)
     await state.update_data(current_app_id=app_id)
     await message.answer(
-        "📤 Отправьте ссылку на опубликованный пост "
+        "Отправьте ссылку на пересланный из @ByMeVPN пост "
         "(например, <code>https://t.me/mychannel/123</code>):",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -782,8 +833,12 @@ async def cb_ad_admin_view(callback: CallbackQuery, bot: Bot):
 
     kb = InlineKeyboardBuilder()
     if app["status"] in ("post_submitted", "active_30_days"):
+        text += (
+            "\n\n<b>Проверьте вручную:</b> сообщение переслано из @ByMeVPN "
+            "без изменений. По одной ссылке Telegram Bot API этого не подтверждает."
+        )
         kb.row(
-            InlineKeyboardButton(text="✅ Подтвердить пост и выдать бонус", callback_data=f"ad_admin_approve:{app_id}"),
+            InlineKeyboardButton(text="Подтвердить репост и выдать бонус", callback_data=f"ad_admin_approve:{app_id}"),
         )
         kb.row(InlineKeyboardButton(text="❌ Отклонить", callback_data=f"ad_admin_reject:{app_id}"))
     elif app["status"] == "grant_pending":
@@ -946,7 +1001,7 @@ async def cb_ad_admin_channel_ok(callback: CallbackQuery, bot: Bot):
     try:
         await bot.send_message(
             app["user_id"],
-            f"✅ Канал в заявке #{app_id} проверен. Опубликуйте рекламный текст и отправьте ссылку на пост — бонус будет начислен после проверки публикации.",
+            f"Канал по заявке #{app_id} проверен. Перешлите пост из @ByMeVPN без изменений и отправьте ссылку на репост.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Открыть рекламный пост", callback_data=f"ad_get_post:{app_id}")],
                 [InlineKeyboardButton(text="Мои заявки", callback_data="ad_my_applications")],
