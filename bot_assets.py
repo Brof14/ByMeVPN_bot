@@ -29,3 +29,12 @@ PAYMENT = _asset("payment")
 PROMO_CODE = _asset("promo_code")
 LEGAL = _asset("legal")
 AUTO_RENEWAL = _asset("auto_renewal")
+
+# Only landmark screens carry large artwork. Secondary operations stay text-first.
+# Files for other sections remain bundled for rollback and future use.
+_LANDMARK_ARTWORK = frozenset({MENU, ABOUT, KEY})
+
+
+def display_artwork(photo: str | None) -> str | None:
+    """Return an allowed banner, or None for an ordinary customer screen."""
+    return photo if photo in _LANDMARK_ARTWORK else None
