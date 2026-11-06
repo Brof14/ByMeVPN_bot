@@ -92,7 +92,7 @@ async def _handle_app_login(message: Message, user_id: int, user_name: str) -> N
 
         await message.answer(
             "Подписка отмечена как активная, но ссылку для приложения получить не удалось. "
-            "Откройте «Мой VPN» или обратитесь в поддержку."
+            "Откройте «Подписка» или обратитесь в поддержку."
         )
         return
 
@@ -231,10 +231,10 @@ async def _send_main_menu(
                 f"<b>Подписка активна</b>\n\n"
                 f"Действует до <b>{expires}</b>\n"
                 f"Устройств в тарифе: <b>{device_count} {device_word}</b>\n\n"
-                "Управление и подключение — в разделе «Мой VPN»."
+                "Управление и подключение — в разделе «Подписка»."
             )
         else:
-            text = "<b>Подписка активна</b>\n\nОткройте «Мой VPN», чтобы подключить устройство или посмотреть срок действия."
+            text = "<b>Подписка активна</b>\n\nОткройте «Подписка», чтобы подключить устройство или посмотреть срок действия."
         # Active customers are never shown the one-time trial offer.
         kb = main_menu_with_keys(trial_used=True) if has_keys else main_menu_existing(trial_used=True)
 
@@ -696,8 +696,8 @@ async def cb_about(callback: CallbackQuery, bot: Bot):
     # Keep the menu navigation in a fixed, full-width bottom row.
     from aiogram.types import InlineKeyboardMarkup
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Выбрать тариф", callback_data="buy_vpn")],
-        [InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu")],
+        [InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn")],
+        [InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu")],
     ])
     await send_with_photo(bot, callback, text, kb, photo=ABOUT)
 
@@ -706,19 +706,17 @@ async def cb_about(callback: CallbackQuery, bot: Bot):
 async def cb_free_vpn(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
-        "<b>Получить VPN бесплатно</b>\n\n"
-        "Выберите, как получить бесплатные дни VPN:\n\n"
-        "<b>Пригласить друзей</b> — получайте бонусные дни за регистрации и покупки друзей. "
-        "Карта и оплата не нужны.\n\n"
-        "<b>Разместить рекламу</b> — получите VPN за публикацию в своём Telegram-канале. "
-        "Бонус зависит от размера аудитории."
+        "<b>Бесплатные дни</b>\n\n"
+        "<b>За друзей</b> — приглашайте новых пользователей и получайте бонусы.\n\n"
+        "<b>За рекламу</b> — разместите ByMeVPN в своём Telegram-канале.\n\n"
+        "Выберите способ."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Пригласить друзей", callback_data="partner")],
         [InlineKeyboardButton(text="VPN за рекламу", callback_data="ad_program")],
-        [InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu")],
+        [InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu")],
     ])
-    await send_with_photo(bot, callback, text, kb, photo=FREE_VPN)
+    await send_with_photo(bot, callback, text, kb, photo=None)
 
 
 

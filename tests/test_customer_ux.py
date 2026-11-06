@@ -180,13 +180,13 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             await cb_partner(callback, bot)
 
         text = send.call_args.args[2]
-        self.assertIn("<b>Бонусы за друзей</b>", text)
+        self.assertIn("<b>Приглашение друзей</b>", text)
         self.assertIn("+15 дней", text)
         self.assertIn("+30 дней", text)
         self.assertIn("<b>Ваша ссылка</b>", text)
-        self.assertIn("Бонусные дни добавятся к подписке автоматически", text)
+        self.assertIn("Ваша статистика", text)
         self.assertIn("Приглашено: <b>1</b> · оплатили: <b>1</b>", text)
-        self.assertIn("Приглашайте новых друзей", text)
+        self.assertIn("Ваша ссылка", text)
 
     def test_back_is_full_width_and_support_is_not_mixed_into_navigation(self):
         back = back_to_menu().inline_keyboard
