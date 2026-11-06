@@ -79,7 +79,7 @@ def tariff_selection_kb(devices: int = DEFAULT_DEVICE_LIMIT, discount_percent: i
         if d == devices:
             label = f"✓ {d} устр."
         dev_btns.append(InlineKeyboardButton(
-            text=label, callback_data=f"devtier_{d}" if d == devices else "primary",
+            text=label, callback_data=f"devtier_{d}",
         ))
     kb.row(*dev_btns)
 
