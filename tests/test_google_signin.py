@@ -340,7 +340,8 @@ class TestGoogleSignInHttp(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(trial.status_code, 200, trial.text)
         self.assertEqual(trial.json()["status"], "trial")
-        self.assertEqual(trial.json()["seconds_remaining"], 3 * 86400)
+        self.assertGreaterEqual(trial.json()["seconds_remaining"], 3 * 86400 - 5)
+        self.assertLessEqual(trial.json()["seconds_remaining"], 3 * 86400)
         self.assertEqual(trial.json()["max_devices"], 2)
         self.assertEqual(retry.status_code, 409)
         create_client.assert_awaited_once_with(

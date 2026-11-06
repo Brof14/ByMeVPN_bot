@@ -124,7 +124,7 @@ async def _send_autorenew_upcoming(bot: Bot, item: dict, sub: dict) -> None:
         f"доступ сохранится до конца оплаченного периода."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔑 Мой VPN", callback_data="my_keys")],
+        [InlineKeyboardButton(text="Подписка", callback_data="my_keys")],
         [InlineKeyboardButton(text="🆘 Поддержка", url="https://t.me/ByMeVPNSupportBot")],
     ])
     await bot.send_message(item["user_id"], text, parse_mode="HTML", reply_markup=kb)
@@ -154,7 +154,7 @@ async def _send_urgent_notification(bot: Bot, item: dict) -> None:
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Продлить подписку", callback_data="buy_vpn", style="primary")],
+        [InlineKeyboardButton(text="Продлить подписку", callback_data="buy_vpn", )],
         [InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn")],
         *([[InlineKeyboardButton(text="Применить промокод", callback_data=f"activate_promo:{promo_code}")]] if promo_expiry else []),
     ])
@@ -187,7 +187,7 @@ async def _send_warning_notification(bot: Bot, item: dict) -> None:
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Продлить подписку", callback_data="buy_vpn", style="primary")],
+        [InlineKeyboardButton(text="Продлить подписку", callback_data="buy_vpn", )],
         [InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn")],
         *([[InlineKeyboardButton(text="Применить промокод", callback_data=f"activate_promo:{promo_code}")]] if promo_expiry else []),
     ])
@@ -212,7 +212,7 @@ async def _send_early_notification(bot: Bot, item: dict) -> None:
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Посмотреть тарифы", callback_data="buy_vpn", style="primary")],
+        [InlineKeyboardButton(text="Посмотреть тарифы", callback_data="buy_vpn", )],
         [InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn")]
     ])
 

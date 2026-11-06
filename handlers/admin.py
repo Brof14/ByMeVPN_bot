@@ -80,37 +80,62 @@ async def _fill_missing_usernames(bot: Bot, users: list[dict]) -> None:
 
 # ── keyboards ─────────────────────────────────────────────────────────────
 
+_ADMIN_HOME_TEXT = "<b>ByMeVPN · Управление</b>\n\nВыберите раздел."
+
+
 def _main_kb() -> InlineKeyboardMarkup:
+    """Navigation by task, not by implementation detail."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        # Clients and service state
-        [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats"),
-         InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_users:0")],
-        [InlineKeyboardButton(text="🗝 Ключи", callback_data="admin_all_keys:0"),
-         InlineKeyboardButton(text="💳 Платежи", callback_data="admin_payments")],
-        [InlineKeyboardButton(text="📢 Создать рассылку", callback_data="admin_broadcast")],
-        [InlineKeyboardButton(text="💰 Финансы", callback_data="admin_finance"),
-         InlineKeyboardButton(text="💳 Возвраты", callback_data="admin_refunds")],
-        [InlineKeyboardButton(text="🚀 Продвижение", callback_data="admin_growth")],
-        [InlineKeyboardButton(text="🖥 Система", callback_data="admin_system"),
-         InlineKeyboardButton(text="❌ Ошибки ключей", callback_data="admin_key_errors:0")],
-        [InlineKeyboardButton(text="📥 Экспорт", callback_data="admin_export_csv"),
-         InlineKeyboardButton(text="📋 Логи", callback_data="admin_logs:0")],
-        [InlineKeyboardButton(text="🎁 Пробник всем", callback_data="admin_mass_trial"),
-         InlineKeyboardButton(text="➕ Дни всем", callback_data="admin_mass_days")],
-        [InlineKeyboardButton(text="🧹 Истёкшие ключи", callback_data="admin_cleanup"),
-         InlineKeyboardButton(text="⚙️ Настройки", callback_data="admin_settings")],
+        [InlineKeyboardButton(text="Обзор", callback_data="admin_stats")],
+        [InlineKeyboardButton(text="Пользователи и подписки", callback_data="admin_clients_menu")],
+        [InlineKeyboardButton(text="Платежи и финансы", callback_data="admin_finance_menu")],
+        [InlineKeyboardButton(text="Маркетинг", callback_data="admin_growth")],
+        [InlineKeyboardButton(text="Система", callback_data="admin_ops_menu")],
+    ])
+
+
+def _clients_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Пользователи", callback_data="admin_users:0"),
+         InlineKeyboardButton(text="Подписки", callback_data="admin_all_keys:0")],
+        [InlineKeyboardButton(text="Найти пользователя", callback_data="admin_search")],
+        [InlineKeyboardButton(text="Экспорт пользователей", callback_data="admin_export_users_csv")],
+        [InlineKeyboardButton(text="← Главное меню", callback_data="admin_menu")],
+    ])
+
+
+def _finances_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Платежи", callback_data="admin_payments"),
+         InlineKeyboardButton(text="Возвраты", callback_data="admin_refunds")],
+        [InlineKeyboardButton(text="Финансовый отчёт", callback_data="admin_finance")],
+        [InlineKeyboardButton(text="Экспорт данных", callback_data="admin_export_csv")],
+        [InlineKeyboardButton(text="← Главное меню", callback_data="admin_menu")],
     ])
 
 
 def _growth_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎁 Промокоды", callback_data="admin_promo_codes"),
-         InlineKeyboardButton(text="🎉 Розыгрыши", callback_data="admin_giveaways")],
-        [InlineKeyboardButton(text="👥 Рефералы", callback_data="admin_referrals"),
-         InlineKeyboardButton(text="📣 Рекламные заявки", callback_data="ad_admin_list")],
-        [InlineKeyboardButton(text="📈 Воронка клиентов", callback_data="admin_funnel")],
-        [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
-        [InlineKeyboardButton(text="🔙 Главное меню", callback_data="admin_menu")],
+        [InlineKeyboardButton(text="Промокоды", callback_data="admin_promo_codes"),
+         InlineKeyboardButton(text="Розыгрыши", callback_data="admin_giveaways")],
+        [InlineKeyboardButton(text="Рефералы", callback_data="admin_referrals"),
+         InlineKeyboardButton(text="Реклама", callback_data="ad_admin_list")],
+        [InlineKeyboardButton(text="Воронка", callback_data="admin_funnel"),
+         InlineKeyboardButton(text="Рассылки", callback_data="admin_broadcast")],
+        [InlineKeyboardButton(text="← Главное меню", callback_data="admin_menu")],
+    ])
+
+
+def _operations_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Статус системы", callback_data="admin_system"),
+         InlineKeyboardButton(text="Ошибки", callback_data="admin_key_errors:0")],
+        [InlineKeyboardButton(text="Логи", callback_data="admin_logs:0"),
+         InlineKeyboardButton(text="Очистка ключей", callback_data="admin_cleanup")],
+        [InlineKeyboardButton(text="Пробник всем", callback_data="admin_mass_trial"),
+         InlineKeyboardButton(text="Дни всем", callback_data="admin_mass_days")],
+        [InlineKeyboardButton(text="Настройки", callback_data="admin_settings")],
+        [InlineKeyboardButton(text="← Главное меню", callback_data="admin_menu")],
     ])
 
 
@@ -120,6 +145,42 @@ def _back_kb() -> InlineKeyboardMarkup:
     ])
 
 
+@router.callback_query(F.data == "admin_clients_menu")
+async def cb_admin_clients_menu(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    await callback.message.edit_text(
+        "<b>Пользователи и подписки</b>\n\nВыберите действие.",
+        parse_mode="HTML", reply_markup=_clients_kb(),
+    )
+
+
+@router.callback_query(F.data == "admin_finance_menu")
+async def cb_admin_finance_menu(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    await callback.message.edit_text(
+        "<b>Платежи и финансы</b>\n\nВыберите действие.",
+        parse_mode="HTML", reply_markup=_finances_kb(),
+    )
+
+
+@router.callback_query(F.data == "admin_ops_menu")
+async def cb_admin_ops_menu(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    await callback.message.edit_text(
+        "<b>Система</b>\n\nСостояние инфраструктуры и массовые операции.",
+        parse_mode="HTML", reply_markup=_operations_kb(),
+    )
+
+
 @router.callback_query(F.data == "admin_growth")
 async def cb_admin_growth(callback: CallbackQuery):
     if not _is_admin(callback.from_user.id):
@@ -127,7 +188,7 @@ async def cb_admin_growth(callback: CallbackQuery):
         return
     await safe_answer(callback)
     await callback.message.edit_text(
-        "🚀 <b>Продвижение и удержание</b>\n\n"
+        "<b>Маркетинг</b>\n\n"
         "Управление промокодами, розыгрышами, приглашениями и рекламными заявками:",
         parse_mode="HTML", reply_markup=_growth_kb(),
     )
@@ -313,17 +374,7 @@ async def cmd_admin(message: Message, state: FSMContext):
         await message.delete()
     except Exception:
         pass
-    await message.answer(
-        "⚡ <b>ByMeVPN — Админ-панель</b>\n"
-        "━━━━━━━━━━━━━━━\n\n"
-        "👋 Добро пожаловать в панель управления!\n\n"
-        "📊 <b>Статистика</b> — просмотр метрик\n"
-        "👥 <b>Пользователи</b> — управление клиентами\n"
-        "💰 <b>Финансы</b> — платежи и возвраты\n"
-        "📢 <b>Рассылка</b> — массовые уведомления\n\n"
-        "👇 Выберите действие:",
-        parse_mode="HTML", reply_markup=_main_kb()
-    )
+    await message.answer(_ADMIN_HOME_TEXT, parse_mode="HTML", reply_markup=_main_kb())
 
 
 @router.message(F.text.startswith("/give_trial_all"))
@@ -343,17 +394,7 @@ async def cb_admin_menu(callback: CallbackQuery, state: FSMContext):
         await safe_answer(callback, "Нет доступа.", alert=True); return
     await safe_answer(callback)
     await state.clear()
-    await callback.message.edit_text(
-        "⚡ <b>ByMeVPN — Админ-панель</b>\n"
-        "━━━━━━━━━━━━━━━\n\n"
-        "👋 Добро пожаловать в панель управления!\n\n"
-        "📊 <b>Статистика</b> — просмотр метрик\n"
-        "👥 <b>Пользователи</b> — управление клиентами\n"
-        "💰 <b>Финансы</b> — платежи и возвраты\n"
-        "📢 <b>Рассылка</b> — массовые уведомления\n\n"
-        "👇 Выберите действие:",
-        parse_mode="HTML", reply_markup=_main_kb()
-    )
+    await callback.message.edit_text(_ADMIN_HOME_TEXT, parse_mode="HTML", reply_markup=_main_kb())
 
 
 # ── Stats ──────────────────────────────────────────────────────────────────

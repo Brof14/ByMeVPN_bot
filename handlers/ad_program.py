@@ -40,7 +40,6 @@ from database import (
 from utils import send_with_photo, safe_answer
 from keyboards import back_to_menu, support_url
 from bot_style import themed_button as InlineKeyboardButton
-from bot_assets import AD_PROGRAM
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -120,25 +119,35 @@ async def cb_ad_program(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await log_ad_analytics_event(user_id, "ad_offer_view")
 
     text = (
-        "<b>VPN за рекламу</b>\n"
-        "Опубликуйте пост ByMeVPN в Telegram-канале и получите бонусные месяцы.\n\n"
-        "<b>Бонус по размеру канала</b>\n"
-        f"{BONUS_TIERS}\n\n"
-        "<b>Как это работает</b>\n"
-        "1. Отправьте канал на проверку.\n"
-        "2. Опубликуйте подготовленный пост и пришлите ссылку.\n"
-        "3. После проверки бонус начислится сразу. Публикацию нужно сохранить 30 дней.\n\n"
-        "Публичный канал проверим автоматически, приватный — вручную. "
-        "Каждый канал участвует один раз."
+        "<b>VPN за рекламу</b>\n\n"
+        "Разместите ByMeVPN в своём Telegram-канале и получите бонусные месяцы.\n\n"
+        "Размер бонуса зависит от аудитории. Отправьте канал на проверку — покажем условия до публикации.\n\n"
+        "Пост должен оставаться в канале 30 дней."
     )
-
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📣 Проверить канал", callback_data="ad_check_channel", style="success")],
-        [InlineKeyboardButton(text="📋 Мои заявки", callback_data="ad_my_applications")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_menu")]
+        [InlineKeyboardButton(text="Проверить канал", callback_data="ad_check_channel")],
+        [InlineKeyboardButton(text="Размер бонусов", callback_data="ad_bonus_tiers")],
+        [InlineKeyboardButton(text="Мои заявки", callback_data="ad_my_applications")],
+        [InlineKeyboardButton(text="← Назад", callback_data="free_vpn")],
     ])
 
-    await send_with_photo(bot, callback, text, kb, photo=AD_PROGRAM)
+    await send_with_photo(bot, callback, text, kb)
+
+
+@router.callback_query(F.data == "ad_bonus_tiers")
+async def cb_ad_bonus_tiers(callback: CallbackQuery, bot: Bot):
+    """Show campaign rewards only on request, not on the first screen."""
+    await safe_answer(callback)
+    text = (
+        "<b>Бонусы за рекламу</b>\n\n"
+        f"{BONUS_TIERS}\n\n"
+        "Публикацию нужно сохранить на 30 дней. Каждый канал участвует один раз."
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Проверить канал", callback_data="ad_check_channel")],
+        [InlineKeyboardButton(text="← Назад", callback_data="ad_program")],
+    ])
+    await send_with_photo(bot, callback, text, kb)
 
 
 @router.callback_query(F.data == "ad_check_channel")
@@ -155,30 +164,28 @@ async def cb_ad_check_channel(callback: CallbackQuery, bot: Bot, state: FSMConte
 
     if pending_apps:
         text = (
-            "⚠️ <b>У вас уже есть активная заявка</b>\n\n"
-            "Вы можете разместить рекламу только в одном канале одновременно.\n\n"
-            "Пожалуйста, завершите текущую заявку или дождитесь её одобрения."
+            "<b>У вас уже есть заявка</b>\n\n"
+            "Ожидайте её проверки или завершите текущую заявку, прежде чем подавать новую."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📋 Мои заявки", callback_data="ad_my_applications")],
-            [InlineKeyboardButton(text="◀️ Назад", callback_data="ad_program")]
+            [InlineKeyboardButton(text="Мои заявки", callback_data="ad_my_applications")],
+            [InlineKeyboardButton(text="← Назад", callback_data="ad_program")],
         ])
-        await send_with_photo(bot, callback, text, kb, photo=AD_PROGRAM)
+        await send_with_photo(bot, callback, text, kb)
         return
 
     text = (
         "<b>Проверка канала</b>\n\n"
-        "Отправьте ссылку на ваш канал:\n\n"
-        "• Публичный: <code>@mychannel</code> или <code>https://t.me/mychannel</code>\n"
-        "• Приватный: ссылка-приглашение <code>https://t.me/+abc123...</code>\n\n"
-        "Канал найдём автоматически, добавлять бота в администраторы не нужно."
+        "Отправьте ссылку на Telegram-канал.\n\n"
+        "Публичный: <code>@mychannel</code>\n"
+        "Приватный: ссылка-приглашение <code>https://t.me/+...</code>\n\n"
+        "Добавлять бота в администраторы не нужно."
     )
-
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="◀️ Отмена", callback_data="ad_program")]
+        [InlineKeyboardButton(text="Отмена", callback_data="ad_program")],
     ])
+    await send_with_photo(bot, callback, text, kb)
 
-    await send_with_photo(bot, callback, text, kb, photo=AD_PROGRAM)
     await state.set_state(AdProgramFlow.waiting_channel)
 
 
@@ -258,7 +265,7 @@ async def _create_application_and_reply(
             "Пожалуйста, используйте другой канал."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ Назад", callback_data="ad_program")]
+            [InlineKeyboardButton(text="← Назад", callback_data="ad_program")]
         ])
         await message.answer(text, reply_markup=kb)
         return
@@ -288,7 +295,7 @@ async def _create_application_and_reply(
                 "⚠️ По этому каналу уже есть заявка или он участвовал раньше. "
                 "Откройте «Мои заявки» или выберите другой канал.",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="📋 Мои заявки", callback_data="ad_my_applications")
+                    InlineKeyboardButton(text="Мои заявки", callback_data="ad_my_applications")
                 ]]),
             )
             return
@@ -314,8 +321,8 @@ async def _create_application_and_reply(
             "Заявку проверит администратор. После подтверждения вы получите рекламный пост."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📋 Мои заявки", callback_data="ad_my_applications")],
-            [InlineKeyboardButton(text="◀️ Назад", callback_data="ad_program")]
+            [InlineKeyboardButton(text="Мои заявки", callback_data="ad_my_applications")],
+            [InlineKeyboardButton(text="← Назад", callback_data="ad_program")]
         ])
     else:
         text = (
@@ -330,8 +337,8 @@ async def _create_application_and_reply(
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📋 Получить рекламный пост", callback_data=f"ad_get_post:{app_id}")],
-            [InlineKeyboardButton(text="📋 Мои заявки", callback_data="ad_my_applications")],
-            [InlineKeyboardButton(text="◀️ Назад", callback_data="ad_program")]
+            [InlineKeyboardButton(text="Мои заявки", callback_data="ad_my_applications")],
+            [InlineKeyboardButton(text="← Назад", callback_data="ad_program")]
         ])
 
     await message.answer(text, reply_markup=kb)
@@ -442,27 +449,21 @@ async def cb_ad_get_post(callback: CallbackQuery, bot: Bot):
 
     text = (
         "<b>Рекламный пост</b>\n\n"
-        "Скопируйте текст ниже и разместите в своём канале:\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "Нужен доступ к привычным сайтам и приложениям?\n\n"
-        "ByMeVPN — VPN, который просто работает.\n\n"
-        "• Понятная инструкция для телефона и компьютера\n"
-        "• Личная ссылка для подключения\n"
-        "• Управление подпиской в Telegram-боте\n\n"
-        "🎁 3 дня — за 1 ₽\n"
-        "💳 Дальше — 89 ₽/мес, отключить автопродление можно в любой момент\n\n"
-        "👇 Попробовать: https://t.me/ByMeVPN_bot\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "После размещения отправьте ссылку на пост."
+        "Скопируйте и опубликуйте текст ниже:\n\n"
+        "ByMeVPN — VPN без сложных настроек.\n"
+        "Подключение на телефоне и компьютере.\n"
+        "3 дня бесплатно, без карты.\n\n"
+        "Начать: https://t.me/ByMeVPNbot\n\n"
+        "После публикации отправьте ссылку на пост. Не удаляйте его 30 дней."
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📤 Отправить ссылку на пост", callback_data=f"ad_submit_post:{app_id}", style="success")],
-        [InlineKeyboardButton(text="📋 Мои заявки", callback_data="ad_my_applications")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="ad_program")]
+        [InlineKeyboardButton(text="📤 Отправить ссылку на пост", callback_data=f"ad_submit_post:{app_id}", )],
+        [InlineKeyboardButton(text="Мои заявки", callback_data="ad_my_applications")],
+        [InlineKeyboardButton(text="← Назад", callback_data="ad_program")]
     ])
 
-    await send_with_photo(bot, callback, text, kb, photo=AD_PROGRAM)
+    await send_with_photo(bot, callback, text, kb)
 
 
 @router.callback_query(F.data.startswith("ad_submit_post:"))
@@ -488,7 +489,7 @@ async def cb_ad_submit_post(callback: CallbackQuery, bot: Bot, state: FSMContext
         [InlineKeyboardButton(text="◀️ Отмена", callback_data=f"ad_get_post:{app_id}")]
     ])
 
-    await send_with_photo(bot, callback, text, kb, photo=AD_PROGRAM)
+    await send_with_photo(bot, callback, text, kb)
     await state.set_state(AdProgramFlow.waiting_post_url)
     await state.update_data(current_app_id=app_id)
 
@@ -538,8 +539,8 @@ async def msg_ad_post_url(message: Message, bot: Bot, state: FSMContext):
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📋 Мои заявки", callback_data="ad_my_applications")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="ad_program")]
+        [InlineKeyboardButton(text="Мои заявки", callback_data="ad_my_applications")],
+        [InlineKeyboardButton(text="← Назад", callback_data="ad_program")]
     ])
 
     await message.answer(text, reply_markup=kb)
@@ -558,14 +559,13 @@ async def cb_ad_my_applications(callback: CallbackQuery, bot: Bot, state: FSMCon
     if not applications:
         text = (
             "<b>Мои заявки</b>\n\n"
-            "У вас пока нет заявок на участие в программе.\n\n"
-            "Нажмите «Проверить мой канал», чтобы начать."
+            "Пока нет заявок."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📣 Проверить мой канал", callback_data="ad_check_channel")],
-            [InlineKeyboardButton(text="◀️ Назад", callback_data="ad_program")]
+            [InlineKeyboardButton(text="Проверить канал", callback_data="ad_check_channel")],
+            [InlineKeyboardButton(text="← Назад", callback_data="ad_program")]
         ])
-        await send_with_photo(bot, callback, text, kb, photo=AD_PROGRAM)
+        await send_with_photo(bot, callback, text, kb)
         return
 
     text = "<b>Мои заявки</b>\n\n"
@@ -599,7 +599,7 @@ async def cb_ad_my_applications(callback: CallbackQuery, bot: Bot, state: FSMCon
             rows.append([InlineKeyboardButton(
                 text=f"Открыть пост · заявка #{app['id']}",
                 callback_data=f"ad_get_post:{app['id']}",
-                style="success",
+                
             )])
         if app["status"] in ("draft", "channel_pending", "waiting_for_post", "post_submitted", "active_30_days", "rejected"):
             rows.append([InlineKeyboardButton(
@@ -608,12 +608,12 @@ async def cb_ad_my_applications(callback: CallbackQuery, bot: Bot, state: FSMCon
                 style="danger",
             )])
     rows.extend([
-        [InlineKeyboardButton(text="📣 Проверить новый канал", callback_data="ad_check_channel", style="success")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="ad_program")],
+        [InlineKeyboardButton(text="📣 Проверить новый канал", callback_data="ad_check_channel", )],
+        [InlineKeyboardButton(text="← Назад", callback_data="ad_program")],
     ])
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
 
-    await send_with_photo(bot, callback, text, kb, photo=AD_PROGRAM)
+    await send_with_photo(bot, callback, text, kb)
 
 
 @router.callback_query(F.data.startswith("ad_cancel_confirm:"))
@@ -637,7 +637,7 @@ async def cb_ad_cancel_confirm(callback: CallbackQuery, bot: Bot):
         [InlineKeyboardButton(text="🗑 Да, удалить заявку", callback_data=f"ad_cancel:{app_id}", style="danger")],
         [InlineKeyboardButton(text="◀️ Оставить заявку", callback_data="ad_my_applications")],
     ])
-    await send_with_photo(bot, callback, text, kb, photo=AD_PROGRAM)
+    await send_with_photo(bot, callback, text, kb)
 
 
 @router.callback_query(F.data.startswith("ad_cancel:"))
@@ -658,10 +658,10 @@ async def cb_ad_cancel(callback: CallbackQuery, bot: Bot, state: FSMContext):
     if data.get("current_app_id") == app_id:
         await state.clear()
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📋 Мои заявки", callback_data="ad_my_applications")],
+        [InlineKeyboardButton(text="Мои заявки", callback_data="ad_my_applications")],
         [InlineKeyboardButton(text="◀️ В раздел VPN за рекламу", callback_data="ad_program")],
     ])
-    await send_with_photo(bot, callback, f"✅ Заявка #{app_id} удалена. Бонус за неё начисляться не будет.", kb, photo=AD_PROGRAM)
+    await send_with_photo(bot, callback, f"✅ Заявка #{app_id} удалена. Бонус за неё начисляться не будет.", kb)
 
 
 @router.message(F.text.regexp(r"^/ad_post_(\d+)$"))
@@ -697,7 +697,7 @@ async def cmd_ad_submit_post(message: Message, bot: Bot, state: FSMContext):
 def _ad_admin_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📥 Заявки на проверку", callback_data="ad_admin_list")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="ad_program")],
+        [InlineKeyboardButton(text="← Назад", callback_data="ad_program")],
     ])
 
 
@@ -740,7 +740,7 @@ async def cb_ad_admin_list(callback: CallbackQuery, bot: Bot):
             text=f"#{app['id']} · {channel_label} · {app['bonus_months']} мес.",
             callback_data=f"ad_admin_view:{app['id']}",
         ))
-    kb.row(InlineKeyboardButton(text="◀️ Назад", callback_data="ad_program"))
+    kb.row(InlineKeyboardButton(text="← Назад", callback_data="ad_program"))
     await send_with_photo(bot, callback, text, kb.as_markup())
 
 

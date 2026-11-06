@@ -19,57 +19,37 @@ _REISSUE_SUPPORT_URL = (
 )
 
 
-def main_menu_new_user() -> InlineKeyboardMarkup:
+def _customer_menu(*, has_subscription: bool, trial_used: bool) -> InlineKeyboardMarkup:
+    """Single source of truth for every customer home menu."""
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="Получить 3 дня бесплатно", callback_data="trial_free", style="success"))
-    kb.row(InlineKeyboardButton(text="Выбрать тариф", callback_data="buy_vpn", style="primary"))
-    kb.row(InlineKeyboardButton(text="Бесплатные дни за друзей", callback_data="free_vpn"))
+    if has_subscription:
+        kb.row(InlineKeyboardButton(text="Подписка", callback_data="my_keys"))
+    elif not trial_used:
+        kb.row(InlineKeyboardButton(text="3 дня бесплатно", callback_data="trial_free"))
+    kb.row(InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn"))
+    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
         InlineKeyboardButton(text="Поддержка", callback_data="trouble"),
     )
     return kb.as_markup()
+
+
+def main_menu_new_user() -> InlineKeyboardMarkup:
+    return _customer_menu(has_subscription=False, trial_used=False)
 
 
 def main_menu_existing(trial_used: bool = False) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    if not trial_used:
-        kb.row(InlineKeyboardButton(text="Получить 3 дня бесплатно", callback_data="trial_free", style="success"))
-    kb.row(InlineKeyboardButton(text="Выбрать тариф", callback_data="buy_vpn", style="primary"))
-    kb.row(InlineKeyboardButton(text="Бесплатные дни за друзей", callback_data="free_vpn"))
-    kb.row(
-        InlineKeyboardButton(text="О сервисе", callback_data="about"),
-        InlineKeyboardButton(text="Поддержка", callback_data="trouble"),
-    )
-    return kb.as_markup()
+    return _customer_menu(has_subscription=False, trial_used=trial_used)
 
 
 def main_menu_with_keys(trial_used: bool = False) -> InlineKeyboardMarkup:
-    """Main menu for users who have at least one key (trial or paid).
-
-    Args:
-        trial_used: If True, hide the intro-trial button (user already used it).
-    """
-    kb = InlineKeyboardBuilder()
-    # Show intro-trial button only if user hasn't used it yet
-    if not trial_used:
-        kb.row(InlineKeyboardButton(text="Получить 3 дня бесплатно", callback_data="trial_free", style="success"))
-    kb.row(InlineKeyboardButton(text="🔑 Мой VPN", callback_data="my_keys", style="primary"))
-    kb.row(InlineKeyboardButton(text="Продлить подписку", callback_data="buy_vpn", style="success"))
-    kb.row(InlineKeyboardButton(text="Бесплатные дни за друзей", callback_data="free_vpn"))
-    # «Войти в другой аккаунт» скрыт (§24): функционал не готов, callback
-    # auth_existing_client остаётся в handlers/auth.py — вернём, когда будет
-    # рабочий account switching.
-    kb.row(
-        InlineKeyboardButton(text="О сервисе", callback_data="about"),
-        InlineKeyboardButton(text="Поддержка", callback_data="trouble"),
-    )
-    return kb.as_markup()
+    return _customer_menu(has_subscription=True, trial_used=trial_used)
 
 
 def back_to_menu() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu"))
+    kb.row(InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu"))
     return kb.as_markup()
 
 
@@ -80,9 +60,9 @@ def support_url() -> str:
 def authorized_user_menu() -> InlineKeyboardMarkup:
     """Menu for authorized existing clients (4 buttons in strict order)."""
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="Продлить подписку", callback_data="buy_vpn", style="success"))
-    kb.row(InlineKeyboardButton(text="🔑 Мой VPN", callback_data="my_keys"))
-    kb.row(InlineKeyboardButton(text="Партнёрская программа", callback_data="partner"))
+    kb.row(InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn"))
+    kb.row(InlineKeyboardButton(text="Подписка", callback_data="my_keys"))
+    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
     kb.row(InlineKeyboardButton(text="Поддержка", callback_data="trouble"))
     return kb.as_markup()
 
@@ -95,11 +75,11 @@ def tariff_selection_kb(devices: int = DEFAULT_DEVICE_LIMIT, discount_percent: i
     # Device selector row: 2, 5, 10 devices
     dev_btns = []
     for d in VALID_DEVICE_LIMITS:
-        label = f"📱 {d} устр."
+        label = f"{d} устр."
         if d == devices:
-            label = f"✓ 📱 {d} устр."
+            label = f"✓ {d} устр."
         dev_btns.append(InlineKeyboardButton(
-            text=label, callback_data=f"devtier_{d}", style="success" if d == devices else "primary",
+            text=label, callback_data=f"devtier_{d}",
         ))
     kb.row(*dev_btns)
 
@@ -123,7 +103,7 @@ def tariff_selection_kb(devices: int = DEFAULT_DEVICE_LIMIT, discount_percent: i
         kb.row(InlineKeyboardButton(
             text=text,
             callback_data=f"tariff_{months}_{devices}",
-            **({"style": "success"} if months == 3 else {}),
+            
         ))
 
     kb.row(InlineKeyboardButton(text="← Назад", callback_data="back_to_menu"))
@@ -136,17 +116,14 @@ def payment_kb(price_rub: int, days: int, devices: int = DEFAULT_DEVICE_LIMIT, y
     kb.row(InlineKeyboardButton(
         text=f"⭐ Telegram Stars ({price_rub} звёзд)",
         callback_data="pay_stars",
-        style="primary",
     ))
     kb.row(InlineKeyboardButton(
         text=f"💳 ЮKassa {price_rub} ₽",
         callback_data="pay_yookassa",
-        style="primary",
     ))
     kb.row(InlineKeyboardButton(
         text=f"₿ CryptoBot {price_rub} ₽",
         callback_data="pay_crypto",
-        style="primary",
     ))
     kb.row(InlineKeyboardButton(text="Назад", callback_data=f"devtier_{devices}"))
     return kb.as_markup()
@@ -177,7 +154,7 @@ def my_keys_kb(keys: list) -> InlineKeyboardMarkup:
             text=f"{status} {remark}"[:64],
             callback_data=f"key_info:{kid}",
         ))
-    kb.row(InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu"))
+    kb.row(InlineKeyboardButton(text="Главное меню", callback_data="back_to_menu"))
     return kb.as_markup()
 
 
@@ -195,8 +172,8 @@ def my_keys_list_kb(keys: list, has_history: bool = False) -> InlineKeyboardMark
             callback_data=f"key_info:{kid}",
         ))
     if has_history:
-        kb.row(InlineKeyboardButton(text="📚 История подписок", callback_data="key_history"))
-    kb.row(InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu"))
+        kb.row(InlineKeyboardButton(text="История подписок", callback_data="key_history"))
+    kb.row(InlineKeyboardButton(text="Главное меню", callback_data="back_to_menu"))
     return kb.as_markup()
 
 
@@ -209,8 +186,8 @@ def key_history_kb(keys: list) -> InlineKeyboardMarkup:
             text=f"⌛ {remark} · до {time.strftime('%d.%m.%Y', time.localtime(key.get('expiry', 0)))}"[:64],
             callback_data=f"key_info:{key['id']}",
         ))
-    kb.row(InlineKeyboardButton(text="← К моему VPN", callback_data="my_keys"))
-    kb.row(InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu"))
+    kb.row(InlineKeyboardButton(text="← К подписке", callback_data="my_keys"))
+    kb.row(InlineKeyboardButton(text="Главное меню", callback_data="back_to_menu"))
     return kb.as_markup()
 
 
@@ -224,19 +201,19 @@ def key_detail_kb(
 ) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(
-        InlineKeyboardButton(text="Подключить", style="success", callback_data=f"key_instructions:{key_id}"),
-        InlineKeyboardButton(text="Продлить", style="primary", callback_data=f"key_renew:{key_id}"),
+        InlineKeyboardButton(text="Подключить", callback_data=f"key_instructions:{key_id}"),
+        InlineKeyboardButton(text="Продлить", callback_data=f"key_renew:{key_id}"),
     )
     if subscription_url:
         kb.row(InlineKeyboardButton(
-            text="📋 Скопировать ссылку",
+            text="Скопировать ссылку",
             copy_text={"text": subscription_url},
         ))
     if has_history:
-        kb.row(InlineKeyboardButton(text="📚 История подписок", callback_data="key_history"))
-    kb.row(InlineKeyboardButton(text="📱 Мои устройства", callback_data=f"key_devices:{key_id}"))
+        kb.row(InlineKeyboardButton(text="История подписок", callback_data="key_history"))
+    kb.row(InlineKeyboardButton(text="Устройства", callback_data=f"key_devices:{key_id}"))
     kb.row(InlineKeyboardButton(text="Управление подпиской", callback_data=f"key_settings:{key_id}"))
-    kb.row(InlineKeyboardButton(text="← В главное меню", callback_data="back_to_menu"))
+    kb.row(InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu"))
     return kb.as_markup()
 
 
@@ -264,7 +241,7 @@ def key_devices_kb(key_id: int, devices: list[dict] | None = None, page: int = 0
         kb.row(*row)
     kb.row(InlineKeyboardButton(text="↻ Обновить список", callback_data=f"key_devices:{key_id}:{page}"))
     kb.row(InlineKeyboardButton(text="💎 Изменить тариф", callback_data=f"key_renew:{key_id}"))
-    kb.row(InlineKeyboardButton(text="← К ключу", callback_data=f"key_info:{key_id}"))
+    kb.row(InlineKeyboardButton(text="← К подписке", callback_data=f"key_info:{key_id}"))
     return kb.as_markup()
 
 
@@ -291,11 +268,10 @@ def key_settings_kb(key_id: int) -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(
         text="🔄 Запросить перевыпуск ключа",
         url=_REISSUE_SUPPORT_URL,
-        style="primary",
     ))
-    kb.row(InlineKeyboardButton(text="💳 Автопродление и оплата", callback_data=f"manage_payment_methods:{key_id}"))
+    kb.row(InlineKeyboardButton(text="Оплата и автопродление", callback_data=f"manage_payment_methods:{key_id}"))
     kb.row(InlineKeyboardButton(text="🗑 Удалить ключ", callback_data=f"key_delete:{key_id}", style="danger"))
-    kb.row(InlineKeyboardButton(text="← К ключу", callback_data=f"key_info:{key_id}"))
+    kb.row(InlineKeyboardButton(text="← К подписке", callback_data=f"key_info:{key_id}"))
     return kb.as_markup()
 
 
@@ -327,7 +303,7 @@ def manage_payment_methods_kb(
     else:
         renew_callback = f"key_renew:{key_id}" if key_id else "buy_vpn"
         kb.row(InlineKeyboardButton(text="🔄 Продлить вручную", callback_data=renew_callback))
-    kb.row(InlineKeyboardButton(text="← К ключу" if key_id else "🏠 Главное меню", callback_data=f"key_info:{key_id}" if key_id else "back_to_menu"))
+    kb.row(InlineKeyboardButton(text="← К подписке" if key_id else "🏠 Главное меню", callback_data=f"key_info:{key_id}" if key_id else "back_to_menu"))
     return kb.as_markup()
 
 
@@ -348,14 +324,14 @@ def after_key_kb(subscription_url: str = "") -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     if subscription_url:
         kb.row(InlineKeyboardButton(
-            text="📋 Скопировать ссылку",
+            text="Скопировать ссылку",
             copy_text={"text": subscription_url},
         ))
     kb.row(
-        InlineKeyboardButton(text="Подключить VPN", style="success", callback_data="connection_guide"),
-        InlineKeyboardButton(text="🔑 Мой VPN", callback_data="my_keys"),
+        InlineKeyboardButton(text="Подключить VPN", callback_data="connection_guide"),
+        InlineKeyboardButton(text="Подписка", callback_data="my_keys"),
     )
-    kb.row(InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu"))
+    kb.row(InlineKeyboardButton(text="Главное меню", callback_data="back_to_menu"))
     return kb.as_markup()
 
 
@@ -365,7 +341,6 @@ def app_open_kb(redirect_url: str, deep_link: str = "") -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(
         text="🚀 Открыть приложение",
         url=redirect_url,
-        style="success",
     ))
     if deep_link:
         kb.row(InlineKeyboardButton(
@@ -379,29 +354,6 @@ def app_open_kb(redirect_url: str, deep_link: str = "") -> InlineKeyboardMarkup:
 # Partner / referral
 # ---------------------------------------------------------------------------
 
-def partner_kb(link: str) -> InlineKeyboardMarkup:
-    share_text = quote_plus(
-        "Если у тебя не работает YouTube / Telegram — вот решение.\n\n"
-        "Сам пользуюсь — реально норм VPN.\n\n"
-        "🎁 3 дня VPN бесплатно\n"
-        "📱 До 10 устройств\n"
-        "⚡ Всё открывается без лагов\n\n"
-        "💳 Дальше — 89 ₽/мес (от 59 ₽/мес при оплате за год)\n\n"
-        f"Попробуй:\n{link}"
-    )
-    kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(
-        text="Поделиться ссылкой",
-        url=f"https://t.me/share/url?url={quote_plus(link)}&text={share_text}",
-    ))
-    kb.row(InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu"))
-    return kb.as_markup()
-
-
-# ---------------------------------------------------------------------------
-# Connection guide
-# ---------------------------------------------------------------------------
-
 def connection_guide_kb(key_id: int | None = None, subscription_url: str = "") -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     def platform_callback(name: str) -> str:
@@ -411,7 +363,6 @@ def connection_guide_kb(key_id: int | None = None, subscription_url: str = "") -
         kb.row(InlineKeyboardButton(
             text="📋 Скопировать ссылку подписки",
             copy_text={"text": subscription_url},
-            style="primary",
         ))
     kb.row(
         InlineKeyboardButton(text="iPhone / iPad", callback_data=platform_callback("ios")),
@@ -421,6 +372,7 @@ def connection_guide_kb(key_id: int | None = None, subscription_url: str = "") -
         InlineKeyboardButton(text="Windows", callback_data=platform_callback("windows")),
         InlineKeyboardButton(text="Linux", callback_data=platform_callback("linux")),
     )
+    kb.row(InlineKeyboardButton(text="Другие устройства", callback_data=f"guide_more:{key_id}" if key_id else "guide_more"))
     back_callback = f"key_info:{key_id}" if key_id else "back_to_menu"
     back_text = "← Назад" if key_id else "← Назад в меню"
     kb.row(InlineKeyboardButton(text=back_text, callback_data=back_callback))
@@ -454,7 +406,7 @@ def linux_guide_back_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="◀️ К выбору Linux", callback_data="guide_linux"))
     kb.row(InlineKeyboardButton(text="Не получается?", callback_data="trouble"))
-    kb.row(InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu"))
+    kb.row(InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu"))
     return kb.as_markup()
 
 
@@ -462,7 +414,7 @@ def guide_back_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="◀️ Назад к платформам", callback_data="connection_guide"))
     kb.row(InlineKeyboardButton(text="Не получается?", callback_data="trouble"))
-    kb.row(InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu"))
+    kb.row(InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu"))
     return kb.as_markup()
 
 
@@ -477,5 +429,5 @@ def legal_kb() -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="Политика конфиденциальности", url="https://telegra.ph/Politika-v-otnoshenii-obrabotki-personalnyh-dannyh-ByMeVPN-10-25"))
     kb.row(InlineKeyboardButton(text="Соглашение об автопродлении", url="https://telegra.ph/Soglashenie-ob-avtomaticheskom-prodlenii-podpiski-ByMeVPN-10-25"))
     kb.row(InlineKeyboardButton(text="💳 Автопродление и карта", callback_data="manage_payment_methods"))
-    kb.row(InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu"))
+    kb.row(InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu"))
     return kb.as_markup()

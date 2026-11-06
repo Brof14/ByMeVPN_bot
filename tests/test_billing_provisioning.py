@@ -449,7 +449,7 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
         conn_cbs = [btn.callback_data for row in conn_kb.inline_keyboard for btn in row if btn.callback_data]
         self.assertIn("guide_linux", conn_cbs)
         self.assertIn("guide_ios", conn_cbs)
-        self.assertNotIn("guide_more", conn_cbs)
+        self.assertIn("guide_more", conn_cbs)
         self.assertIn("back_to_menu", conn_cbs)
         extra_cbs = [btn.callback_data for row in additional_platforms_kb().inline_keyboard for btn in row if btn.callback_data]
         self.assertIn("guide_macos", extra_cbs)
@@ -501,7 +501,8 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
             await _send_platform_guide(callback, bot, "android")
             android_markup = send_or_edit_mock.call_args.args[3]
             android_urls = {button.url for row in android_markup.inline_keyboard for button in row if button.url}
-            self.assertIn(HAPP_ANDROID_APK, android_urls)
+            self.assertIn("https://bymevpn.duckdns.org/app/", android_urls)
+        self.assertIn("https://play.google.com/store/apps/details?id=com.happproxy", android_urls)
 
     # ------------------------------------------------------------------------
     # Test 11: Switching between text and photo screens uses the right edit path
