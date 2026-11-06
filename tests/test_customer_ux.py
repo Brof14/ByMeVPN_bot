@@ -25,6 +25,76 @@ def callbacks(markup):
 
 
 class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
+    async def test_trial_delivery_edits_the_originating_screen(self):
+        from subscription import _send_delivery_message
+        from bot_assets import KEY
+
+        bot = object()
+        target = object()
+        with (
+            patch("subscription.send_or_edit", new=AsyncMock()) as edit,
+            patch("subscription.send_photo_message", new=AsyncMock()) as send,
+        ):
+            delivered = await _send_delivery_message(
+                bot, 123, "<b>Пробный период активирован</b>", "https://example.test/sub",
+                edit_target=target,
+            )
+
+        self.assertTrue(delivered)
+        edit.assert_awaited_once()
+        self.assertIs(edit.await_args.args[0], bot)
+        self.assertIs(edit.await_args.args[1], target)
+        self.assertEqual(edit.await_args.kwargs["photo"], KEY)
+        send.assert_not_awaited()
+
+    async def test_paid_delivery_keeps_sending_a_new_key_card(self):
+        from subscription import _send_delivery_message
+        from bot_assets import KEY
+
+        bot = object()
+        with (
+            patch("subscription.send_or_edit", new=AsyncMock()) as edit,
+            patch("subscription.send_photo_message", new=AsyncMock()) as send,
+        ):
+            delivered = await _send_delivery_message(bot, 123, "Подписка", "https://example.test/sub")
+
+        self.assertTrue(delivered)
+        edit.assert_not_awaited()
+        send.assert_awaited_once()
+        self.assertEqual(send.await_args.args[2], KEY)
+
+    async def test_trial_handler_delivers_into_the_callback_message(self):
+        from types import SimpleNamespace
+        from handlers.start import _start_free_trial
+
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=123),
+            message=SimpleNamespace(answer=AsyncMock()),
+        )
+        bot = object()
+        base_time = 1_800_000_000
+        with (
+            patch("handlers.start.safe_answer", new=AsyncMock()),
+            patch("handlers.start.has_trial_used", new=AsyncMock(return_value=False)),
+            patch("handlers.start.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("handlers.start.get_xui_client_details", new=AsyncMock(side_effect=[None, {
+                "enable": True, "expiry_time": (base_time + 3 * 86400) * 1000,
+            }])),
+            patch("handlers.start.get_trial_claim_reservation", new=AsyncMock(return_value=None)),
+            patch("handlers.start.reserve_trial_claim", new=AsyncMock(return_value="claim-1")),
+            patch("subscription.deliver_key", new=AsyncMock(return_value=True)) as deliver,
+            patch("handlers.start.get_xui_devices", new=AsyncMock(return_value={
+                "limit_hwid": 2, "limit_ip": 0, "devices": [],
+            })),
+            patch("handlers.start.complete_trial_claim", new=AsyncMock(return_value=True)),
+            patch("handlers.start.time.time", return_value=base_time),
+            patch("database.log_analytics_event", new=AsyncMock()),
+        ):
+            await _start_free_trial(bot, callback)
+
+        self.assertIs(deliver.await_args.kwargs["delivery_target"], callback)
+        callback.message.answer.assert_not_awaited()
+
     def test_home_labels_for_subscriber(self):
         menu = main_menu_with_keys(trial_used=True)
         self.assertEqual(
