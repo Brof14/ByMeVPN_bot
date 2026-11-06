@@ -196,20 +196,20 @@ async def _send_main_menu(
         if is_new_referral:
             text = (
                 "<b>Добро пожаловать!</b>\n\n"
-                "Приглашение учтено. Подключение займёт несколько минут.\n\n"
-                "Начните с пробного доступа или посмотрите тарифы."
+                "Приглашение учтено.\n\n"
+                "Начните с пробного доступа или выберите тариф."
             )
         else:
             text = (
-                "<b>Ваш интернет — без лишних настроек.</b>\n\n"
-                "Подключите ByMeVPN за несколько минут и пользуйтесь привычными приложениями.\n\n"
-                "Начните с 3 дней бесплатно или выберите тариф."
+                "<b>ByMeVPN</b>\n\n"
+                "VPN без сложных настроек.\n"
+                "3 дня бесплатно, без карты."
             )
         kb = main_menu_new_user()
     elif state == "expired":
         text = (
             "<b>Доступ завершён</b>\n\n"
-            "Ключи и настройки сохранены. Продлите подписку или получите бонусные дни за приглашения."
+            "Продлите подписку или получите бонусные дни."
         )
         # Check if user has keys to show appropriate menu (use direct DB check, not cache)
         user_keys = await get_user_keys(user_id)
@@ -230,8 +230,7 @@ async def _send_main_menu(
             text = (
                 f"<b>Подписка активна</b>\n\n"
                 f"Действует до <b>{expires}</b>\n"
-                f"Устройств в тарифе: <b>{device_count} {device_word}</b>\n\n"
-                "Управление и подключение — в разделе «Подписка»."
+                f"Устройств в тарифе: <b>{device_count} {device_word}</b>"
             )
         else:
             text = "<b>Подписка активна</b>\n\nОткройте «Подписка», чтобы подключить устройство или посмотреть срок действия."
@@ -687,11 +686,9 @@ async def cb_about(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
         "<b>ByMeVPN</b>\n\n"
-        "Защищённое подключение для телефона и компьютера — без сложной настройки.\n\n"
-        "• До 10 устройств — по выбранному тарифу.\n"
-        "• Подпиской и устройствами можно управлять в Telegram.\n"
-        "• За приглашения друзей начисляются бонусные дни.\n\n"
-        "Новые пользователи могут начать с <b>3 дней бесплатно</b>."
+        "VPN для телефона и компьютера.\n\n"
+        "Подключение, подписка и устройства — в одном месте.\n"
+        "3 дня бесплатно для новых пользователей."
     )
     # Keep the menu navigation in a fixed, full-width bottom row.
     from aiogram.types import InlineKeyboardMarkup
@@ -707,9 +704,7 @@ async def cb_free_vpn(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
         "<b>Бесплатные дни</b>\n\n"
-        "<b>За друзей</b> — приглашайте новых пользователей и получайте бонусы.\n\n"
-        "<b>За рекламу</b> — разместите ByMeVPN в своём Telegram-канале.\n\n"
-        "Выберите способ."
+        "Получайте дополнительные дни за друзей и рекламу."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Пригласить друзей", callback_data="partner")],
