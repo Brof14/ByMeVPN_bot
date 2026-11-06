@@ -40,7 +40,6 @@ from database import (
 from utils import send_with_photo, safe_answer
 from keyboards import back_to_menu, support_url
 from bot_style import themed_button as InlineKeyboardButton
-from bot_assets import AD_PROGRAM
 
 logger = logging.getLogger(__name__)
 router = Router()
