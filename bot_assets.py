@@ -30,11 +30,13 @@ PROMO_CODE = _asset("promo_code")
 LEGAL = _asset("legal")
 AUTO_RENEWAL = _asset("auto_renewal")
 
-# Only landmark screens carry large artwork. Secondary operations stay text-first.
-# Files for other sections remain bundled for rollback and future use.
-_LANDMARK_ARTWORK = frozenset({MENU, ABOUT, KEY})
+_SECTION_ARTWORK = frozenset({
+    MENU, SUPPORT, ABOUT, FREE_VPN, REFERRALS, MY_INVITATIONS, AD_PROGRAM,
+    PLANS, KEY, DEVICES, CONNECTION, ANDROID, IPHONE, WINDOWS, LINUX,
+    RENEWAL, PAYMENT, PROMO_CODE, LEGAL, AUTO_RENEWAL,
+})
 
 
 def display_artwork(photo: str | None) -> str | None:
-    """Return an allowed banner, or None for an ordinary customer screen."""
-    return photo if photo in _LANDMARK_ARTWORK else None
+    """Return a bundled section image when a screen explicitly requests one."""
+    return photo if photo in _SECTION_ARTWORK else None
