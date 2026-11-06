@@ -449,7 +449,7 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
         conn_cbs = [btn.callback_data for row in conn_kb.inline_keyboard for btn in row if btn.callback_data]
         self.assertIn("guide_linux", conn_cbs)
         self.assertIn("guide_ios", conn_cbs)
-        self.assertNotIn("guide_more", conn_cbs)
+        self.assertIn("guide_more", conn_cbs)
         self.assertIn("back_to_menu", conn_cbs)
         extra_cbs = [btn.callback_data for row in additional_platforms_kb().inline_keyboard for btn in row if btn.callback_data]
         self.assertIn("guide_macos", extra_cbs)
