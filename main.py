@@ -27,7 +27,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import ErrorEvent
 
-from config import BOT_TOKEN, ADMIN_ID, REDIS_URL
+from config import BOT_TOKEN, BOT_INSTANCE_MODE, ADMIN_ID, REDIS_URL
 from database import init_db, close_db
 from notifications import start_notification_scheduler
 from device_monitor import start_device_monitor
@@ -227,49 +227,44 @@ async def main() -> None:
 
     logger.info("All routers registered")
 
-    # Start restartable background tasks; a failure is logged, reported to admin,
-    # and retried with bounded exponential backoff.
-    spawn_supervised("notification_scheduler", lambda: start_notification_scheduler(bot), bot)
-    spawn_supervised("device_monitor", lambda: start_device_monitor(bot), bot)
+    if BOT_INSTANCE_MODE == "primary":
+        # Singleton work belongs to the primary instance only. A second bot
+        # may share the database and Redis, but must not duplicate billing,
+        # notification, device-monitor, webhook, or broadcast workers.
+        spawn_supervised("notification_scheduler", lambda: start_notification_scheduler(bot), bot)
+        spawn_supervised("device_monitor", lambda: start_device_monitor(bot), bot)
+        spawn_supervised("webhook_server", lambda: start_webhook_server(bot, dp), bot)
+        await start_payment_monitor(bot)
 
-    # Start the YooKassa webhook HTTP server in the background.
-    # FIX: this used to be imported but never called, so YooKassa's
-    # /webhook/yookassa endpoint never actually listened on any port, and
-    # webhook.dispatcher stayed None forever — meaning even the FSM state
-    # set after a payment (see webhook.py) had nothing to attach to.
-    # We intentionally do NOT await this — it runs the uvicorn server forever.
-    spawn_supervised("webhook_server", lambda: start_webhook_server(bot, dp), bot)
+        from autorenew import start_autorenew_worker
+        spawn_supervised("autorenew_worker", lambda: start_autorenew_worker(bot), bot)
+        from broadcast_worker import start_broadcast_worker
+        spawn_supervised("broadcast_worker", lambda: start_broadcast_worker(bot), bot)
 
-    # Start automatic payment monitoring (polls YooKassa every 30s as a
-    # belt-and-suspenders fallback in case the webhook is unreachable, e.g.
-    # no public HTTPS endpoint configured yet)
-    await start_payment_monitor(bot)
+        async def performance_sampler():
+            from async_utils import perf_metrics
+            from database import save_performance_snapshot
+            previous = {}
+            while True:
+                await asyncio.sleep(60)
+                current = perf_metrics.snapshot()
+                interval = {}
+                for name, values in current.items():
+                    old = previous.get(name, {})
+                    interval[name] = {
+                        **values,
+                        "calls": max(0, int(values["calls"]) - int(old.get("calls", 0))),
+                        "errors": max(0, int(values["errors"]) - int(old.get("errors", 0))),
+                    }
+                await save_performance_snapshot(interval)
+                previous = current
 
-    # Start YooKassa auto-renewal worker (checks expiring subscriptions every 60s)
-    from autorenew import start_autorenew_worker
-    spawn_supervised("autorenew_worker", lambda: start_autorenew_worker(bot), bot)
-    from broadcast_worker import start_broadcast_worker
-    spawn_supervised("broadcast_worker", lambda: start_broadcast_worker(bot), bot)
-
-    async def performance_sampler():
-        from async_utils import perf_metrics
-        from database import save_performance_snapshot
-        previous = {}
-        while True:
-            await asyncio.sleep(60)
-            current = perf_metrics.snapshot()
-            interval = {}
-            for name, values in current.items():
-                old = previous.get(name, {})
-                interval[name] = {
-                    **values,
-                    "calls": max(0, int(values["calls"]) - int(old.get("calls", 0))),
-                    "errors": max(0, int(values["errors"]) - int(old.get("errors", 0))),
-                }
-            await save_performance_snapshot(interval)
-            previous = current
-
-    spawn_supervised("performance_sampler", performance_sampler, bot)
+        spawn_supervised("performance_sampler", performance_sampler, bot)
+    else:
+        logger.info(
+            "Bot instance mode=%s: polling enabled; singleton background services remain on the primary instance",
+            BOT_INSTANCE_MODE,
+        )
 
     logger.info("Bot is running in polling mode. Press Ctrl+C to stop.")
 
