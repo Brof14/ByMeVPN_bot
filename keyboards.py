@@ -62,7 +62,7 @@ def authorized_user_menu() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn"))
     kb.row(InlineKeyboardButton(text="Подписка", callback_data="my_keys"))
-    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="partner"))
+    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
     kb.row(InlineKeyboardButton(text="Поддержка", callback_data="trouble"))
     return kb.as_markup()
 

@@ -95,7 +95,7 @@ async def _partner_program_screen(user_id: int, username: str | None):
             url=f"https://t.me/share/url?url={quote_plus(referral_link)}&text={share_text}"
         )],
         [InlineKeyboardButton(
-            text="Мои рефералы",
+            text="Мои приглашения",
             callback_data="my_referrals_list"
         )],
         [InlineKeyboardButton(
