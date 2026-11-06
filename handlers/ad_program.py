@@ -127,9 +127,8 @@ async def cb_ad_program(callback: CallbackQuery, bot: Bot, state: FSMContext):
 
     text = (
         "<b>VPN за рекламу</b>\n\n"
-        "Разместите ByMeVPN в своём Telegram-канале и получите бонусные месяцы.\n\n"
-        "Размер бонуса зависит от аудитории. Отправьте канал на проверку — покажем условия до публикации.\n\n"
-        "Пост должен оставаться в канале 30 дней."
+        "Разместите пост в своём Telegram-канале и получите бонусные месяцы.\n\n"
+        "Размер бонуса зависит от аудитории. Пост нужно сохранить на 30 дней."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Проверить канал", callback_data="ad_check_channel")],
@@ -183,10 +182,9 @@ async def cb_ad_check_channel(callback: CallbackQuery, bot: Bot, state: FSMConte
 
     text = (
         "<b>Проверка канала</b>\n\n"
-        "Отправьте ссылку на Telegram-канал.\n\n"
-        "Публичный: <code>@mychannel</code>\n"
-        "Приватный: ссылка-приглашение <code>https://t.me/+...</code>\n\n"
-        "Добавлять бота в администраторы не нужно."
+        "Отправьте ссылку на канал: <code>@mychannel</code>\n"
+        "Для приватного канала — ссылку-приглашение.\n\n"
+        "Права администратора не нужны."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Отмена", callback_data="ad_program")],

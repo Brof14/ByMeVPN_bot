@@ -19,11 +19,11 @@ router = Router()
 def partner_main_kb(link: str) -> InlineKeyboardMarkup:
     share_text = quote_plus(
         "Попробуй ByMeVPN — VPN без сложных настроек.\n"
-        "3 дня бесплатно, без карты.\n"
-        f"{link}"
+        "3 дня бесплатно, без карты."
     )
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Поделиться", url=f"https://t.me/share/url?url={quote_plus(link)}&text={share_text}", )],
+        [InlineKeyboardButton(text="Скопировать ссылку", copy_text={"text": link})],
         [InlineKeyboardButton(text="Мои приглашения", callback_data="partner_referrals_list")],
         [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu")],
     ])
@@ -48,12 +48,10 @@ async def cb_partner(callback: CallbackQuery, bot: Bot):
     )
     text = (
         "<b>Приглашение друзей</b>\n\n"
-        "+15 дней — за регистрацию друга.\n"
-        "+30 дней — за его первую подходящую оплату.\n\n"
-        "<b>Ваша статистика</b>\n"
+        "+15 дней за регистрацию друга.\n"
+        "+30 дней за его первую подходящую оплату.\n\n"
         f"Приглашено: <b>{registrations}</b> · оплатили: <b>{paid_referrals}</b>\n"
-        f"Начислено: <b>{bonus_days} дней</b>\n\n"
-        f"<b>Ваша ссылка</b>\n<code>{link}</code>"
+        f"Получено: <b>{bonus_days} дней</b>"
         f"{pending_note}"
     )
     await send_with_photo(bot, callback, text, partner_main_kb(link), photo=REFERRALS)

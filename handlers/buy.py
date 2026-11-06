@@ -44,10 +44,20 @@ _stars_payment_locks: dict[str, asyncio.Lock] = {}
 
 
 def _promo_purchase_keyboard() -> InlineKeyboardMarkup:
-    """One consistent green action to continue to tariff selection."""
+    """Return to the tariff chooser after a promotion."""
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn")
     ]])
+
+
+def _tariff_intro(devices: int, *, renewal: bool = False) -> str:
+    """Shared copy for tariff choice, preserving all prices and durations."""
+    title = "Продление" if renewal else "Тарифы"
+    return (
+        f"<b>{title}</b>\n\n"
+        f"Устройства: <b>{devices}</b>\n"
+        "Выберите срок. Полная сумма — перед оплатой."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -66,12 +76,7 @@ async def cb_buy_vpn(callback: CallbackQuery, bot: Bot, state: FSMContext):
     renew_key_id = data.get("renew_key_id")
     await state.update_data(devices=devices)
     
-    dev_info = DEVICE_CONFIG.get(devices, DEVICE_CONFIG[DEFAULT_DEVICE_LIMIT])
-    text = (
-        f"<b>{dev_info['name']} · {dev_info['badge']}</b>\n"
-        f"{dev_info['description']}\n\n"
-        "На кнопках указана цена за месяц. При выборе срока покажем полную сумму заранее."
-    )
+    text = _tariff_intro(devices, renewal=bool(renew_key_id))
     await send_with_photo(
         bot, callback,
         text,
@@ -94,20 +99,8 @@ async def cb_select_devtier(callback: CallbackQuery, bot: Bot, state: FSMContext
     promo_discount = data.get("promo_discount", 0)
     await state.update_data(devices=devices)
 
-    dev_info = DEVICE_CONFIG.get(devices, DEVICE_CONFIG[DEFAULT_DEVICE_LIMIT])
     renew_key_id = data.get("renew_key_id")
-    if renew_key_id:
-        text = (
-            f"<b>Продление · {dev_info['name']}</b>\n"
-            f"{dev_info['description']}\n\n"
-            "Цена указана за месяц; итог за выбранный срок покажем до оплаты."
-        )
-    else:
-        text = (
-            f"<b>{dev_info['name']} · {dev_info['badge']}</b>\n"
-            f"{dev_info['description']}\n\n"
-            "На кнопках указана цена за месяц. При выборе срока покажем полную сумму заранее."
-        )
+    text = _tariff_intro(devices, renewal=bool(renew_key_id))
     await send_with_photo(
         bot, callback,
         text,
@@ -180,11 +173,11 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
     text += (
         "\nПродолжая, вы принимаете условия <a href='https://telegra.ph/Publichnaya-oferta-na-okazanie-uslug-ByMeVPN-10-25'>оферты</a> и "
         "<a href='https://telegra.ph/Politika-v-otnoshenii-obrabotki-personalnyh-dannyh-ByMeVPN-10-25'>политики конфиденциальности</a>.\n\n"
-        "Доступ включится после подтверждения оплаты.\n\n"
-        "<b>Перед оплатой:</b> если ЮKassa сохранит способ оплаты, подписка может продлеваться "
-        f"на {days} дней за {price_rub} ₽ по окончании срока. Отключение — в разделе "
-        "«Подписка» → «Оплата и автопродление». Stars и CryptoBot — разовая оплата.\n\n"
-        "<b>Выберите способ оплаты</b>"
+        "<b>Перед оплатой</b>\n"
+        "При сохранении способа оплаты в ЮKassa возможно автоматическое продление: "
+        f"{price_rub} ₽ за {days} дней. Управление: «Подписка» → «Оплата и автопродление».\n"
+        "Stars и CryptoBot — разовые платежи.\n\n"
+        "<b>Способ оплаты</b>"
     )
 
     await send_with_photo(

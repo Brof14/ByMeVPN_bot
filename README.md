@@ -31,3 +31,9 @@ Configure the values required by the current checkout in `.env`. Use test creden
 ## Security
 
 Never commit Telegram bot tokens, panel credentials, payment secrets, VPN subscription URLs, user exports, or database files. Rotate credentials that have been exposed in Git history or logs. Review payment idempotency, webhook validation, access provisioning, backups, and administrator permissions before deployment.
+
+## Telegram UI
+
+The V3 UI keeps the bot's payment and subscription logic intact. Button styling and optional custom emoji IDs live in `bot_style.py`; brand image visibility is controlled by `bot_assets.py`. See [Telegram UX architecture and rollout](docs/TELEGRAM_UX_ARCHITECTURE.md).
+
+Premium button icons require eligibility under Telegram's Bot API rules. Set `BOT_PREMIUM_BUTTON_ICONS=1` **only after** the bot owner has Telegram Premium or the bot has an eligible purchased Fragment username. The default `0` keeps buttons working without icons.

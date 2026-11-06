@@ -34,7 +34,7 @@ async def cb_guide_menu(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
         "<b>Подключение</b>\n\n"
-        "Выберите устройство — покажем доступный способ подключения."
+        "Выберите устройство."
     )
     await _track_guide_event(callback.from_user.id, "connection_guide_open")
     await send_or_edit(bot, callback, text, connection_guide_kb(), photo=CONNECTION)
@@ -55,7 +55,7 @@ async def cb_guide_for_key(callback: CallbackQuery, bot: Bot):
         return
     text = (
         f"<b>Подключение · {escape(key.get('remark') or f'Ключ #{key_id}')}</b>\n\n"
-        "Выберите устройство. Покажем, как установить приложение и включить VPN за несколько шагов."
+        "Выберите устройство."
     )
     await send_or_edit(bot, callback, text, connection_guide_kb(key_id), photo=CONNECTION)
 
@@ -66,15 +66,17 @@ async def cb_trouble(callback: CallbackQuery, bot: Bot):
     await _track_guide_event(callback.from_user.id, "connection_help_open")
     text = (
         "<b>Чем помочь?</b>\n\n"
-        "Выберите проблему. Если подсказка не поможет, напишите нам — разберёмся вместе."
+        "С чем возникла проблема?"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="VPN не подключается", callback_data="support_topic:no_connection")],
-        [InlineKeyboardButton(text="VPN включён, но нет интернета", callback_data="support_topic:no_internet")],
-        [InlineKeyboardButton(text="Не работает приложение", callback_data="support_topic:app")],
+        [InlineKeyboardButton(text="Нет интернета с VPN", callback_data="support_topic:no_internet")],
+        [InlineKeyboardButton(text="Проблема с приложением", callback_data="support_topic:app")],
         [InlineKeyboardButton(text="Не добавляется подписка", callback_data="support_topic:import")],
+        [InlineKeyboardButton(text="Оплата и подписка", callback_data="support_topic:billing")],
+        [InlineKeyboardButton(text="Устройства", callback_data="support_topic:devices")],
         [InlineKeyboardButton(text="Написать в поддержку", url=support_url())],
-        [InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu")],
+        [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu")],
     ])
     await send_with_photo(bot, callback, text, kb, photo=SUPPORT)
 
@@ -86,30 +88,43 @@ async def cb_support_topic(callback: CallbackQuery, bot: Bot):
     guidance = {
         "no_connection": (
             "<b>VPN не подключается</b>\n\n"
-            "1. Проверьте интернет без VPN.\n2. Обновите подписку в Happ.\n3. Попробуйте подключиться ещё раз."
+            "1. Проверьте интернет без VPN.\n2. Обновите подписку в приложении.\n3. Подключитесь повторно."
         ),
         "no_internet": (
             "<b>VPN включён, но интернета нет</b>\n\n"
-            "Отключите другие VPN и прокси, обновите подписку в Happ и подключитесь снова."
+            "Отключите другие VPN. Затем обновите подписку и подключитесь снова."
         ),
         "app": (
             "<b>Не работает приложение</b>\n\n"
-            "Обновите подписку в Happ и перезапустите приложение. Если проблема останется, напишите в поддержку и укажите, что именно не работает."
+            "Перезапустите приложение. Если ошибка повторится, напишите в поддержку."
         ),
         "import": (
             "<b>Не добавляется подписка</b>\n\n"
-            "В разделе «Подписка» скопируйте ссылку целиком. В Happ нажмите «+», выберите добавление подписки "
-            "и вставьте ссылку."
+            "Скопируйте ссылку в разделе «Подписка» и импортируйте её в VPN-приложение."
+        ),
+        "billing": (
+            "<b>Оплата и подписка</b>\n\n"
+            "Если платёж прошёл, а доступ не появился, не оплачивайте повторно. "
+            "Проверьте статус подписки или напишите в поддержку."
+        ),
+        "devices": (
+            "<b>Устройства</b>\n\n"
+            "Откройте «Подписка» → «Устройства». Удалите старое устройство, "
+            "если лимит занят."
         ),
     }
     text = guidance.get(topic)
     if not text:
         await safe_answer(callback, "Подсказка не найдена.", alert=True)
         return
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+    rows = []
+    if topic in {"billing", "devices"}:
+        rows.append([InlineKeyboardButton(text="Подписка", callback_data="my_keys")])
+    rows.extend([
         [InlineKeyboardButton(text="Написать в поддержку", url=support_url())],
-        [InlineKeyboardButton(text="← К выбору проблемы", callback_data="trouble")],
+        [InlineKeyboardButton(text="← Назад", callback_data="trouble")],
     ])
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
     await send_with_photo(bot, callback, text, kb, photo=SUPPORT)
 
 
@@ -135,15 +150,15 @@ async def cb_guide_more(callback: CallbackQuery, bot: Bot):
 _GUIDES = {
     "ios": (
         "<b>iPhone и iPad</b>\n\n"
-        "1. Установите Happ из App Store.\n"
-        "2. В разделе «Подписка» скопируйте ссылку подписки.\n"
-        "3. В Happ добавьте подписку и нажмите подключение."
+        "1. Установите Happ.\n"
+        "2. Скопируйте ссылку в разделе «Подписка».\n"
+        "3. Добавьте её в Happ и подключитесь."
     ),
     "android": (
         "<b>Android</b>\n\n"
-        "1. Откройте страницу ByMeVPN для Android и скачайте доступную версию.\n"
-        "2. Если приложение ещё недоступно, установите Happ.\n"
-        "3. Скопируйте ссылку из раздела «Подписка», добавьте её в Happ и подключитесь."
+        "1. Установите ByMeVPN по кнопке ниже.\n"
+        "2. Войдите и подключитесь.\n\n"
+        "Если приложение недоступно, установите Happ и добавьте в него ссылку из раздела «Подписка»."
     ),
     "android_tv": (
         "<b>Android TV</b>\n\n"
@@ -158,9 +173,9 @@ _GUIDES = {
     ),
     "windows": (
         "<b>Windows</b>\n\n"
-        "1. Скачайте и установите Happ по кнопке ниже.\n"
-        "2. В разделе «Подписка» скопируйте ссылку подписки.\n"
-        "3. Добавьте ссылку в Happ и нажмите «Подключить»."
+        "1. Установите Happ.\n"
+        "2. Скопируйте ссылку в разделе «Подписка».\n"
+        "3. Импортируйте её и подключитесь."
     ),
     "macos": (
         "<b>macOS</b>\n\n"
@@ -264,7 +279,7 @@ async def _send_platform_guide(callback: CallbackQuery, bot: Bot, platform: str,
             return
         if key.get("key"):
             guide_rows.insert(0, [InlineKeyboardButton(
-                text="📋 Скопировать ссылку подписки",
+                text="Скопировать ссылку",
                 copy_text={"text": key["key"]},
                 
             )])

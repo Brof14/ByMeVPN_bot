@@ -1,4 +1,4 @@
-"""Every customer section uses its matching bundled artwork."""
+"""Screen art policy: retain bundled images but render only landmark banners."""
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,6 +8,13 @@ import bot_assets
 
 
 class TestSectionArtwork(unittest.IsolatedAsyncioTestCase):
+    def test_landmark_only_photo_policy(self):
+        for photo in (bot_assets.MENU, bot_assets.ABOUT, bot_assets.KEY):
+            self.assertEqual(bot_assets.display_artwork(photo), photo)
+        for photo in (bot_assets.PLANS, bot_assets.PAYMENT, bot_assets.CONNECTION, bot_assets.AD_PROGRAM, bot_assets.REFERRALS, bot_assets.SUPPORT):
+            self.assertIsNone(bot_assets.display_artwork(photo))
+
+
     def test_all_twenty_artworks_are_bundled(self):
         names = (
             "MENU", "SUPPORT", "ABOUT", "FREE_VPN", "REFERRALS", "MY_INVITATIONS",

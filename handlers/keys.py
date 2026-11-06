@@ -68,7 +68,7 @@ async def cmd_keys(message: Message, bot: Bot):
         )
         return
     await send_with_photo(bot, message,
-        "<b>Ваш активный VPN</b>\n\nВыберите подписку для управления. Завершённые подписки находятся в истории.",
+        "<b>Подписки</b>\n\nВыберите подписку.",
         my_keys_list_kb(active_keys, has_history=len(active_keys) < len(keys)),
         photo=KEY,
     )
@@ -145,7 +145,7 @@ async def _key_info_content(user_id: int, k: dict) -> tuple[str, object]:
     key_id = int(k["id"])
 
     now = int(time.time())
-    status = "🟢 Доступ активен" if k["expiry"] > now else "⚪ Доступ завершён"
+    status = "Доступ активен" if k["expiry"] > now else "Доступ завершён"
     subscription_url = k.get("key", "")
 
     devices_info = ""
@@ -158,8 +158,8 @@ async def _key_info_content(user_id: int, k: dict) -> tuple[str, object]:
         registered = len(device_state.get("devices") or [])
         device_limit = int(device_state.get("limit_hwid") or 0)
         devices_info = (
-            f"📱 Устройства: <b>{registered} из {device_limit}</b>\n"
-            if device_limit else f"📱 Устройств в подписке: <b>{registered}</b>\n"
+            f"Устройства: <b>{registered} из {device_limit}</b>\n"
+            if device_limit else f"Устройств: <b>{registered}</b>\n"
         )
 
     all_keys = await get_user_keys(user_id)
@@ -348,9 +348,8 @@ async def cb_key_settings(callback: CallbackQuery, bot: Bot):
         return
 
     text = (
-        f"<b>Управление подпиской «{escape(key.get('remark') or f'Ключ #{key_id}')}»</b>\n\n"
-        "Здесь можно управлять автопродлением и запросить перевыпуск ключа через поддержку. "
-        "Текущий ключ бот автоматически не отключает."
+        "<b>Управление</b>\n\n"
+        "Оплата, перевыпуск и удаление доступа."
     )
     await send_or_edit(bot, callback, text, key_settings_kb(key_id), photo=AUTO_RENEWAL)
 
@@ -625,8 +624,7 @@ async def cb_key_instructions(callback: CallbackQuery, bot: Bot):
     from keyboards import connection_guide_kb
 
     text = (
-        f"<b>Подключение VPN</b> · {escape(key.get('remark') or f'Ключ #{key_id}')}\n\n"
-        "Ссылка подписки готова. Скопируйте её кнопкой выше, затем выберите устройство."
+        "<b>Подключение</b>\n\nВыберите устройство."
     )
     await send_or_edit(bot, callback, text, connection_guide_kb(key_id, subscription_url), photo=CONNECTION)
 
