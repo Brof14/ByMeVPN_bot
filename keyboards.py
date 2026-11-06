@@ -57,6 +57,14 @@ def support_url() -> str:
     return _SUPPORT_URL
 
 
+def feedback_url() -> str:
+    """Direct users to support with a clear bug-report / suggestion prompt."""
+    return (
+        "https://t.me/ByMeVPNSupportBot?text="
+        + quote_plus("Здравствуйте! Хочу сообщить об ошибке или предложить улучшение ByMeVPN.\n")
+    )
+
+
 def authorized_user_menu() -> InlineKeyboardMarkup:
     """Compact navigation for signed-in app users."""
     kb = InlineKeyboardBuilder()

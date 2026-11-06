@@ -8,7 +8,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
 )
 
-from keyboards import connection_guide_kb, additional_platforms_kb, support_url
+from keyboards import connection_guide_kb, additional_platforms_kb, support_url, feedback_url
 from utils import send_with_photo, send_or_edit, safe_answer
 from bot_assets import SUPPORT, CONNECTION, ANDROID, IPHONE, WINDOWS, LINUX
 from bot_style import themed_button as InlineKeyboardButton
@@ -76,6 +76,7 @@ async def cb_trouble(callback: CallbackQuery, bot: Bot):
         [InlineKeyboardButton(text="Оплата и подписка", callback_data="support_topic:billing")],
         [InlineKeyboardButton(text="Устройства", callback_data="support_topic:devices")],
         [InlineKeyboardButton(text="Написать в поддержку", url=support_url())],
+        [InlineKeyboardButton(text="Сообщить об ошибке или идее", url=feedback_url())],
         [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu")],
     ])
     await send_with_photo(bot, callback, text, kb, photo=SUPPORT)
