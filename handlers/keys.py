@@ -23,6 +23,7 @@ from keyboards import (
 from utils import send_with_photo, send_or_edit, safe_answer
 from constants import format_timestamp as fmt_date, format_days_left as fmt_days_left
 from states import BuyFlow
+from bot_assets import KEY, DEVICES, RENEWAL, CONNECTION, AUTO_RENEWAL
 from bot_style import themed_button as InlineKeyboardButton
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,7 @@ async def cmd_keys(message: Message, bot: Bot):
             "<b>У вас пока нет VPN-ключей</b>\n\n"
             "Выберите тариф или получите бесплатные дни за приглашения друзей.",
             back_to_menu(),
+            photo=KEY,
         )
         return
 
@@ -52,21 +54,23 @@ async def cmd_keys(message: Message, bot: Bot):
                          key=lambda k: (k.get("expiry", 0), k.get("id", 0)), reverse=True)
     if len(active_keys) == 1:
         text, keyboard = await _key_info_content(user_id, active_keys[0])
-        await send_with_photo(bot, message, text, keyboard)
+        await send_with_photo(bot, message, text, keyboard, photo=KEY)
         return
     if not active_keys and len(keys) == 1:
         text, keyboard = await _key_info_content(user_id, keys[0])
-        await send_with_photo(bot, message, text, keyboard)
+        await send_with_photo(bot, message, text, keyboard, photo=KEY)
         return
     if not active_keys:
         await send_with_photo(bot, message,
             "<b>История подписок</b>\n\nАктивной подписки сейчас нет. Выберите завершённую, чтобы открыть её данные.",
             key_history_kb(keys),
+            photo=KEY,
         )
         return
     await send_with_photo(bot, message,
         "<b>Ваш активный VPN</b>\n\nВыберите подписку для управления. Завершённые подписки находятся в истории.",
         my_keys_list_kb(active_keys, has_history=len(active_keys) < len(keys)),
+        photo=KEY,
     )
 
 
@@ -85,7 +89,7 @@ async def cb_my_keys(callback: CallbackQuery, bot: Bot):
             "У вас пока нет ключей.\n\n"
             "Выберите тариф или получите бесплатные дни за приглашения друзей."
         )
-        await send_with_photo(bot, callback, text, back_to_menu())
+        await send_with_photo(bot, callback, text, back_to_menu(), photo=KEY)
         return
 
     now = int(time.time())
@@ -93,18 +97,18 @@ async def cb_my_keys(callback: CallbackQuery, bot: Bot):
                          key=lambda k: (k.get("expiry", 0), k.get("id", 0)), reverse=True)
     if len(active_keys) == 1:
         text, keyboard = await _key_info_content(user_id, active_keys[0])
-        await send_or_edit(bot, callback, text, keyboard)
+        await send_or_edit(bot, callback, text, keyboard, photo=KEY)
         return
     if not active_keys and len(keys) == 1:
         text, keyboard = await _key_info_content(user_id, keys[0])
-        await send_or_edit(bot, callback, text, keyboard)
+        await send_or_edit(bot, callback, text, keyboard, photo=KEY)
         return
     if not active_keys:
         text = "<b>История подписок</b>\n\nАктивной подписки сейчас нет. Выберите завершённую, чтобы открыть её данные."
-        await send_with_photo(bot, callback, text, key_history_kb(keys))
+        await send_with_photo(bot, callback, text, key_history_kb(keys), photo=KEY)
         return
     text = "<b>Ваш активный VPN</b>\n\nВыберите подписку для управления. Завершённые подписки находятся в истории."
-    await send_with_photo(bot, callback, text, my_keys_list_kb(active_keys, has_history=len(active_keys) < len(keys)))
+    await send_with_photo(bot, callback, text, my_keys_list_kb(active_keys, has_history=len(active_keys) < len(keys)), photo=KEY)
 
 
 @router.callback_query(F.data == "key_history")
@@ -116,7 +120,7 @@ async def cb_key_history(callback: CallbackQuery, bot: Bot):
         "<b>История подписок</b>\n\nВыберите завершённую подписку, чтобы посмотреть её данные."
         if expired else "<b>История подписок</b>\n\nЗавершённых подписок пока нет."
     )
-    await send_with_photo(bot, callback, text, key_history_kb(expired))
+    await send_with_photo(bot, callback, text, key_history_kb(expired), photo=KEY)
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +138,7 @@ async def cb_key_info(callback: CallbackQuery, bot: Bot):
         return
 
     text, keyboard = await _key_info_content(callback.from_user.id, k)
-    await send_or_edit(bot, callback, text, keyboard)
+    await send_or_edit(bot, callback, text, keyboard, photo=KEY)
 
 
 async def _key_info_content(user_id: int, k: dict) -> tuple[str, object]:
@@ -233,9 +237,9 @@ async def cb_key_devices(callback: CallbackQuery, bot: Bot):
         logger.exception("Could not load connection details for user %s", callback.from_user.id)
         await send_or_edit(bot, callback,
                            "<b>Не удалось загрузить устройства</b>\n\nПопробуйте обновить список чуть позже.",
-                           key_devices_kb(key_id))
+                           key_devices_kb(key_id), photo=DEVICES)
         return
-    await send_or_edit(bot, callback, text, keyboard)
+    await send_or_edit(bot, callback, text, keyboard, photo=DEVICES)
 
 
 @router.callback_query(F.data.startswith("key_device:"))
@@ -255,7 +259,7 @@ async def cb_key_device(callback: CallbackQuery, bot: Bot):
         info = await get_xui_devices(callback.from_user.id)
         device = next((item for item in info["devices"] if item["id"] == device_id), None)
         if not device:
-            await send_or_edit(bot, callback, "Это устройство уже удалено.", key_devices_kb(key_id, info["devices"]))
+            await send_or_edit(bot, callback, "Это устройство уже удалено.", key_devices_kb(key_id, info["devices"]), photo=DEVICES)
             return
         name = escape(device["model"] or device["user_agent"] or "Устройство")
         system = " ".join(part for part in (device["os"], device["os_version"]) if part)
@@ -268,10 +272,10 @@ async def cb_key_device(callback: CallbackQuery, bot: Bot):
             "Удаление освободит место, если для подписки задан лимит. Если устройство снова обновит подписку, "
             "оно может зарегистрироваться повторно. Не узнаёте устройство? Напишите в поддержку — поможем проверить подключение."
         )
-        await send_or_edit(bot, callback, text, key_device_detail_kb(key_id, device_id))
+        await send_or_edit(bot, callback, text, key_device_detail_kb(key_id, device_id), photo=DEVICES)
     except Exception:
         logger.exception("Could not load device %s for user %s", device_id, callback.from_user.id)
-        await send_or_edit(bot, callback, "Не удалось загрузить устройство. Обновите список чуть позже.", key_devices_kb(key_id))
+        await send_or_edit(bot, callback, "Не удалось загрузить устройство. Обновите список чуть позже.", key_devices_kb(key_id), photo=DEVICES)
 
 
 @router.callback_query(F.data.startswith("key_device_delete_prompt:"))
@@ -292,7 +296,7 @@ async def cb_key_device_delete_prompt(callback: CallbackQuery, bot: Bot):
         "Оно освободит место, если включён лимит устройств. Если устройство снова обновит подписку, "
         "оно может зарегистрироваться повторно. Не узнаёте устройство? Напишите в поддержку — поможем проверить подключение."
     )
-    await send_or_edit(bot, callback, text, confirm_delete_device_kb(key_id, device_id))
+    await send_or_edit(bot, callback, text, confirm_delete_device_kb(key_id, device_id), photo=DEVICES)
 
 
 @router.callback_query(F.data.startswith("key_device_delete:"))
@@ -323,10 +327,10 @@ async def cb_key_device_delete(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback, "Устройство удалено")
     try:
         text, keyboard = await _key_devices_view(callback.from_user.id, key)
-        await send_or_edit(bot, callback, text, keyboard)
+        await send_or_edit(bot, callback, text, keyboard, photo=DEVICES)
     except Exception as exc:
         logger.warning("Device list refresh failed after deletion (%s)", type(exc).__name__)
-        await send_or_edit(bot, callback, "Устройство удалено.", key_devices_kb(key_id))
+        await send_or_edit(bot, callback, "Устройство удалено.", key_devices_kb(key_id), photo=DEVICES)
 
 
 @router.callback_query(F.data.startswith("key_settings:"))
@@ -348,7 +352,7 @@ async def cb_key_settings(callback: CallbackQuery, bot: Bot):
         "Здесь можно управлять автопродлением и запросить перевыпуск ключа через поддержку. "
         "Текущий ключ бот автоматически не отключает."
     )
-    await send_or_edit(bot, callback, text, key_settings_kb(key_id))
+    await send_or_edit(bot, callback, text, key_settings_kb(key_id), photo=AUTO_RENEWAL)
 
 
 def _pm_tariff_line(sub: dict | None) -> str:
@@ -450,6 +454,7 @@ async def cb_card_toggle_check(callback: CallbackQuery, bot: Bot):
             card_title=card_title, is_checked=new_checked, key_id=key_id,
             has_card=bool(sub and sub.get("payment_method_id")), autorenew_active=bool(sub and sub.get("status") == "active"),
         ),
+        photo=AUTO_RENEWAL,
     )
 
 
@@ -465,7 +470,7 @@ async def cb_autorenew_unbind_prompt(callback: CallbackQuery, bot: Bot):
     if not card_title:
         text = _get_payment_methods_text(sub=sub, expiry_str=expiry_str)
         kb = manage_payment_methods_kb(key_id=key_id, has_card=False)
-        await send_or_edit(bot, callback, text, kb)
+        await send_or_edit(bot, callback, text, kb, photo=AUTO_RENEWAL)
         return
 
     warning = "Будущие списания прекратятся."
@@ -478,7 +483,7 @@ async def cb_autorenew_unbind_prompt(callback: CallbackQuery, bot: Bot):
         f"{warning}\n\n"
         "Доступ сохранится до конца оплаченного срока. Автопродление можно подключить снова при следующей оплате через ЮKassa."
     )
-    await send_or_edit(bot, callback, text, autorenew_cancel_confirm_kb(key_id))
+    await send_or_edit(bot, callback, text, autorenew_cancel_confirm_kb(key_id), photo=AUTO_RENEWAL)
 
 
 @router.callback_query(F.data.startswith("autorenew_unbind_confirm:"))
@@ -516,7 +521,7 @@ async def cb_autorenew_unbind_confirm(callback: CallbackQuery, bot: Bot):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="← К ключу", callback_data=f"key_info:{key_id}")],
     ])
-    await send_or_edit(bot, callback, text, kb)
+    await send_or_edit(bot, callback, text, kb, photo=AUTO_RENEWAL)
 
 
 @router.callback_query(F.data.startswith("autorenew_enable:"))
@@ -545,7 +550,7 @@ async def cb_autorenew_enable(callback: CallbackQuery, bot: Bot):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="← К ключу", callback_data=f"key_info:{key_id}")],
     ])
-    await send_or_edit(bot, callback, text, kb)
+    await send_or_edit(bot, callback, text, kb, photo=AUTO_RENEWAL)
 
 
 @router.callback_query(F.data.startswith("autorenew_toggle:"))
@@ -571,6 +576,7 @@ async def cb_manage_payment_methods(callback: CallbackQuery, bot: Bot):
             card_title=card_title, is_checked=True, key_id=key_id,
             has_card=bool(sub and sub.get("payment_method_id")), autorenew_active=bool(sub and sub.get("status") == "active"),
         ),
+        photo=AUTO_RENEWAL,
     )
 
 
@@ -589,6 +595,7 @@ async def cmd_unsubscribe(message: Message, bot: Bot):
             card_title=card_title, is_checked=True, key_id=key_id,
             has_card=bool(card_title), autorenew_active=bool(sub and sub.get("status") == "active"),
         ),
+        photo=AUTO_RENEWAL,
     )
 
 
@@ -621,7 +628,7 @@ async def cb_key_instructions(callback: CallbackQuery, bot: Bot):
         f"<b>Подключение VPN</b> · {escape(key.get('remark') or f'Ключ #{key_id}')}\n\n"
         "Ссылка подписки готова. Скопируйте её кнопкой выше, затем выберите устройство."
     )
-    await send_or_edit(bot, callback, text, connection_guide_kb(key_id, subscription_url))
+    await send_or_edit(bot, callback, text, connection_guide_kb(key_id, subscription_url), photo=CONNECTION)
 
 
 # ---------------------------------------------------------------------------
@@ -647,6 +654,7 @@ async def cb_key_renew(callback: CallbackQuery, bot: Bot, state: FSMContext):
         f"<b>Продление подписки «{escape(k.get('remark') or str(k['id']))}»</b>\n\n"
         "Выберите тариф:",
         tariff_selection_kb(devices=key_devices),
+        photo=RENEWAL,
     )
 
 
@@ -669,7 +677,7 @@ async def cb_key_delete(callback: CallbackQuery, bot: Bot):
         f"Удалить ключ <b>«{remark}»</b>?\n\n"
         "После удаления подключение по этой ссылке перестанет работать."
     )
-    await send_or_edit(bot, callback, text, confirm_delete_kb(key_id))
+    await send_or_edit(bot, callback, text, confirm_delete_kb(key_id), photo=KEY)
 
 
 # ---------------------------------------------------------------------------
@@ -736,10 +744,11 @@ async def cb_key_delete_confirm(callback: CallbackQuery, bot: Bot):
             bot, callback,
             f"Ключ «{remark}» удалён. Подключение по нему отключено.",
             back_to_menu(),
+            photo=KEY,
         )
     elif len(keys) == 1:
         text, keyboard = await _key_info_content(user_id, keys[0])
-        await send_or_edit(bot, callback, f"Ключ «{remark}» удалён.\n\n{text}", keyboard)
+        await send_or_edit(bot, callback, f"Ключ «{remark}» удалён.\n\n{text}", keyboard, photo=KEY)
     else:
         text = (
             f"Ключ «{remark}» удалён.\n\n"
@@ -749,9 +758,9 @@ async def cb_key_delete_confirm(callback: CallbackQuery, bot: Bot):
         active = [key for key in keys if int(key.get("expiry") or 0) > now]
         expired = [key for key in keys if int(key.get("expiry") or 0) <= now]
         if not active and expired:
-            await send_with_photo(bot, callback, "<b>История подписок</b>", key_history_kb(expired))
+            await send_with_photo(bot, callback, "<b>История подписок</b>", key_history_kb(expired), photo=KEY)
         else:
-            await send_with_photo(bot, callback, text, my_keys_list_kb(active, has_history=bool(expired)))
+            await send_with_photo(bot, callback, text, my_keys_list_kb(active, has_history=bool(expired)), photo=KEY)
 
 # ---------------------------------------------------------------------------
 # Referral bonus activation

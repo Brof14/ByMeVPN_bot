@@ -37,12 +37,19 @@ from database import (
     calculate_bonus_months, log_ad_analytics_event, log_ad_audit,
     get_user_keys, delete_user_ad_application,
 )
-from utils import send_with_photo, safe_answer
+from utils import send_with_photo as _send_with_photo, safe_answer
+from bot_assets import AD_PROGRAM
 from keyboards import back_to_menu, support_url
 from bot_style import themed_button as InlineKeyboardButton
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+
+async def send_with_photo(bot, target, text, reply_markup=None, **kwargs):
+    """Use the advertising artwork consistently across this section."""
+    kwargs.setdefault("photo", AD_PROGRAM)
+    return await _send_with_photo(bot, target, text, reply_markup, **kwargs)
 
 
 class AdProgramFlow(StatesGroup):
@@ -851,10 +858,7 @@ async def cb_ad_admin_retention_issue(callback: CallbackQuery, bot: Bot):
 
 
 async def send_or_edit_safe(bot: Bot, callback: CallbackQuery, text: str, kb) -> None:
-    try:
-        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
-    except Exception:
-        await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
+    await send_with_photo(bot, callback, text, kb)
 
 
 @router.callback_query(F.data.startswith("ad_admin_approve:"))
