@@ -1332,10 +1332,11 @@ async def reserve_mobile_device_bootstrap(
     active_devices: int,
     device_limit: int,
 ) -> Optional[int]:
-    """Atomically reserve one free panel slot; never refresh an expired grant.
+    """Atomically reserve one free panel slot for a short device bootstrap.
 
-    Repeating the same account/device/subscription request returns its original
-    expiry. Concurrent installations are counted as pending slots until expiry.
+    Repeating a live account/device/subscription request returns its original
+    expiry. Once that grant expires, the same device may retry if capacity is
+    still available; expired grants never count as occupied slots.
     """
     db = await get_db()
     now = int(time.time())
@@ -1357,9 +1358,18 @@ async def reserve_mobile_device_bootstrap(
             )
             row = await existing.fetchone()
             if row:
-                await db.commit()
                 original_expiry = int(row[0])
-                return original_expiry if original_expiry > now else None
+                if original_expiry > now:
+                    await db.commit()
+                    return original_expiry
+                # A failed first connect must not strand this installation
+                # forever. Remove only its expired reservation, then reserve
+                # again below under the same transaction and capacity check.
+                await db.execute(
+                    """DELETE FROM mobile_device_bootstraps
+                       WHERE user_id=? AND device_hash=? AND subscription_expiry=? AND expires_at<=?""",
+                    (int(user_id), str(device_hash), int(subscription_expiry), now),
+                )
 
             pending = await db.execute(
                 """SELECT COUNT(*) FROM mobile_device_bootstraps

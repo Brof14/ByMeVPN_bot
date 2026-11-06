@@ -249,7 +249,7 @@ def install_telegram_auth_storage_compat(database: Any) -> tuple[str, ...]:
         active_devices: int,
         device_limit: int,
     ) -> int | None:
-        """Atomically reserve a free slot without extending any existing grant."""
+        """Atomically reserve a free slot for a bounded device bootstrap."""
         db = await ensure_schema()
         now = int(time.time())
         if (int(subscription_expiry) <= now or int(expires_at) <= now
@@ -269,9 +269,17 @@ def install_telegram_auth_storage_compat(database: Any) -> tuple[str, ...]:
                 )
                 row = await existing.fetchone()
                 if row:
-                    await db.commit()
                     original_expiry = int(row[0])
-                    return original_expiry if original_expiry > now else None
+                    if original_expiry > now:
+                        await db.commit()
+                        return original_expiry
+                    # Permit only this same device to retry after expiry; the
+                    # new reservation still passes the live-capacity check.
+                    await db.execute(
+                        """DELETE FROM mobile_device_bootstraps
+                           WHERE user_id=? AND device_hash=? AND subscription_expiry=? AND expires_at<=?""",
+                        (int(user_id), str(device_hash), int(subscription_expiry), now),
+                    )
 
                 pending = await db.execute(
                     """SELECT COUNT(*) FROM mobile_device_bootstraps
