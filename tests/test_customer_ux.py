@@ -109,9 +109,10 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             patch("subscription.deliver_key", new=AsyncMock(side_effect=[False, True])) as deliver,
             patch("handlers.ad_program.log_ad_audit", new=AsyncMock()),
             patch("handlers.ad_program.log_ad_analytics_event", new=AsyncMock()),
+            patch("handlers.ad_program.send_with_photo", new=AsyncMock()) as send,
         ):
             await cb_ad_admin_approve(callback, bot)
-            self.assertIn("пока не выдан", callback.message.edit_text.await_args.args[0])
+            self.assertIn("пока не выдан", send.await_args.args[2])
             await cb_ad_admin_approve(callback, bot)
 
         self.assertEqual(deliver.await_count, 2)

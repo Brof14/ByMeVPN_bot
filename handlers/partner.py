@@ -9,6 +9,7 @@ from aiogram.types import (
 
 from database import get_referral_stats_enhanced, get_referred_users_list
 from utils import send_with_photo, safe_answer
+from bot_assets import REFERRALS, MY_INVITATIONS
 from constants import format_timestamp, INTRO_TRIAL_DAYS, INTRO_TRIAL_PRICE_RUB, RECURRING_MONTHLY_PRICE, RECURRING_DAYS
 from bot_style import themed_button as InlineKeyboardButton
 
@@ -55,7 +56,7 @@ async def cb_partner(callback: CallbackQuery, bot: Bot):
         f"<b>Ваша ссылка</b>\n<code>{link}</code>"
         f"{pending_note}"
     )
-    await send_with_photo(bot, callback, text, partner_main_kb(link))
+    await send_with_photo(bot, callback, text, partner_main_kb(link), photo=REFERRALS)
 
 
 @router.callback_query(F.data == "partner_referrals_list")
@@ -82,4 +83,4 @@ async def cb_partner_referrals_list(callback: CallbackQuery, bot: Bot):
         [InlineKeyboardButton(text="← К приглашениям", callback_data="partner")],
         [InlineKeyboardButton(text="Главное меню", callback_data="back_to_menu")],
     ])
-    await send_with_photo(bot, callback, text, kb)
+    await send_with_photo(bot, callback, text, kb, photo=MY_INVITATIONS)

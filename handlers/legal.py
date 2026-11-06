@@ -8,6 +8,7 @@ from aiogram.types import Message, CallbackQuery
 
 from keyboards import legal_kb
 from utils import send_with_photo, safe_answer
+from bot_assets import LEGAL
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -27,10 +28,10 @@ async def cmd_legal(message: Message, bot: Bot):
         await message.delete()
     except Exception:
         pass
-    await send_with_photo(bot, message, _LEGAL_TEXT, legal_kb())
+    await send_with_photo(bot, message, _LEGAL_TEXT, legal_kb(), photo=LEGAL)
 
 
 @router.callback_query(F.data == "legal")
 async def cb_legal(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
-    await send_with_photo(bot, callback, _LEGAL_TEXT, legal_kb())
+    await send_with_photo(bot, callback, _LEGAL_TEXT, legal_kb(), photo=LEGAL)

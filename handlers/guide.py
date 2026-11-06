@@ -10,6 +10,7 @@ from aiogram.types import (
 
 from keyboards import connection_guide_kb, additional_platforms_kb, support_url
 from utils import send_with_photo, send_or_edit, safe_answer
+from bot_assets import SUPPORT, CONNECTION, ANDROID, IPHONE, WINDOWS, LINUX
 from bot_style import themed_button as InlineKeyboardButton
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ async def cb_guide_menu(callback: CallbackQuery, bot: Bot):
         "Выберите устройство — покажем доступный способ подключения."
     )
     await _track_guide_event(callback.from_user.id, "connection_guide_open")
-    await send_or_edit(bot, callback, text, connection_guide_kb())
+    await send_or_edit(bot, callback, text, connection_guide_kb(), photo=CONNECTION)
 
 
 @router.callback_query(F.data.startswith("connection_guide:"))
@@ -56,7 +57,7 @@ async def cb_guide_for_key(callback: CallbackQuery, bot: Bot):
         f"<b>Подключение · {escape(key.get('remark') or f'Ключ #{key_id}')}</b>\n\n"
         "Выберите устройство. Покажем, как установить приложение и включить VPN за несколько шагов."
     )
-    await send_or_edit(bot, callback, text, connection_guide_kb(key_id))
+    await send_or_edit(bot, callback, text, connection_guide_kb(key_id), photo=CONNECTION)
 
 
 @router.callback_query(F.data == "trouble")
@@ -75,7 +76,7 @@ async def cb_trouble(callback: CallbackQuery, bot: Bot):
         [InlineKeyboardButton(text="Написать в поддержку", url=support_url())],
         [InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu")],
     ])
-    await send_with_photo(bot, callback, text, kb)
+    await send_with_photo(bot, callback, text, kb, photo=SUPPORT)
 
 
 @router.callback_query(F.data.startswith("support_topic:"))
@@ -109,7 +110,7 @@ async def cb_support_topic(callback: CallbackQuery, bot: Bot):
         [InlineKeyboardButton(text="Написать в поддержку", url=support_url())],
         [InlineKeyboardButton(text="← К выбору проблемы", callback_data="trouble")],
     ])
-    await send_with_photo(bot, callback, text, kb)
+    await send_with_photo(bot, callback, text, kb, photo=SUPPORT)
 
 
 @router.callback_query(F.data.startswith("guide_more"))
@@ -128,7 +129,7 @@ async def cb_guide_more(callback: CallbackQuery, bot: Bot):
             await safe_answer(callback, "Ключ не найден.", alert=True)
             return
     text = "<b>Другие устройства</b>\n\nВыберите платформу."
-    await send_or_edit(bot, callback, text, additional_platforms_kb(key_id))
+    await send_or_edit(bot, callback, text, additional_platforms_kb(key_id), photo=CONNECTION)
 
 
 _GUIDES = {
@@ -271,7 +272,16 @@ async def _send_platform_guide(callback: CallbackQuery, bot: Bot, platform: str,
         *guide_rows,
         [InlineKeyboardButton(text="← Назад", callback_data=choose_callback)],
     ])
-    await send_or_edit(bot, callback, text, kb)
+    platform_art = {
+        "ios": IPHONE,
+        "android": ANDROID,
+        "android_tv": ANDROID,
+        "ios_mac": IPHONE,
+        "windows": WINDOWS,
+        "macos": CONNECTION,
+        "linux": LINUX,
+    }.get(platform, CONNECTION)
+    await send_or_edit(bot, callback, text, kb, photo=platform_art)
 
 
 async def _track_guide_event(user_id: int, event_type: str, platform: str | None = None) -> None:

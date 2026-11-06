@@ -1,4 +1,4 @@
-"""Artwork retained for the active main menu and key delivery."""
+"""Local artwork for the ByMeVPN Telegram bot's customer sections."""
 
 from pathlib import Path
 
@@ -10,5 +10,22 @@ def _asset(name: str) -> str:
 
 
 MENU = _asset("menu")
+SUPPORT = _asset("support")
 ABOUT = _asset("about")
+FREE_VPN = _asset("free_vpn")
+REFERRALS = _asset("referrals")
+MY_INVITATIONS = _asset("my_invitations")
+AD_PROGRAM = _asset("ad_program")
+PLANS = _asset("plans")
 KEY = _asset("key")
+DEVICES = _asset("devices")
+CONNECTION = _asset("connection")
+ANDROID = _asset("android")
+IPHONE = _asset("iphone")
+WINDOWS = _asset("windows")
+LINUX = _asset("linux")
+RENEWAL = _asset("renewal")
+PAYMENT = _asset("payment")
+PROMO_CODE = _asset("promo_code")
+LEGAL = _asset("legal")
+AUTO_RENEWAL = _asset("auto_renewal")
