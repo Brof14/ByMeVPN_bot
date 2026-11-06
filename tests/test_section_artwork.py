@@ -1,4 +1,4 @@
-"""Every customer section uses its matching bundled artwork."""
+"""Screen art policy: retain bundled images but render only landmark banners."""
 import unittest
 from pathlib import Path
 from types import SimpleNamespace

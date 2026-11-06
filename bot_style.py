@@ -84,6 +84,7 @@ _PREFIX_ICONS = (
     ("manage_payment_methods", "card"),
     ("autorenew_", "settings"),
     ("guide_", "connect"),
+    ("support_topic:", "support"),
     ("ad_get_post:", "ads"),
     ("ad_submit_post:", "share"),
     ("ad_admin_", "ads"),
@@ -94,6 +95,7 @@ _PREFIX_ICONS = (
 # A fallback for external URLs and copy buttons without callback data.
 _LABEL_ICONS = (
     ("поделиться", "share"),
+    ("написать в поддержку", "support"),
     ("скопировать", "copy"),
     ("установить", "download"),
     ("скачать", "download"),

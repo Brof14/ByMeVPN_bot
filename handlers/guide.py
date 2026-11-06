@@ -73,6 +73,8 @@ async def cb_trouble(callback: CallbackQuery, bot: Bot):
         [InlineKeyboardButton(text="Нет интернета с VPN", callback_data="support_topic:no_internet")],
         [InlineKeyboardButton(text="Проблема с приложением", callback_data="support_topic:app")],
         [InlineKeyboardButton(text="Не добавляется подписка", callback_data="support_topic:import")],
+        [InlineKeyboardButton(text="Оплата и подписка", callback_data="support_topic:billing")],
+        [InlineKeyboardButton(text="Устройства", callback_data="support_topic:devices")],
         [InlineKeyboardButton(text="Написать в поддержку", url=support_url())],
         [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu")],
     ])
@@ -100,15 +102,29 @@ async def cb_support_topic(callback: CallbackQuery, bot: Bot):
             "<b>Не добавляется подписка</b>\n\n"
             "Скопируйте ссылку в разделе «Подписка» и импортируйте её в VPN-приложение."
         ),
+        "billing": (
+            "<b>Оплата и подписка</b>\n\n"
+            "Если платёж прошёл, а доступ не появился, не оплачивайте повторно. "
+            "Проверьте статус подписки или напишите в поддержку."
+        ),
+        "devices": (
+            "<b>Устройства</b>\n\n"
+            "Откройте «Подписка» → «Устройства». Удалите старое устройство, "
+            "если лимит занят."
+        ),
     }
     text = guidance.get(topic)
     if not text:
         await safe_answer(callback, "Подсказка не найдена.", alert=True)
         return
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+    rows = []
+    if topic in {"billing", "devices"}:
+        rows.append([InlineKeyboardButton(text="Подписка", callback_data="my_keys")])
+    rows.extend([
         [InlineKeyboardButton(text="Написать в поддержку", url=support_url())],
-        [InlineKeyboardButton(text="← К выбору проблемы", callback_data="trouble")],
+        [InlineKeyboardButton(text="← Назад", callback_data="trouble")],
     ])
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
     await send_with_photo(bot, callback, text, kb, photo=SUPPORT)
 
 
@@ -142,7 +158,7 @@ _GUIDES = {
         "<b>Android</b>\n\n"
         "1. Установите ByMeVPN по кнопке ниже.\n"
         "2. Войдите и подключитесь.\n\n"
-        "Если приложение недоступно, используйте Happ."
+        "Если приложение недоступно, установите Happ и добавьте в него ссылку из раздела «Подписка»."
     ),
     "android_tv": (
         "<b>Android TV</b>\n\n"

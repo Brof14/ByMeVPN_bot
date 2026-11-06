@@ -1,7 +1,8 @@
 """Regression contracts for the V3 Telegram button design."""
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
 
 from bot_style import themed_button
 from keyboards import (
@@ -42,6 +43,21 @@ class PremiumButtonDesignTests(unittest.TestCase):
         self.assertEqual([b.callback_data for b in buttons(off)], [b.callback_data for b in buttons(on)])
         self.assertTrue(all(b.icon_custom_emoji_id is None for b in buttons(off)))
         self.assertTrue(any(b.icon_custom_emoji_id for b in buttons(on)))
+
+    async def test_help_topics_cover_payments_and_devices(self):
+        from handlers.guide import cb_support_topic
+        for topic in ("billing", "devices"):
+            callback = SimpleNamespace(data=f"support_topic:{topic}")
+            with (
+                patch("handlers.guide.safe_answer", new=AsyncMock()),
+                patch("handlers.guide.send_with_photo", new=AsyncMock()) as send,
+            ):
+                await cb_support_topic(callback, object())
+            text = send.await_args.args[2]
+            self.assertIn("Подписка", text)
+            actions = [b.callback_data for row in send.await_args.args[3].inline_keyboard for b in row]
+            self.assertIn("my_keys", actions)
+            self.assertIn("trouble", actions)
 
     def test_existing_tariffs_and_key_actions_remain_intact(self):
         tariffs = [b.callback_data for b in buttons(tariff_selection_kb(devices=5))]
