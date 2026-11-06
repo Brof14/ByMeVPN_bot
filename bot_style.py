@@ -121,9 +121,15 @@ _LEGACY_PREFIXES = (
 
 def _is_navigation(text: str, callback: str) -> bool:
     label = text.strip().lower()
+    if label.startswith(("←", "◀")):
+        return True
+    for legacy in ("🔙 ", "🏠 "):
+        if label.startswith(legacy):
+            label = label[len(legacy):]
+            break
     return (
         callback == "back_to_menu"
-        or label.startswith(("←", "◀", "назад", "отмена", "главное меню", "к меню"))
+        or label.startswith(("назад", "отмена", "главное меню", "к меню"))
         or label in {"закрыть", "отменить"}
     )
 

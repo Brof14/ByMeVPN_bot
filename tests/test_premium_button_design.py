@@ -35,6 +35,14 @@ class PremiumButtonDesignTests(unittest.TestCase):
         self.assertEqual(delete.style, "danger")
         self.assertIsNone(back.style)
 
+    def test_legacy_back_buttons_remain_neutral(self):
+        with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "1"}):
+            for title in ("🔙 Главное меню", "🏠 Главное меню", "← Назад", "◀️ Назад"):
+                button = themed_button(text=title, callback_data="admin_menu")
+                self.assertIsNone(button.style)
+                self.assertEqual(button.icon_custom_emoji_id, "5875082500023258804")
+                self.assertNotIn("Главное менюГлавное меню", button.text)
+
     def test_custom_icons_can_be_disabled_without_changing_callbacks(self):
         with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "0"}):
             off = main_menu_with_keys()
