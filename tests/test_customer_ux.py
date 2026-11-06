@@ -77,13 +77,13 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             patch("handlers.start.safe_answer", new=AsyncMock()),
             patch("handlers.start.has_trial_used", new=AsyncMock(return_value=False)),
             patch("handlers.start.get_user_keys", new=AsyncMock(return_value=[])),
-            patch("handlers.start.get_xui_client_details", new=AsyncMock(side_effect=[None, {
+            patch("xui_client.get_xui_client_details", new=AsyncMock(side_effect=[None, {
                 "enable": True, "expiry_time": (base_time + 3 * 86400) * 1000,
             }])),
             patch("handlers.start.get_trial_claim_reservation", new=AsyncMock(return_value=None)),
             patch("handlers.start.reserve_trial_claim", new=AsyncMock(return_value="claim-1")),
             patch("subscription.deliver_key", new=AsyncMock(return_value=True)) as deliver,
-            patch("handlers.start.get_xui_devices", new=AsyncMock(return_value={
+            patch("xui_client.get_xui_devices", new=AsyncMock(return_value={
                 "limit_hwid": 2, "limit_ip": 0, "devices": [],
             })),
             patch("handlers.start.complete_trial_claim", new=AsyncMock(return_value=True)),
