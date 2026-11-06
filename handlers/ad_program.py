@@ -165,33 +165,28 @@ async def cb_ad_check_channel(callback: CallbackQuery, bot: Bot, state: FSMConte
 
     if pending_apps:
         text = (
-        "<b>Проверка канала</b>\n\n"
-        "Отправьте ссылку на Telegram-канал.\n\n"
-        "Публичный: <code>@mychannel</code>\n"
-        "Приватный: ссылка-приглашение <code>https://t.me/+...</code>\n\n"
-        "Добавлять бота в администраторы не нужно."
-    )
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+            "<b>У вас уже есть заявка</b>\n\n"
+            "Ожидайте её проверки или завершите текущую заявку, прежде чем подавать новую."
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Мои заявки", callback_data="ad_my_applications")],
-            [InlineKeyboardButton(text="← Назад", callback_data="ad_program")]
+            [InlineKeyboardButton(text="← Назад", callback_data="ad_program")],
         ])
         await send_with_photo(bot, callback, text, kb)
         return
 
     text = (
         "<b>Проверка канала</b>\n\n"
-        "Отправьте ссылку на ваш канал:\n\n"
-        "• Публичный: <code>@mychannel</code> или <code>https://t.me/mychannel</code>\n"
-        "• Приватный: ссылка-приглашение <code>https://t.me/+abc123...</code>\n\n"
-        "Канал найдём автоматически, добавлять бота в администраторы не нужно."
+        "Отправьте ссылку на Telegram-канал.\n\n"
+        "Публичный: <code>@mychannel</code>\n"
+        "Приватный: ссылка-приглашение <code>https://t.me/+...</code>\n\n"
+        "Добавлять бота в администраторы не нужно."
     )
-
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="◀️ Отмена", callback_data="ad_program")]
+        [InlineKeyboardButton(text="Отмена", callback_data="ad_program")],
     ])
-
     await send_with_photo(bot, callback, text, kb)
+
     await state.set_state(AdProgramFlow.waiting_channel)
 
 
