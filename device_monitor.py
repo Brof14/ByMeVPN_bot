@@ -5,10 +5,13 @@ import logging
 import time
 
 from aiogram import Bot
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    InlineKeyboardMarkup,
+)
 
 from database import get_user_keys, remember_hwid_devices, mark_hwid_device_notified
 from xui_client import get_xui_devices, get_xui_online_user_ids
+from bot_style import themed_button as InlineKeyboardButton
 
 logger = logging.getLogger(__name__)
 _MONITOR_STARTED_AT = int(time.time())

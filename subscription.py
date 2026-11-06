@@ -11,7 +11,8 @@ from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 
 from config import ADMIN_ID
 from constants import REFERRAL_FIRST_PAYMENT_BONUS_DAYS
-from utils import LOGO_URL, send_with_photo, safe_answer
+from utils import send_photo_message, send_with_photo, safe_answer
+from bot_assets import KEY
 import database
 from database import (
     add_key, get_referrer, add_payment, set_trial_used, log_key_error,
@@ -20,6 +21,7 @@ from database import (
 )
 from xui_client import create_xui_user, get_xui_user, format_traffic
 from keyboards import after_key_kb, cancel_kb
+from bot_style import themed_button as InlineKeyboardButton
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +39,8 @@ async def _send_delivery_message(bot: Bot, chat_id: int, text: str, subscription
     the key via «Мои ключи».
     """
     try:
-        await bot.send_photo(
-            chat_id=chat_id, photo=LOGO_URL,
-            caption=text, parse_mode="HTML", reply_markup=after_key_kb(subscription_url),
+        await send_photo_message(
+            bot, chat_id, KEY, text, reply_markup=after_key_kb(subscription_url),
         )
         return True
     except (TelegramBadRequest, TelegramForbiddenError) as e:
@@ -504,7 +505,7 @@ async def _notify_referral_bonus(bot: Bot, referrer_id: int, new_user_id: int) -
     Referrer must press a button and enter a config name to activate.
     """
     try:
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        from aiogram.types import InlineKeyboardMarkup
         kb = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(
                 text=f"🎁 Активировать +{REFERRAL_FIRST_PAYMENT_BONUS_DAYS} дней",

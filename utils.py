@@ -1,14 +1,105 @@
 """Utility helpers for ByMeVPN bot."""
-import logging
+import asyncio
+import json
+import os
+from pathlib import Path
+
 from aiogram import Bot
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup
+from aiogram.types import (
+    Message,
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    FSInputFile,
+    InputMediaPhoto,
+)
 from aiogram.exceptions import TelegramBadRequest
 
-from constants import LOGO_URL, CAPTION_LIMIT
 from async_utils import monitor_performance, get_preloaded
+from constants import LOGO_URL  # Backward compatibility for existing handlers.
 
-logger = logging.getLogger(__name__)
+_photo_file_ids: dict[str, str] = {}
+_photo_cache_loaded = False
+_photo_cache_lock = asyncio.Lock()
 
+
+def _photo_cache_path() -> Path:
+    configured = os.getenv("BOT_MEDIA_CACHE_FILE")
+    return Path(configured) if configured else Path("/app/data/telegram-photo-file-ids.json")
+
+
+async def _load_photo_cache() -> None:
+    global _photo_cache_loaded
+    if _photo_cache_loaded:
+        return
+    async with _photo_cache_lock:
+        if _photo_cache_loaded:
+            return
+        try:
+            loaded = json.loads(_photo_cache_path().read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                _photo_file_ids.update({str(k): str(v) for k, v in loaded.items() if isinstance(v, str)})
+        except (OSError, ValueError, TypeError):
+            pass
+        _photo_cache_loaded = True
+
+
+async def _photo_source(photo: str):
+    """Return a cached Telegram file_id or a local upload source."""
+    path = Path(photo)
+    if not path.is_file():
+        return photo, None
+    await _load_photo_cache()
+    key = path.name
+    return _photo_file_ids.get(key) or FSInputFile(path), key
+
+
+async def _remember_photo_file_id(key: str | None, message: Message) -> None:
+    if not key:
+        return
+    photos = getattr(message, "photo", None) or []
+    if not photos:
+        return
+    await _load_photo_cache()
+    async with _photo_cache_lock:
+        _photo_file_ids[key] = photos[-1].file_id
+        path = _photo_cache_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp = path.with_suffix(path.suffix + ".tmp")
+            temp.write_text(json.dumps(_photo_file_ids, separators=(",", ":")), encoding="utf-8")
+            temp.replace(path)
+        except OSError:
+            # The in-memory cache still speeds up this process; persistent
+            # caching is a best-effort optimization, not a delivery dependency.
+            pass
+
+
+async def send_photo_message(
+    bot: Bot,
+    chat_id: int,
+    photo: str,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> Message:
+    """Send a local banner, caching Telegram's file_id for later sends."""
+    source, cache_key = await _photo_source(photo)
+    try:
+        sent = await bot.send_photo(
+            chat_id=chat_id,
+            photo=source,
+            caption=text,
+            parse_mode="HTML",
+            reply_markup=reply_markup,
+        )
+        await _remember_photo_file_id(cache_key, sent)
+        return sent
+    except Exception:
+        return await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=reply_markup,
+        )
 
 # ---------------------------------------------------------------------------
 # Message sending helpers
@@ -20,40 +111,74 @@ async def send_or_edit(
     target: "Message | CallbackQuery",
     text: str,
     reply_markup: InlineKeyboardMarkup | None = None,
+    *,
+    photo: str | None = None,
 ) -> Message:
-    """Edit existing text message or photo caption, or send a new one."""
+    """Edit the current screen and reuse Telegram's file_id for local artwork."""
     msg = target.message if isinstance(target, CallbackQuery) else target
-    is_photo_msg = bool(getattr(msg, "photo", None))
+    if photo:
+        source, cache_key = await _photo_source(photo)
+        if getattr(msg, "photo", None):
+            try:
+                updated = await bot.edit_message_media(
+                    chat_id=msg.chat.id,
+                    message_id=msg.message_id,
+                    media=InputMediaPhoto(media=source, caption=text, parse_mode="HTML"),
+                    reply_markup=reply_markup,
+                )
+                await _remember_photo_file_id(cache_key, updated)
+                return updated
+            except TelegramBadRequest as e:
+                if "message is not modified" in str(e):
+                    return msg
+            except Exception:
+                pass
 
-    if is_photo_msg and len(text) <= CAPTION_LIMIT:
         try:
-            return await bot.edit_message_caption(
+            sent = await bot.send_photo(
                 chat_id=msg.chat.id,
-                message_id=msg.message_id,
+                photo=source,
                 caption=text,
                 parse_mode="HTML",
                 reply_markup=reply_markup,
             )
-        except TelegramBadRequest as e:
-            if "message is not modified" in str(e):
-                return msg
+            await _remember_photo_file_id(cache_key, sent)
         except Exception:
-            pass
-    else:
+            return await send_or_edit(bot, target, text, reply_markup)
         try:
-            return await bot.edit_message_text(
-                chat_id=msg.chat.id,
-                message_id=msg.message_id,
-                text=text,
-                parse_mode="HTML",
-                reply_markup=reply_markup,
-            )
-        except TelegramBadRequest as e:
-            if "message is not modified" in str(e):
-                return msg
-            # Can't edit (e.g. photo message) — fall through
+            await bot.delete_message(msg.chat.id, msg.message_id)
         except Exception:
             pass
+        return sent
+
+    if getattr(msg, "photo", None):
+        # Old screens used remote banners. Skip a guaranteed edit-text failure
+        # and replace that message in two Telegram calls on the first tap.
+        try:
+            await bot.delete_message(msg.chat.id, msg.message_id)
+        except Exception:
+            pass
+        return await bot.send_message(
+            chat_id=msg.chat.id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=reply_markup,
+        )
+
+    try:
+        return await bot.edit_message_text(
+            chat_id=msg.chat.id,
+            message_id=msg.message_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=reply_markup,
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e):
+            return msg
+        # Telegram cannot turn a photo into a text message; replace it below.
+    except Exception:
+        pass
 
     try:
         await bot.delete_message(msg.chat.id, msg.message_id)
@@ -74,62 +199,20 @@ async def send_with_photo(
     target: "Message | CallbackQuery",
     text: str,
     reply_markup: InlineKeyboardMarkup | None = None,
+    *,
+    photo: str | None = None,
 ) -> Message:
-    """
-    Send (or edit) a message with the ByMeVPN logo photo.
-
-    - If text > 1024 chars → falls back to text-only (send_or_edit).
-    - If current message is already a photo → edits the caption.
-    - Otherwise → deletes old message + sends new photo message.
-    """
-    if len(text) > CAPTION_LIMIT:
-        # Caption too long — use plain text mode
-        return await send_or_edit(bot, target, text, reply_markup)
-
+    """Send or edit a screen with a locally stored, Telegram-cached banner."""
     msg = target.message if isinstance(target, CallbackQuery) else target
-    chat_id = msg.chat.id
+    if isinstance(target, CallbackQuery):
+        return await send_or_edit(bot, target, text, reply_markup, photo=photo)
 
-    # If the current message already has a photo, just edit its caption
-    is_photo_msg = bool(getattr(msg, "photo", None))
-    if isinstance(target, CallbackQuery) and is_photo_msg:
-        try:
-            return await bot.edit_message_caption(
-                chat_id=chat_id,
-                message_id=msg.message_id,
-                caption=text,
-                parse_mode="HTML",
-                reply_markup=reply_markup,
-            )
-        except TelegramBadRequest as e:
-            if "message is not modified" in str(e):
-                return msg
-            # Can't edit caption — fall through to delete+send
-        except Exception:
-            pass
+    if photo:
+        return await send_photo_message(bot, msg.chat.id, photo, text, reply_markup)
 
-    # Delete old message silently
-    try:
-        await bot.delete_message(chat_id, msg.message_id)
-    except Exception:
-        pass
-
-    # Send new photo message
-    try:
-        return await bot.send_photo(
-            chat_id=chat_id,
-            photo=LOGO_URL,
-            caption=text,
-            parse_mode="HTML",
-            reply_markup=reply_markup,
-        )
-    except Exception as e:
-        logger.warning("Photo send failed (%s), falling back to text", e)
-        return await bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            parse_mode="HTML",
-            reply_markup=reply_markup,
-        )
+    return await bot.send_message(
+        chat_id=msg.chat.id, text=text, parse_mode="HTML", reply_markup=reply_markup,
+    )
 
 
 async def safe_answer(callback: CallbackQuery, text: str = "", alert: bool = False) -> None:

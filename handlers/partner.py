@@ -2,11 +2,16 @@
 from urllib.parse import quote_plus
 
 from aiogram import Bot, F, Router
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardMarkup,
+)
 
 from database import get_referral_stats_enhanced, get_referred_users_list
 from utils import send_with_photo, safe_answer
 from constants import format_timestamp, INTRO_TRIAL_DAYS, INTRO_TRIAL_PRICE_RUB, RECURRING_MONTHLY_PRICE, RECURRING_DAYS
+from bot_style import themed_button as InlineKeyboardButton
+from bot_assets import REFERRALS, MY_INVITATIONS
 
 router = Router()
 
@@ -48,20 +53,18 @@ async def cb_partner(callback: CallbackQuery, bot: Bot):
         if pending_rewards else ""
     )
     text = (
-        "<b>VPN бесплатно за друзей</b>\n\n"
-        "Приглашайте друзей и пользуйтесь ByMeVPN без оплаты и привязки карты.\n\n"
-        "Друг зарегистрировался — <b>+15 дней</b>\n"
-        "Друг впервые оплатил подходящую подписку — <b>+30 дней</b>\n\n"
+        "<b>Бонусы за друзей</b>\n\n"
+        "Друг запустит бота по вашей ссылке — <b>+15 дней</b>.\n"
+        "Его первая подходящая оплата — ещё <b>+30 дней</b>.\n\n"
         f"<b>Ваш результат</b>\n"
-        f"Зарегистрировались: <b>{registrations}</b> · оплатили: <b>{paid_referrals}</b>\n"
-        f"Начислено: <b>+{bonus_days} дней</b>\n"
-        f"Следующий шаг: {next_step}\n\n"
-        "<b>Ваша ссылка</b>\n"
-        f"<code>{link}</code>\n\n"
-        "Бонусные дни добавляются к вашему VPN. Если ключа ещё нет, бот создаст его автоматически."
+        f"Приглашено: <b>{registrations}</b> · оплатили: <b>{paid_referrals}</b>\n"
+        f"Начислено: <b>{bonus_days} дней</b>\n\n"
+        f"<b>Следующий шаг</b>\n{next_step}\n\n"
+        f"<b>Ваша ссылка</b>\n<code>{link}</code>\n\n"
+        "Бонусные дни добавятся к подписке автоматически."
         f"{pending_note}"
     )
-    await send_with_photo(bot, callback, text, partner_main_kb(link))
+    await send_with_photo(bot, callback, text, partner_main_kb(link), photo=REFERRALS)
 
 
 @router.callback_query(F.data == "partner_referrals_list")
@@ -88,4 +91,4 @@ async def cb_partner_referrals_list(callback: CallbackQuery, bot: Bot):
         [InlineKeyboardButton(text="← К приглашениям", callback_data="partner")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu")],
     ])
-    await send_with_photo(bot, callback, text, kb)
+    await send_with_photo(bot, callback, text, kb, photo=MY_INVITATIONS)

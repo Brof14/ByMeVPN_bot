@@ -9,7 +9,9 @@ from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    InlineKeyboardMarkup,
+)
 
 from config import ADMIN_IDS
 from database import (
@@ -31,6 +33,7 @@ from database import (
     get_user_keys,
     update_automated_monthly_giveaway,
 )
+from bot_style import themed_button as InlineKeyboardButton
 
 logger = logging.getLogger(__name__)
 
