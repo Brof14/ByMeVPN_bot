@@ -3,10 +3,15 @@ import logging
 from html import escape
 
 from aiogram import Bot, F, Router
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardMarkup,
+)
 
 from keyboards import connection_guide_kb, additional_platforms_kb, support_url
 from utils import send_with_photo, send_or_edit, safe_answer
+from bot_style import themed_button as InlineKeyboardButton
+from bot_assets import CONNECTION, SUPPORT, ANDROID, IPHONE, WINDOWS, LINUX
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -27,11 +32,11 @@ HAPP_LINUX_ARCH = "https://github.com/Happ-proxy/happ-desktop/releases/latest/do
 async def cb_guide_menu(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
-        "<b>Подключить ByMeVPN</b>\n\n"
-        "Выберите устройство. Покажем, как установить приложение и включить VPN за несколько шагов."
+        "<b>Подключение</b>\n\n"
+        "Выберите устройство — покажем, где установить Happ и как добавить подписку."
     )
     await _track_guide_event(callback.from_user.id, "connection_guide_open")
-    await send_or_edit(bot, callback, text, connection_guide_kb())
+    await send_or_edit(bot, callback, text, connection_guide_kb(), photo=CONNECTION)
 
 
 @router.callback_query(F.data.startswith("connection_guide:"))
@@ -51,7 +56,7 @@ async def cb_guide_for_key(callback: CallbackQuery, bot: Bot):
         f"<b>Подключение · {escape(key.get('remark') or f'Ключ #{key_id}')}</b>\n\n"
         "Выберите устройство. Покажем, как установить приложение и включить VPN за несколько шагов."
     )
-    await send_or_edit(bot, callback, text, connection_guide_kb(key_id))
+    await send_or_edit(bot, callback, text, connection_guide_kb(key_id), photo=CONNECTION)
 
 
 @router.callback_query(F.data == "trouble")
@@ -59,8 +64,8 @@ async def cb_trouble(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     await _track_guide_event(callback.from_user.id, "connection_help_open")
     text = (
-        "<b>Помощь с подключением</b>\n\n"
-        "Выберите проблему. Если не получится решить её самостоятельно, поможем в поддержке."
+        "<b>Чем помочь?</b>\n\n"
+        "Выберите проблему. Если подсказка не поможет, напишите нам — разберёмся вместе."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="VPN не подключается", callback_data="support_topic:no_connection")],
@@ -70,7 +75,7 @@ async def cb_trouble(callback: CallbackQuery, bot: Bot):
         [InlineKeyboardButton(text="Написать в поддержку", url=support_url())],
         [InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu")],
     ])
-    await send_with_photo(bot, callback, text, kb)
+    await send_with_photo(bot, callback, text, kb, photo=SUPPORT)
 
 
 @router.callback_query(F.data.startswith("support_topic:"))
@@ -80,16 +85,15 @@ async def cb_support_topic(callback: CallbackQuery, bot: Bot):
     guidance = {
         "no_connection": (
             "<b>VPN не подключается</b>\n\n"
-            "Проверьте, что интернет работает без VPN. Обновите подписку в Happ и попробуйте подключиться снова."
+            "1. Проверьте интернет без VPN.\n2. Обновите подписку в Happ.\n3. Попробуйте подключиться ещё раз."
         ),
         "no_internet": (
             "<b>VPN включён, но интернета нет</b>\n\n"
-            "Отключите другие VPN или прокси, обновите подписку в Happ и подключитесь снова."
+            "Отключите другие VPN и прокси, обновите подписку в Happ и подключитесь снова."
         ),
         "app": (
             "<b>Не работает приложение</b>\n\n"
-            "Сначала обновите подписку в Happ и перезапустите приложение. Российские сайты и приложения доступны без отключения VPN и дополнительных настроек. "
-            "Если проблема остаётся, напишите в поддержку и укажите название приложения."
+            "Обновите подписку в Happ и перезапустите приложение. Если проблема останется, напишите в поддержку и укажите, что именно не работает."
         ),
         "import": (
             "<b>Не добавляется подписка</b>\n\n"
@@ -105,7 +109,7 @@ async def cb_support_topic(callback: CallbackQuery, bot: Bot):
         [InlineKeyboardButton(text="Написать в поддержку", url=support_url())],
         [InlineKeyboardButton(text="← К выбору проблемы", callback_data="trouble")],
     ])
-    await send_with_photo(bot, callback, text, kb)
+    await send_with_photo(bot, callback, text, kb, photo=SUPPORT)
 
 
 @router.callback_query(F.data.startswith("guide_more"))
@@ -124,7 +128,7 @@ async def cb_guide_more(callback: CallbackQuery, bot: Bot):
             await safe_answer(callback, "Ключ не найден.", alert=True)
             return
     text = "<b>Другие устройства</b>\n\nВыберите подходящую платформу."
-    await send_or_edit(bot, callback, text, additional_platforms_kb(key_id))
+    await send_or_edit(bot, callback, text, additional_platforms_kb(key_id), photo=CONNECTION)
 
 
 _GUIDES = {
@@ -251,11 +255,33 @@ async def _send_platform_guide(callback: CallbackQuery, bot: Bot, platform: str,
             [InlineKeyboardButton(text="Установщик для Mac", url=HAPP_MACOS_DMG)],
         ],
     }.get(platform, [])
+    guide_rows = list(download_rows)
+    if key_id:
+        from database import get_key_by_id
+        key = await get_key_by_id(key_id)
+        if not key or key["user_id"] != callback.from_user.id:
+            await safe_answer(callback, "Ключ не найден.", alert=True)
+            return
+        if key.get("key"):
+            guide_rows.insert(0, [InlineKeyboardButton(
+                text="📋 Скопировать ссылку подписки",
+                copy_text={"text": key["key"]},
+                style="primary",
+            )])
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        *download_rows,
+        *guide_rows,
         [InlineKeyboardButton(text="← Назад", callback_data=choose_callback)],
     ])
-    await send_or_edit(bot, callback, text, kb)
+    platform_photo = {
+        "ios": IPHONE,
+        "ios_mac": IPHONE,
+        "android": ANDROID,
+        "android_tv": ANDROID,
+        "windows": WINDOWS,
+        "linux": LINUX,
+        "macos": CONNECTION,
+    }.get(platform, CONNECTION)
+    await send_or_edit(bot, callback, text, kb, photo=platform_photo)
 
 
 async def _track_guide_event(user_id: int, event_type: str, platform: str | None = None) -> None:

@@ -17,8 +17,9 @@ from aiogram import Bot, F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
-    Message, CallbackQuery,
-    InlineKeyboardMarkup, InlineKeyboardButton,
+    Message,
+    CallbackQuery,
+    InlineKeyboardMarkup,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -35,9 +36,11 @@ from keyboards import (
     main_menu_new_user, main_menu_existing, main_menu_with_keys,
     back_to_menu, cancel_kb, support_url, app_open_kb,
 )
-from utils import send_with_photo, safe_answer, LOGO_URL
+from utils import send_with_photo, safe_answer
 from async_utils import monitor_performance
 from cache import cache_subscription_data
+from bot_style import themed_button as InlineKeyboardButton
+from bot_assets import MENU, ABOUT, FREE_VPN
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -186,30 +189,27 @@ async def _send_main_menu(
         if isinstance(target, Message):
             await bot.send_message(chat_id=user_id, text=text, reply_markup=kb)
         else:
-            await send_with_photo(bot, target, text, kb)
+            await send_with_photo(bot, target, text, kb, photo=MENU)
         return
 
     if state == "new":
         if is_new_referral:
             text = (
-                "<b>Добро пожаловать в ByMeVPN!</b>\n\n"
-                "Приглашение учтено. Подключиться можно за несколько шагов.\n\n"
-                "Российские сайты и приложения доступны без отключения VPN и дополнительных настроек.\n\n"
-                "3 бесплатных дня или VPN-бонус за приглашения друзей."
+                "<b>Добро пожаловать!</b>\n\n"
+                "Приглашение учтено. Подключение займёт несколько минут.\n\n"
+                "Начните с пробного доступа или посмотрите тарифы."
             )
         else:
             text = (
-                "<b>ByMeVPN — VPN, который просто работает.</b>\n\n"
-                "Доступ к любимым сайтам и приложениям без сложных настроек.\n\n"
-                "Российские сайты и приложения доступны без отключения VPN и дополнительных настроек.\n\n"
-                "3 бесплатных дня или VPN-бонус за приглашения друзей."
+                "<b>Ваш интернет — без лишних настроек.</b>\n\n"
+                "Подключите ByMeVPN за несколько минут и пользуйтесь привычными приложениями.\n\n"
+                "Начните с 3 дней бесплатно или выберите тариф."
             )
         kb = main_menu_new_user()
     elif state == "expired":
         text = (
-            f"<b>ByMeVPN</b>\n\n"
-            "Срок подписки завершился. Ваши ключи и настройки сохранены.\n\n"
-            "Продлите доступ или получите бесплатные дни за приглашения. Подписка и настройки — в «Мой VPN»."
+            "<b>Доступ завершён</b>\n\n"
+            "Ключи и настройки сохранены. Продлите подписку или получите бонусные дни за приглашения."
         )
         # Check if user has keys to show appropriate menu (use direct DB check, not cache)
         user_keys = await get_user_keys(user_id)
@@ -228,22 +228,17 @@ async def _send_main_menu(
             device_count = active_key.get("limit_ip", 2)
             device_word = "устройство" if device_count == 1 else "устройства" if 2 <= device_count <= 4 else "устройств"
             text = (
-                f"<b>ByMeVPN</b>\n\n"
-                f"✅ Подписка активна до <b>{expires}</b>\n"
-                f"📱 В тарифе: <b>{device_count} {device_word}</b>"
+                f"<b>Подписка активна</b>\n\n"
+                f"Действует до <b>{expires}</b>\n"
+                f"Устройств в тарифе: <b>{device_count} {device_word}</b>\n\n"
+                "Управление и подключение — в разделе «Мой VPN»."
             )
         else:
-            text = "<b>ByMeVPN</b>\n\n✅ Подписка активна"
+            text = "<b>Подписка активна</b>\n\nОткройте «Мой VPN», чтобы подключить устройство или посмотреть срок действия."
         # Active customers are never shown the one-time trial offer.
         kb = main_menu_with_keys(trial_used=True) if has_keys else main_menu_existing(trial_used=True)
 
-    if isinstance(target, Message):
-        await bot.send_photo(
-            chat_id=user_id, photo=LOGO_URL,
-            caption=text, parse_mode="HTML", reply_markup=kb,
-        )
-    else:
-        await send_with_photo(bot, target, text, kb)
+    await send_with_photo(bot, target, text, kb, photo=MENU)
 
 
 # ---------------------------------------------------------------------------
@@ -691,24 +686,20 @@ async def cb_back_to_menu(callback: CallbackQuery, bot: Bot, state: FSMContext):
 async def cb_about(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
-        "<b>ByMeVPN — VPN, который просто работает.</b>\n\n"
-        "Подключайтесь за несколько шагов и пользуйтесь привычными сайтами и приложениями.\n\n"
-        "<b>Возможности:</b>\n"
-        "• Подключение на телефоне и компьютере.\n"
-        "• До 10 устройств — в зависимости от тарифа.\n"
-        "• Российские сайты и приложения доступны без отключения VPN и дополнительных настроек.\n"
-        "• Бесплатные дни за приглашение друзей.\n"
-        "• Управление подпиской прямо в Telegram.\n"
-        "• Подписчикам доступен @ByMeAudiobot для расшифровки голосовых сообщений.\n\n"
-        "<b>3 дня бесплатно</b> или тарифы от <b>59 ₽/мес.</b> при оплате за год."
+        "<b>ByMeVPN</b>\n\n"
+        "Защищённое подключение для телефона и компьютера — без сложной настройки.\n\n"
+        "• До 10 устройств — по выбранному тарифу.\n"
+        "• Подпиской и устройствами можно управлять в Telegram.\n"
+        "• За приглашения друзей начисляются бонусные дни.\n\n"
+        "Новые пользователи могут начать с <b>3 дней бесплатно</b>."
     )
     # Keep the menu navigation in a fixed, full-width bottom row.
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    from aiogram.types import InlineKeyboardMarkup
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Выбрать тариф", callback_data="buy_vpn")],
         [InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu")],
     ])
-    await send_with_photo(bot, callback, text, kb)
+    await send_with_photo(bot, callback, text, kb, photo=ABOUT)
 
 
 @router.callback_query(F.data == "free_vpn")
@@ -727,7 +718,7 @@ async def cb_free_vpn(callback: CallbackQuery, bot: Bot):
         [InlineKeyboardButton(text="VPN за рекламу", callback_data="ad_program")],
         [InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu")],
     ])
-    await send_with_photo(bot, callback, text, kb)
+    await send_with_photo(bot, callback, text, kb, photo=FREE_VPN)
 
 
 

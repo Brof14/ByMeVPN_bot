@@ -5,7 +5,8 @@ import logging
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup
+from bot_style import themed_button
 
 from config import ADMIN_ID
 from database import (
@@ -21,12 +22,16 @@ from database import (
 logger = logging.getLogger(__name__)
 
 
+def _broadcast_button(payload: dict):
+    return themed_button(**payload)
+
+
 async def _run_campaign(bot: Bot, campaign: dict) -> None:
     campaign_id = int(campaign["id"])
     try:
         buttons = json.loads(campaign.get("buttons_json") or "[]")
         markup = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton.model_validate(button) for button in row] for row in buttons]
+            inline_keyboard=[[_broadcast_button(button) for button in row] for row in buttons]
         ) if buttons else None
     except Exception:
         logger.exception("Broadcast campaign %s has invalid button data", campaign_id)

@@ -15,8 +15,9 @@ from aiogram import Bot, F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
-    Message, CallbackQuery,
-    InlineKeyboardMarkup, InlineKeyboardButton,
+    Message,
+    CallbackQuery,
+    InlineKeyboardMarkup,
     BufferedInputFile,
 )
 
@@ -46,6 +47,7 @@ from states import AdminFlow
 from utils import safe_answer
 from constants import format_timestamp as fmt_date, format_days_left as fmt_days_left, MAX_GRANT_DAYS
 from xui_client import delete_xui_user
+from bot_style import themed_button as InlineKeyboardButton
 
 logger = logging.getLogger(__name__)
 router = Router()

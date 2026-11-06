@@ -15,7 +15,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from aiogram import Bot
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    InlineKeyboardMarkup,
+)
 from aiogram.types import BufferedInputFile
 
 from config import ADMIN_ID, DB_FILE
@@ -26,6 +28,7 @@ from database import (
     retry_connection_reminder,
     claim_expiry_notification, finish_expiry_notification,
 )
+from bot_style import themed_button as InlineKeyboardButton
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +150,7 @@ async def _send_urgent_notification(bot: Bot, item: dict) -> None:
         f"<b>До окончания подписки — {days_left} {get_day_word(days_left)}</b>\n\n"
         f"Доступ активен до <b>{date_str}</b>. Продлите подписку, чтобы пользоваться VPN и дальше.\n\n"
         + (f"🎁 Промокод <code>{promo_code}</code> даёт <b>30% скидки</b> до {promo_expiry}.\n\n" if promo_expiry else "")
-        + "На длительном тарифе ниже цена за месяц: 15 месяцев — 885 ₽ (≈59 ₽/мес)."
+        + "Откройте тарифы, чтобы выбрать срок и лимит устройств."
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -180,7 +183,7 @@ async def _send_warning_notification(bot: Bot, item: dict) -> None:
         f"<b>Подписка активна до {date_str}</b>\n"
         f"Осталось {days_left} {get_day_word(days_left)}. Продлите заранее, чтобы сохранить непрерывный доступ. Ключи и настройки останутся прежними.\n\n"
         + (f"🎁 Промокод <code>{promo_code}</code> — <b>30% скидки</b> до {promo_expiry}.\n\n" if promo_expiry else "")
-        + "На длительном тарифе ниже цена за месяц: 15 месяцев — 885 ₽ (≈59 ₽/мес)."
+        + "Откройте тарифы, чтобы выбрать срок и лимит устройств."
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -205,7 +208,7 @@ async def _send_early_notification(bot: Bot, item: dict) -> None:
 
     text = (
         f"<b>Подписка активна ещё {days_left} {get_day_word(days_left)}</b>\n\n"
-        f"Доступ завершится {date_str}. На тарифе на 12 месяцев месяц стоит около 59 ₽."
+        f"Доступ завершится {date_str}. Откройте тарифы, чтобы выбрать подходящий срок."
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[

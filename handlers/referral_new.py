@@ -12,7 +12,9 @@ from referral_system_new import (
     get_referral_stats_with_free_days, validate_referral_link
 )
 from keyboards import main_menu_new_user, main_menu_existing
-from utils import safe_answer, send_with_photo, LOGO_URL
+from utils import safe_answer, send_with_photo
+from bot_style import themed_button as InlineKeyboardButton
+from bot_assets import REFERRALS, MY_INVITATIONS
 
 router = Router()
 
@@ -55,42 +57,36 @@ async def cb_claim_referral_bonus(callback: CallbackQuery):
 @router.message(F.text == "Партнёрская программа")
 async def cmd_partner_program(message: Message):
     """Show partner program with referral link and statistics."""
-    user_id = message.from_user.id
-    
-    # Ensure user exists
-    await ensure_user(user_id, message.from_user.username)
-    
-    # Get referral statistics
+    text, kb = await _partner_program_screen(message.from_user.id, message.from_user.username)
+    await send_with_photo(message.bot, message, text, kb, photo=REFERRALS)
+
+
+async def _partner_program_screen(user_id: int, username: str | None):
+    await ensure_user(user_id, username)
     stats = await get_referral_stats_with_free_days(user_id)
-    
-    # Generate referral link
     from referral_system_new import get_referral_link
-    referral_link = await get_referral_link(user_id, "ByMeVPN_bot")  # Update with actual bot username
-    
+    referral_link = await get_referral_link(user_id, "ByMeVPN_bot")
+
     text = (
-        "Приглашайте друзей и получайте бесплатные дни VPN:\n\n"
-        "+15 дней — за регистрацию друга по вашей ссылке\n"
-        "+30 дней — после первой подходящей платной подписки друга\n\n"
-        f"<b>Ваши приглашения</b>\n"
-        f"🔗 Переходов по ссылке: {stats.get('clicks', 0)}\n"
-        f"👤 Зарегистрировалось: {stats['total']} человек\n"
-        f"💳 Оплативших: {stats['paid']} человек\n"
-        f"🎁 Бонусных дней: {stats.get('free_days', 0)}\n"
-        "Денежных начислений и вывода средств нет.\n\n"
-        f"<b>Ваша ссылка</b>\n"
-        f"<code>{referral_link}</code>\n\n"
-        "Бонусные дни продлевают ваш VPN. Для получения бонуса за регистрацию карта не нужна."
+        "<b>Бонусы за друзей</b>\n\n"
+        "+15 дней — когда друг впервые запустит бота по вашей ссылке.\n"
+        "+30 дней — после его первой подходящей оплаты.\n\n"
+        f"<b>Ваша статистика</b>\n"
+        f"Переходы: <b>{stats.get('clicks', 0)}</b> · регистрации: <b>{stats['total']}</b>\n"
+        f"Оплатили: <b>{stats['paid']}</b> · начислено: <b>{stats.get('free_days', 0)} дней</b>\n\n"
+        f"<b>Ваша ссылка</b>\n<code>{referral_link}</code>\n\n"
+        "Бонусы продлевают подписку. Денежных начислений нет."
     )
     
     # Create keyboard
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    from aiogram.types import InlineKeyboardMarkup
     from urllib.parse import quote_plus
     
     share_text = quote_plus(
-        "Попробуй ByMeVPN — бот поможет подключиться шаг за шагом.\n\n"
-        "🎁 3 дня за 1 ₽\n"
-        "📱 Подключение для нескольких устройств\n\n"
-        f"Попробуй:\n{referral_link}"
+        "Попробуй ByMeVPN — бот поможет подключиться за несколько шагов.\n\n"
+        "🎁 3 дня бесплатно для новых пользователей\n"
+        "📱 Тарифы для нескольких устройств\n\n"
+        f"Подключиться: {referral_link}"
     )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -103,12 +99,12 @@ async def cmd_partner_program(message: Message):
             callback_data="my_referrals_list"
         )],
         [InlineKeyboardButton(
-            text="В главное меню",
+            text="← В главное меню",
             callback_data="back_to_menu"
         )]
     ])
     
-    await message.answer(text, parse_mode="HTML", reply_markup=kb)
+    return text, kb
 
 
 @router.callback_query(F.data == "my_referrals_list")
@@ -127,7 +123,7 @@ async def cb_my_referrals_list(callback: CallbackQuery):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Назад", callback_data="partner_program")]
         ])
-        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+        await send_with_photo(callback.bot, callback, text, kb, photo=MY_INVITATIONS)
         return
     
     text = "<b>Мои приглашения</b>\n\n"
@@ -157,13 +153,12 @@ async def cb_my_referrals_list(callback: CallbackQuery):
         [InlineKeyboardButton(text="Назад", callback_data="partner_program")]
     ])
     
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await send_with_photo(callback.bot, callback, text, kb, photo=MY_INVITATIONS)
 
 
 @router.callback_query(F.data == "partner_program")
 async def cb_partner_program(callback: CallbackQuery):
     """Return to partner program."""
     await safe_answer(callback)
-    
-    # Reuse the partner program message handler
-    await cmd_partner_program(callback.message)
+    text, kb = await _partner_program_screen(callback.from_user.id, callback.from_user.username)
+    await send_with_photo(callback.bot, callback, text, kb, photo=REFERRALS)

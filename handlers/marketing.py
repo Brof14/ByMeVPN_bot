@@ -1,10 +1,14 @@
 """Controls for optional promotional bot messages."""
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardMarkup,
+)
 
 from database import set_promotional_opt_out
 from utils import safe_answer
+from bot_style import themed_button as InlineKeyboardButton
 
 router = Router()
 

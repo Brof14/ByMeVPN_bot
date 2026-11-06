@@ -504,12 +504,11 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
             self.assertIn(HAPP_ANDROID_APK, android_urls)
 
     # ------------------------------------------------------------------------
-    # Test 11: Device switching edits caption and preserves photo (no deletion)
+    # Test 11: Switching between text and photo screens uses the right edit path
     # ------------------------------------------------------------------------
     def test_11_device_switching_preserves_photo_and_edits_caption(self):
         """
-        Verify that send_or_edit and send_with_photo on a photo message edit caption
-        in-place rather than deleting the message or sending a new text message.
+        Text screens replace a photo message; a new photo screen edits media in-place.
         """
         from utils import send_or_edit, send_with_photo
         from unittest.mock import AsyncMock, MagicMock
@@ -518,6 +517,7 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
         async def run_test():
             bot = MagicMock()
             bot.edit_message_caption = AsyncMock()
+            bot.edit_message_media = AsyncMock()
             bot.edit_message_text = AsyncMock()
             bot.delete_message = AsyncMock()
             bot.send_message = AsyncMock()
@@ -532,29 +532,26 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
             callback = MagicMock(spec=CallbackQuery)
             callback.message = msg
 
-            # 1. Test send_or_edit on a photo message
+            # A text-only destination replaces the old photo with a text message.
             await send_or_edit(bot, callback, "Updated caption 1")
-            bot.edit_message_caption.assert_called_once_with(
+            bot.delete_message.assert_awaited_once_with(12345, 999)
+            bot.send_message.assert_awaited_once_with(
                 chat_id=12345,
-                message_id=999,
-                caption="Updated caption 1",
+                text="Updated caption 1",
                 parse_mode="HTML",
                 reply_markup=None,
             )
-            bot.delete_message.assert_not_called()
-            bot.send_message.assert_not_called()
 
-            # 2. Test send_with_photo on a photo message
+            # A photo destination edits the current media and keeps one message.
+            bot.edit_message_media.reset_mock()
             bot.edit_message_caption.reset_mock()
             bot.delete_message.reset_mock()
-            await send_with_photo(bot, callback, "Updated caption 2")
-            bot.edit_message_caption.assert_called_once_with(
-                chat_id=12345,
-                message_id=999,
-                caption="Updated caption 2",
-                parse_mode="HTML",
-                reply_markup=None,
-            )
+            await send_with_photo(bot, callback, "Updated caption 2", photo="https://example.test/banner.png")
+            bot.edit_message_media.assert_awaited_once()
+            self.assertEqual(bot.edit_message_media.await_args.kwargs["chat_id"], 12345)
+            self.assertEqual(bot.edit_message_media.await_args.kwargs["message_id"], 999)
+            self.assertEqual(bot.edit_message_media.await_args.kwargs["media"].caption, "Updated caption 2")
+            bot.edit_message_caption.assert_not_called()
             bot.delete_message.assert_not_called()
             bot.send_photo.assert_not_called()
 

@@ -39,7 +39,9 @@ class TestTelegramDeviceDelete(unittest.IsolatedAsyncioTestCase):
 
         delete.assert_awaited_once_with(123, 42)
         answer.assert_awaited_once_with(callback, "Устройство удалено")
-        refresh.assert_awaited_once_with(bot, callback, "fresh", None)
+        refresh.assert_awaited_once_with(
+            bot, callback, "fresh", None, photo=keys.DEVICES,
+        )
 
     async def test_foreign_subscription_never_reaches_panel_delete(self):
         callback = self.callback(user_id=999)

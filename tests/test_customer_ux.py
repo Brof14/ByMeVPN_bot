@@ -31,13 +31,14 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("connection_guide", actions)
             self.assertNotIn("auth_existing_client", actions)
 
-    def test_main_menu_uses_compact_rows_and_limited_semantic_colors(self):
+    def test_main_menu_uses_compact_rows_and_consistent_semantic_colors(self):
         for markup in (main_menu_new_user(), main_menu_existing(), main_menu_with_keys()):
             rows = markup.inline_keyboard
             self.assertEqual(rows[-1][0].text, "О сервисе")
             self.assertEqual(rows[-1][1].text, "Поддержка")
             self.assertEqual(rows[-1][1].callback_data, "trouble")
-            self.assertLessEqual(sum(button.style is not None for row in rows for button in row), 2)
+            buttons = [button for row in rows for button in row]
+            self.assertTrue(all(button.style in {"primary", "success", "danger"} for button in buttons))
         menu = main_menu_with_keys()
         self.assertEqual([len(row) for row in menu.inline_keyboard], [1, 1, 1, 1, 2])
         self.assertEqual(menu.inline_keyboard[0][0].style, "success")
@@ -132,9 +133,9 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         ):
             await _send_main_menu(SimpleNamespace(), SimpleNamespace(), 123, "Алексей", is_new_referral=True)
         welcome = send.call_args.args[2]
-        self.assertIn("Добро пожаловать в ByMeVPN", welcome)
+        self.assertIn("Добро пожаловать", welcome)
         self.assertIn("Приглашение учтено", welcome)
-        self.assertIn("3 бесплатных дня", welcome)
+        self.assertIn("Начните с пробного доступа", welcome)
 
     def test_key_settings_remove_rf_routing_and_highlight_only_destructive_action(self):
         markup = key_settings_kb(9)
@@ -161,13 +162,13 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             await cb_partner(callback, bot)
 
         text = send.call_args.args[2]
-        self.assertIn("<b>VPN бесплатно за друзей</b>", text)
+        self.assertIn("<b>Бонусы за друзей</b>", text)
         self.assertIn("+15 дней", text)
         self.assertIn("+30 дней", text)
         self.assertIn("<b>Ваша ссылка</b>", text)
-        self.assertIn("Бонусные дни добавляются к вашему VPN", text)
-        self.assertIn("Зарегистрировались: <b>1</b> · оплатили: <b>1</b>", text)
-        self.assertIn("бот создаст его автоматически", text)
+        self.assertIn("Бонусные дни добавятся к подписке автоматически", text)
+        self.assertIn("Приглашено: <b>1</b> · оплатили: <b>1</b>", text)
+        self.assertIn("Приглашайте новых друзей", text)
 
     def test_back_is_full_width_and_support_is_not_mixed_into_navigation(self):
         back = back_to_menu().inline_keyboard
@@ -179,7 +180,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             for row in markup.inline_keyboard:
                 self.assertFalse(any(button.url for button in row))
 
-    def test_tariff_grid_restores_bonus_marketing_with_one_highlight(self):
+    def test_tariff_grid_shows_monthly_price_and_semantic_button_colors(self):
         markup = tariff_selection_kb()
         tariff_buttons = [
             button for row in markup.inline_keyboard for button in row
@@ -188,7 +189,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         three_months = next(button for button in tariff_buttons if button.callback_data == "tariff_3_2")
         self.assertIn("3 мес. + 1 мес. 🎁 — 79 ₽ / мес.", three_months.text)
         self.assertEqual(three_months.style, "success")
-        self.assertTrue(all(button.style is None for button in tariff_buttons if button is not three_months))
+        self.assertTrue(all(button.style in {"primary", "success", "danger"} for button in tariff_buttons))
 
     async def test_saved_sbp_method_without_title_is_still_manageable(self):
         sub = {
