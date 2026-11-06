@@ -24,7 +24,7 @@ class PremiumButtonDesignTests(unittest.TestCase):
         self.assertEqual(by_callback["buy_vpn"].style, "primary")
         self.assertEqual(by_callback["my_keys"].icon_custom_emoji_id, "6005570495603282482")
         self.assertEqual(by_callback["buy_vpn"].icon_custom_emoji_id, "5927169041595634481")
-        self.assertEqual(by_callback["free_vpn"].icon_custom_emoji_id, "5406756500108501710")
+        self.assertEqual(by_callback["free_vpn"].icon_custom_emoji_id, "5301299389245985629")
 
     def test_trial_and_destructive_actions_are_distinct(self):
         trial = buttons(main_menu_new_user())[0]

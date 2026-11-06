@@ -116,7 +116,7 @@ OFFICIAL_AD_CHANNEL_URL = "https://t.me/ByMeVPN"
 def official_ad_post_url() -> str | None:
     """Canonical advertising post, configured by the operator after publication."""
     url = os.getenv("AD_SOURCE_POST_URL", "").strip().rstrip("/")
-    return url if re.fullmatch(r"https://t\\.me/ByMeVPN/[1-9][0-9]*", url, re.I) else None
+    return url if re.fullmatch(r"https://t\.me/ByMeVPN/[1-9][0-9]*", url, re.I) else None
 
 
 def valid_ad_post_for_application(post_url: str, app: dict) -> bool:
