@@ -26,7 +26,7 @@ class TestNotificationMarketing(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("🚨", text)
         keyboard = bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard
         self.assertEqual(keyboard[0][0].callback_data, "buy_vpn")
-        self.assertIsNone(keyboard[0][0].style)
+        self.assertEqual(keyboard[0][0].style, "primary")
         self.assertEqual(keyboard[1][0].callback_data, "free_vpn")
 
     async def test_opted_out_customer_gets_service_reminder_without_promo(self):

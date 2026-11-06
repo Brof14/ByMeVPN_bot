@@ -184,10 +184,11 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         self.assertIn("<b>Приглашение друзей</b>", text)
         self.assertIn("+15 дней", text)
         self.assertIn("+30 дней", text)
-        self.assertIn("<b>Ваша ссылка</b>", text)
-        self.assertIn("Ваша статистика", text)
+        self.assertIn("Получено: <b>15 дней</b>", text)
         self.assertIn("Приглашено: <b>1</b> · оплатили: <b>1</b>", text)
-        self.assertIn("Ваша ссылка", text)
+        buttons = [b for row in send.call_args.args[3].inline_keyboard for b in row]
+        copied = next(b for b in buttons if b.text == "Скопировать ссылку")
+        self.assertEqual(copied.copy_text.text, "https://t.me/ByMeVPNbot?start=123")
 
     def test_back_is_full_width_and_support_is_not_mixed_into_navigation(self):
         back = back_to_menu().inline_keyboard

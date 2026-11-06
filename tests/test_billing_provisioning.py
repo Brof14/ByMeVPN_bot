@@ -507,13 +507,14 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
     # ------------------------------------------------------------------------
     # Test 11: Switching between text and photo screens uses the right edit path
     # ------------------------------------------------------------------------
-    def test_11_device_switching_preserves_photo_and_edits_caption(self):
+    def test_11_secondary_screens_are_text_only_but_landmarks_keep_photo(self):
         """
-        Text screens replace a photo message; a new photo screen edits media in-place.
+        Secondary screens are text-only; branded landmark screens keep photo.
         """
         from utils import send_or_edit, send_with_photo
         from unittest.mock import AsyncMock, MagicMock
         from aiogram.types import CallbackQuery, Message, PhotoSize
+        from bot_assets import MENU
 
         async def run_test():
             bot = MagicMock()
@@ -543,18 +544,22 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
                 reply_markup=None,
             )
 
-            # A photo destination edits the current media and keeps one message.
-            bot.edit_message_media.reset_mock()
-            bot.edit_message_caption.reset_mock()
+            # Unapproved artwork does not cause a photo upload.
             bot.delete_message.reset_mock()
+            bot.send_message.reset_mock()
             await send_with_photo(bot, callback, "Updated caption 2", photo="https://example.test/banner.png")
+            bot.edit_message_media.assert_not_awaited()
+            bot.delete_message.assert_awaited_once_with(12345, 999)
+            bot.send_message.assert_awaited_once()
+            bot.send_photo.assert_not_awaited()
+
+            # An approved landmark banner still edits the existing image.
+            bot.delete_message.reset_mock()
+            with patch("utils._photo_source", new=AsyncMock(return_value=("cached-photo-id", None))):
+                await send_with_photo(bot, callback, "Updated caption 3", photo=MENU)
             bot.edit_message_media.assert_awaited_once()
-            self.assertEqual(bot.edit_message_media.await_args.kwargs["chat_id"], 12345)
-            self.assertEqual(bot.edit_message_media.await_args.kwargs["message_id"], 999)
-            self.assertEqual(bot.edit_message_media.await_args.kwargs["media"].caption, "Updated caption 2")
-            bot.edit_message_caption.assert_not_called()
-            bot.delete_message.assert_not_called()
-            bot.send_photo.assert_not_called()
+            self.assertEqual(bot.edit_message_media.await_args.kwargs["media"].caption, "Updated caption 3")
+            bot.delete_message.assert_not_awaited()
 
         asyncio.run(run_test())
 
