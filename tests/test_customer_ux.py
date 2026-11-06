@@ -58,7 +58,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             buttons = [button for row in rows for button in row]
             self.assertTrue(all(button.style is None for button in buttons))
         menu = main_menu_with_keys()
-        self.assertEqual([len(row) for row in menu.inline_keyboard], [1, 1, 1, 1, 2])
+        self.assertEqual([len(row) for row in menu.inline_keyboard], [1, 1, 1, 2])
         self.assertIsNone(menu.inline_keyboard[0][0].style)
         self.assertEqual(menu.inline_keyboard[0][0].callback_data, "my_keys")
         self.assertIsNone(menu.inline_keyboard[0][0].style)
