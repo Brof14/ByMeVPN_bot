@@ -121,7 +121,8 @@ def _growth_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="Рефералы", callback_data="admin_referrals"),
          InlineKeyboardButton(text="Реклама", callback_data="ad_admin_list")],
         [InlineKeyboardButton(text="Воронка", callback_data="admin_funnel"),
-         InlineKeyboardButton(text="Рассылки", callback_data="admin_broadcast")],
+         InlineKeyboardButton(text="Органический рост", callback_data="admin_referral_funnel")],
+        [InlineKeyboardButton(text="Рассылки", callback_data="admin_broadcast")],
         [InlineKeyboardButton(text="← Главное меню", callback_data="admin_menu")],
     ])
 
@@ -221,6 +222,30 @@ async def cb_admin_funnel(callback: CallbackQuery):
             )
     lines.extend(["", "Этапы подключения считаются по первому подтверждённому признаку активности в 3x-ui."])
     await callback.message.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=_growth_kb())
+
+
+@router.callback_query(F.data == "admin_referral_funnel")
+async def cb_admin_referral_funnel(callback: CallbackQuery):
+    """Cohort-specific invitation conversions, not inflated revenue estimates."""
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    from growth_metrics import referral_growth_snapshot
+    stats = await referral_growth_snapshot(days=30)
+    text = (
+        "<b>Органический рост · 30 дней</b>\n\n"
+        f"Приглашено: <b>{stats['invited']}</b>\n"
+        f"Приглашали: <b>{stats['advocates']}</b> пользователей\n"
+        f"С первой подходящей оплатой: <b>{stats['paying']}</b>\n"
+        f"Без подтверждённой оплаты: <b>{stats['unconverted']}</b>\n"
+        f"Конверсия: <b>{stats['conversion_pct']:.1f}%</b>\n"
+        f"Начислено за них: <b>{stats['bonus_days']} бонусных дней</b>\n\n"
+        "Когорта — пользователи, приглашённые за 30 дней. "
+        "Оплаты и бонусы учитываются на момент отчёта.\n"
+        "Бонусные дни — не денежная прибыль и не стоимость привлечения."
+    )
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=_growth_kb())
 
 
 def _broadcast_controls() -> InlineKeyboardMarkup:

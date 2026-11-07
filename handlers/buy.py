@@ -56,7 +56,7 @@ def _tariff_intro(devices: int, *, renewal: bool = False) -> str:
     return (
         f"<b>{title}</b>\n\n"
         f"Устройства: <b>{devices}</b>\n"
-        "Выберите срок. Полная сумма — перед оплатой."
+        "Выберите срок. На кнопках — полная сумма и цена за месяц."
     )
 
 

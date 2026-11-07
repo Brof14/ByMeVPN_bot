@@ -26,6 +26,12 @@ class PremiumButtonDesignTests(unittest.TestCase):
         self.assertEqual(by_callback["buy_vpn"].icon_custom_emoji_id, "5927169041595634481")
         self.assertEqual(by_callback["free_vpn"].icon_custom_emoji_id, "5301299389245985629")
 
+    def test_support_and_about_are_secondary_not_competing_ctas(self):
+        by_callback = {button.callback_data: button for button in buttons(main_menu_with_keys())}
+        self.assertIsNone(by_callback["about"].style)
+        self.assertIsNone(by_callback["trouble"].style)
+        self.assertEqual(by_callback["my_keys"].style, "primary")
+
     def test_trial_and_destructive_actions_are_distinct(self):
         trial = buttons(main_menu_new_user())[0]
         self.assertEqual(trial.callback_data, "trial_free")

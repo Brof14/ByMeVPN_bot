@@ -4082,14 +4082,14 @@ async def get_referred_users_list(referrer_id: int) -> list[dict]:
         """
         SELECT r.referred_id, r.created,
                (SELECT COUNT(*) FROM keys WHERE user_id=r.referred_id AND expiry > ?) as active_keys,
-               (SELECT COUNT(*) FROM payments WHERE user_id=r.referred_id AND method != 'trial') as payment_count,
+               (SELECT COUNT(*) FROM referral_events WHERE referrer_id=? AND referred_id=r.referred_id AND event_type='payment_bonus') as payment_count,
                (SELECT COALESCE(SUM(days_awarded), 0) FROM referral_events 
                 WHERE referrer_id=? AND referred_id=r.referred_id) as bonus_days
         FROM referrals r
         WHERE r.referrer_id=?
         ORDER BY r.created DESC
         """,
-        (current_time, referrer_id, referrer_id)
+        (current_time, referrer_id, referrer_id, referrer_id)
     )
     
     rows = await cur.fetchall()
