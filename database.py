@@ -3259,14 +3259,31 @@ async def has_recent_unsettled_checkout(
     """
     db = await get_db()
     cutoff = int(time.time()) - int(lookback_seconds)
-    for table in ("yookassa_pending", "crypto_pending"):
+    for table in ("yookassa_pending", "crypto_pending", "yookassa_trial_pending"):
         cursor = await db.execute(
             f"SELECT 1 FROM {table} WHERE user_id=? AND created>=? LIMIT 1",
             (user_id, cutoff),
         )
         if await cursor.fetchone():
             return True
-    return False
+
+    # A mobile checkout can be in the external provider's creation phase
+    # before it has an invoice ID or a row in either pending ledger.
+    cursor = await db.execute(
+        """SELECT 1 FROM mobile_payment_requests
+           WHERE user_id=? AND created_at>=?
+             AND (creation_state='creating'
+               OR (payment_id IS NOT NULL AND NOT EXISTS (
+                   SELECT 1 FROM payments p
+                   WHERE p.provider=CASE mobile_payment_requests.provider
+                       WHEN 'crypto' THEN 'cryptobot'
+                       ELSE mobile_payment_requests.provider END
+                     AND p.provider_payment_id=mobile_payment_requests.payment_id
+                     AND p.status='success')))
+           LIMIT 1""",
+        (user_id, cutoff),
+    )
+    return await cursor.fetchone() is not None
 
 
 async def suspend_all_user_autorenew(user_id: int) -> int:
