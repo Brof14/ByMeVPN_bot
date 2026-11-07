@@ -93,11 +93,13 @@ async def get_or_create_renewal_promo(user_id: int) -> str:
     raise RuntimeError("Could not create a unique renewal promo code after 5 attempts")
 
 
-async def _get_active_autorenew(user_id: int) -> dict | None:
-    """Return the active auto-renew subscription row for a user, if any."""
+async def _get_active_autorenew(user_id: int, key_id: int | None) -> dict | None:
+    """Find auto-renew for this key, including applicable legacy rows."""
+    if not key_id:
+        return None
     try:
         from database import get_auto_renew_subscription
-        sub = await get_auto_renew_subscription(user_id)
+        sub = await get_auto_renew_subscription(user_id, key_id, include_legacy=True)
         if sub and sub.get("status") == "active" and (sub.get("payment_method_id") or "").strip():
             return sub
     except Exception as e:
@@ -161,7 +163,7 @@ async def _optional_renewal_promo(user_id: int) -> tuple[str | None, dict | None
 
 async def _send_urgent_notification(bot: Bot, item: dict) -> None:
     """Send urgent notification for keys expiring in 1-3 days."""
-    sub = await _get_active_autorenew(item["user_id"])
+    sub = await _get_active_autorenew(item["user_id"], item.get("key_id"))
     if sub:
         return await _send_autorenew_upcoming(bot, item, sub)
 
@@ -189,7 +191,7 @@ async def _send_urgent_notification(bot: Bot, item: dict) -> None:
 
 async def _send_warning_notification(bot: Bot, item: dict) -> None:
     """Send warning notification for keys expiring in 7-14 days."""
-    sub = await _get_active_autorenew(item["user_id"])
+    sub = await _get_active_autorenew(item["user_id"], item.get("key_id"))
     if sub:
         # Keep renewal messages to one clear reminder in the final days.
         return False
@@ -218,7 +220,7 @@ async def _send_warning_notification(bot: Bot, item: dict) -> None:
 
 async def _send_early_notification(bot: Bot, item: dict) -> None:
     """Send early notification for keys expiring in 21-30 days."""
-    sub = await _get_active_autorenew(item["user_id"])
+    sub = await _get_active_autorenew(item["user_id"], item.get("key_id"))
     if sub:
         # An auto-renewing customer only gets the pre-charge reminder close to billing.
         return False

@@ -2970,10 +2970,24 @@ async def save_auto_renew_subscription(
     return sub_id
 
 
-async def get_auto_renew_subscription(user_id: int, key_id: Optional[int] = None) -> Optional[dict]:
+async def get_auto_renew_subscription(
+    user_id: int, key_id: Optional[int] = None, *, include_legacy: bool = False,
+) -> Optional[dict]:
     """Get auto-renew subscription record for user and optional key."""
     db = await get_db()
-    if key_id:
+    if key_id and include_legacy:
+        cur = await db.execute(
+            """SELECT id, user_id, key_id, payment_method_id, payment_method_title,
+                      payment_method_type, months, days, devices, amount_rub,
+                      status, fail_count, last_charge_at, last_charge_status,
+                      next_retry_at, created_at, updated_at
+               FROM auto_renew_subscriptions
+               WHERE user_id = ? AND (key_id = ? OR key_id IS NULL)
+               ORDER BY (status='active' AND TRIM(COALESCE(payment_method_id, '')) != '') DESC,
+                        (key_id IS NULL), id DESC LIMIT 1""",
+            (user_id, key_id),
+        )
+    elif key_id:
         cur = await db.execute(
             """SELECT id, user_id, key_id, payment_method_id, payment_method_title,
                       payment_method_type, months, days, devices, amount_rub,

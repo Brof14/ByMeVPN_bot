@@ -8,6 +8,21 @@ from unittest.mock import AsyncMock, patch
 
 
 class ExpiryReminderRegression(unittest.IsolatedAsyncioTestCase):
+    async def test_other_key_autorenew_does_not_hide_manual_renewal(self):
+        from notifications import _send_urgent_notification
+        bot = SimpleNamespace(send_message=AsyncMock())
+        item = {"user_id": 123, "key_id": 7, "expiry": int(time.time()) + 2 * 86400}
+        async def lookup(user_id, key_id=None, **kwargs):
+            return {"status": "active", "payment_method_id": "other-key"} if key_id is None else None
+        with (
+            patch("database.get_auto_renew_subscription", new=AsyncMock(side_effect=lookup)),
+            patch("notifications._optional_renewal_promo", new=AsyncMock(return_value=(None, None))),
+        ):
+            await _send_urgent_notification(bot, item)
+        text = bot.send_message.await_args.args[1]
+        self.assertNotIn("Ничего делать не нужно", text)
+        self.assertEqual(bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard[0][0].callback_data, "key_renew:7")
+
     async def test_direct_renewal_preserves_expiring_key(self):
         from notifications import _send_urgent_notification
         bot = SimpleNamespace(send_message=AsyncMock())
