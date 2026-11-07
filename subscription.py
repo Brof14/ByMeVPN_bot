@@ -11,7 +11,7 @@ from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 
 from config import ADMIN_ID
 from constants import REFERRAL_FIRST_PAYMENT_BONUS_DAYS
-from utils import send_photo_message, send_with_photo, safe_answer
+from utils import send_or_edit, send_photo_message, send_with_photo, safe_answer
 from bot_assets import KEY
 import database
 from database import (
@@ -29,7 +29,14 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 
-async def _send_delivery_message(bot: Bot, chat_id: int, text: str, subscription_url: str = "") -> bool:
+async def _send_delivery_message(
+    bot: Bot,
+    chat_id: int,
+    text: str,
+    subscription_url: str = "",
+    *,
+    edit_target=None,
+) -> bool:
     """Deliver the key message to the user. NEVER raises.
 
     Provisioning success must not be downgraded by a notification failure:
@@ -39,9 +46,13 @@ async def _send_delivery_message(bot: Bot, chat_id: int, text: str, subscription
     the key via «Мои ключи».
     """
     try:
-        await send_photo_message(
-            bot, chat_id, KEY, text, reply_markup=after_key_kb(subscription_url),
-        )
+        markup = after_key_kb(subscription_url)
+        if edit_target is not None:
+            # Trial is initiated from the main menu's photo message. Replace
+            # that screen with the key card instead of posting a second message.
+            await send_or_edit(bot, edit_target, text, markup, photo=KEY)
+        else:
+            await send_photo_message(bot, chat_id, KEY, text, reply_markup=markup)
         return True
     except (TelegramBadRequest, TelegramForbiddenError) as e:
         logger.error("Delivery message not delivered to %s (provisioning already done): %s", chat_id, e)
@@ -77,6 +88,7 @@ async def deliver_key(
     payload: str = "",
     extend_existing: bool = True,
     skip_referral_bonus: bool = False,
+    delivery_target=None,
 ) -> bool:
     """
     Создать или обновить клиента в 3x-ui, сохранить в БД, отправить ссылку на подписку пользователю.
@@ -219,7 +231,9 @@ async def deliver_key(
                     f"Ссылка на VPN не изменилась. Повторно подключать устройства не нужно."
                 )
                 
-                delivered = await _send_delivery_message(bot, chat_id, text, key_to_show)
+                delivered = await _send_delivery_message(
+                    bot, chat_id, text, key_to_show, edit_target=delivery_target,
+                )
                 if not delivered:
                     await _log_notification_failure(
                         user_id, {"branch": "deliver_key.extend", "days": days, "limit_ip": limit_ip}
@@ -325,7 +339,9 @@ async def deliver_key(
                 f"<code>{sub_url}</code>\n\n"
                 f"Ваш ByMeVPN готов к использованию."
             )
-            delivered = await _send_delivery_message(bot, chat_id, text, sub_url)
+            delivered = await _send_delivery_message(
+                bot, chat_id, text, sub_url, edit_target=delivery_target,
+            )
             if not delivered:
                 await _log_notification_failure(
                     user_id, {"branch": "deliver_key.import_xui", "days": days, "limit_ip": limit_ip}
@@ -426,7 +442,9 @@ async def deliver_key(
             f"4. Включите VPN."
         )
         
-        delivered = await _send_delivery_message(bot, chat_id, text, subscription_url)
+        delivered = await _send_delivery_message(
+            bot, chat_id, text, subscription_url, edit_target=delivery_target,
+        )
         if not delivered:
             await _log_notification_failure(
                 user_id, {"branch": "deliver_key.create", "days": days, "limit_ip": limit_ip}

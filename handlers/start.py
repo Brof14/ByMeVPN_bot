@@ -581,6 +581,7 @@ async def _start_free_trial(bot: Bot, callback: CallbackQuery, ref_id: int | Non
             currency="RUB",
             method="trial",
             extend_existing=False,
+            delivery_target=callback,
         )
     except Exception as exc:
         logger.error("Free trial provisioning failed (%s)", type(exc).__name__)

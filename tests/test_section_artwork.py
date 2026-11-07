@@ -8,11 +8,17 @@ import bot_assets
 
 
 class TestSectionArtwork(unittest.IsolatedAsyncioTestCase):
-    def test_landmark_only_photo_policy(self):
-        for photo in (bot_assets.MENU, bot_assets.ABOUT, bot_assets.KEY):
-            self.assertEqual(bot_assets.display_artwork(photo), photo)
-        for photo in (bot_assets.PLANS, bot_assets.PAYMENT, bot_assets.CONNECTION, bot_assets.AD_PROGRAM, bot_assets.REFERRALS, bot_assets.SUPPORT):
-            self.assertIsNone(bot_assets.display_artwork(photo))
+    def test_each_section_uses_its_requested_artwork(self):
+        names = (
+            "MENU", "SUPPORT", "ABOUT", "FREE_VPN", "REFERRALS", "MY_INVITATIONS",
+            "AD_PROGRAM", "PLANS", "KEY", "DEVICES", "CONNECTION", "ANDROID",
+            "IPHONE", "WINDOWS", "LINUX", "RENEWAL", "PAYMENT", "PROMO_CODE",
+            "LEGAL", "AUTO_RENEWAL",
+        )
+        for name in names:
+            photo = getattr(bot_assets, name)
+            self.assertEqual(bot_assets.display_artwork(photo), photo, name)
+        self.assertIsNone(bot_assets.display_artwork("/tmp/not-a-section-image.png"))
 
 
     def test_all_twenty_artworks_are_bundled(self):

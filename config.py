@@ -42,6 +42,8 @@ load_dotenv()
 # Telegram Bot Configuration
 # ============================================================================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+from bot_instance import normalize_bot_instance_mode
+BOT_INSTANCE_MODE = normalize_bot_instance_mode(os.getenv("BOT_INSTANCE_MODE"))
 REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
 SUPPORT_USERNAME = "@ByMeVPNSupportBot"
 MENU_PHOTO = os.getenv("MENU_PHOTO", "")
