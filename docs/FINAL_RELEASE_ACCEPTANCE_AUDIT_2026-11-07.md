@@ -39,7 +39,7 @@ No validated 100/100 certification is possible without the external gates below.
 | Data backup | WAL-safe consistent daily SQLite archive with integrity test | Off-site encrypted retention and staging restoration drill |
 | Login / application link | HTTPS gate and safe copy fallback | Query exposure in reverse-proxy logs, introduce one-time handover token |
 | OAuth / API | Existing API with security draft [#14](https://github.com/Brof14/ByMeVPN_bot/pull/14) | Draft needs strong JWT_SECRET, staged migration and real client QA |
-| Account deletion | `DELETE /me` explicitly returns HTTP 501 | P0 missing real account deletion, retention & revocation transaction design |
+| Account deletion | PR #69 implements confirmed `DELETE /me` with billing shutdown, panel-first revocation, tombstones and retained payment evidence | P0 staging checks, legal retention policy and client confirmation UX remain unverified; see `ACCOUNT_ERASURE_AND_BILLING_RACE_AUDIT_2026-11-07.md` |
 | Operations | GitHub Actions unit and compile quality, Docker/Redis/SQLite backend | Live VPS deployment, TLS, rollback, backup restore, stress/load monitoring |
 
 ## Release checklist: do not mark as passed without evidence
