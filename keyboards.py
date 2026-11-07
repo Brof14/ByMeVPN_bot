@@ -93,28 +93,30 @@ def tariff_selection_kb(devices: int = DEFAULT_DEVICE_LIMIT, discount_percent: i
 
     # Keep the familiar monthly price on the duration chooser. The final
     # checkout screen shows the full amount before the user selects payment.
+    # No invisible totals or misleading free months: the existing billing
+    # calculation charges for all 1/4/8/15 included months. Show the actual
+    # payable amount and effective monthly rate without changing a kopeck.
     tariff_rows = [
-        (1, "1 месяц"),
-        (3, "3 мес. + 1 в подарок"),
-        (6, "6 мес. + 2 в подарок"),
-        (12, "12 мес. + 3 в подарок"),
+        (1, "1 мес."),
+        (3, "4 мес. (3+1)"),
+        (6, "8 мес. (6+2)"),
+        (12, "15 мес. (12+3)"),
     ]
 
-    for months, bonus in tariff_rows:
-        monthly_price = get_monthly_display(months, devices)
+    for months, period_label in tariff_rows:
+        total_price, included_days = get_price_for_months(months, devices)
         if discount_percent > 0:
-            monthly_price = round(monthly_price * (100 - discount_percent) / 100)
-            text = f"{bonus} — {monthly_price} ₽/мес. · −{discount_percent}%"
+            total_price = round(total_price * (100 - discount_percent) / 100)
+            months_included = included_days // 30
+            monthly_display = f"≈{total_price / months_included:g}"
         else:
-            text = f"{bonus} — {monthly_price} ₽/мес."
-
+            monthly_display = str(get_monthly_display(months, devices))
+        text = f"{period_label} · {total_price} ₽ · {monthly_display} ₽/мес."
+        if discount_percent > 0:
+            text += f" · −{discount_percent}%"
         if months == 12:
             text += " · Лучшая цена"
-        kb.row(InlineKeyboardButton(
-            text=text,
-            callback_data=f"tariff_{months}_{devices}",
-            
-        ))
+        kb.row(InlineKeyboardButton(text=text, callback_data=f"tariff_{months}_{devices}"))
 
     kb.row(InlineKeyboardButton(text="← Назад", callback_data="back_to_menu"))
     return kb.as_markup()
@@ -337,11 +339,12 @@ def after_key_kb(subscription_url: str = "") -> InlineKeyboardMarkup:
             text="Скопировать ссылку",
             copy_text={"text": subscription_url},
         ))
+    kb.row(InlineKeyboardButton(text="Подключить VPN", callback_data="connection_guide"))
     kb.row(
-        InlineKeyboardButton(text="Подключить VPN", callback_data="connection_guide"),
         InlineKeyboardButton(text="Подписка", callback_data="my_keys"),
+        InlineKeyboardButton(text="Пригласить друга", callback_data="partner"),
     )
-    kb.row(InlineKeyboardButton(text="Главное меню", callback_data="back_to_menu"))
+    kb.row(InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu"))
     return kb.as_markup()
 
 

@@ -15,9 +15,9 @@ class TariffDesignTests(unittest.TestCase):
     def test_bonus_months_are_explicit_without_unicode_gifts(self):
         keyboard = tariff_selection_kb(devices=2)
         labels = {b.callback_data: b.text for b in buttons(keyboard)}
-        self.assertIn("1 в подарок", labels["tariff_3_2"])
-        self.assertIn("2 в подарок", labels["tariff_6_2"])
-        self.assertIn("3 в подарок", labels["tariff_12_2"])
+        self.assertIn("4 мес. (3+1)", labels["tariff_3_2"])
+        self.assertIn("8 мес. (6+2)", labels["tariff_6_2"])
+        self.assertIn("15 мес. (12+3)", labels["tariff_12_2"])
         self.assertIn("Лучшая цена", labels["tariff_12_2"])
         self.assertTrue(all("🎁" not in text for text in labels.values()))
         with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "1"}):
