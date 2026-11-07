@@ -301,9 +301,15 @@ class ExpiryDatabaseRegression(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((sub["key_id"], title), (None, "Card"))
         result = await self.db.unlink_auto_renew_payment_method(9801, key_id)
         self.assertTrue(result["unlinked"])
-        legacy = await self.db.get_auto_renew_subscription(9801)
-        self.assertEqual(legacy["status"], "cancelled")
-        self.assertFalse(legacy["payment_method_id"])
+        db = await self.db.get_db()
+        cursor = await db.execute(
+            "SELECT status, payment_method_id FROM auto_renew_subscriptions "
+            "WHERE user_id=? AND key_id IS NULL",
+            (9801,),
+        )
+        legacy = await cursor.fetchone()
+        self.assertEqual(legacy[0], "cancelled")
+        self.assertFalse(legacy[1])
 
     async def test_account_payment_controls_prefer_active_token_over_newer_canceled_card(self):
         first = await self.db.add_key(9801, "https://sub.test/first", "first", "uuid-first", 30, 2)
