@@ -64,6 +64,24 @@ class TestUncertainAutoRenew(unittest.IsolatedAsyncioTestCase):
         defer.assert_awaited_once_with(77, "provider response was not confirmed")
         mark_failed.assert_not_awaited()
 
+    async def test_canceled_payment_with_null_details_is_handled(self):
+        subscription = {
+            "sub_id": 79, "user_id": 12347, "key_id": 11, "expiry": 1_800_000_002,
+            "fail_count": 0, "days": 30, "devices": 2, "months": 1,
+            "amount_rub": 89, "payment_method_id": "pm_saved",
+        }
+        with (
+            patch("autorenew.get_expiring_auto_renew_subscriptions", new=AsyncMock(return_value=[subscription])),
+            patch("autorenew.charge_yookassa_recurrent", new=AsyncMock(return_value={
+                "id": "yk-canceled", "status": "canceled", "cancellation_details": None,
+            })),
+            patch("autorenew.update_auto_renew_charge_failure", new=AsyncMock(return_value=False)) as failed,
+            patch("autorenew._notify_autorenew_failed", new=AsyncMock()) as notify,
+        ):
+            await autorenew.process_auto_renewals(MagicMock())
+        failed.assert_awaited_once_with(79, "unknown")
+        notify.assert_awaited_once()
+
     async def test_successful_charge_is_fulfilled_before_success_marker(self):
         subscription = {
             "sub_id": 78,
