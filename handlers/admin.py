@@ -1311,38 +1311,126 @@ async def cb_admin_del_key(callback: CallbackQuery, bot: Bot):
 # ── Delete user ────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("admin_del_user:"))
-async def cb_del_user(callback: CallbackQuery, bot: Bot):
+async def cb_del_user_prompt(callback: CallbackQuery):
+    """Require a second explicit tap before irreversible administrator deletion."""
     if not _is_admin(callback.from_user.id):
-        await safe_answer(callback, "Нет доступа.", alert=True); return
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
     await safe_answer(callback)
     uid = int(callback.data.split(":")[1])
+    if uid in ADMIN_IDS:
+        await callback.message.edit_text("Удаление учётной записи администратора через бота запрещено.", reply_markup=_back_kb())
+        return
+    await callback.message.edit_text(
+        f"<b>Удалить пользователя {uid}?</b>\\n\\n"
+        "Все сохранённые способы автосписания будут отключены. Затем бот "
+        "попытается удалить VPN-клиента со всех серверов. Только после "
+        "подтверждения удаления в 3x-ui будут удалены локальные ключи.\\n\\n"
+        "Уже оплаченный доступ может быть потерян. Финансовые записи сохраняются для сверки.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Да, удалить доступ", callback_data=f"admin_del_user_confirm:{uid}", style="danger")],
+            [InlineKeyboardButton(text="Отмена", callback_data=f"admin_user:{uid}")],
+        ]),
+    )
+
+
+@router.callback_query(F.data.startswith("admin_del_user_confirm:"))
+async def cb_del_user(callback: CallbackQuery, bot: Bot):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    uid = int(callback.data.split(":")[1])
+    if uid in ADMIN_IDS:
+        await callback.message.edit_text("Удаление администратора через бота запрещено.", reply_markup=_back_kb())
+        return
+
+    from database import (
+        try_acquire_delivery_lease, renew_delivery_lease,
+        release_delivery_lease, suspend_all_user_autorenew,
+    )
+    from secrets import token_urlsafe
+
+    token = token_urlsafe(24)
     try:
-        uuids = await delete_user_and_keys(uid)
-    except Exception as e:
-        logger.exception("Failed to delete user %d from database: %s", uid, e)
+        acquired = await try_acquire_delivery_lease(uid, token)
+    except Exception:
+        logger.exception("Admin deletion could not acquire lease for user %d", uid)
+        acquired = False
+    if not acquired:
         await callback.message.edit_text(
-            f"❌ Не удалось удалить пользователя <code>{uid}</code> из БД. "
-            "Удаление VPN-клиента не выполнялось.",
-            parse_mode="HTML",
+            "У пользователя выполняется другая операция или недоступна база данных. "
+            "Удаление не началось. Повторите позже.",
             reply_markup=_back_kb(),
         )
         return
 
-    # 3x-ui has one client per Telegram user; passing a UUID here was incorrect.
-    panel_deleted = await delete_xui_user(uid)
-    text = (
-        f"🗑 Пользователь <code>{uid}</code> и записи его ключей удалены из БД."
-    )
-    if panel_deleted:
-        text += "\nVPN-клиент удалён из 3x-ui."
-    else:
-        text += "\n⚠️ Клиент не удалён из 3x-ui. Требуется ручная очистка панели."
-        logger.error("User %d removed from DB but 3x-ui cleanup failed", uid)
-    await callback.message.edit_text(
-        text,
-        parse_mode="HTML",
-        reply_markup=_back_kb(),
-    )
+    try:
+        try:
+            await suspend_all_user_autorenew(uid)
+        except Exception:
+            logger.exception("Admin deletion cannot disable recurring billing for user %d", uid)
+            await callback.message.edit_text(
+                "Не удалось отключить автосписания. Удаление VPN и данных отменено.",
+                reply_markup=_back_kb(),
+            )
+            return
+
+        try:
+            panel_deleted = await delete_xui_user(uid)
+        except Exception:
+            logger.exception("Admin deletion panel check failed for user %d", uid)
+            panel_deleted = False
+        if not panel_deleted:
+            logger.error("Admin deletion requires panel reconciliation for user %d", uid)
+            await callback.message.edit_text(
+                f"Удаление пользователя <code>{uid}</code> в 3x-ui не подтверждено. "
+                "Локальные данные сохранены, автосписания отключены. "
+                "Проверьте все VPN-серверы вручную.",
+                parse_mode="HTML",
+                reply_markup=_back_kb(),
+            )
+            return
+
+        # Prevent a reclaimed lease from silently deleting local state while
+        # a concurrent writer is changing the user's subscription.
+        try:
+            owned = await renew_delivery_lease(uid, token)
+        except Exception:
+            owned = False
+        if not owned:
+            logger.error("Admin deletion lost delivery lease for user %d", uid)
+            await callback.message.edit_text(
+                "Удаление VPN на серверах подтверждено, но блокировка БД потеряна. "
+                "Автосписания отключены. Требуется ручная сверка данных.",
+                reply_markup=_back_kb(),
+            )
+            return
+
+        try:
+            await delete_user_and_keys(uid)
+        except Exception:
+            logger.exception("Admin deletion DB cleanup failed after panel removal for user %d", uid)
+            await callback.message.edit_text(
+                f"VPN-клиент <code>{uid}</code> удалён из 3x-ui, но очистка БД не завершена. "
+                "Автосписания отключены. Требуется ручная сверка; не начисляйте дни вслепую.",
+                parse_mode="HTML",
+                reply_markup=_back_kb(),
+            )
+            return
+
+        await callback.message.edit_text(
+            f"VPN-клиент <code>{uid}</code> удалён из 3x-ui, локальные ключи и учётная запись удалены. "
+            "Автосписания отключены; финансовые записи сохранены для сверки.",
+            parse_mode="HTML",
+            reply_markup=_back_kb(),
+        )
+    finally:
+        try:
+            await release_delivery_lease(uid, token)
+        except Exception:
+            logger.exception("Admin deletion could not release delivery lease for user %d", uid)
 
 
 # ── Reset trial ────────────────────────────────────────────────────────────
