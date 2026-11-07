@@ -285,6 +285,26 @@ class ExpiryDatabaseRegression(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone((await _get_active_autorenew(9801, key1))["key_id"])
 
+    async def test_key_screen_and_unlink_choose_active_legacy_subscription(self):
+        from handlers.keys import _load_autorenew_context
+        key_id = await self.db.add_key(9801, "https://sub.test/legacy", "legacy", "uuid-legacy", 30, 2)
+        await self.db.save_auto_renew_subscription(
+            user_id=9801, key_id=key_id, payment_method_id="inactive", payment_method_title="Old",
+            payment_method_type="bank_card", months=1, days=30, devices=2, amount_rub=89,
+        )
+        await self.db.set_auto_renew_status_by_key(9801, key_id, "cancelled")
+        await self.db.save_auto_renew_subscription(
+            user_id=9801, key_id=None, payment_method_id="legacy-active", payment_method_title="Card",
+            payment_method_type="bank_card", months=1, days=30, devices=2, amount_rub=89,
+        )
+        sub, title, _ = await _load_autorenew_context(9801, key_id)
+        self.assertEqual((sub["key_id"], title), (None, "Card"))
+        result = await self.db.unlink_auto_renew_payment_method(9801, key_id)
+        self.assertTrue(result["unlinked"])
+        legacy = await self.db.get_auto_renew_subscription(9801)
+        self.assertEqual(legacy["status"], "cancelled")
+        self.assertFalse(legacy["payment_method_id"])
+
 
 class PromoAccountingAlerts(unittest.IsolatedAsyncioTestCase):
     async def test_missing_usage_notifies_without_failing_fulfilled_order(self):
