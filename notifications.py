@@ -378,38 +378,50 @@ async def _wait_until_10_00_moscow() -> None:
 
 
 async def _record_verified_first_connection(bot: Bot, item: dict, signal: str) -> None:
-    """Once per account, celebrate verified connectivity and offer sharing.
+    """Record verified 3x-ui activity once, without an immediate marketing push.
 
-    This is optional customer outreach, never a requirement to use the VPN.
-    Promotional opt-outs are respected; a Telegram failure cannot revert
-    a successfully recorded VPN connection.
+    Connection is proof that a tunnel worked, not proof that the customer
+    recommends the product. Referral outreach is handled separately after
+    at least 24 hours of actual opportunity to use the service.
     """
-    await update_connection_reminder(item["key_id"], "connected")
     from database import log_analytics_event_once
-    first = await log_analytics_event_once(
+    await update_connection_reminder(item["key_id"], "connected")
+    await log_analytics_event_once(
         item["user_id"], "first_connection", f"3x-ui {signal} observed"
     )
-    if not first:
-        return
-    try:
-        if await is_promotional_opted_out(item["user_id"]):
-            return
-        await bot.send_message(
-            item["user_id"],
-            "<b>Подключение подтверждено</b>\n\n"
-            "ByMeVPN работает. Если сервис пригодился, поделитесь им с другом.\n"
-            "+15 дней за регистрацию друга и +30 дней за его первую подходящую оплату.",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Пригласить друга", callback_data="partner")],
-                [InlineKeyboardButton(text="Отключить предложения", callback_data="marketing_optout")],
-            ]),
-        )
-    except Exception as exc:
-        logger.info(
-            "Optional first-connection message unavailable for user %d (%s)",
-            item["user_id"], type(exc).__name__,
-        )
+
+
+async def _referral_nudge_pass(bot: Bot) -> None:
+    """At-most-once, post-connection offer; respects opt-outs and active access."""
+    from database import get_due_referral_nudges, log_analytics_event_once, log_analytics_event
+
+    for user_id in await get_due_referral_nudges(limit=10):
+        # The preference may have changed after selecting the cohort.
+        if await is_promotional_opted_out(user_id):
+            continue
+        # Mark before contacting Telegram: if the network times out after the
+        # message was accepted, retrying would send unwanted duplicate ads.
+        if not await log_analytics_event_once(user_id, "referral_nudge_attempted"):
+            continue
+        try:
+            await bot.send_message(
+                user_id,
+                "<b>Если ByMeVPN оказался полезен</b>\n\n"
+                "Можете пригласить друга и получить бонусные дни: "
+                "+15 дней за регистрацию и +30 дней за его первую подходящую оплату.\n\n"
+                "Это необязательно.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Пригласить друга", callback_data="partner")],
+                    [InlineKeyboardButton(text="Отключить предложения", callback_data="marketing_optout")],
+                ]),
+            )
+            await log_analytics_event(user_id, "referral_nudge_sent")
+        except Exception as exc:
+            logger.info(
+                "Referral suggestion unavailable for user %d (%s)",
+                user_id, type(exc).__name__,
+            )
 
 
 async def _connection_reminder_pass(bot: Bot) -> None:
@@ -465,6 +477,10 @@ async def _connection_reminder_scheduler(bot: Bot) -> None:
     while True:
         try:
             await _connection_reminder_pass(bot)
+            # Optional marketing is sent only during daytime in Moscow.
+            moscow_hour = (datetime.now(timezone.utc) + timedelta(hours=3)).hour
+            if 10 <= moscow_hour < 20:
+                await _referral_nudge_pass(bot)
         except Exception:
             logger.exception("First-connection reminder pass failed")
         await asyncio.sleep(300)

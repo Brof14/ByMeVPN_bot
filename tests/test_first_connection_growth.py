@@ -1,4 +1,4 @@
-"""One-time organic-growth prompt after a verified, working VPN connection."""
+"""First connection is a separate event from voluntary marketing outreach."""
 import os
 import unittest
 from types import SimpleNamespace
@@ -6,47 +6,41 @@ from unittest.mock import AsyncMock, patch
 
 
 class FirstConnectionGrowthTests(unittest.IsolatedAsyncioTestCase):
-    async def test_verified_connection_offers_optin_share_once(self):
+    async def test_verified_connection_records_milestone_without_marketing_push(self):
         from notifications import _record_verified_first_connection
         bot = SimpleNamespace(send_message=AsyncMock())
         with (
             patch("notifications.update_connection_reminder", new=AsyncMock()) as update,
             patch("database.log_analytics_event_once", new=AsyncMock(side_effect=[True, False])) as milestone,
-            patch("notifications.is_promotional_opted_out", new=AsyncMock(return_value=False)),
         ):
             await _record_verified_first_connection(bot, {"user_id": 9, "key_id": 1}, "traffic")
             await _record_verified_first_connection(bot, {"user_id": 9, "key_id": 1}, "traffic")
         self.assertEqual(update.await_count, 2)
         self.assertEqual(milestone.await_count, 2)
-        bot.send_message.assert_awaited_once()
-        text = bot.send_message.await_args.args[1]
-        self.assertIn("Подключение подтверждено", text)
-        self.assertIn("+15 дней", text)
-        actions = [b.callback_data for row in bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard for b in row]
-        self.assertIn("partner", actions)
-        self.assertIn("marketing_optout", actions)
+        bot.send_message.assert_not_awaited()
 
-    async def test_opted_out_never_gets_growth_prompt(self):
+    async def test_verified_connection_notifies_only_the_separate_referral_worker(self):
         from notifications import _record_verified_first_connection
         bot = SimpleNamespace(send_message=AsyncMock())
         with (
-            patch("notifications.update_connection_reminder", new=AsyncMock()),
+            patch("notifications.update_connection_reminder", new=AsyncMock()) as update,
             patch("database.log_analytics_event_once", new=AsyncMock(return_value=True)),
-            patch("notifications.is_promotional_opted_out", new=AsyncMock(return_value=True)),
         ):
             await _record_verified_first_connection(bot, {"user_id": 9, "key_id": 1}, "online")
+        update.assert_awaited_once_with(1, "connected")
         bot.send_message.assert_not_awaited()
 
-    async def test_send_failure_does_not_unconfirm_vpn_connection(self):
+    async def test_telegram_failure_can_not_undo_confirmed_connection(self):
         from notifications import _record_verified_first_connection
         bot = SimpleNamespace(send_message=AsyncMock(side_effect=RuntimeError("Telegram offline")))
         with (
             patch("notifications.update_connection_reminder", new=AsyncMock()) as update,
             patch("database.log_analytics_event_once", new=AsyncMock(return_value=True)),
-            patch("notifications.is_promotional_opted_out", new=AsyncMock(return_value=False)),
         ):
             await _record_verified_first_connection(bot, {"user_id": 9, "key_id": 1}, "traffic")
         update.assert_awaited_once_with(1, "connected")
+
+
 
 
 class AnalyticsOnceTests(unittest.IsolatedAsyncioTestCase):

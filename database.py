@@ -1696,20 +1696,49 @@ async def update_connection_reminder(key_id: int, status: str) -> None:
     if status not in {"sent", "connected", "expired", "failed"}:
         raise ValueError("invalid connection reminder status")
     db = await get_db()
-    cur = await db.execute(
+    await db.execute(
         "UPDATE keys SET connect_reminder_status=? WHERE id=? AND connect_reminder_status='pending'",
         (status, key_id),
     )
-    if status == "connected" and cur.rowcount == 1:
-        user_cur = await db.execute("SELECT user_id FROM keys WHERE id=?", (key_id,))
-        row = await user_cur.fetchone()
-        if row:
-            await db.execute(
-                "INSERT INTO analytics_events(user_id,event_type,timestamp,details) "
-                "VALUES(?,'first_connection',strftime('%s','now'),?)",
-                (int(row[0]), f"key_id={int(key_id)}"),
-            )
+    # Recording the first_connection milestone belongs to the verified
+    # connection worker, not this state-only update. A duplicate insert here
+    # previously defeated the worker's one-time detection.
     await db.commit()
+
+
+async def get_due_referral_nudges(*, now: int | None = None, limit: int = 10) -> list[int]:
+    """Find accounts with a verified connection at least one day ago.
+
+    Offers are optional and bounded to a 14-day cohort: old accounts must not
+    receive surprise promotional campaigns after deployment. No offer is sent
+    without a current active key or to anyone who disabled marketing.
+    """
+    clock = int(time.time() if now is None else now)
+    db = await get_db()
+    cur = await db.execute(
+        """SELECT e.user_id
+        FROM analytics_events e
+        JOIN users u ON u.user_id=e.user_id
+        WHERE e.event_type='first_connection'
+          AND COALESCE(u.is_banned,0)=0
+          AND NOT EXISTS (
+            SELECT 1 FROM marketing_preferences m
+            WHERE m.user_id=e.user_id AND m.promotional_opt_out=1
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM analytics_events n
+            WHERE n.user_id=e.user_id AND n.event_type='referral_nudge_attempted'
+          )
+          AND EXISTS (
+            SELECT 1 FROM keys k WHERE k.user_id=e.user_id AND k.expiry>?
+          )
+        GROUP BY e.user_id
+        HAVING MIN(e.timestamp) BETWEEN ? AND ?
+        ORDER BY MIN(e.timestamp) ASC
+        LIMIT ?""",
+        (clock, clock - 14 * 86400, clock - 86400, max(1, min(int(limit), 25))),
+    )
+    return [int(row[0]) for row in await cur.fetchall()]
 
 
 async def claim_expiry_notification(user_id: int, expiry: int, bucket: str) -> bool:
@@ -5333,21 +5362,25 @@ async def log_analytics_event_once(
 
 
 async def get_conversion_funnel(days: int = 30) -> dict:
-    """Cohort users first seen in the period and their later conversion milestones."""
+    """Registered-user cohort; repeated /start must not count as new acquisition."""
     days = max(1, min(int(days), 365))
     since = int(time.time()) - days * 86400
     db = await get_db()
     cur = await db.execute(
         """
         WITH cohort AS (
-          SELECT e.user_id, MIN(e.timestamp) AS started_at,
-            (SELECT first_event.source FROM analytics_events first_event
-             WHERE first_event.user_id=e.user_id AND first_event.event_type='bot_started'
-             ORDER BY first_event.timestamp ASC LIMIT 1) AS start_source
-          FROM analytics_events e WHERE e.event_type='bot_started' AND e.timestamp>=?
-          GROUP BY e.user_id
+          SELECT u.user_id, u.created AS started_at,
+            COALESCE(
+              (SELECT NULLIF(first_event.source, '')
+               FROM analytics_events first_event
+               WHERE first_event.user_id=u.user_id
+                 AND first_event.event_type='bot_started'
+               ORDER BY first_event.timestamp ASC, first_event.id ASC LIMIT 1),
+              NULLIF(u.source, ''), 'direct'
+            ) AS start_source
+          FROM users u WHERE u.created>=?
         )
-        SELECT COALESCE(NULLIF(c.start_source, ''), NULLIF(u.source, ''), 'direct') AS source,
+        SELECT c.start_source AS source,
           COUNT(DISTINCT c.user_id),
           COUNT(DISTINCT CASE WHEN e.event_type='trial_started' THEN c.user_id END),
           COUNT(DISTINCT CASE WHEN e.event_type='subscription_created' THEN c.user_id END),
