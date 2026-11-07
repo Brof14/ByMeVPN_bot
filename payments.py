@@ -286,8 +286,8 @@ async def charge_yookassa_recurrent(
         "metadata": metadata,
     }
 
-    logger.info("charge_yookassa_recurrent: user_id=%d key_id=%d days=%d devices=%d amount=%d pm=%s",
-                user_id, key_id, days, devices, amount_rub, payment_method_id)
+    logger.info("charge_yookassa_recurrent: user_id=%d key_id=%d days=%d devices=%d amount=%d",
+                user_id, key_id, days, devices, amount_rub)
 
     try:
         async with yookassa_client(timeout=20.0) as client:
