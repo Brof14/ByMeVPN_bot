@@ -75,12 +75,26 @@ class AdForwardingTests(unittest.IsolatedAsyncioTestCase):
         message = SimpleNamespace(from_user=SimpleNamespace(id=123), text="@channelname")
         state = SimpleNamespace(update_data=AsyncMock())
         bot = SimpleNamespace(
-            get_chat=AsyncMock(return_value=SimpleNamespace(id=9, title="News <VPN> & more")),
+            get_chat=AsyncMock(return_value=SimpleNamespace(id=9, title="News <VPN> & more", type="channel")),
             get_chat_member_count=AsyncMock(side_effect=RuntimeError("not available")),
         )
         with patch("handlers.ad_program._ask_subscriber_count", new=AsyncMock()) as ask:
             await msg_ad_channel_input(message, bot, state)
         self.assertIn("News &lt;VPN&gt; &amp; more", ask.await_args.kwargs["prompt"])
+
+    async def test_public_group_cannot_enter_channel_ad_program(self):
+        from handlers.ad_program import msg_ad_channel_input
+        message = SimpleNamespace(from_user=SimpleNamespace(id=123), text="@somegroup", answer=AsyncMock())
+        state = SimpleNamespace(update_data=AsyncMock(), clear=AsyncMock())
+        bot = SimpleNamespace(
+            get_chat=AsyncMock(return_value=SimpleNamespace(id=9, title="Group", type="supergroup")),
+            get_chat_member_count=AsyncMock(return_value=100),
+        )
+        with patch("handlers.ad_program._create_application_and_reply", new=AsyncMock()) as create:
+            await msg_ad_channel_input(message, bot, state)
+        create.assert_not_awaited()
+        bot.get_chat_member_count.assert_not_awaited()
+        self.assertIn("канал", message.answer.await_args.args[0].lower())
 
     async def test_private_invite_is_not_written_to_audit_or_analytics(self):
         from handlers.ad_program import _create_application_and_reply
