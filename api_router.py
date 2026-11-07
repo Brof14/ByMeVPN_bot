@@ -37,6 +37,7 @@ from config import XUI_SUB_PATH, XUI_URL
 from telegram_post_compat import TelegramSessionTokenBody, register_telegram_check_post
 from telegram_auth_storage_compat import install_telegram_auth_storage_compat
 from google_signin import GoogleIdTokenError, verify_google_id_token
+from desktop_vpn_capabilities import windows_vpn_compatible
 
 logger = logging.getLogger(__name__)
 
@@ -2790,12 +2791,12 @@ async def create_vpn_session(req: SessionRequest, request: Request, user_id: int
             detail="Нет активной подписки или серверов. Оформите подписку или активируйте пробный период.",
         )
 
+    # Older Windows releases still receive only VLESS Reality/TCP. New
+    # versions advertise extra protocols explicitly at session selection.
+    capabilities = request.headers.get("x-vpn-capabilities", "")
+
     def compatible_with_desktop(server: dict) -> bool:
-        conf = server.get("config") or {}
-        return (conf.get("protocol") == "vless"
-                and conf.get("security") == "reality"
-                and conf.get("network", "tcp") in ("tcp", "raw")
-                and bool(conf.get("public_key")))
+        return windows_vpn_compatible(server, capabilities)
 
     is_windows = request.headers.get("x-device-os", "").casefold() == "windows"
     if req.node_code == "auto":
