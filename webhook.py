@@ -735,7 +735,7 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                         devices=devices,
                         amount_rub=amount_rub,
                     )
-                    logger.info("Saved auto-renew subscription for user %d (key=%s, pm_id=%s)", user_id, key_id, pm_id)
+                    logger.info("Saved auto-renew subscription for user %d (key=%s)", user_id, key_id)
                     try:
                         await bot.send_message(
                             chat_id=user_id,
