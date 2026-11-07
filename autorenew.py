@@ -112,7 +112,7 @@ async def process_auto_renewals(bot: Bot) -> None:
             idempotence_key=idempotence_key,
         )
 
-        if not payment_res:
+        if not isinstance(payment_res, dict) or not payment_res:
             await defer_auto_renew_charge_retry(sub_id, "provider response was not confirmed")
             logger.warning(
                 "Auto-renew payment result is uncertain for subscription %d; retrying with same idempotency key",
@@ -122,6 +122,14 @@ async def process_auto_renewals(bot: Bot) -> None:
 
         p_status = payment_res.get("status")
         payment_id = payment_res.get("id")
+
+        if not isinstance(payment_id, str) or not payment_id.strip() or p_status not in ("succeeded", "pending", "canceled"):
+            await defer_auto_renew_charge_retry(sub_id, "provider response was not confirmed")
+            logger.warning(
+                "Auto-renew response is incomplete or has an unknown status for subscription %d; keeping the same idempotency key",
+                sub_id,
+            )
+            continue
 
         if payment_id and p_status in ("succeeded", "pending"):
             try:

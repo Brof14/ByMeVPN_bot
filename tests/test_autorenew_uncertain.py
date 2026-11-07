@@ -19,7 +19,7 @@ class TestUncertainAutoRenew(unittest.IsolatedAsyncioTestCase):
             "fail_count": 2, "days": 30, "devices": 2, "months": 1,
             "amount_rub": 89, "payment_method_id": "pm_saved",
         }
-        for response in ({"id": "yk-1", "status": "waiting_for_capture"}, {"status": "succeeded"}, {"status": "pending"}):
+        for response in ({"id": "yk-1", "status": "waiting_for_capture"}, {"status": "succeeded"}, {"status": "pending"}, "malformed"):
             with (
                 self.subTest(response=response),
                 patch("autorenew.get_expiring_auto_renew_subscriptions", new=AsyncMock(return_value=[subscription])),
