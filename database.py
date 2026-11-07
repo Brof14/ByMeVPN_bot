@@ -71,6 +71,16 @@ CREATE TABLE IF NOT EXISTS keys (
 CREATE INDEX IF NOT EXISTS idx_keys_user   ON keys(user_id);
 CREATE INDEX IF NOT EXISTS idx_keys_expiry ON keys(expiry);
 
+-- The last selected plan, not an authorization to charge. Intentionally
+-- excludes prices and promo state: provider checkout must be reconfirmed.
+CREATE TABLE IF NOT EXISTS checkout_drafts (
+    user_id INTEGER PRIMARY KEY,
+    months INTEGER NOT NULL,
+    devices INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(user_id)
+);
+
 CREATE TABLE IF NOT EXISTS revoked_mobile_jwt_sessions (
     jti TEXT PRIMARY KEY,
     expires_at INTEGER NOT NULL
@@ -5359,6 +5369,94 @@ async def log_analytics_event_once(
     except Exception as exc:
         logger.debug("Failed to record milestone %s: %s", event_type, exc)
         return False
+
+
+async def save_checkout_draft(user_id: int, months: int, devices: int) -> None:
+    """Persist a selection to recover safely after MemoryStorage is restarted.
+
+    Nothing here authorizes a payment. A resumed user must revisit the full
+    order page with a freshly calculated price and choose a provider again.
+    """
+    if int(user_id) <= 0 or int(months) not in (1, 3, 6, 12) or int(devices) not in (2, 5, 10):
+        raise ValueError("invalid checkout selection")
+    db = await get_db()
+    async with _db_semaphore:
+        await db.execute(
+            """INSERT INTO checkout_drafts(user_id,months,devices,updated_at)
+            VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET
+            months=excluded.months, devices=excluded.devices,
+            updated_at=excluded.updated_at""",
+            (int(user_id), int(months), int(devices), int(time.time())),
+        )
+        await db.commit()
+
+
+async def get_checkout_draft(user_id: int, *, max_age: int = 86400) -> dict | None:
+    """Return a recent saved plan, never an amount or payment authorization."""
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT months,devices,updated_at FROM checkout_drafts WHERE user_id=?",
+        (int(user_id),),
+    )
+    row = await cur.fetchone()
+    if not row:
+        return None
+    months, devices, saved_at = (int(value) for value in row)
+    if (months not in (1, 3, 6, 12)
+            or devices not in (2, 5, 10)
+            or saved_at < int(time.time()) - max(1, int(max_age))):
+        return None
+    return {"months": months, "devices": devices}
+
+
+async def get_checkout_conversion_snapshot(days: int = 30) -> dict:
+    """Real registration-cohort funnel, with verified successful payments.
+
+    Amounts are grouped by their recorded currency, never added across XTR,
+    RUB and crypto. No gross revenue is passed off as net profit.
+    """
+    days = max(1, min(int(days), 365))
+    cutoff = int(time.time()) - days * 86400
+    db = await get_db()
+    cur = await db.execute(
+        """SELECT COUNT(*) FROM users WHERE created>=?""", (cutoff,),
+    )
+    registered = int((await cur.fetchone())[0])
+    async def event_users(kind: str) -> int:
+        cur = await db.execute(
+            """SELECT COUNT(DISTINCT e.user_id) FROM analytics_events e
+            JOIN users u ON u.user_id=e.user_id
+            WHERE u.created>=? AND e.timestamp>=u.created AND e.event_type=?""",
+            (cutoff, kind),
+        )
+        return int((await cur.fetchone())[0])
+    views = await event_users("tariffs_viewed")
+    selections = await event_users("tariff_selected")
+    started = await event_users("checkout_started")
+    cur = await db.execute(
+        """SELECT COUNT(DISTINCT p.user_id)
+        FROM payments p JOIN users u ON u.user_id=p.user_id
+        WHERE u.created>=? AND p.created>=u.created AND p.status='success'""",
+        (cutoff,),
+    )
+    paid = int((await cur.fetchone())[0])
+    cur = await db.execute(
+        """SELECT p.currency, COUNT(*), COALESCE(SUM(p.amount),0)
+        FROM payments p JOIN users u ON u.user_id=p.user_id
+        WHERE u.created>=? AND p.created>=u.created AND p.status='success'
+        GROUP BY p.currency ORDER BY p.currency""",
+        (cutoff,),
+    )
+    by_currency = {
+        str(currency): {"payments": int(count), "gross_amount": int(amount)}
+        for currency, count, amount in await cur.fetchall()
+    }
+    return {
+        "days": days, "registered": registered, "views": views,
+        "selections": selections, "started": started, "paid": paid,
+        "purchase_pct": 100 * paid / views if views else None,
+        "by_currency": by_currency,
+    }
 
 
 async def get_conversion_funnel(days: int = 30) -> dict:

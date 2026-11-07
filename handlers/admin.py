@@ -121,7 +121,8 @@ def _growth_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="Рефералы", callback_data="admin_referrals"),
          InlineKeyboardButton(text="Реклама", callback_data="ad_admin_list")],
         [InlineKeyboardButton(text="Воронка", callback_data="admin_funnel"),
-         InlineKeyboardButton(text="Органический рост", callback_data="admin_referral_funnel")],
+         InlineKeyboardButton(text="Оплаты / конверсия", callback_data="admin_checkout_funnel")],
+        [InlineKeyboardButton(text="Органический рост", callback_data="admin_referral_funnel")],
         [InlineKeyboardButton(text="Рассылки", callback_data="admin_broadcast")],
         [InlineKeyboardButton(text="← Главное меню", callback_data="admin_menu")],
     ])
@@ -222,6 +223,45 @@ async def cb_admin_funnel(callback: CallbackQuery):
             )
     lines.extend(["", "Этапы подключения считаются по первому подтверждённому признаку активности в 3x-ui."])
     await callback.message.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=_growth_kb())
+
+
+@router.callback_query(F.data == "admin_checkout_funnel")
+async def cb_admin_checkout_funnel(callback: CallbackQuery):
+    """Verified provider payments only; never blend currencies or infer profit."""
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    from database import get_checkout_conversion_snapshot
+    report = await get_checkout_conversion_snapshot(30)
+    text = [
+        "<b>Покупки новых клиентов · 30 дней</b>",
+        "",
+        f"Зарегистрировались: <b>{report['registered']}</b>",
+        f"Открыли тарифы: <b>{report['views']}</b>",
+        f"Выбрали тариф: <b>{report['selections']}</b>",
+        f"Перешли к оплате: <b>{report['started']}</b>",
+        f"Успешно оплатили: <b>{report['paid']}</b>",
+    ]
+    pct = report["purchase_pct"]
+    text.append(
+        f"Оплаты / открывшие тарифы: <b>{pct:.1f}%</b>"
+        if pct is not None else "Оплаты / открывшие тарифы: <b>нет данных</b>"
+    )
+    if report["by_currency"]:
+        text.extend(["", "<b>Подтверждённые суммы по валютам:</b>"])
+        for currency, values in report["by_currency"].items():
+            text.append(
+                f"{values['gross_amount']} {escape(currency)} · {values['payments']} операций"
+            )
+    text.extend([
+        "", "Когорта определяется датой регистрации; оплата могла быть позднее.",
+        "Суммы — валовые подтверждённые платежи, не прибыль. "
+        "Комиссии, возвраты, расходы на VPS и стоимость бонусов не вычтены.",
+    ])
+    await callback.message.edit_text(
+        "\n".join(text), parse_mode="HTML", reply_markup=_growth_kb(),
+    )
 
 
 @router.callback_query(F.data == "admin_referral_funnel")
