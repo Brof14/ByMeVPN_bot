@@ -48,6 +48,23 @@ class TariffDesignTests(unittest.TestCase):
 
 
 class AdForwardingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_channel_offer_explains_review_and_personal_link(self):
+        from handlers.ad_program import cb_ad_program
+        callback = SimpleNamespace(from_user=SimpleNamespace(id=123))
+        state = SimpleNamespace(clear=AsyncMock())
+        with (
+            patch("handlers.ad_program.safe_answer", new=AsyncMock()),
+            patch("handlers.ad_program.get_active_ad_campaign", new=AsyncMock(return_value=None)),
+            patch("handlers.ad_program.log_ad_notification", new=AsyncMock()),
+            patch("handlers.ad_program.log_ad_analytics_event", new=AsyncMock()),
+            patch("handlers.ad_program.send_with_photo", new=AsyncMock()) as send,
+        ):
+            await cb_ad_program(callback, object(), state)
+        text = send.await_args.args[2]
+        self.assertIn("после проверки", text)
+        self.assertIn("отдельным сообщением", text)
+        self.assertIn("partner", [b.callback_data for b in buttons(send.await_args.args[3])])
+
     def test_ad_post_link_only_from_official_channel(self):
         from handlers.ad_program import official_ad_post_url
         with patch.dict(os.environ, {"AD_SOURCE_POST_URL": "https://t.me/ByMeVPN/42"}):
