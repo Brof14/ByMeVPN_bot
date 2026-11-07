@@ -29,8 +29,9 @@ class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
                         patch("subscription.get_user_keys", new=AsyncMock(return_value=[] if panel_only else [key])),
                         patch("xui_client.get_xui_client_details", new=AsyncMock(return_value=panel)),
                         patch("subscription.database.get_or_create_provisioning_intent", new=AsyncMock(return_value=expiry - 30 * 86400)),
-                        patch("subscription.set_key_expiry", new=AsyncMock()) as set_expiry,
-                        patch("xui_client.update_xui_user", new=AsyncMock()) as update_panel,
+                        patch("subscription.set_key_expiry", new=AsyncMock(return_value=True)) as set_expiry,
+                        patch("xui_client.update_xui_user", new=AsyncMock(return_value=None)) as update_panel,
+                        patch("subscription.log_key_error", new=AsyncMock()),
                         patch("subscription.add_key", new=AsyncMock()) as add_key,
                     ):
                         result = await subscription.deliver_key(
