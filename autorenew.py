@@ -40,7 +40,7 @@ async def _notify_autorenew_failed(
         if disabled:
             text = (
                 f"<b>Автопродление отключено</b>\n\n"
-                f"Не удалось списать <b>{amount_rub} ₽</b> через {pm_title or 'сохранённый способ оплаты'} "
+                f"Не удалось списать <b>{amount_rub} ₽</b> через {safe_pm_title} "
                 f"после нескольких попыток"
                 f"{f' ({reason})' if reason else ''}.\n\n"
                 f"Ваша подписка истекла. Пожалуйста, продлите доступ вручную, "
