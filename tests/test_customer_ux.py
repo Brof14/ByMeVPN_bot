@@ -198,6 +198,24 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(update.await_args_list[0].kwargs["status"], "grant_pending")
         self.assertEqual(update.await_args_list[-1].kwargs["status"], "approved")
 
+    async def test_ad_admin_is_not_told_application_closed_if_status_update_failed(self):
+        from types import SimpleNamespace
+        from handlers.ad_program import cb_ad_admin_approve
+        app = {"id": 72, "user_id": 123, "status": "post_submitted", "bonus_months": 2}
+        callback = SimpleNamespace(from_user=SimpleNamespace(id=1), data="ad_admin_approve:72")
+        with (
+            patch("handlers.ad_program._is_admin", return_value=True),
+            patch("handlers.ad_program.safe_answer", new=AsyncMock()),
+            patch("handlers.ad_program.get_ad_application_by_id", new=AsyncMock(side_effect=[app, {**app, "status": "grant_pending"}])),
+            patch("handlers.ad_program.update_ad_application", new=AsyncMock(side_effect=[True, False])),
+            patch("handlers.ad_program._deliver_verified_ad_reward", new=AsyncMock(return_value=True)),
+            patch("handlers.ad_program.send_with_photo", new=AsyncMock()) as send,
+            patch("handlers.ad_program.log_ad_audit", new=AsyncMock()),
+            patch("handlers.ad_program.log_ad_analytics_event", new=AsyncMock()),
+        ):
+            await cb_ad_admin_approve(callback, SimpleNamespace())
+        self.assertIn("сверк", send.await_args.args[2].lower())
+
     def test_guide_device_selector_uses_compact_two_column_rows(self):
         markup = connection_guide_kb()
         self.assertEqual([len(row) for row in markup.inline_keyboard[:2]], [2, 2])
