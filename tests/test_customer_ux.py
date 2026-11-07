@@ -126,7 +126,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(rows[-1][0].callback_data, "trouble")
             buttons = [button for row in rows for button in row]
             by_action = {button.callback_data: button for button in buttons}
-             self.assertIsNone(by_action["trouble"].style)
+            self.assertIsNone(by_action["trouble"].style)
             self.assertEqual(by_action["buy_vpn"].style, None if "my_keys" in by_action else "primary")
             self.assertIsNone(by_action["free_vpn"].style)
         menu = main_menu_with_keys()
