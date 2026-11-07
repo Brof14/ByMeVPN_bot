@@ -625,6 +625,48 @@ async def pre_checkout(pre: PreCheckoutQuery):
 @router.message(F.successful_payment)
 async def on_successful_payment(message: Message, bot: Bot, state: FSMContext):
     user_id = message.from_user.id
+    from database import is_account_tombstoned
+    if await is_account_tombstoned(user_id):
+        # This update can arrive after account erasure even if the pre-checkout
+        # was approved earlier. Record the charge without recreating VPN access.
+        payment = message.successful_payment
+        charge_id = payment.telegram_payment_charge_id or payment.invoice_payload
+        is_new, _ = await record_payment_idempotent(
+            user_id=user_id,
+            amount=payment.total_amount,
+            currency=payment.currency,
+            method="stars",
+            days=0,
+            payload=charge_id,
+            status="recovery_required",
+            tariff="Deleted account — manual refund review",
+            devices=DEFAULT_DEVICE_LIMIT,
+            provider="stars",
+            provider_payment_id=charge_id,
+        )
+        if is_new:
+            from html import escape
+            from config import ADMIN_ID
+            try:
+                await bot.send_message(
+                    ADMIN_ID,
+                    "⚠️ Stars оплата после удаления аккаунта. "
+                    f"Пользователь <code>{user_id}</code>, "
+                    f"платёж <code>{escape(str(charge_id))}</code>. "
+                    "Не выдавайте доступ автоматически; проверьте возврат вручную.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                logger.exception("Could not alert admin about late Stars charge after deletion")
+        try:
+            await message.answer(
+                "Оплата получена после удаления аккаунта. "
+                "Доступ не активируется автоматически. Не оплачивайте повторно; "
+                "обратитесь в @ByMeVPNSupportBot для проверки возврата."
+            )
+        except Exception:
+            logger.warning("Could not notify user %d about late Stars charge", user_id)
+        return
     await ensure_user(user_id, message.from_user.username)
 
     payment = message.successful_payment
