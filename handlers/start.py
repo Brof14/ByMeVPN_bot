@@ -87,9 +87,9 @@ async def _handle_app_login(message: Message, user_id: int, user_name: str) -> N
                 # handover is correctly configured and verified.
                 logger.warning("Secure public app URL is not configured for user %d", user_id)
                 await message.answer(
-                    "<b>Вход в приложение ByMeVPN</b>\\n\\n"
+                    "<b>Вход в приложение ByMeVPN</b>\n\n"
                     "Автоматический переход временно недоступен. "
-                    "Для безопасности скопируйте ссылку входа и вставьте её в приложение.\\n\\n"
+                    "Для безопасности скопируйте ссылку входа и вставьте её в приложение.\n\n"
                     f"<code>{escape(app_url)}</code>",
                     parse_mode="HTML",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
