@@ -4711,17 +4711,17 @@ async def get_keys_nearing_expiry(days_min: int = 1, days_max: int = 3) -> list[
 
     cur = await db.execute(
         """
-        SELECT DISTINCT user_id, expiry, last_notification_at
+        SELECT id, user_id, expiry, last_notification_at
         FROM keys
         WHERE expiry BETWEEN ? AND ?
         AND expiry > ?
-        ORDER BY expiry ASC
+        ORDER BY expiry ASC, id ASC
         """,
         (min_expiry, max_expiry, current_time)
     )
     rows = await cur.fetchall()
     return [
-        {"user_id": row[0], "expiry": row[1], "last_notification_at": row[2]}
+        {"key_id": row[0], "user_id": row[1], "expiry": row[2], "last_notification_at": row[3]}
         for row in rows
     ]
 
