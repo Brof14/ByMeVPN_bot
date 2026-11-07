@@ -151,11 +151,11 @@ async def _deliver_key_unlocked(
                 new_expiry = await database.get_or_create_provisioning_intent(
                     method, payload, user_id, new_expiry
                 )
-            if method in ("ref_bonus", "ref_signup_bonus") and old_expiry and new_expiry < old_expiry:
+            if is_paid and payload and old_expiry and new_expiry < old_expiry:
                 # Another operation has moved the subscription past this old
-                # reward intent. Applying it would shorten paid access; leave
-                # the reward pending for reconciliation instead.
-                logger.error("Referral bonus %s requires reconciliation for user %d", payload, user_id)
+                # order intent. Applying it would shorten paid access; leave
+                # the order pending for reconciliation instead.
+                logger.error("Order %s requires reconciliation for user %d", payload, user_id)
                 return False
 
             # Set the immutable target, rather than applying relative days.
@@ -297,8 +297,8 @@ async def _deliver_key_unlocked(
                 target_expiry = await database.get_or_create_provisioning_intent(
                     method, payload, user_id, target_expiry
                 )
-            if method in ("ref_bonus", "ref_signup_bonus") and target_expiry < int(xui_client.get("expiry_time") or 0) // 1000:
-                logger.error("Referral bonus %s requires panel reconciliation for user %d", payload, user_id)
+            if is_paid and payload and target_expiry < int(xui_client.get("expiry_time") or 0) // 1000:
+                logger.error("Order %s requires panel reconciliation for user %d", payload, user_id)
                 return False
             xui_res = await update_xui_user(
                 user_id, new_expiry_ms=target_expiry * 1000, limit_ip=0, limit_hwid=limit_ip
