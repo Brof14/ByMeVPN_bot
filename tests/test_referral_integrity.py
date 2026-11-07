@@ -179,6 +179,16 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
         events = await database.get_referral_events(1011)
         self.assertEqual(len([e for e in events if e["referred_id"] == 1022 and e["event_type"] == "payment_bonus"]), 1)
 
+    async def test_10_second_inviter_does_not_create_a_phantom_referral(self):
+        for uid in (1101, 1102, 1103):
+            await database.ensure_user(uid)
+        await database.set_referrer(1103, 1101)
+        await database.set_referrer(1103, 1102)
+        self.assertEqual(await database.get_referrer(1103), 1101)
+        self.assertEqual(await database.count_referrals(1101), 1)
+        self.assertEqual(await database.count_referrals(1102), 0)
+        self.assertEqual(await database.get_referrals_missing_signup_bonus(1102), [])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
