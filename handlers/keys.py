@@ -532,10 +532,12 @@ async def cb_autorenew_unbind_confirm(callback: CallbackQuery, bot: Bot):
         )
     except Exception:
         logger.exception("Cannot safely unlink recurring payment method for user %d", user_id)
-        await safe_answer(
-            callback,
-            "Не удалось подтвердить отключение. Проверьте состояние подписки и повторите попытку.",
-            alert=True,
+        await send_or_edit(
+            bot, callback,
+            "Не удалось подтвердить отключение автопродления. "
+            "Проверьте статус подписки и повторите попытку.",
+            key_settings_kb(key_id) if key_id > 0 else back_to_menu(),
+            photo=AUTO_RENEWAL,
         )
         return
 
@@ -582,7 +584,13 @@ async def cb_autorenew_enable(callback: CallbackQuery, bot: Bot):
         )
     except Exception:
         logger.exception("Cannot safely resume recurring payment method for user %d", user_id)
-        await safe_answer(callback, "Подписка занята другой операцией. Повторите позже.", alert=True)
+        await send_or_edit(
+            bot, callback,
+            "Не удалось подтвердить включение автопродления. "
+            "Возможна другая операция с подпиской. Повторите позже.",
+            key_settings_kb(key_id) if key_id > 0 else back_to_menu(),
+            photo=AUTO_RENEWAL,
+        )
         return
     if reenabled:
         text = (
