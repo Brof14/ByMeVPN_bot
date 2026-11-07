@@ -80,6 +80,11 @@ class TestAppOpenPage(unittest.TestCase):
 
 
 class TestAppOpenKeyboard(unittest.TestCase):
+    def test_long_deep_link_does_not_exceed_telegram_copy_limit(self):
+        markup = app_open_kb("https://public.example/app/login", "bymevpn://login?sub=" + "x" * 400)
+        self.assertEqual(markup.inline_keyboard[0][0].url, "https://public.example/app/login")
+        self.assertEqual(markup.inline_keyboard[1][0].callback_data, "my_keys")
+
     def test_first_button_opens_app_and_copy_stays_as_fallback(self):
         markup = app_open_kb("http://example.test/app/login?sub=1", "bymevpn://login?sub=1")
 
