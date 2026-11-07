@@ -3248,6 +3248,26 @@ async def set_auto_renew_status_by_key(user_id: int, key_id: int, status: str) -
     return cur.rowcount > 0
 
 
+async def has_recent_unsettled_checkout(
+    user_id: int, lookback_seconds: int = 7200,
+) -> bool:
+    """Do not destroy a customer while a newly created invoice may settle.
+
+    Pending checkout rows can survive after an expired provider invoice, so
+    block only the recent window and leave older records for reconciliation.
+    """
+    db = await get_db()
+    cutoff = int(time.time()) - int(lookback_seconds)
+    for table in ("yookassa_pending", "crypto_pending"):
+        cursor = await db.execute(
+            f"SELECT 1 FROM {table} WHERE user_id=? AND created>=? LIMIT 1",
+            (user_id, cutoff),
+        )
+        if await cursor.fetchone():
+            return True
+    return False
+
+
 async def suspend_all_user_autorenew(user_id: int) -> int:
     """Fail closed for admin/account deletion: disable *every* saved token.
 
