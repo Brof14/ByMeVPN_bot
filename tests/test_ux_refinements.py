@@ -194,6 +194,28 @@ class AdForwardingTests(unittest.IsolatedAsyncioTestCase):
         update.assert_not_awaited()
         self.assertIn("Дождитесь проверки", message.answer.await_args.args[0])
 
+    async def test_post_url_is_stored_only_in_application_not_event_logs(self):
+        from handlers.ad_program import msg_ad_post_url
+        post_url = "https://t.me/mychannel/55"
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=123), text=post_url, answer=AsyncMock(),
+        )
+        state = SimpleNamespace(
+            get_data=AsyncMock(return_value={"current_app_id": 7}), clear=AsyncMock(),
+        )
+        app = {"id": 7, "user_id": 123, "status": "waiting_for_post", "channel_username": "mychannel"}
+        with (
+            patch("handlers.ad_program.get_ad_application_by_id", new=AsyncMock(return_value=app)),
+            patch("handlers.ad_program.update_ad_application", new=AsyncMock(return_value=True)) as update,
+            patch("handlers.ad_program.log_ad_audit", new=AsyncMock()) as audit,
+            patch("handlers.ad_program.log_ad_analytics_event", new=AsyncMock()) as analytics,
+        ):
+            await msg_ad_post_url(message, object(), state)
+        self.assertEqual(update.await_args.kwargs["post_url"], post_url)
+        self.assertNotIn(post_url, repr(audit.await_args))
+        self.assertNotIn(post_url, repr(analytics.await_args))
+        state.clear.assert_awaited_once()
+
     async def test_post_url_from_another_channel_is_rejected(self):
         from handlers.ad_program import msg_ad_post_url
         message = SimpleNamespace(
