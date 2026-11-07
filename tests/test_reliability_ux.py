@@ -120,6 +120,9 @@ class VPNDeletionSafetyTests(unittest.IsolatedAsyncioTestCase):
         resume.assert_not_awaited()
         delete_db.assert_awaited_once_with(7)
         self.assertIn("автопродление", answer.await_args.args[0].lower())
+        menu = answer.await_args.kwargs["reply_markup"]
+        self.assertEqual(menu.inline_keyboard[0][0].url.startswith("https://t.me/ByMeVPNSupportBot"), True)
+        self.assertEqual(menu.inline_keyboard[-1][0].callback_data, "my_keys")
 
     async def test_db_failure_after_panel_delete_never_reenables_autopay(self):
         answer, resume, delete_db = await self._handler_delete(remote=True, db_deleted=False)

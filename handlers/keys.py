@@ -701,7 +701,15 @@ async def _report_unconfirmed_deletion(
         )
     except Exception:
         logger.exception("Could not record key %d reconciliation incident", key_id)
-    await callback.message.answer(customer_text)
+    from aiogram.types import InlineKeyboardMarkup
+    from keyboards import support_url
+    await callback.message.answer(
+        customer_text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Написать в поддержку", url=support_url())],
+            [InlineKeyboardButton(text="Подписка", callback_data="my_keys")],
+        ]),
+    )
 
 
 @router.callback_query(F.data.startswith("key_delete_confirm:"))
