@@ -8,6 +8,7 @@ import secrets
 import time
 import json
 import logging
+import math
 from typing import Optional
 import aiosqlite
 from cache import cache_user_info, invalidate_user_cache, invalidate_subscription_cache
@@ -4954,6 +4955,11 @@ async def update_user_email(user_id: int, email: str) -> bool:
 # Promo Codes
 # ---------------------------------------------------------------------------
 
+def _canonical_promo_type(promo_type: str) -> str:
+    """Keep existing admin-created aliases compatible with checkout."""
+    return {"fixed": "fixed_rub", "days": "free_days"}.get(promo_type, promo_type)
+
+
 async def create_promo_code(
     code: str,
     promo_type: str = "percent",
@@ -4974,7 +4980,7 @@ async def create_promo_code(
         await db.execute(
             "INSERT INTO promo_codes(code, promo_type, discount_value, max_uses, uses_count, tariff_binding, start_date, expires_at, is_active, created) "
             "VALUES(?,?,?,?,?,?,?,?,?,?)",
-            (code.upper(), promo_type, discount_value, max_uses, 0, tariff_binding, start_date, expires_at, 1, current_time)
+            (code.upper(), _canonical_promo_type(promo_type), discount_value, max_uses, 0, tariff_binding, start_date, expires_at, 1, current_time)
         )
         await db.commit()
         return True
@@ -4998,6 +5004,24 @@ async def validate_promo_code(code: str, tariff_months: int = None) -> Optional[
     if not row:
         return None
 
+    promo_type = _canonical_promo_type(row[1])
+    try:
+        value = float(row[2])
+        if not math.isfinite(value) or value <= 0:
+            return None
+        if promo_type == "percent":
+            if value > 100:
+                return None
+            discount_value = row[2]
+        elif promo_type in ("fixed_rub", "free_days"):
+            if not value.is_integer():
+                return None
+            discount_value = int(value)
+        else:
+            return None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
     # Check if not started yet
     if row[6] > current_time:
         return None
@@ -5017,8 +5041,8 @@ async def validate_promo_code(code: str, tariff_months: int = None) -> Optional[
 
     return {
         "code": row[0],
-        "promo_type": row[1],
-        "discount_value": row[2],
+        "promo_type": promo_type,
+        "discount_value": discount_value,
         "max_uses": row[3],
         "uses_count": row[4],
         "tariff_binding": row[5],
@@ -5085,7 +5109,7 @@ async def get_all_promo_codes() -> list[dict]:
         return [
             {
                 "code": row[0],
-                "promo_type": row[1],
+                "promo_type": _canonical_promo_type(row[1]),
                 "discount_value": row[2],
                 "max_uses": row[3],
                 "uses_count": row[4],

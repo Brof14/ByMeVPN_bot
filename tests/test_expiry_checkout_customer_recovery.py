@@ -199,6 +199,11 @@ class ExpiryDatabaseRegression(unittest.IsolatedAsyncioTestCase):
         listed = {p["code"]: p["promo_type"] for p in await self.db.get_all_promo_codes()}
         self.assertEqual((listed["FIXED10"], listed["DAYS5"]), ("fixed_rub", "free_days"))
 
+    async def test_fractional_day_or_ruble_promo_is_rejected_before_checkout(self):
+        for code, promo_type in (("FRACTIONALDAY", "days"), ("FRACTIONALRUB", "fixed")):
+            await self.db.create_promo_code(code, promo_type=promo_type, discount_value=2.5)
+            self.assertIsNone(await self.db.validate_promo_code(code))
+
     async def test_crypto_checkout_consumes_promo_after_success_only_once(self):
         from handlers.buy import cb_pay_crypto
         from webhook import _process_crypto_invoice

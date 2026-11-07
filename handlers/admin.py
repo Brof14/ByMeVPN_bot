@@ -8,6 +8,7 @@ import asyncio
 from html import escape
 import io
 import logging
+import math
 from datetime import datetime
 from urllib.parse import urlsplit
 
@@ -3177,6 +3178,13 @@ async def receive_promo_value(message: Message, state: FSMContext):
         data = await state.get_data()
         promo_type = data["promo_type"]
 
+        if not math.isfinite(value):
+            await message.answer("❌ Введите конечное число.")
+            return
+        if promo_type in ("fixed", "days") and not value.is_integer():
+            await message.answer("❌ Введите целое число рублей или дней.")
+            return
+
         if promo_type == "percent" and (value < 1 or value > 100):
             await message.answer("❌ Процент должен быть от 1 до 100.")
             return
@@ -3187,7 +3195,7 @@ async def receive_promo_value(message: Message, state: FSMContext):
             await message.answer("❌ Количество дней должно быть от 1 до 365.")
             return
 
-        await state.update_data(discount_value=value)
+        await state.update_data(discount_value=int(value) if promo_type in ("fixed", "days") else value)
         await state.set_state(AdminFlow.promo_uses)
         await message.answer(
             "Введите максимальное количество использований (например: 100 или 999999 для безлимита):",
