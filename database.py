@@ -1505,10 +1505,12 @@ async def set_referrer(user_id: int, referrer_id: int) -> None:
         "UPDATE users SET referrer_id=? WHERE user_id=? AND referrer_id IS NULL",
         (referrer_id, user_id),
     )
-    # Track referral
+    # Record only the inviter actually attached to the user. A repeated or
+    # concurrent request for a different inviter must not create a phantom row.
     await db.execute(
-        "INSERT OR IGNORE INTO referrals(referrer_id, referred_id) VALUES(?,?)",
-        (referrer_id, user_id),
+        "INSERT OR IGNORE INTO referrals(referrer_id, referred_id) "
+        "SELECT referrer_id, user_id FROM users WHERE user_id=? AND referrer_id=?",
+        (user_id, referrer_id),
     )
     await db.commit()
 
