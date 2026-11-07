@@ -17,6 +17,23 @@ import subscription
 
 
 class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
+    async def test_retried_referral_reward_does_not_shorten_newer_subscription(self):
+        existing_expiry = int(time.time()) + 90 * 86400
+        key = {"id": 7, "key": "https://example.test/sub", "expiry": existing_expiry, "limit_ip": 2}
+        with (
+            patch("subscription.get_user_keys", new=AsyncMock(return_value=[key])),
+            patch("subscription.database.get_or_create_provisioning_intent", new=AsyncMock(return_value=existing_expiry - 30 * 86400)),
+            patch("subscription.set_key_expiry", new=AsyncMock()) as set_expiry,
+            patch("xui_client.update_xui_user", new=AsyncMock()) as update_panel,
+        ):
+            result = await subscription.deliver_key(
+                bot=MagicMock(), user_id=123, chat_id=123, config_name="ByMeVPN_123",
+                days=30, is_paid=True, amount=0, method="ref_bonus", payload="ref_bonus_123_456",
+            )
+        self.assertFalse(result)
+        set_expiry.assert_not_awaited()
+        update_panel.assert_not_awaited()
+
     async def test_existing_panel_client_is_not_imported_when_update_fails(self):
         """Never claim delivery or persist a key from a stale panel snapshot."""
         bot = MagicMock()
