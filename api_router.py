@@ -1749,13 +1749,102 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
 
 
 @api_router.delete("/me")
-async def delete_me(user_id: int = Depends(get_current_user_id)):
-    # The mobile account-deletion flow is not implemented yet. Never report
-    # success while leaving the account and subscription untouched.
-    raise HTTPException(
-        status_code=501,
-        detail="Удаление аккаунта пока недоступно. Обратитесь в поддержку",
-    )
+async def delete_me(
+    user_id: int = Depends(get_current_user_id),
+    confirmation: Optional[str] = Header(None, alias="X-Confirm-Account-Deletion"),
+):
+    """Permanently revoke confirmed VPN access and erase personal account data.
+
+    The caller must explicitly confirm loss of paid access. A failed or
+    uncertain panel operation leaves SQLite keys intact and stops recurring
+    billing; clients can retry safely after the panel is reconciled.
+    """
+    if confirmation != "DELETE":
+        raise HTTPException(
+            status_code=400,
+            detail="Подтвердите удаление заголовком X-Confirm-Account-Deletion: DELETE. "
+                   "Оплаченный срок не сохраняется.",
+        )
+
+    from config import ADMIN_IDS
+    if user_id in ADMIN_IDS:
+        raise HTTPException(status_code=403, detail="Удаление администратора через приложение недоступно")
+
+    token = secrets.token_urlsafe(24)
+    try:
+        acquired = await database.try_acquire_delivery_lease(user_id, token)
+    except Exception as exc:
+        logger.error("Account deletion lease unavailable for %d (%s)", user_id, type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Удаление временно недоступно") from None
+    if not acquired:
+        raise HTTPException(
+            status_code=409, detail="Другая операция с подпиской ещё выполняется. Повторите запрос",
+        )
+
+    try:
+        try:
+            await database.suspend_all_user_autorenew(user_id)
+        except Exception as exc:
+            logger.error("Account billing cancellation failed for %d (%s)", user_id, type(exc).__name__)
+            raise HTTPException(status_code=503, detail="Не удалось подтвердить отключение автосписаний") from None
+
+        try:
+            if await database.has_recent_unsettled_checkout(user_id):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Есть недавно созданный неопределённый платёж. "
+                           "Автосписания отключены. Дождитесь его проверки и повторите удаление",
+                )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error("Account deletion checkout check failed for %d (%s)", user_id, type(exc).__name__)
+            raise HTTPException(status_code=503, detail="Не удалось проверить незавершённые платежи") from None
+
+        from xui_client import delete_xui_user
+        try:
+            confirmed_absent = await delete_xui_user(user_id)
+        except Exception as exc:
+            logger.error("Account deletion panel failure for %d (%s)", user_id, type(exc).__name__)
+            confirmed_absent = False
+        if not confirmed_absent:
+            raise HTTPException(
+                status_code=503,
+                detail="Удаление VPN на всех серверах не подтверждено. "
+                       "Автосписания отключены; доступ и данные оставлены для сверки. "
+                       "Не оплачивайте повторно",
+            )
+        try:
+            owned = await database.renew_delivery_lease(user_id, token)
+        except Exception:
+            owned = False
+        if not owned:
+            raise HTTPException(
+                status_code=503,
+                detail="VPN удалён, но подтверждение блокировки БД потеряно. "
+                       "Автосписания отключены; требуется сверка",
+            )
+
+        try:
+            await database.delete_user_and_keys(user_id, source="self_service")
+        except Exception as exc:
+            logger.exception("Account erasure incomplete after panel deletion for user %d", user_id)
+            raise HTTPException(
+                status_code=503,
+                detail="VPN удалён, но очистка данных не подтверждена. "
+                       "Автосписания отключены; обратитесь в поддержку",
+            ) from None
+        return {
+            "status": "deleted",
+            "access_revoked": True,
+            "recurring_charges_disabled": True,
+            "retained_records": "Финансовые транзакции сохраняются для расчётов и спорных платежей",
+        }
+    finally:
+        try:
+            await database.release_delivery_lease(user_id, token)
+        except Exception:
+            logger.exception("Account deletion lease release failed for user %d", user_id)
 
 
 # ---------------------------------------------------------------------------
