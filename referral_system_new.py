@@ -4,6 +4,7 @@ Handles referral tracking, bonuses, and statistics.
 """
 
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 
@@ -355,7 +356,8 @@ async def process_pending_referral_payment_rewards(bot, limit: int = 100) -> int
     from constants import DEFAULT_DEVICE_LIMIT, REFERRAL_FIRST_PAYMENT_BONUS_DAYS
 
     delivered_count = 0
-    for reward in await get_pending_referral_payment_rewards(limit=limit):
+    retry_before_ms = time.time_ns() // 1_000_000 - 60_000
+    for reward in await get_pending_referral_payment_rewards(limit=limit, retry_before_ms=retry_before_ms):
         referrer_id = int(reward["referrer_id"])
         referred_id = int(reward["referred_id"])
         try:

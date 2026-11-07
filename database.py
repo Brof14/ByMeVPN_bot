@@ -3604,7 +3604,7 @@ async def has_referral_payment_reward(referrer_id: int, referred_id: int) -> boo
     return await cur.fetchone() is not None
 
 
-async def get_pending_referral_payment_rewards(limit: int = 100) -> list[dict]:
+async def get_pending_referral_payment_rewards(limit: int = 100, *, retry_before_ms: int | None = None) -> list[dict]:
     """Paid referral bonuses whose automatic day delivery still needs retrying."""
     db = await get_db()
     cur = await db.execute(
@@ -3614,8 +3614,9 @@ async def get_pending_referral_payment_rewards(limit: int = 100) -> list[dict]:
         "LEFT JOIN ref_bonus_claims c "
         "ON c.referrer_id=r.referrer_id AND c.referred_id=r.referred_id "
         "WHERE COALESCE(c.claimed, 0)=0 "
+        "AND (? IS NULL OR r.last_attempt_ms IS NULL OR r.last_attempt_ms <= ?) "
         "ORDER BY r.last_attempt_ms IS NOT NULL, r.last_attempt_ms, r.created, r.referrer_id, r.referred_id LIMIT ?",
-        (int(limit),),
+        (retry_before_ms, retry_before_ms, int(limit)),
     )
     return [
         {"referrer_id": row[0], "referred_id": row[1], "payment_ref": row[2]}
