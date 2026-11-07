@@ -418,14 +418,16 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
 
         # ── Step 3: Extract metadata ──
         metadata = payment.get("metadata", {})
-        logger.info("Webhook: payment_id=%s metadata=%s", payment_id, metadata)
+        # Provider metadata can contain PII and user-controlled text.
+        # Only payment IDs and explicit validation outcomes belong in logs.
+        logger.info("Webhook: verifying payment_id=%s", payment_id)
         try:
             user_id = int(metadata["user_id"])
             raw_days = int(metadata["days"])
             devices = int(metadata.get("devices", 1))
         except (KeyError, ValueError, TypeError) as e:
-            logger.error("Webhook: bad metadata in payment %s: %s — %s", payment_id, metadata, e)
-            await _notify_admin(bot, f"⚠️ YooKassa payment {payment_id}: bad metadata {metadata}")
+            logger.error("Webhook: invalid metadata for payment %s (%s)", payment_id, type(e).__name__)
+            await _notify_admin(bot, f"⚠️ YooKassa payment {payment_id}: некорректные метаданные. Требуется сверка.")
             return
 
         from constants import normalize_days
