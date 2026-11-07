@@ -36,6 +36,22 @@ class TestGiveawayAutomation(unittest.IsolatedAsyncioTestCase):
             except FileNotFoundError:
                 pass
 
+    async def test_scheduler_recovers_new_signup_reward(self):
+        from giveaway_automation import run_giveaway_automation
+        await database.ensure_user(701)
+        await database.ensure_user(702)
+        await database.set_referrer(702, 701)
+        bot = SimpleNamespace(
+            send_message=AsyncMock(),
+            get_me=AsyncMock(return_value=SimpleNamespace(username="ByMeVPNbot")),
+        )
+        with (
+            patch("subscription.deliver_key", new=AsyncMock(return_value=True)),
+            patch("giveaway_automation._notify_admins", new=AsyncMock()),
+        ):
+            await run_giveaway_automation(bot)
+        self.assertTrue(await database.has_referral_event(701, 702, "registration_bonus"))
+
     async def test_monthly_campaign_is_created_once_and_respects_opt_out(self):
         from giveaway_automation import run_giveaway_automation
 
