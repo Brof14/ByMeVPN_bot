@@ -26,6 +26,36 @@ class StarsPreCheckoutTests(unittest.IsolatedAsyncioTestCase):
             answer=AsyncMock(),
         )
 
+    async def test_late_charge_after_erasure_is_logged_for_refund_not_provisioned(self):
+        from handlers.buy import on_successful_payment
+        payment = SimpleNamespace(
+            telegram_payment_charge_id="late-charge",
+            invoice_payload="stars_old_receipt",
+            total_amount=89,
+            currency="XTR",
+        )
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=911, username="old"),
+            successful_payment=payment,
+            answer=AsyncMock(),
+        )
+        bot = SimpleNamespace(send_message=AsyncMock())
+        state = SimpleNamespace(clear=AsyncMock())
+        with (
+            patch("database.is_account_tombstoned", new=AsyncMock(return_value=True)),
+            patch("handlers.buy.record_payment_idempotent", new=AsyncMock(return_value=(True, 7))) as record,
+            patch("handlers.buy.deliver_key", new=AsyncMock()) as deliver,
+            patch("handlers.buy.ensure_user", new=AsyncMock()) as ensure,
+        ):
+            await on_successful_payment(message, bot, state)
+        self.assertEqual(record.await_args.kwargs["status"], "recovery_required")
+        self.assertEqual(record.await_args.kwargs["provider_payment_id"], "late-charge")
+        self.assertEqual(record.await_args.kwargs["days"], 0)
+        deliver.assert_not_awaited()
+        ensure.assert_not_awaited()
+        state.clear.assert_not_awaited()
+        self.assertIn("возврата", message.answer.await_args.args[0])
+
     async def test_canonical_invoice_is_authorized(self):
         pre = self.invoice()
         await pre_checkout(pre)
