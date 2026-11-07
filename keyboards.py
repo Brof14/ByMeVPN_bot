@@ -318,11 +318,18 @@ def manage_payment_methods_kb(
 
 
 def confirm_delete_kb(key_id: int) -> InlineKeyboardMarkup:
+    """Make cancelling billing plainly distinct from deleting VPN access."""
     kb = InlineKeyboardBuilder()
-    kb.row(
-        InlineKeyboardButton(text="Удалить ключ", callback_data=f"key_delete_confirm:{key_id}", style="danger"),
-        InlineKeyboardButton(text="← Назад", callback_data=f"key_info:{key_id}"),
-    )
+    kb.row(InlineKeyboardButton(
+        text="Удалить доступ сейчас",
+        callback_data=f"key_delete_confirm:{key_id}",
+        style="danger",
+    ))
+    kb.row(InlineKeyboardButton(
+        text="Только отключить автопродление",
+        callback_data=f"manage_payment_methods:{key_id}",
+    ))
+    kb.row(InlineKeyboardButton(text="← Назад", callback_data=f"key_info:{key_id}"))
     return kb.as_markup()
 
 
