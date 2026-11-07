@@ -8,6 +8,7 @@ Also handles daily database backup at 03:00.
 import asyncio
 import io
 import logging
+from contextlib import closing
 import secrets
 import sqlite3
 import tempfile
@@ -316,14 +317,15 @@ def _verified_sqlite_backup_zip(source: Path) -> bytes:
         raise FileNotFoundError(source)
     with tempfile.TemporaryDirectory(prefix="bymevpn-sqlite-backup-") as tmp:
         snapshot = Path(tmp) / source.name
-        with sqlite3.connect(
+        # sqlite3.Connection's context manager does not close connections.
+        # Explicit closing avoids locked temporary files on Windows.
+        with closing(sqlite3.connect(
             f"file:{source.resolve()}?mode=ro", uri=True, timeout=30
-        ) as original:
-            with sqlite3.connect(snapshot, timeout=30) as target:
-                original.backup(target, pages=256, sleep=0.1)
-                check = target.execute("PRAGMA integrity_check").fetchone()
-                if check != ("ok",):
-                    raise RuntimeError("SQLite backup integrity check failed")
+        )) as original, closing(sqlite3.connect(snapshot, timeout=30)) as target:
+            original.backup(target, pages=256, sleep=0.1)
+            check = target.execute("PRAGMA integrity_check").fetchone()
+            if check != ("ok",):
+                raise RuntimeError("SQLite backup integrity check failed")
 
         out = io.BytesIO()
         with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -345,7 +347,7 @@ async def _backup_database(bot: Bot) -> None:
         await bot.send_document(
             ADMIN_ID,
             BufferedInputFile(archive_bytes, filename=f"vpnbot_backup_{stamp}.zip"),
-            caption=f"📦 <b>Database Backup</b>\\n\\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            caption=f"📦 <b>Database Backup</b>\n\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             parse_mode="HTML",
         )
         logger.info("Verified SQLite backup sent to admin")
@@ -354,7 +356,7 @@ async def _backup_database(bot: Bot) -> None:
         try:
             await bot.send_message(
                 ADMIN_ID,
-                "⚠️ <b>Database Backup Failed</b>\\n\\n"
+                "⚠️ <b>Database Backup Failed</b>\n\n"
                 "Не удалось создать или отправить проверенную резервную копию. "
                 "Проверьте журналы сервера.",
                 parse_mode="HTML",
