@@ -108,6 +108,39 @@ class CancelAllMethodsTests(unittest.IsolatedAsyncioTestCase):
         database.DB_FILE, database._db_pool = self.old_path, self.old_pool
         self.tmp.cleanup()
 
+    async def test_account_erase_blocks_resurrection_and_preserves_payment_evidence(self):
+        from api_router import _ensure_auth_db
+        await _ensure_auth_db()
+        db = await database.get_db()
+        await db.execute("UPDATE users SET username='Original' WHERE user_id=123")
+        await db.execute(
+            "INSERT INTO app_users(user_id,email,password_hash,salt,name,created_at) "
+            "VALUES (123,'test@example.invalid','hash','salt','Name',1)"
+        )
+        await db.execute(
+            "INSERT INTO payments(user_id,amount,currency,method,days,created,payload) "
+            "VALUES (123,89,'RUB','yookassa',30,1,'receipt-1')"
+        )
+        await db.commit()
+        await database.add_key(123, "https://sub.test/one", "one", "uuid-1", 30, 2)
+
+        uuids = await database.delete_user_and_keys(123)
+        self.assertEqual(uuids, ["uuid-1"])
+        self.assertEqual(await database.get_user_keys(123), [])
+        self.assertTrue(await database.is_account_tombstoned(123))
+        self.assertFalse(await database.try_acquire_delivery_lease(123, "late-provision"))
+        await database.ensure_user(123, "Resurrected")
+        row = await (await db.execute(
+            "SELECT username,is_banned FROM users WHERE user_id=123"
+        )).fetchone()
+        self.assertEqual(row, (None, 1))
+        self.assertIsNone((await (await db.execute(
+            "SELECT user_id FROM app_users WHERE user_id=123"
+        )).fetchone()))
+        self.assertEqual((await (await db.execute(
+            "SELECT amount FROM payments WHERE payload='receipt-1'"
+        )).fetchone())[0], 89)
+
     async def test_all_saved_methods_are_removed_without_touching_paid_access(self):
         first = await database.add_key(123, "https://sub.test/one", "one", "uuid-1", 30, 2)
         second = await database.add_key(123, "https://sub.test/two", "two", "uuid-2", 30, 5)
