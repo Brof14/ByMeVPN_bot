@@ -28,14 +28,29 @@ class CheckoutPersistenceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_plan_draft_has_no_price_and_expires(self):
         await self.db.save_checkout_draft(101, 6, 5)
-        self.assertEqual(await self.db.get_checkout_draft(101), {"months": 6, "devices": 5})
+        self.assertEqual(await self.db.get_checkout_draft(101), {"months": 6, "devices": 5, "renew_key_id": 0})
         await self.db.save_checkout_draft(101, 12, 10)
-        self.assertEqual(await self.db.get_checkout_draft(101), {"months": 12, "devices": 10})
+        self.assertEqual(await self.db.get_checkout_draft(101), {"months": 12, "devices": 10, "renew_key_id": 0})
         db = await self.db.get_db()
         await db.execute("UPDATE checkout_drafts SET updated_at=? WHERE user_id=101",
                          (int(time.time()) - 2 * 86400,))
         await db.commit()
         self.assertIsNone(await self.db.get_checkout_draft(101))
+
+    async def test_renewal_draft_cannot_turn_into_a_new_purchase(self):
+        from handlers.buy import _ask_tariff_again
+        await self.db.save_checkout_draft(101, 3, 5, renew_key_id=75)
+        self.assertEqual(
+            await self.db.get_checkout_draft(101),
+            {"months": 3, "devices": 5, "renew_key_id": 75},
+        )
+        callback = SimpleNamespace(from_user=SimpleNamespace(id=101))
+        with patch("handlers.buy.send_with_photo", new=AsyncMock()) as send:
+            await _ask_tariff_again(object(), callback)
+        keyboard = send.await_args.args[3]
+        actions = [b.callback_data for row in keyboard.inline_keyboard for b in row]
+        self.assertEqual(actions, ["key_renew:75", "back_to_menu"])
+        self.assertIn("продление", send.await_args.args[2].lower())
 
     async def test_invalid_checkout_never_persisted(self):
         for months, devices in [(99, 2), (1, 99), (0, 5)]:
@@ -77,7 +92,8 @@ class CheckoutPersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot["selections"], 1)
         self.assertEqual(snapshot["started"], 1)
         self.assertEqual(snapshot["paid"], 2)
-        self.assertAlmostEqual(snapshot["purchase_pct"], 100)
+        self.assertEqual(snapshot["paid_from_views"], 1)
+        self.assertAlmostEqual(snapshot["purchase_pct"], 50)
         self.assertEqual(snapshot["by_currency"]["RUB"]["gross_amount"], 552)
         self.assertEqual(snapshot["by_currency"]["XTR"]["gross_amount"], 200)
         self.assertEqual(snapshot["by_currency"]["RUB"]["payments"], 1)

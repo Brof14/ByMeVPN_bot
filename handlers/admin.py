@@ -242,6 +242,7 @@ async def cb_admin_checkout_funnel(callback: CallbackQuery):
         f"Выбрали тариф: <b>{report['selections']}</b>",
         f"Перешли к оплате: <b>{report['started']}</b>",
         f"Успешно оплатили: <b>{report['paid']}</b>",
+        f"Из открывших тарифы оплатили: <b>{report['paid_from_views']}</b>",
     ]
     pct = report["purchase_pct"]
     text.append(

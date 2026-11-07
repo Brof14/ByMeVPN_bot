@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS checkout_drafts (
     user_id INTEGER PRIMARY KEY,
     months INTEGER NOT NULL,
     devices INTEGER NOT NULL,
+    renew_key_id INTEGER NOT NULL DEFAULT 0,
     updated_at INTEGER NOT NULL,
     FOREIGN KEY(user_id) REFERENCES users(user_id)
 );
@@ -5371,22 +5372,26 @@ async def log_analytics_event_once(
         return False
 
 
-async def save_checkout_draft(user_id: int, months: int, devices: int) -> None:
+async def save_checkout_draft(
+    user_id: int, months: int, devices: int, *, renew_key_id: int | None = None,
+) -> None:
     """Persist a selection to recover safely after MemoryStorage is restarted.
 
     Nothing here authorizes a payment. A resumed user must revisit the full
     order page with a freshly calculated price and choose a provider again.
     """
-    if int(user_id) <= 0 or int(months) not in (1, 3, 6, 12) or int(devices) not in (2, 5, 10):
+    if (int(user_id) <= 0 or int(months) not in (1, 3, 6, 12)
+            or int(devices) not in (2, 5, 10)
+            or (renew_key_id is not None and int(renew_key_id) < 0)):
         raise ValueError("invalid checkout selection")
     db = await get_db()
     async with _db_semaphore:
         await db.execute(
-            """INSERT INTO checkout_drafts(user_id,months,devices,updated_at)
-            VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET
+            """INSERT INTO checkout_drafts(user_id,months,devices,renew_key_id,updated_at)
+            VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET
             months=excluded.months, devices=excluded.devices,
-            updated_at=excluded.updated_at""",
-            (int(user_id), int(months), int(devices), int(time.time())),
+            renew_key_id=excluded.renew_key_id, updated_at=excluded.updated_at""",
+            (int(user_id), int(months), int(devices), int(renew_key_id or 0), int(time.time())),
         )
         await db.commit()
 
@@ -5395,18 +5400,18 @@ async def get_checkout_draft(user_id: int, *, max_age: int = 86400) -> dict | No
     """Return a recent saved plan, never an amount or payment authorization."""
     db = await get_db()
     cur = await db.execute(
-        "SELECT months,devices,updated_at FROM checkout_drafts WHERE user_id=?",
+        "SELECT months,devices,renew_key_id,updated_at FROM checkout_drafts WHERE user_id=?",
         (int(user_id),),
     )
     row = await cur.fetchone()
     if not row:
         return None
-    months, devices, saved_at = (int(value) for value in row)
+    months, devices, renew_key_id, saved_at = (int(value) for value in row)
     if (months not in (1, 3, 6, 12)
-            or devices not in (2, 5, 10)
+            or devices not in (2, 5, 10) or renew_key_id < 0
             or saved_at < int(time.time()) - max(1, int(max_age))):
         return None
-    return {"months": months, "devices": devices}
+    return {"months": months, "devices": devices, "renew_key_id": renew_key_id}
 
 
 async def get_checkout_conversion_snapshot(days: int = 30) -> dict:
@@ -5441,6 +5446,18 @@ async def get_checkout_conversion_snapshot(days: int = 30) -> dict:
     )
     paid = int((await cur.fetchone())[0])
     cur = await db.execute(
+        """SELECT COUNT(DISTINCT p.user_id)
+        FROM payments p JOIN users u ON u.user_id=p.user_id
+        WHERE u.created>=? AND p.created>=u.created AND p.status='success'
+          AND EXISTS (
+            SELECT 1 FROM analytics_events e
+            WHERE e.user_id=p.user_id AND e.event_type='tariffs_viewed'
+              AND e.timestamp BETWEEN u.created AND p.created
+          )""",
+        (cutoff,),
+    )
+    paid_from_views = int((await cur.fetchone())[0])
+    cur = await db.execute(
         """SELECT p.currency, COUNT(*), COALESCE(SUM(p.amount),0)
         FROM payments p JOIN users u ON u.user_id=p.user_id
         WHERE u.created>=? AND p.created>=u.created AND p.status='success'
@@ -5454,7 +5471,8 @@ async def get_checkout_conversion_snapshot(days: int = 30) -> dict:
     return {
         "days": days, "registered": registered, "views": views,
         "selections": selections, "started": started, "paid": paid,
-        "purchase_pct": 100 * paid / views if views else None,
+        "paid_from_views": paid_from_views,
+        "purchase_pct": 100 * paid_from_views / views if views else None,
         "by_currency": by_currency,
     }
 

@@ -158,7 +158,9 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
     # computed price, so recovering cannot silently charge an old amount.
     try:
         from database import save_checkout_draft
-        await save_checkout_draft(callback.from_user.id, months, devices)
+        await save_checkout_draft(
+            callback.from_user.id, months, devices, renew_key_id=data.get("renew_key_id"),
+        )
     except Exception:
         logger.exception("Checkout preference could not be saved for user %d", callback.from_user.id)
     from database import log_analytics_event
@@ -231,19 +233,30 @@ async def _ask_tariff_again(bot: Bot, callback: CallbackQuery) -> None:
     if draft:
         months, devices = draft["months"], draft["devices"]
         label = {1: "1 месяц", 3: "3 + 1 месяц", 6: "6 + 2 месяца", 12: "12 + 3 месяца"}[months]
+        renewing = int(draft.get("renew_key_id") or 0)
         text = (
             "<b>Оформление было прервано</b>\n\n"
             f"Сохранён выбор: <b>{label}</b>, <b>{devices} устройств</b>.\n"
-            "Вернитесь к заказу, чтобы проверить актуальную итоговую сумму "
-            "и заново выбрать способ оплаты.\n\n"
-            "Если применяли промокод, активируйте его повторно через /promo КОД. "
+            + ("Это продление существующей подписки. Для сохранения "
+               "её ключа нужно заново выбрать срок.\n\n"
+               if renewing else
+               "Вернитесь к заказу, чтобы проверить актуальную итоговую сумму "
+               "и заново выбрать способ оплаты.\n\n")
+            + "Если применяли промокод, активируйте его повторно через /promo КОД. "
             "Оплата пока не создаётся."
         )
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Проверить мой заказ", callback_data=f"tariff_{months}_{devices}")],
-            [InlineKeyboardButton(text="Другой тариф", callback_data=f"devtier_{devices}")],
-            [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
-        ])
+        if renewing:
+            # key_renew validates ownership again and restores the renewal FSM.
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Вернуться к продлению", callback_data=f"key_renew:{renewing}")],
+                [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+            ])
+        else:
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Проверить мой заказ", callback_data=f"tariff_{months}_{devices}")],
+                [InlineKeyboardButton(text="Другой тариф", callback_data=f"devtier_{devices}")],
+                [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+            ])
         await log_analytics_event(callback.from_user.id, "checkout_recovery_shown",
                                   tariff=f"{months}m", devices=devices)
     else:
