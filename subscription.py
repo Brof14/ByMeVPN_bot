@@ -3,6 +3,7 @@ Core subscription logic: ask config name → create VPN key → deliver.
 """
 import asyncio
 import logging
+import secrets
 import time
 import weakref
 from datetime import datetime
@@ -95,17 +96,69 @@ async def deliver_key(
     skip_referral_bonus: bool = False,
     delivery_target=None,
 ) -> bool:
+    # Keep the lightweight in-process lock to avoid needless contention.
+    # The SQLite lease below also serializes workers running in *other* bot
+    # processes against the same persistent database file.
     lock = _delivery_locks.get(user_id)
     if lock is None:
         lock = asyncio.Lock()
         _delivery_locks[user_id] = lock
     async with lock:
-        return await _deliver_key_unlocked(
-            bot, user_id, chat_id, config_name, days, limit_ip, is_paid,
-            amount, currency, method, payload, extend_existing,
-            skip_referral_bonus, delivery_target,
-        )
+        token = secrets.token_urlsafe(24)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 15
+        try:
+            while True:
+                if await database.try_acquire_delivery_lease(user_id, token):
+                    break
+                if loop.time() >= deadline:
+                    logger.warning("Delivery already running for user %d in another worker", user_id)
+                    return False
+                await asyncio.sleep(0.2)
+        except Exception:
+            logger.exception("Cannot safely acquire cross-process delivery lease for user %d", user_id)
+            return False
 
+        stop_heartbeat = asyncio.Event()
+        lost_lease = asyncio.Event()
+
+        async def heartbeat() -> None:
+            while not stop_heartbeat.is_set():
+                try:
+                    await asyncio.wait_for(stop_heartbeat.wait(), timeout=30)
+                    return
+                except asyncio.TimeoutError:
+                    pass
+                try:
+                    if not await database.renew_delivery_lease(user_id, token):
+                        logger.error("Delivery lease ownership lost for user %d", user_id)
+                        lost_lease.set()
+                        return
+                except Exception:
+                    logger.exception("Delivery lease renewal failed for user %d", user_id)
+                    lost_lease.set()
+                    return
+
+        heartbeat_task = asyncio.create_task(heartbeat())
+        try:
+            delivered = await _deliver_key_unlocked(
+                bot, user_id, chat_id, config_name, days, limit_ip, is_paid,
+                amount, currency, method, payload, extend_existing,
+                skip_referral_bonus, delivery_target,
+            )
+            if lost_lease.is_set():
+                # The remote update may have succeeded. An explicit retry /
+                # reconciliation is safer than falsely claiming fulfillment.
+                logger.error("Unconfirmed provisioning after delivery lease loss for user %d", user_id)
+                return False
+            return delivered
+        finally:
+            stop_heartbeat.set()
+            await heartbeat_task
+            try:
+                await database.release_delivery_lease(user_id, token)
+            except Exception:
+                logger.exception("Could not release delivery lease for user %d", user_id)
 
 async def _deliver_key_unlocked(
     bot: Bot,
