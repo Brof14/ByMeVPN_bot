@@ -5072,33 +5072,27 @@ async def has_user_used_promo(code: str, user_id: int) -> bool:
 
 
 async def use_promo_code(code: str, user_id: int) -> bool:
-    """Mark promo code as used by user."""
-    db = await get_db()
-    current_time = int(time.time())
-    
+    """Record a fulfilled order's promo usage and counter as one transaction."""
     try:
-        # Check if user already used this code
-        cur = await db.execute(
-            "SELECT 1 FROM promo_code_uses WHERE code=? AND user_id=?",
-            (code.upper(), user_id)
-        )
-        if await cur.fetchone():
-            return False  # Already used
-        
-        # Record usage
-        await db.execute(
-            "INSERT INTO promo_code_uses(code, user_id, used_at) VALUES(?,?,?)",
-            (code.upper(), user_id, current_time)
-        )
-        
-        # Increment uses count
-        await db.execute(
-            "UPDATE promo_codes SET uses_count = uses_count + 1 WHERE code=?",
-            (code.upper(),)
-        )
-        
-        await db.commit()
-        return True
+        # A dedicated connection keeps this transaction separate from unrelated
+        # coroutines sharing the regular connection. Existing paid orders must
+        # still be recorded even if the code has since expired or hit its cap.
+        async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            cur = await db.execute(
+                """INSERT OR IGNORE INTO promo_code_uses(code, user_id, used_at)
+                   SELECT code, ?, ? FROM promo_codes WHERE code=?""",
+                (user_id, int(time.time()), code.upper()),
+            )
+            if cur.rowcount != 1:
+                await db.rollback()
+                return False
+            await db.execute(
+                "UPDATE promo_codes SET uses_count = uses_count + 1 WHERE code=?",
+                (code.upper(),),
+            )
+            await db.commit()
+            return True
     except Exception as e:
         logger.error("Failed to use promo code: %s", e)
         return False
