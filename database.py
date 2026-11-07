@@ -3221,6 +3221,29 @@ async def set_auto_renew_status_by_key(user_id: int, key_id: int, status: str) -
     return cur.rowcount > 0
 
 
+async def suspend_all_user_autorenew(user_id: int) -> int:
+    """Fail closed for admin/account deletion: disable *every* saved token.
+
+    Never change paid key expiry here. Financial history is retained and
+    no future recurring charge can be initiated from the stored tokens.
+    """
+    if user_id <= 0:
+        raise ValueError("invalid account id")
+    db = await get_db()
+    async with _db_semaphore:
+        cursor = await db.execute(
+            """UPDATE auto_renew_subscriptions
+               SET status='cancelled', payment_method_id='',
+                   payment_method_title='', payment_method_type='',
+                   next_retry_at=NULL, updated_at=strftime('%s','now')
+               WHERE user_id=? AND (status!='cancelled'
+                   OR TRIM(COALESCE(payment_method_id,''))!='')""",
+            (user_id,),
+        )
+        await db.commit()
+        return cursor.rowcount
+
+
 async def cancel_auto_renew(user_id: int, key_id: Optional[int] = None) -> dict:
     """
     Disable future recurring charges for the user.
