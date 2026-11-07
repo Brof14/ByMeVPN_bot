@@ -50,6 +50,36 @@ class TariffDesignTests(unittest.TestCase):
 
 
 class AdForwardingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_private_invite_keeps_case(self):
+        from handlers.ad_program import msg_ad_channel_input
+        message = SimpleNamespace(from_user=SimpleNamespace(id=123), text="https://t.me/+AbCdEf012345")
+        state = SimpleNamespace(update_data=AsyncMock())
+        with (
+            patch("handlers.ad_program.log_ad_analytics_event", new=AsyncMock()),
+            patch("handlers.ad_program._ask_subscriber_count", new=AsyncMock()),
+        ):
+            await msg_ad_channel_input(message, object(), state)
+        self.assertEqual(state.update_data.await_args.kwargs["ad_channel_ref"], "+AbCdEf012345")
+
+    async def test_private_invite_is_not_written_to_audit_or_analytics(self):
+        from handlers.ad_program import _create_application_and_reply
+        message = SimpleNamespace(answer=AsyncMock())
+        with (
+            patch("handlers.ad_program.channel_already_used", new=AsyncMock(return_value=False)),
+            patch("handlers.ad_program.get_active_ad_campaign", new=AsyncMock(return_value=None)),
+            patch("handlers.ad_program.create_ad_application", new=AsyncMock(return_value=7)) as create,
+            patch("handlers.ad_program.log_ad_analytics_event", new=AsyncMock()) as analytics,
+            patch("handlers.ad_program.log_ad_audit", new=AsyncMock()) as audit,
+        ):
+            await _create_application_and_reply(
+                object(), message, 123, channel_id=None, channel_username="",
+                channel_ref="+AbCdEf012345", chat_title="private", subscriber_count=20,
+                bonus_months=2, manual_count=True,
+            )
+        self.assertEqual(create.await_args.kwargs["channel_ref"], "+AbCdEf012345")
+        self.assertNotIn("+AbCdEf012345", repr(analytics.await_args))
+        self.assertNotIn("+AbCdEf012345", repr(audit.await_args))
+
     async def test_channel_offer_explains_review_and_personal_link(self):
         from handlers.ad_program import cb_ad_program
         callback = SimpleNamespace(from_user=SimpleNamespace(id=123))

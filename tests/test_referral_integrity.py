@@ -203,6 +203,13 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
         from growth_metrics import referral_growth_snapshot
         self.assertEqual((await referral_growth_snapshot(days=30))["invited"], 1)
 
+    async def test_12_private_invite_matches_legacy_lowercase_application(self):
+        await database.create_ad_application(
+            user_id=1301, channel_id=None, channel_username="", subscriber_count=20,
+            bonus_months=2, channel_ref="+abcdef012345", status="channel_pending",
+        )
+        self.assertTrue(await database.channel_already_used(None, "+AbCdEf012345"))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
