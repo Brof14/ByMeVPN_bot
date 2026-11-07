@@ -2374,9 +2374,12 @@ async def delete_key(key_id: int) -> bool:
 
 async def delete_key_by_uuid(uuid: str) -> bool:
     db = await get_db()
-    cur = await db.execute("DELETE FROM keys WHERE uuid=?", (uuid,))
-    await db.commit()
-    return cur.rowcount > 0
+    cursor = await db.execute("SELECT id FROM keys WHERE uuid=?", (uuid,))
+    key_ids = [row[0] for row in await cursor.fetchall()]
+    removed = False
+    for key_id in key_ids:
+        removed = await delete_key(key_id) or removed
+    return removed
 
 
 async def get_expired_keys() -> list[dict]:
@@ -2394,15 +2397,29 @@ async def get_expired_keys() -> list[dict]:
 
 
 async def cleanup_expired_keys() -> int:
-    """Remove expired keys and return count of removed keys."""
+    """Delete expired keys and cancel legacy billing in the same transaction."""
     expired = await get_expired_keys()
     if not expired:
         return 0
-    
     db = await get_db()
-    for key in expired:
-        await db.execute("DELETE FROM keys WHERE id=?", (key["id"],))
-    await db.commit()
+    async with _db_semaphore:
+        try:
+            # Otherwise the cleanup could turn an ambiguous unbound recurring
+            # charge into a chargeable subscription with exactly one key.
+            await db.executemany(
+                "UPDATE auto_renew_subscriptions "
+                "SET status='cancelled', next_retry_at=NULL, updated_at=strftime('%s','now') "
+                "WHERE user_id=? AND key_id IS NULL AND status='active'",
+                [(user_id,) for user_id in {key["user_id"] for key in expired}],
+            )
+            await db.executemany(
+                "DELETE FROM keys WHERE id=?",
+                [(key["id"],) for key in expired],
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
     return len(expired)
 
 
