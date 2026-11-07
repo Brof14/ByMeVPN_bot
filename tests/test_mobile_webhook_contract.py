@@ -173,7 +173,10 @@ class TestMobileWebhookContract(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertTrue(await webhook._mobile_crypto_order_matches("crypto-invoice-test", pending))
             self.assertFalse(await webhook._mobile_crypto_order_matches(
-                "crypto-invoice-test", {**pending, "amount_rub": 1},
+                "crypto-invoice-test", {**pending, "days": 30},
+            ))
+            self.assertFalse(await webhook._mobile_crypto_order_matches(
+                "crypto-invoice-test", {**pending, "user_id": 123},
             ))
 
     async def test_missing_mobile_checkout_record_fails_closed(self):

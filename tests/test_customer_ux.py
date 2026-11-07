@@ -132,7 +132,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(by_action["buy_vpn"].style, "primary")
             self.assertEqual(by_action["free_vpn"].style, "primary")
         menu = main_menu_with_keys()
-        self.assertEqual([len(row) for row in menu.inline_keyboard], [1, 1, 1, 1, 1])
+        self.assertEqual([len(row) for row in menu.inline_keyboard], [1, 1, 1, 2])
         self.assertEqual(menu.inline_keyboard[0][0].style, "primary")
         self.assertEqual(menu.inline_keyboard[0][0].callback_data, "my_keys")
         self.assertEqual(menu.inline_keyboard[0][0].style, "primary")
