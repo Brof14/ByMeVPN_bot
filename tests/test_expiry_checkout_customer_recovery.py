@@ -62,6 +62,22 @@ class ExpiryDatabaseRegression(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[0]["key_id"], key_id)
         self.assertEqual(rows[0]["user_id"], 9801)
 
+    async def test_reminder_uses_autorenew_for_expiring_key_only(self):
+        from notifications import _get_active_autorenew
+        key1 = await self.db.add_key(9801, "https://sub.test/1", "one", "uuid-one", 30, 2)
+        key2 = await self.db.add_key(9801, "https://sub.test/2", "two", "uuid-two", 30, 2)
+        await self.db.save_auto_renew_subscription(
+            user_id=9801, key_id=key2, payment_method_id="pm-two", payment_method_title="Card",
+            payment_method_type="bank_card", months=1, days=30, devices=2, amount_rub=89,
+        )
+        self.assertIsNone(await _get_active_autorenew(9801, key1))
+        self.assertEqual((await _get_active_autorenew(9801, key2))["key_id"], key2)
+        await self.db.save_auto_renew_subscription(
+            user_id=9801, key_id=None, payment_method_id="pm-legacy", payment_method_title="Card",
+            payment_method_type="bank_card", months=1, days=30, devices=2, amount_rub=89,
+        )
+        self.assertIsNone((await _get_active_autorenew(9801, key1))["key_id"])
+
 
 class PlatformGuideRegression(unittest.IsolatedAsyncioTestCase):
     async def test_one_active_key_is_selected_from_general_guide(self):
