@@ -337,28 +337,28 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
         #
         # total_prices:
         #             1 мес   3 мес   6 мес   12 мес
-        # 2 devices      89     316     552      885
-        # 5 devices     109     396     712     1185
-        # 10 devices    129     476     872     1485
+        # 2 devices      89     237     414      708
+        # 5 devices     109     297     534      948
+        # 10 devices    129     357     654     1188
 
         expected_matrix = {
             2: {
                 1:  {"monthly": 89,  "total": 89,   "days": 30},
-                3:  {"monthly": 79,  "total": 316,  "days": 120},
-                6:  {"monthly": 69,  "total": 552,  "days": 240},
-                12: {"monthly": 59,  "total": 885,  "days": 450},
+                3:  {"monthly": 79,  "total": 237,  "days": 120},
+                6:  {"monthly": 69,  "total": 414,  "days": 240},
+                12: {"monthly": 59,  "total": 708,  "days": 450},
             },
             5: {
                 1:  {"monthly": 109, "total": 109,  "days": 30},
-                3:  {"monthly": 99,  "total": 396,  "days": 120},
-                6:  {"monthly": 89,  "total": 712,  "days": 240},
-                12: {"monthly": 79,  "total": 1185,  "days": 450},
+                3:  {"monthly": 99,  "total": 297,  "days": 120},
+                6:  {"monthly": 89,  "total": 534,  "days": 240},
+                12: {"monthly": 79,  "total": 948,  "days": 450},
             },
             10: {
                 1:  {"monthly": 129, "total": 129,  "days": 30},
-                3:  {"monthly": 119, "total": 476,  "days": 120},
-                6:  {"monthly": 109, "total": 872,  "days": 240},
-                12: {"monthly": 99,  "total": 1485, "days": 450},
+                3:  {"monthly": 119, "total": 357,  "days": 120},
+                6:  {"monthly": 109, "total": 654,  "days": 240},
+                12: {"monthly": 99,  "total": 1188, "days": 450},
             },
         }
 

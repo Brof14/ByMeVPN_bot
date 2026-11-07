@@ -17,26 +17,26 @@ class TariffDesignTests(unittest.TestCase):
             tariff_selection_kb(devices=2, discount_percent=30, promo_tariff_months=3)
         )}
         self.assertIn("89 ₽", labels["tariff_1_2"])
-        self.assertIn("221 ₽", labels["tariff_3_2"])
+        self.assertIn("55 ₽ / мес.", labels["tariff_3_2"])
         self.assertNotIn("−30%", labels["tariff_1_2"])
         self.assertIn("−30%", labels["tariff_3_2"])
 
-    def test_tariffs_show_actual_days_without_implying_free_months(self):
+    def test_tariffs_show_monthly_rates_and_highlight_bonus_months(self):
         keyboard = tariff_selection_kb(devices=2)
         labels = {b.callback_data: b.text for b in buttons(keyboard)}
-        self.assertIn("120 дней", labels["tariff_3_2"])
-        self.assertIn("240 дней", labels["tariff_6_2"])
-        self.assertIn("450 дней", labels["tariff_12_2"])
-        self.assertIn("Выгоднее за 30 дней", labels["tariff_12_2"])
+        self.assertIn("3 мес. + 1 мес. 🎁", labels["tariff_3_2"])
+        self.assertIn("6 мес. + 2 мес. 🎁", labels["tariff_6_2"])
+        self.assertIn("12 мес. + 3 мес. 🎁", labels["tariff_12_2"])
+        self.assertIn("59 ₽ / мес.", labels["tariff_12_2"])
         discounted = {b.callback_data: b.text for b in buttons(tariff_selection_kb(devices=2, discount_percent=100))}
         self.assertNotIn("Выгоднее", discounted["tariff_12_2"])
-        self.assertTrue(all("🎁" not in text for text in labels.values()))
+        self.assertIn("🎁", labels["tariff_3_2"])
         with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "1"}):
             premium = tariff_selection_kb(devices=2)
         bonus_buttons = [b for b in buttons(premium) if b.callback_data and b.callback_data.startswith("tariff_") and not b.callback_data.startswith("tariff_1_")]
         self.assertEqual(
             [b.icon_custom_emoji_id for b in bonus_buttons],
-            ["6023880246128810031"] * 3,
+            ["5301299389245985629", "5301163762768707871", "5301192569114366400"],
         )
 
     def test_crypto_has_no_bitcoin_character(self):

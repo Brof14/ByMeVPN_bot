@@ -34,7 +34,7 @@ from database import (
 from app_links import build_app_login_url, build_app_redirect_url
 from keyboards import (
     main_menu_new_user, main_menu_existing, main_menu_with_keys, main_menu_active, main_menu_expired,
-    back_to_menu, cancel_kb, support_url, feedback_url, app_open_kb,
+    back_to_menu, cancel_kb, support_url, app_open_kb,
 )
 from utils import send_with_photo, safe_answer
 from async_utils import monitor_performance
@@ -225,8 +225,8 @@ async def _send_main_menu(
         else:
             text = (
                 "<b>ByMeVPN</b>\n\n"
-                "VPN без сложных настроек.\n"
-                "3 дня бесплатно, без карты."
+                "Защитите интернет-соединение на телефоне и компьютере.\n\n"
+                "Попробуйте 3 дня бесплатно или сразу выберите подходящий тариф."
             )
         kb = main_menu_new_user()
     elif state == "expired":
@@ -712,20 +712,16 @@ async def cb_back_to_menu(callback: CallbackQuery, bot: Bot, state: FSMContext):
 async def cb_about(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
-        "<b>О ByMeVPN</b>\n\n"
-        "VPN для телефона и компьютера. Подключение без сложных настроек.\n"
-        "Подписка на 2, 5 или 10 устройств.\n"
-        "Новым пользователям — 3 дня бесплатно, без карты.\n\n"
-        "Нашли ошибку или полезное улучшение? Напишите нам. "
-        "За проверенное сообщение можем начислить бонусные дни."
+        "<b>Интернет без лишних ограничений</b>\n\n"
+        "ByMeVPN помогает безопаснее пользоваться привычными приложениями и сайтами дома, "
+        "в дороге и в общественных сетях.\n\n"
+        "Одна подписка работает на 2, 5 или 10 устройствах. Новым пользователям доступны "
+        "3 дня, чтобы спокойно проверить сервис на своих устройствах."
     )
-    # Keep the menu navigation in a fixed, full-width bottom row.
+    # Keep this screen informative and minimal; primary actions live in the menu.
     from aiogram.types import InlineKeyboardMarkup
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn")],
-        [InlineKeyboardButton(text="Подключение", callback_data="connection_guide")],
         [InlineKeyboardButton(text="Документы", callback_data="legal")],
-        [InlineKeyboardButton(text="Сообщить об ошибке или идее", url=feedback_url())],
         [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu")],
     ])
     await send_with_photo(bot, callback, text, kb, photo=ABOUT)
@@ -736,14 +732,12 @@ async def cb_free_vpn(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
         "<b>Бесплатные дни</b>\n\n"
-        "Приглашайте друзей или перешлите пост из нашего канала в свой.\n\n"
-        "Заметили ошибку или полезное улучшение? "
-        "Напишите нам — после проверки можем начислить бонусные дни."
+        "Получайте дополнительные дни двумя простыми способами: "
+        "пригласите друга или разместите официальный пост ByMeVPN в своём канале."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Пригласить друзей", callback_data="partner")],
         [InlineKeyboardButton(text="VPN за рекламу", callback_data="ad_program")],
-        [InlineKeyboardButton(text="Сообщить об ошибке или идее", url=feedback_url())],
         [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu")],
     ])
     await send_with_photo(bot, callback, text, kb, photo=FREE_VPN)

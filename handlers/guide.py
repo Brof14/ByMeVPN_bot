@@ -9,9 +9,9 @@ from aiogram.types import (
     InlineKeyboardMarkup,
 )
 
-from keyboards import connection_guide_kb, additional_platforms_kb, support_url, feedback_url
+from keyboards import connection_guide_kb, additional_platforms_kb, support_url
 from utils import send_with_photo, send_or_edit, safe_answer
-from bot_assets import SUPPORT, CONNECTION
+from bot_assets import SUPPORT, CONNECTION, ANDROID, IPHONE, WINDOWS, LINUX
 from bot_style import themed_button as InlineKeyboardButton
 
 logger = logging.getLogger(__name__)
@@ -35,21 +35,33 @@ async def cb_guide_menu(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
         "<b>Подключение</b>\n\n"
-        "Выберите устройство."
+        "Откройте страницу — она подберёт приложение для вашего устройства."
     )
     # Open the actual active key directly when there is exactly one.
     # With multiple active keys, let the customer choose explicitly.
     key_id = None
+    subscription_url = ""
     try:
         from database import get_user_keys
         keys = await get_user_keys(callback.from_user.id)
         active = [key for key in keys if int(key.get("expiry") or 0) > int(time.time())]
         if len(active) == 1:
             key_id = int(active[0]["id"])
+            subscription_url = str(active[0].get("key") or "")
     except Exception:
         logger.warning("Unable to resolve active key for connection guide (user=%s)", callback.from_user.id)
     await _track_guide_event(callback.from_user.id, "connection_guide_open")
-    await send_or_edit(bot, callback, text, connection_guide_kb(key_id), photo=CONNECTION)
+    connect_url = ""
+    if subscription_url:
+        try:
+            from app_links import build_connect_page_url
+            connect_url = build_connect_page_url(subscription_url, callback.from_user.first_name or "")
+        except (RuntimeError, ValueError):
+            logger.warning("Secure connection page unavailable")
+    await send_or_edit(
+        bot, callback, text,
+        connection_guide_kb(key_id, subscription_url, connect_url), photo=CONNECTION,
+    )
 
 
 @router.callback_query(F.data.startswith("connection_guide:"))
@@ -67,31 +79,25 @@ async def cb_guide_for_key(callback: CallbackQuery, bot: Bot):
         return
     text = (
         f"<b>Подключение · {escape(key.get('remark') or f'Ключ #{key_id}')}</b>\n\n"
-        "Выберите устройство."
+        "Страница сама определит устройство и предложит подходящее приложение."
     )
-    await send_or_edit(bot, callback, text, connection_guide_kb(key_id), photo=CONNECTION)
+    connect_url = ""
+    if key.get("key"):
+        try:
+            from app_links import build_connect_page_url
+            connect_url = build_connect_page_url(key["key"], callback.from_user.first_name or "")
+        except (RuntimeError, ValueError):
+            logger.warning("Secure connection page unavailable")
+    await send_or_edit(
+        bot, callback, text,
+        connection_guide_kb(key_id, str(key.get("key") or ""), connect_url), photo=CONNECTION,
+    )
 
 
 @router.callback_query(F.data == "trouble")
 async def cb_trouble(callback: CallbackQuery, bot: Bot):
-    await safe_answer(callback)
-    await _track_guide_event(callback.from_user.id, "connection_help_open")
-    text = (
-        "<b>Чем помочь?</b>\n\n"
-        "С чем возникла проблема?"
-    )
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="VPN не подключается", callback_data="support_topic:no_connection")],
-        [InlineKeyboardButton(text="Нет интернета с VPN", callback_data="support_topic:no_internet")],
-        [InlineKeyboardButton(text="Проблема с приложением", callback_data="support_topic:app")],
-        [InlineKeyboardButton(text="Не добавляется подписка", callback_data="support_topic:import")],
-        [InlineKeyboardButton(text="Оплата и подписка", callback_data="support_topic:billing")],
-        [InlineKeyboardButton(text="Устройства", callback_data="support_topic:devices")],
-        [InlineKeyboardButton(text="Написать в поддержку", url=support_url())],
-        [InlineKeyboardButton(text="Сообщить об ошибке или идее", url=feedback_url())],
-        [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu")],
-    ])
-    await send_with_photo(bot, callback, text, kb, photo=SUPPORT)
+    # Compatibility for already-sent keyboards: open the support chat directly.
+    await callback.answer(url=support_url())
 
 
 @router.callback_query(F.data.startswith("support_topic:"))
@@ -137,7 +143,7 @@ async def cb_support_topic(callback: CallbackQuery, bot: Bot):
         rows.append([InlineKeyboardButton(text="Инструкция по подключению", callback_data="connection_guide")])
     rows.extend([
         [InlineKeyboardButton(text="Написать в поддержку", url=support_url())],
-        [InlineKeyboardButton(text="← Назад", callback_data="trouble")],
+        [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
     ])
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
     await send_with_photo(bot, callback, text, kb, photo=SUPPORT)
@@ -315,9 +321,16 @@ async def _send_platform_guide(callback: CallbackQuery, bot: Bot, platform: str,
         *guide_rows,
         [InlineKeyboardButton(text="← Назад", callback_data=choose_callback)],
     ])
-    # Platform selection is branded; individual installation steps are
-    # intentionally text-only for speed and easy scanning.
-    await send_or_edit(bot, callback, text, kb)
+    platform_artwork = {
+        "ios": IPHONE,
+        "ios_mac": IPHONE,
+        "macos": IPHONE,
+        "android": ANDROID,
+        "android_tv": ANDROID,
+        "windows": WINDOWS,
+        "linux": LINUX,
+    }.get(platform, CONNECTION)
+    await send_or_edit(bot, callback, text, kb, photo=platform_artwork)
 
 
 async def _track_guide_event(user_id: int, event_type: str, platform: str | None = None) -> None:

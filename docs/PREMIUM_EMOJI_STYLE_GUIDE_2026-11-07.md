@@ -8,7 +8,7 @@
 - No cheap neon, pixel, game, cartoon, random stickers or unrelated icons in customer screens.
 - One semantic role = one unique catalog ID. The same role reuses its icon everywhere. Each platform and duration tier receives its own ID. The runtime single source of truth is `bot_style.ICON_IDS`.
 - Keep customer copy short. Prefer one primary blue action, green only for the free trial, red only for destructive confirmation. Navigation is uncolored and always the last keyboard row.
-- Strong brand illustrations only on menu, about, tariff, subscription-key, connection, referrals and advertising program screens. Intermediate forms, platform steps, troubleshooting, device settings and checkout are text-first.
+- Use the matching bundled illustration throughout each customer-facing section: menu, help, plans, payment, subscription, devices, platform guides, referrals, advertising, promo codes, legal information and auto-renewal.
 - All button callbacks, payment logic, entitlement rules and 2/5/10 device tiers stay unchanged.
 
 ## Platform roles (catalog verified)
@@ -37,7 +37,7 @@ Tariff buttons use the catalog calendar `6023880246128810031` for all durations.
 - Highlight **6+2** as the price/commitment compromise while keeping **12+3** visibly marked as the lowest effective monthly price; do not insert fake social proof or countdown timers.
 - Show total checkout price from the canonical calculation, not from display labels. This PR never changes the canonical calculation.
 - Prioritize app install and connection over exposing subscription URLs; manual link copy remains available.
-- Fewer pictures improve screen density and avoid needless Telegram photo upload overhead; the seven existing brand visuals remain in use.
+- The per-bot Telegram `file_id` cache avoids re-uploading section illustrations during normal navigation.
 - Conversion and premium appearance **cannot be rated 100/100 without live client visual inspection and cohort metrics**. No uplift estimates are claimed.
 
 ## Source-repository assessment

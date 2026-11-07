@@ -340,7 +340,10 @@ async def validate_yookassa_mobile_payment(payment: dict) -> bool:
             and int(metadata.get("devices", -1)) == row[4]
             and metadata.get("plan_code") == row[1]
             and int(metadata.get("months", -1)) == plan["months"]
-            and plan["price_rub"] == row[2] and plan["days"] == row[3]
+            # Amount is the durable value captured when this invoice was
+            # created. Do not reject an already-created invoice after prices
+            # change; the provider amount must still match this stored row.
+            and plan["days"] == row[3]
             and plan["devices"] == row[4]
             and amount.is_finite() and amount == Decimal(row[2])
             and (payment.get("amount") or {}).get("currency") == "RUB")
@@ -379,7 +382,7 @@ async def validate_crypto_mobile_invoice(invoice: dict) -> bool:
         plan = CATALOG.get(row[2])
         amount = Decimal(str(invoice.get("amount", "0")))
         valid = bool(plan and payload == "bmv2_" + hashlib.sha256(f"{row[1]}:{row[0]}".encode()).hexdigest()[:24]
-                    and plan["price_rub"] == row[3] and plan["days"] == row[4]
+                    and plan["days"] == row[4]
                     and plan["devices"] == row[5] and amount.is_finite() and amount == Decimal(row[3])
                     and invoice.get("status") == "paid" and invoice.get("currency_type") == "fiat"
                     and invoice.get("fiat") == "RUB")

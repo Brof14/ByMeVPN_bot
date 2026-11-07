@@ -8,10 +8,14 @@ the app immediately and keeps a manual button as a fallback.
 from __future__ import annotations
 
 import html
+import base64
+import hashlib
 import json
-from urllib.parse import urlencode, urlsplit
+import os
+import time
+from urllib.parse import quote, urlencode, urlsplit
 
-from config import APP_PUBLIC_URL
+from config import APP_CONNECT_PAGE_URL, APP_PUBLIC_URL, BOT_TOKEN
 
 APP_SCHEME = "bymevpn"
 
@@ -138,3 +142,119 @@ def render_app_open_page(deep_link: str) -> str:
 </script>
 </body>
 </html>"""
+
+
+CONNECT_TICKET_TTL_SECONDS = 15 * 60
+
+
+def _connect_aead():
+    """Use the shared API secret so primary and secondary bots can serve the same page."""
+    handoff_secret = os.getenv("APP_HANDOFF_SECRET") or os.getenv("JWT_SECRET") or BOT_TOKEN
+    if not handoff_secret:
+        raise RuntimeError("connection page secret is not configured")
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    key = hashlib.sha256(b"bymevpn-connect-page-v1\0" + handoff_secret.encode("utf-8")).digest()
+    return AESGCM(key)
+
+
+def build_connect_ticket(subscription_url: str, user_name: str = "", *, now: int | None = None) -> str:
+    """Encrypt the subscription link in a short-lived browser handover ticket."""
+    value = subscription_url.strip()
+    parsed = urlsplit(value)
+    if (
+        len(value) > MAX_SUBSCRIPTION_URL_LENGTH or parsed.scheme != "https"
+        or not parsed.hostname or parsed.username is not None or parsed.password is not None
+    ):
+        raise ValueError("invalid secure subscription URL")
+    payload = json.dumps({
+        "sub": value,
+        "name": "".join(ch for ch in user_name if ch.isprintable())[:MAX_USER_NAME_LENGTH],
+        "exp": int(now if now is not None else time.time()) + CONNECT_TICKET_TTL_SECONDS,
+    }, separators=(",", ":")).encode("utf-8")
+    nonce = os.urandom(12)
+    encrypted = _connect_aead().encrypt(nonce, payload, b"bymevpn-connect-ticket-v1")
+    return base64.urlsafe_b64encode(nonce + encrypted).decode("ascii").rstrip("=")
+
+
+def read_connect_ticket(ticket: str, *, now: int | None = None) -> dict[str, str]:
+    """Decrypt and validate a handover ticket; invalid and expired tickets fail closed."""
+    if not ticket or len(ticket) > 4096:
+        raise ValueError("invalid connection ticket")
+    try:
+        raw = base64.urlsafe_b64decode(ticket + "=" * (-len(ticket) % 4))
+        if len(raw) < 29:
+            raise ValueError
+        payload = _connect_aead().decrypt(raw[:12], raw[12:], b"bymevpn-connect-ticket-v1")
+        value = json.loads(payload)
+        expiry = int(value.get("exp", 0))
+        subscription_url = str(value.get("sub", ""))
+        parsed = urlsplit(subscription_url)
+        if (
+            expiry < int(now if now is not None else time.time())
+            or expiry > int(now if now is not None else time.time()) + CONNECT_TICKET_TTL_SECONDS + 5
+            or parsed.scheme != "https" or not parsed.hostname
+            or parsed.username is not None or parsed.password is not None
+            or len(subscription_url) > MAX_SUBSCRIPTION_URL_LENGTH
+        ):
+            raise ValueError
+        return {
+            "subscription_url": subscription_url,
+            "user_name": "".join(ch for ch in str(value.get("name", "")) if ch.isprintable())[:MAX_USER_NAME_LENGTH],
+        }
+    except Exception as exc:
+        raise ValueError("invalid or expired connection ticket") from exc
+
+
+def build_connect_page_url(subscription_url: str, user_name: str = "") -> str:
+    # Keep direct-connect behaviour until a dedicated public HTTPS origin is
+    # configured and its /connect route is exposed by the proxy. WEBHOOK_URL
+    # may point to an internal or placeholder address and is not sufficient.
+    if not APP_CONNECT_PAGE_URL:
+        return subscription_url
+    base = urlsplit(APP_CONNECT_PAGE_URL)
+    if base.scheme != "https" or not base.hostname or base.path or base.username is not None or base.password is not None:
+        raise ValueError("APP_CONNECT_PAGE_URL must be an HTTPS origin")
+    ticket = build_connect_ticket(subscription_url, user_name)
+    return f"{APP_CONNECT_PAGE_URL}/connect?ticket={quote(ticket)}"
+
+
+def render_connection_choice_page(subscription_url: str, user_name: str = "") -> str:
+    """A small, self-hosted OS/app chooser with automatic OS detection and fallback downloads."""
+    sub = _js_string(subscription_url)
+    byme_link = build_app_login_url(subscription_url, user_name)
+    apps = {
+        "android": [
+            {"name": "ByMeVPN", "deep": byme_link, "download": "https://bymevpn.duckdns.org/app/"},
+            {"name": "Happ", "deep": "happ://add/" + quote(subscription_url, safe=""), "download": "https://play.google.com/store/apps/details?id=com.happproxy"},
+        ],
+        "ios": [{"name": "Happ", "deep": "happ://add/" + quote(subscription_url, safe=""), "download": "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215"}],
+        "windows": [{"name": "Happ", "deep": "happ://add/" + quote(subscription_url, safe=""), "download": "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe"}],
+        "macos": [{"name": "Happ", "deep": "happ://add/" + quote(subscription_url, safe=""), "download": "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/Happ.macOS.universal.dmg"}],
+        "linux": [{"name": "Happ", "deep": "happ://add/" + quote(subscription_url, safe=""), "download": "https://github.com/Happ-proxy/happ-desktop/releases/latest"}],
+    }
+    apps_json = _js_string(json.dumps(apps, ensure_ascii=False))
+    return f"""<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow"><title>Подключение ByMeVPN</title>
+<style>
+:root{{color-scheme:dark;--bg:#0b1220;--card:#111c2d;--blue:#2878f0;--muted:#9eb0c7;--green:#26c281}}
+*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;background:linear-gradient(160deg,#0c1424,#08101b);color:#eef5ff;font:16px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;padding:24px;display:grid;place-items:center}}
+main{{width:100%;max-width:480px}}h1{{font-size:24px;margin:0 0 8px}}p{{color:var(--muted);margin:0 0 20px}}.card{{background:var(--card);border:1px solid #23344c;border-radius:20px;padding:22px;box-shadow:0 18px 60px #0005}}
+.os{{display:flex;gap:8px;flex-wrap:wrap;margin:18px 0}}button,a.btn{{font:inherit;color:#fff;border:0;border-radius:12px;padding:12px 15px;text-decoration:none;cursor:pointer}}
+.os button{{background:#1b2b43}}.os button.active{{background:var(--blue)}}.app{{padding:15px 0;border-top:1px solid #26364b}}.app:first-child{{border:0}}.app h2{{font-size:17px;margin:0 0 10px}}
+.btn{{display:block;text-align:center;background:var(--blue);font-weight:700;margin:8px 0}}.btn.alt{{background:#20324b}}.note{{font-size:13px;margin-top:16px}}.copy{{color:#b9d7ff;text-decoration:underline;background:none;border:0;padding:5px;font:inherit;cursor:pointer}}
+</style></head><body><main><section class="card"><h1>Подключить ByMeVPN</h1>
+<p>Выберите устройство и приложение. Мы уже определили вашу систему — при необходимости переключите её вручную.</p>
+<div class="os" id="os"></div><div id="apps"></div>
+<button class="copy" id="copy">Скопировать ссылку для ручного добавления</button>
+<p class="note">Если приложение не установлено, скачайте его и вернитесь сюда. Страница подключения действует 15 минут — затем откройте её заново из бота.</p>
+</section></main>
+<script>
+(function(){{const sub={sub};const apps=JSON.parse({apps_json});const labels={{android:"Android",ios:"iPhone / iPad",windows:"Windows",macos:"Mac",linux:"Linux"}};
+const ua=navigator.userAgent;let current=/Android/i.test(ua)?"android":/iPhone|iPad/i.test(ua)?"ios":/Windows/i.test(ua)?"windows":/Macintosh/i.test(ua)?"macos":"linux";
+const os=document.getElementById("os"),root=document.getElementById("apps");function render(){{os.innerHTML="";Object.keys(labels).forEach(k=>{{const b=document.createElement("button");b.textContent=labels[k];b.className=k===current?"active":"";b.onclick=()=>{{current=k;render()}};os.appendChild(b)}});
+root.innerHTML="";apps[current].forEach(a=>{{const d=document.createElement("div");d.className="app";const h=document.createElement("h2");h.textContent=a.name;const open=document.createElement("a");open.className="btn";open.href=a.deep;open.textContent="Открыть и добавить подписку";const download=document.createElement("a");download.className="btn alt";download.href=a.download;download.target="_blank";download.rel="noopener";download.textContent="Скачать приложение";d.append(h,open,download);root.appendChild(d)}})}}
+render();document.getElementById("copy").onclick=async()=>{{try{{await navigator.clipboard.writeText(sub);document.getElementById("copy").textContent="Ссылка скопирована"}}catch(_){{prompt("Скопируйте ссылку",sub)}}}};
+}})();
+</script></body></html>"""

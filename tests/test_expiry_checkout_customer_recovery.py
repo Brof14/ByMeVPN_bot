@@ -528,7 +528,7 @@ class PaymentProviderFailures(unittest.IsolatedAsyncioTestCase):
 
     def state(self):
         return SimpleNamespace(get_data=AsyncMock(return_value={
-            "months": 6, "devices": 2, "price_rub": 552, "days": 240, "promo_code": "",
+            "months": 6, "devices": 2, "price_rub": 414, "days": 240, "promo_code": "",
         }))
 
     async def test_yookassa_error_does_not_crash_or_leave_checkout_lock(self):

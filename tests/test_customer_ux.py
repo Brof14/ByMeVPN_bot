@@ -99,7 +99,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         menu = main_menu_with_keys(trial_used=True)
         self.assertEqual(
             [b.text for row in menu.inline_keyboard for b in row],
-            ["Подписка", "Тарифы", "Бесплатные дни", "Поддержка"],
+            ["Подписка", "Тарифы", "Бесплатные дни", "О сервисе", "Поддержка"],
         )
 
     def test_device_tiers_and_periods_unchanged(self):
@@ -126,11 +126,11 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(rows[-1][0].callback_data, "trouble")
             buttons = [button for row in rows for button in row]
             by_action = {button.callback_data: button for button in buttons}
-            self.assertIsNone(by_action["trouble"].style)
-            self.assertEqual(by_action["buy_vpn"].style, None if "my_keys" in by_action else "primary")
-            self.assertIsNone(by_action["free_vpn"].style)
+            self.assertEqual(by_action["trouble"].style, "primary")
+            self.assertEqual(by_action["buy_vpn"].style, "primary")
+            self.assertEqual(by_action["free_vpn"].style, "primary")
         menu = main_menu_with_keys()
-        self.assertEqual([len(row) for row in menu.inline_keyboard], [1, 1, 1, 1])
+        self.assertEqual([len(row) for row in menu.inline_keyboard], [1, 1, 1, 1, 1])
         self.assertEqual(menu.inline_keyboard[0][0].style, "primary")
         self.assertEqual(menu.inline_keyboard[0][0].callback_data, "my_keys")
         self.assertEqual(menu.inline_keyboard[0][0].style, "primary")
@@ -271,18 +271,15 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             await cb_partner(callback, bot)
 
         text = send.call_args.args[2]
-        self.assertIn("<b>Приглашение друзей</b>", text)
+        self.assertIn("<b>Поделитесь ByMeVPN с другом</b>", text)
         self.assertIn("+15 дней", text)
-        self.assertIn("+30 дней", text)
-        self.assertIn("Начислено или ожидает начисления: <b>15 дней</b>", text)
-        self.assertIn("Приглашено: <b>1</b> · оплатили: <b>1</b>", text)
+        self.assertIn("ещё <b>30 дней</b>", text)
+        self.assertIn("Бонусных дней начислено: <b>15</b>", text)
+        self.assertIn("Ваши приглашения: <b>1</b> · с оплатой: <b>1</b>", text)
         buttons = [b for row in send.call_args.args[3].inline_keyboard for b in row]
         copied = next(b for b in buttons if b.text == "Скопировать ссылку")
         self.assertEqual(copied.copy_text.text, "https://t.me/ByMeVPNbot?start=123")
-        post = next(b for b in buttons if b.text == "Скопировать текст для канала")
-        self.assertIn("https://t.me/ByMeVPNbot?start=123", post.copy_text.text)
-        self.assertIn("3 дня бесплатно", post.copy_text.text)
-        self.assertLessEqual(len(post.copy_text.text), 256)
+        self.assertFalse(any(b.text == "Скопировать текст для канала" for b in buttons))
 
     def test_back_is_full_width_and_support_is_not_mixed_into_navigation(self):
         back = back_to_menu().inline_keyboard
@@ -301,11 +298,11 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             if button.callback_data and button.callback_data.startswith("tariff_")
         ]
         three_months = next(button for button in tariff_buttons if button.callback_data == "tariff_3_2")
-        self.assertIn("120 дней · 316 ₽ · 79 ₽/30 дней", three_months.text)
-        self.assertIsNone(three_months.style)
+        self.assertIn("3 мес. + 1 мес. 🎁 — 79 ₽ / мес.", three_months.text)
+        self.assertEqual(three_months.style, "success")
         self.assertEqual(
             [button.style for button in tariff_buttons],
-            [None, None, "primary", None],
+            ["primary", "success", "primary", "primary"],
         )
 
     async def test_saved_sbp_method_without_title_is_still_manageable(self):

@@ -21,15 +21,16 @@ class PremiumButtonDesignTests(unittest.TestCase):
             menu = main_menu_with_keys(trial_used=True)
         by_callback = {button.callback_data: button for button in buttons(menu)}
         self.assertEqual(by_callback["my_keys"].style, "primary")
-        self.assertIsNone(by_callback["buy_vpn"].style)
+        self.assertEqual(by_callback["buy_vpn"].style, "primary")
         self.assertEqual(by_callback["my_keys"].icon_custom_emoji_id, "6019290828759898301")
         self.assertEqual(by_callback["buy_vpn"].icon_custom_emoji_id, "6030573613357209704")
         self.assertEqual(by_callback["free_vpn"].icon_custom_emoji_id, "6023826881160157558")
 
-    def test_support_and_about_are_secondary_not_competing_ctas(self):
+    def test_support_and_about_are_available_and_colored(self):
         by_callback = {button.callback_data: button for button in buttons(main_menu_with_keys())}
-        self.assertNotIn("about", by_callback)
-        self.assertIsNone(by_callback["trouble"].style)
+        self.assertIn("about", by_callback)
+        self.assertEqual(by_callback["about"].style, "primary")
+        self.assertEqual(by_callback["trouble"].style, "primary")
         self.assertEqual(by_callback["my_keys"].style, "primary")
 
     def test_trial_and_destructive_actions_are_distinct(self):
@@ -39,13 +40,13 @@ class PremiumButtonDesignTests(unittest.TestCase):
         delete = themed_button(text="Удалить", callback_data="key_device_delete:5:10")
         back = themed_button(text="Назад", callback_data="back_to_menu")
         self.assertEqual(delete.style, "danger")
-        self.assertIsNone(back.style)
+        self.assertEqual(back.style, "danger")
 
-    def test_legacy_back_buttons_remain_neutral(self):
+    def test_legacy_back_buttons_are_red(self):
         with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "1"}):
             for title in ("🔙 Главное меню", "🏠 Главное меню", "← Назад", "◀️ Назад"):
                 button = themed_button(text=title, callback_data="admin_menu")
-                self.assertIsNone(button.style)
+                self.assertEqual(button.style, "danger")
                 self.assertEqual(button.icon_custom_emoji_id, "5805509901048356965")
                 self.assertNotIn("Главное менюГлавное меню", button.text)
 
@@ -77,9 +78,10 @@ class PremiumButtonDesignTests(unittest.TestCase):
         tariffs = [b.callback_data for b in buttons(tariff_selection_kb(devices=5))]
         self.assertEqual([s for s in tariffs if s and s.startswith("devtier_")], ["devtier_2","devtier_5","devtier_10"])
         self.assertEqual([s for s in tariffs if s and s.startswith("tariff_")], ["tariff_1_5","tariff_3_5","tariff_6_5","tariff_12_5"])
-        key = [b.callback_data for b in buttons(key_detail_kb(42, subscription_url="https://example.com/sub/42"))]
-        self.assertIn("key_instructions:42", key)
-        self.assertIn("key_renew:42", key)
+        with patch("app_links.BOT_TOKEN", "test-bot-token"):
+            key = buttons(key_detail_kb(42, subscription_url="https://example.com/sub/42"))
+        self.assertTrue(any(b.url and "/connect?ticket=" in b.url for b in key))
+        self.assertIn("key_renew:42", [b.callback_data for b in key])
         device = [b.callback_data for b in buttons(key_device_detail_kb(42,3))]
         self.assertIn("key_device_delete_prompt:42:3",device)
 

@@ -43,7 +43,7 @@ async def cmd_keys(message: Message, bot: Bot):
     if not keys:
         await send_with_photo(bot, message,
             "<b>У вас пока нет VPN-ключей</b>\n\n"
-            "Выберите тариф или получите бесплатные дни за приглашения друзей.",
+            "Оформите подписку или получите дополнительные дни за приглашение друга и публикацию в канале.",
             back_to_menu(),
             photo=KEY,
         )
@@ -86,8 +86,8 @@ async def cb_my_keys(callback: CallbackQuery, bot: Bot):
 
     if not keys:
         text = (
-            "У вас пока нет ключей.\n\n"
-            "Выберите тариф или получите бесплатные дни за приглашения друзей."
+            "Пока нет активной подписки.\n\n"
+            "Выберите тариф или получите дополнительные дни в разделе «Бесплатные дни»."
         )
         await send_with_photo(bot, callback, text, back_to_menu(), photo=KEY)
         return

@@ -53,7 +53,7 @@ class SemanticPremiumEmojiTests(unittest.TestCase):
         self.assertEqual(secondary["guide_macos:31"].icon_custom_emoji_id, ICON_IDS["macos"])
         self.assertEqual(secondary["guide_android_tv:31"].icon_custom_emoji_id, ICON_IDS["android_tv"])
 
-    def test_tariff_icons_use_calendar_without_implying_a_gift(self):
+    def test_tariff_icons_and_bonus_labels_match_each_term(self):
         with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "1"}):
             for devices in (2, 5, 10):
                 marked = by_callback(tariff_selection_kb(devices=devices))
@@ -63,13 +63,13 @@ class SemanticPremiumEmojiTests(unittest.TestCase):
                     action = f"tariff_{months}_{devices}"
                     self.assertIn(action, marked)
                     icons.append(marked[action].icon_custom_emoji_id)
-                    self.assertEqual(marked[action].icon_custom_emoji_id, ICON_IDS["tariff_1"])
-                self.assertEqual(len(set(icons)), 1)
+                    self.assertEqual(marked[action].icon_custom_emoji_id, ICON_IDS[role])
+                self.assertEqual(len(set(icons)), 4)
                 self.assertEqual(
                     [marked[f"tariff_{m}_{devices}"].style for m in (1, 3, 6, 12)],
-                    [None, None, "primary", None],
+                    ["primary", "success", "primary", "primary"],
                 )
-                self.assertTrue(all("🎁" not in marked[f"tariff_{m}_{devices}"].text for m in roles))
+                self.assertIn("🎁", marked[f"tariff_3_{devices}"].text)
 
     def test_payment_methods_have_separate_branded_icons(self):
         with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "1"}):
@@ -78,12 +78,12 @@ class SemanticPremiumEmojiTests(unittest.TestCase):
             self.assertEqual(marked[cb].icon_custom_emoji_id, ICON_IDS[role])
         self.assertEqual(len({marked[cb].icon_custom_emoji_id for cb in ("pay_stars", "pay_yookassa", "pay_crypto")}), 3)
 
-    def test_active_customer_has_direct_connection_and_only_one_blue_cta(self):
+    def test_active_customer_actions_are_colored(self):
         kb = main_menu_active(42)
         actions = [b.callback_data for b in all_buttons(kb)]
         self.assertEqual(actions[0], "my_keys")
         self.assertIn("my_keys", actions)
-        self.assertEqual(sum(b.style == "primary" for b in all_buttons(kb)), 1)
+        self.assertTrue(all(b.style in {"primary", "success", "danger"} for b in all_buttons(kb)))
         self.assertEqual(kb.inline_keyboard[-1][-1].callback_data, "trouble")
 
     def test_delivery_and_platform_guide_prioritize_connection(self):

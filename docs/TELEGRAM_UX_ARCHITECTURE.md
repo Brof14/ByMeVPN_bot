@@ -8,7 +8,7 @@ Customer messages should emphasize **current state → next action → optional 
 
 - Main navigation has exactly one definition in `keyboards._customer_menu`, with stable public wrappers.
 - Customer actions use `primary` blue; trial activation uses `success`; destructive actions use `danger`; navigation/back remains neutral. `bot_style.py` owns these rules and premium icon IDs.
-- Only home, about and main subscription screens use a large branded image (`MENU`, `ABOUT`, `KEY`). Purchase, help, devices and bonuses are text-first through `bot_assets.display_artwork`.
+- Every customer-facing section keeps its matching bundled image (`bot_assets.py`); screen changes reuse that bot's cached photo ID.
 - Do not quote backend details (UUID, Xray protocols, 3x-ui IDs) on marketing screens.
 - Use **Подписка**, **Тарифы**, **Бесплатные дни**, **Устройства** consistently.
 - The 2 / 5 / 10 device tiers, tariff prices, durations and bonus months remain controlled by `constants.py`.
@@ -46,7 +46,7 @@ Preserve callback data when renaming visible labels: Telegram users can tap butt
 4. Moved advertising bonus tiers behind a separate button to keep the initial screen short.
 5. Kept the first-step recurring-payment disclosure in checkout and removed duplicate later explanations.
 6. Added an official Android download-page entry, with Happ as a fallback where ByMeVPN is not distributed.
-7. Removed repeated artwork from utility screens, retaining first-view branding.
+7. Added section-matched artwork throughout customer-facing navigation and help screens.
 8. Removed an unregistered duplicate referral handler and unused media assets.
 9. Added a GitHub Actions workflow to compile Python and run the regression suite on each PR/push.
 10. Updated behavior tests where button labels, media presentation or navigation changed.
@@ -92,7 +92,7 @@ Source: [Zulut30/premium-telegram-emoji — emoji-catalog.md @ 294d22c](https://
 ## V3 change log
 
 - Added semantic blue button theme with catalog-sourced premium icon IDs, feature-flagged for safe rollout.
-- Centralized large-artwork policy so utility screens are text-first without deleting user artwork.
+- Centralized an allowlist for all bundled section artwork and kept arbitrary external paths blocked.
 - Shortened onboarding, tariff selection, help, device and referral copy without changing business data.
 - Added direct copy for referral links and dedicated help for payments/devices.
 - Retained compatibility callbacks and expanded regression testing.

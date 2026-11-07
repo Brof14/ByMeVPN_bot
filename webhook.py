@@ -32,12 +32,15 @@ import httpx
 from yookassa_http import yookassa_client
 import uvicorn
 from aiogram import Bot, Dispatcher
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from aiogram.types import InlineKeyboardMarkup, Update
+from bot_style import themed_button as InlineKeyboardButton
 from fastapi import FastAPI, Request, Response
 
 from config import (
     YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY,
     WEBHOOK_HOST, WEBHOOK_PORT, ADMIN_ID, REDIS_URL, YOOKASSA_WEBHOOK_ALLOWED_IPS,
+    APP_CONNECT_TLS_HOST, APP_CONNECT_TLS_PORT,
+    APP_CONNECT_TLS_CERT_FILE, APP_CONNECT_TLS_KEY_FILE,
 )
 from database import init_db, is_yookassa_processed, mark_yookassa_processed
 from subscription import deliver_key
@@ -129,7 +132,6 @@ async def app_login_redirect(sub: str = "", name: str = ""):
         build_app_login_url,
         render_app_open_page,
     )
-
     sub = sub.strip()
     name = "".join(ch for ch in name if ch.isprintable())[:MAX_USER_NAME_LENGTH].strip()
 
@@ -139,6 +141,38 @@ async def app_login_redirect(sub: str = "", name: str = ""):
         return HTMLResponse("Некорректная ссылка подписки.", status_code=400)
 
     page = render_app_open_page(build_app_login_url(sub, name))
+    return HTMLResponse(
+        page,
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Referrer-Policy": "no-referrer",
+            "X-Robots-Tag": "noindex, nofollow",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": APP_LOGIN_CONTENT_SECURITY_POLICY,
+        },
+    )
+
+
+@app.get("/connect")
+async def connection_choice_page(ticket: str = ""):
+    """Show the small OS/app chooser without exposing the subscription URL in the link."""
+    from fastapi.responses import HTMLResponse
+    from app_links import APP_LOGIN_CONTENT_SECURITY_POLICY, read_connect_ticket, render_connection_choice_page
+
+    try:
+        payload = read_connect_ticket(ticket)
+        page = render_connection_choice_page(payload["subscription_url"], payload["user_name"])
+    except (ValueError, RuntimeError):
+        return HTMLResponse(
+            "Ссылка подключения истекла. Вернитесь в бот и нажмите «Подключить» ещё раз.",
+            status_code=400,
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "Referrer-Policy": "no-referrer",
+                "X-Content-Type-Options": "nosniff",
+                "X-Robots-Tag": "noindex, nofollow",
+            },
+        )
     return HTMLResponse(
         page,
         headers={
@@ -294,21 +328,30 @@ async def _mobile_yookassa_order_matches(
 ) -> bool:
     """Verify a settled app invoice against its durable request and catalog."""
     from database import get_mobile_payment_request_by_invoice
-    from constants import get_price_for_months
+    from constants import TARIFF_DAYS
 
     order = await get_mobile_payment_request_by_invoice("yookassa", payment_id)
     months = {"1m": 1, "3m": 3, "6m": 6, "12m": 12}.get(order["plan_code"]) if order else None
     if not order or not months:
         return False
-    expected_amount, expected_days = get_price_for_months(months, order["devices"])
+    # The provider's verified invoice metadata records the price at creation.
+    # Do not reprice an already-created checkout when the catalog later changes.
+    try:
+        metadata_amount = int(metadata.get("amount_rub", 0))
+        metadata_days = int(metadata.get("days", 0))
+        metadata_months = int(metadata.get("months", 0))
+    except (TypeError, ValueError):
+        return False
+    plan_code = f"{order['plan_code']}_d{order['devices']}"
     return all((
         order["user_id"] == user_id,
         order["provider"] == "yookassa",
         order["payment_id"] == payment_id,
         order["devices"] == devices,
-        f"{order['plan_code']}_d{order['devices']}" == metadata.get("plan_code"),
-        expected_days == days,
-        expected_amount == amount_rub,
+        plan_code == metadata.get("plan_code"),
+        metadata_months == months,
+        TARIFF_DAYS[months] == days == metadata_days,
+        amount_rub == metadata_amount > 0,
     ))
 
 
@@ -369,20 +412,19 @@ async def _mark_mobile_v2_yookassa_fulfilled(payment_id: str) -> bool:
 async def _mobile_crypto_order_matches(invoice_id: str, pending: dict) -> bool:
     """Verify a settled app Crypto Pay invoice against its durable request."""
     from database import get_mobile_payment_request_by_invoice
-    from constants import get_price_for_months
+    from constants import TARIFF_DAYS
 
     order = await get_mobile_payment_request_by_invoice("crypto", invoice_id)
     months = {"1m": 1, "3m": 3, "6m": 6, "12m": 12}.get(order["plan_code"]) if order else None
     if not order or not months:
         return False
-    expected_amount, expected_days = get_price_for_months(months, order["devices"])
     return all((
         order["user_id"] == int(pending["user_id"]),
         order["provider"] == "crypto",
         order["payment_id"] == invoice_id,
         order["devices"] == int(pending["devices"]),
-        expected_days == int(pending["days"]),
-        expected_amount == int(pending["amount_rub"]),
+        TARIFF_DAYS[months] == int(pending["days"]),
+        int(pending["amount_rub"]) > 0,
     ))
 
 
@@ -531,8 +573,8 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                 return
 
         # Mobile checkouts have a separate durable request record. Before
-        # fulfillment, bind the provider's verified invoice metadata back to
-        # that exact owner/request and recompute its terms from our catalog.
+        # fulfillment, bind the verified invoice back to that owner and plan.
+        # The amount stays the one recorded on the provider invoice at creation.
         # Telegram bot payments do not carry app_payment=1 and retain their
         # existing fulfillment contract.
         mobile_order_valid = await _mobile_yookassa_order_matches_for_payment(
@@ -1100,4 +1142,34 @@ async def start_webhook_server(bot: Bot, dp: Dispatcher) -> None:
     )
     server = uvicorn.Server(config)
     logger.info("Webhook server starting on %s:%d", WEBHOOK_HOST, WEBHOOK_PORT)
+    await server.serve()
+
+
+async def start_connection_tls_server() -> None:
+    """Serve only the browser handoff pages over HTTPS on the dedicated port."""
+    if not APP_CONNECT_TLS_CERT_FILE or not APP_CONNECT_TLS_KEY_FILE:
+        raise RuntimeError("connection page TLS certificate is not configured")
+
+    from fastapi.responses import JSONResponse
+    from fastapi import FastAPI
+
+    secure_app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    secure_app.add_api_route("/connect", connection_choice_page, methods=["GET"])
+    secure_app.add_api_route("/app/login", app_login_redirect, methods=["GET"])
+
+    @secure_app.get("/healthz")
+    async def secure_health():
+        return JSONResponse({"status": "ok"})
+
+    config = uvicorn.Config(
+        secure_app,
+        host=APP_CONNECT_TLS_HOST,
+        port=APP_CONNECT_TLS_PORT,
+        ssl_certfile=APP_CONNECT_TLS_CERT_FILE,
+        ssl_keyfile=APP_CONNECT_TLS_KEY_FILE,
+        log_level="warning",
+        access_log=False,
+    )
+    server = uvicorn.Server(config)
+    logger.info("Connection page HTTPS server starting on %s:%d", APP_CONNECT_TLS_HOST, APP_CONNECT_TLS_PORT)
     await server.serve()

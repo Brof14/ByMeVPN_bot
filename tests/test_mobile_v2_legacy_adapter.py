@@ -104,9 +104,9 @@ class LegacyMobileV2HttpTests(unittest.TestCase):
         self.assertFalse(response.json()["purchase_enabled"])
         plans = response.json()["plans"]
         expected = {
-            2: (89, 316, 552, 885),
-            5: (109, 396, 712, 1185),
-            10: (129, 476, 872, 1485),
+            2: (89, 237, 414, 708),
+            5: (109, 297, 534, 948),
+            10: (129, 357, 654, 1188),
         }
         for devices, prices in expected.items():
             for index, period in enumerate(("1m", "3m", "6m", "12m")):
@@ -322,7 +322,7 @@ class LegacyMobileV2HttpTests(unittest.TestCase):
         self.assertEqual(created.status_code, 200, created.text)
         payload = "bmv2_" + __import__("hashlib").sha256(b"1001:crypto_12345678").hexdigest()[:24]
         invoice = {"invoice_id": "crypto-71", "payload": payload, "status": "active",
-                   "amount": "476", "currency_type": "fiat", "fiat": "RUB"}
+                   "amount": "357", "currency_type": "fiat", "fiat": "RUB"}
         self.assertFalse(self.client.post("/test-hooks/crypto", json=invoice).json()["allowed"])
         invoice["status"] = "paid"
         bad_amount = dict(invoice, amount="1")
