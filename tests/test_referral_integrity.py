@@ -189,6 +189,16 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await database.count_referrals(1102), 0)
         self.assertEqual(await database.get_referrals_missing_signup_bonus(1102), [])
 
+    async def test_11_historical_phantom_does_not_block_retry_queue(self):
+        for uid in (1201, 1202, 1203):
+            await database.ensure_user(uid)
+        await database.set_referrer(1203, 1201)
+        db = await database.get_db()
+        await db.execute("INSERT INTO referrals(referrer_id, referred_id) VALUES(?,?)", (1202, 1203))
+        await db.commit()
+        self.assertEqual(await database.get_referrals_missing_signup_bonus(1202), [])
+        self.assertEqual(await database.get_referrals_missing_signup_bonus(1201), [1203])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

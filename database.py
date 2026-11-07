@@ -2574,6 +2574,7 @@ async def get_referrals_missing_signup_bonus(referrer_id: int, limit: int = 100)
     db = await get_db()
     cur = await db.execute(
         """SELECT r.referred_id FROM referrals r
+        JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id
         WHERE r.referrer_id = ? AND NOT EXISTS (
             SELECT 1 FROM referral_events e
             WHERE e.referrer_id=r.referrer_id AND e.referred_id=r.referred_id
