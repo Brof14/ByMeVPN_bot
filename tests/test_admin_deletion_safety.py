@@ -58,6 +58,7 @@ class AdminDeletionHandlerTests(unittest.IsolatedAsyncioTestCase):
             patch("database.renew_delivery_lease", new=AsyncMock(return_value=True)),
             patch("database.release_delivery_lease", new=AsyncMock()) as release,
             patch("database.suspend_all_user_autorenew", new=AsyncMock(side_effect=billing)),
+            patch("database.has_recent_unsettled_checkout", new=AsyncMock(return_value=False)),
             patch("handlers.admin.delete_xui_user", new=AsyncMock(side_effect=remove_panel)),
             patch("handlers.admin.delete_user_and_keys", new=AsyncMock(side_effect=erase_db)),
         ):
@@ -75,6 +76,23 @@ class AdminDeletionHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events, ["stop_billing", "panel"])
         self.assertIn("не подтверждено", text)
         self.assertEqual(released, 1)
+
+    async def test_recent_checkout_blocks_admin_deletion(self):
+        callback = self.callback("admin_del_user_confirm:123")
+        with (
+            patch("handlers.admin._is_admin", return_value=True),
+            patch("handlers.admin.safe_answer", new=AsyncMock()),
+            patch("database.try_acquire_delivery_lease", new=AsyncMock(return_value=True)),
+            patch("database.suspend_all_user_autorenew", new=AsyncMock(return_value=1)),
+            patch("database.has_recent_unsettled_checkout", new=AsyncMock(return_value=True)),
+            patch("database.release_delivery_lease", new=AsyncMock()),
+            patch("handlers.admin.delete_xui_user", new=AsyncMock()) as panel,
+            patch("handlers.admin.delete_user_and_keys", new=AsyncMock()) as erase,
+        ):
+            await admin.cb_del_user(callback, object())
+        panel.assert_not_awaited()
+        erase.assert_not_awaited()
+        self.assertIn("оплата", callback.message.edit_text.await_args.args[0])
 
     async def test_successful_deletion_follows_billing_panel_database_order(self):
         events, text, released = await self.attempt()
