@@ -377,7 +377,9 @@ class ExpiryDatabaseRegression(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.db.get_expiring_auto_renew_subscriptions(now=now), [])
         legacy = await self.db.get_auto_renew_subscription(9801)
         self.assertEqual(legacy["status"], "cancelled")
-        self.assertEqual(legacy["payment_method_id"], "legacy-active")
+        # A consciously deleted key must not leave a merchant token that
+        # could later be re-enabled by an unrelated legacy subscription.
+        self.assertEqual(legacy["payment_method_id"], "")
 
     async def test_expiry_cleanup_cannot_enable_legacy_renewal(self):
         now = int(time.time())
