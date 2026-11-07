@@ -72,6 +72,11 @@ class UserProfileMiddleware(BaseMiddleware):
                 # the deleted identity and VPN access cannot be re-created by
                 # a late Telegram callback or a new invoice.
                 if await is_account_tombstoned(user.id):
+                    # A Stars successful-payment update can arrive after
+                    # account erasure. Allow only this financial event through
+                    # so the payment handler can record it for manual refund.
+                    if getattr(event, "successful_payment", None) is not None:
+                        return await handler(event, data)
                     from aiogram.types import CallbackQuery
                     if isinstance(event, CallbackQuery):
                         await event.answer(
