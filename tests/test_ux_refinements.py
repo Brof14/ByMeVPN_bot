@@ -61,6 +61,18 @@ class AdForwardingTests(unittest.IsolatedAsyncioTestCase):
             await msg_ad_channel_input(message, object(), state)
         self.assertEqual(state.update_data.await_args.kwargs["ad_channel_ref"], "+AbCdEf012345")
 
+    async def test_channel_title_is_escaped_in_manual_count_prompt(self):
+        from handlers.ad_program import msg_ad_channel_input
+        message = SimpleNamespace(from_user=SimpleNamespace(id=123), text="@channelname")
+        state = SimpleNamespace(update_data=AsyncMock())
+        bot = SimpleNamespace(
+            get_chat=AsyncMock(return_value=SimpleNamespace(id=9, title="News <VPN> & more")),
+            get_chat_member_count=AsyncMock(side_effect=RuntimeError("not available")),
+        )
+        with patch("handlers.ad_program._ask_subscriber_count", new=AsyncMock()) as ask:
+            await msg_ad_channel_input(message, bot, state)
+        self.assertIn("News &lt;VPN&gt; &amp; more", ask.await_args.kwargs["prompt"])
+
     async def test_private_invite_is_not_written_to_audit_or_analytics(self):
         from handlers.ad_program import _create_application_and_reply
         message = SimpleNamespace(answer=AsyncMock())
