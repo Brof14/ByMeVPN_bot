@@ -264,6 +264,18 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(await database.channel_already_used(None, "+AbCdEf012345"))
 
+    async def test_same_channel_cannot_be_submitted_concurrently_under_different_names(self):
+        import asyncio
+        results = await asyncio.gather(*(
+            database.create_ad_application(
+                user_id=user_id, channel_id=-100123, channel_username=alias,
+                subscriber_count=20, bonus_months=2, channel_ref=alias,
+            )
+            for user_id, alias in ((1302, "firstalias"), (1303, "secondalias"))
+        ), return_exceptions=True)
+        self.assertEqual(sum(isinstance(result, int) for result in results), 1)
+        self.assertEqual(sum(isinstance(result, Exception) for result in results), 1)
+
     async def test_13_concurrent_signup_reward_conflict_is_reported_as_success(self):
         from unittest.mock import AsyncMock, patch
         from referral_system_new import award_referral_signup_bonus
