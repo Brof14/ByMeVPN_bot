@@ -21,10 +21,10 @@ class PremiumButtonDesignTests(unittest.TestCase):
             menu = main_menu_with_keys(trial_used=True)
         by_callback = {button.callback_data: button for button in buttons(menu)}
         self.assertEqual(by_callback["my_keys"].style, "primary")
-        self.assertEqual(by_callback["buy_vpn"].style, "primary")
-        self.assertEqual(by_callback["my_keys"].icon_custom_emoji_id, "6005570495603282482")
-        self.assertEqual(by_callback["buy_vpn"].icon_custom_emoji_id, "5927169041595634481")
-        self.assertEqual(by_callback["free_vpn"].icon_custom_emoji_id, "5301299389245985629")
+        self.assertIsNone(by_callback["buy_vpn"].style)
+        self.assertEqual(by_callback["my_keys"].icon_custom_emoji_id, "6019290828759898301")
+        self.assertEqual(by_callback["buy_vpn"].icon_custom_emoji_id, "6030573613357209704")
+        self.assertEqual(by_callback["free_vpn"].icon_custom_emoji_id, "6023826881160157558")
 
     def test_support_and_about_are_secondary_not_competing_ctas(self):
         by_callback = {button.callback_data: button for button in buttons(main_menu_with_keys())}
@@ -46,7 +46,7 @@ class PremiumButtonDesignTests(unittest.TestCase):
             for title in ("🔙 Главное меню", "🏠 Главное меню", "← Назад", "◀️ Назад"):
                 button = themed_button(text=title, callback_data="admin_menu")
                 self.assertIsNone(button.style)
-                self.assertEqual(button.icon_custom_emoji_id, "5875082500023258804")
+                self.assertEqual(button.icon_custom_emoji_id, "5805509901048356965")
                 self.assertNotIn("Главное менюГлавное меню", button.text)
 
     def test_custom_icons_can_be_disabled_without_changing_callbacks(self):

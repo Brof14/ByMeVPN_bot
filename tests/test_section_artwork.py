@@ -15,9 +15,14 @@ class TestSectionArtwork(unittest.IsolatedAsyncioTestCase):
             "IPHONE", "WINDOWS", "LINUX", "RENEWAL", "PAYMENT", "PROMO_CODE",
             "LEGAL", "AUTO_RENEWAL",
         )
+        landmarks = {"MENU", "ABOUT", "REFERRALS", "AD_PROGRAM", "PLANS", "KEY", "CONNECTION"}
         for name in names:
             photo = getattr(bot_assets, name)
-            self.assertEqual(bot_assets.display_artwork(photo), photo, name)
+            self.assertEqual(
+                bot_assets.display_artwork(photo),
+                photo if name in landmarks else None,
+                name,
+            )
         self.assertIsNone(bot_assets.display_artwork("/tmp/not-a-section-image.png"))
 
 
@@ -43,7 +48,7 @@ class TestSectionArtwork(unittest.IsolatedAsyncioTestCase):
             patch("handlers.start.send_with_photo", new=AsyncMock()) as send,
         ):
             await cb_free_vpn(callback, object())
-        self.assertEqual(send.call_args.kwargs["photo"], bot_assets.FREE_VPN)
+        self.assertIsNone(bot_assets.display_artwork(send.call_args.kwargs["photo"]))
 
     async def test_tariff_screen_uses_plans_banner(self):
         from handlers.buy import cb_buy_vpn
@@ -78,6 +83,7 @@ class TestSectionArtwork(unittest.IsolatedAsyncioTestCase):
             for platform, artwork in expected.items():
                 await _send_platform_guide(callback, object(), platform)
                 self.assertEqual(send.call_args.kwargs["photo"], artwork, platform)
+                self.assertIsNone(bot_assets.display_artwork(artwork), platform)
 
     async def test_ad_program_applies_its_artwork_to_all_screens(self):
         from handlers.ad_program import send_with_photo

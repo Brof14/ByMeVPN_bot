@@ -26,7 +26,7 @@ def _customer_menu(*, has_subscription: bool, trial_used: bool) -> InlineKeyboar
         kb.row(InlineKeyboardButton(text="Подписка", callback_data="my_keys"))
     elif not trial_used:
         kb.row(InlineKeyboardButton(text="3 дня бесплатно", callback_data="trial_free"))
-    kb.row(InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn"))
+    kb.row(InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn", style=None if has_subscription else "primary"))
     kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
@@ -51,8 +51,8 @@ def main_menu_active(key_id: int) -> InlineKeyboardMarkup:
     """Give a one-key subscriber an immediate connection path, without checkout."""
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="Подключить VPN", callback_data=f"key_instructions:{key_id}"))
-    kb.row(InlineKeyboardButton(text="Моя подписка", callback_data="my_keys"))
-    kb.row(InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn"))
+    kb.row(InlineKeyboardButton(text="Моя подписка", callback_data="my_keys", style=None))
+    kb.row(InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn", style=None))
     kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
