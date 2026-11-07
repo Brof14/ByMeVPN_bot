@@ -52,6 +52,12 @@ _DESTRUCTIVE_PREFIXES = (
     "autorenew_unbind_confirm:", "admin_cleanup_do",
 )
 
+# Contextual help and informational navigation are not competing blue CTAs.
+_SECONDARY_CALLBACKS = frozenset({
+    "about", "trouble", "legal", "partner_referrals_list",
+    "ad_my_applications", "guide_more", "key_history",
+})
+
 _ACTION_ICONS = {
     "my_keys": "subscription",
     "buy_vpn": "plans",
@@ -178,7 +184,7 @@ def themed_button(*args, **kwargs) -> TelegramInlineKeyboardButton:
             kwargs["style"] = "danger"
         elif callback == "trial_free":
             kwargs["style"] = "success"
-        elif navigation:
+        elif navigation or callback in _SECONDARY_CALLBACKS:
             pass
         else:
             kwargs["style"] = "primary"

@@ -49,14 +49,18 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("connection_guide", actions)
             self.assertNotIn("auth_existing_client", actions)
 
-    def test_main_menu_uses_primary_actions_and_compact_rows(self):
+    def test_main_menu_uses_distinct_primary_and_secondary_actions(self):
         for markup in (main_menu_new_user(), main_menu_existing(), main_menu_with_keys()):
             rows = markup.inline_keyboard
             self.assertEqual(rows[-1][0].text, "О сервисе")
             self.assertEqual(rows[-1][1].text, "Поддержка")
             self.assertEqual(rows[-1][1].callback_data, "trouble")
             buttons = [button for row in rows for button in row]
-            self.assertTrue(all(button.style == "primary" for button in buttons if button.callback_data != "trial_free"))
+            by_action = {button.callback_data: button for button in buttons}
+            self.assertIsNone(by_action["about"].style)
+            self.assertIsNone(by_action["trouble"].style)
+            self.assertEqual(by_action["buy_vpn"].style, "primary")
+            self.assertEqual(by_action["free_vpn"].style, "primary")
         menu = main_menu_with_keys()
         self.assertEqual([len(row) for row in menu.inline_keyboard], [1, 1, 1, 2])
         self.assertEqual(menu.inline_keyboard[0][0].style, "primary")
