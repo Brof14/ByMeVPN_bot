@@ -13,6 +13,15 @@ import autorenew
 
 
 class TestUncertainAutoRenew(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        for name, value in (
+            ("try_acquire_delivery_lease", True),
+            ("release_delivery_lease", None),
+        ):
+            patcher = patch(f"database.{name}", new=AsyncMock(return_value=value))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     async def test_unexpected_status_or_missing_payment_id_keeps_same_attempt(self):
         subscription = {
             "sub_id": 77, "user_id": 12345, "key_id": 9, "expiry": 1_800_000_000,
@@ -63,6 +72,61 @@ class TestUncertainAutoRenew(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(charge.await_args.kwargs["idempotence_key"], "autorenew_77_9_1800000000_2")
         defer.assert_awaited_once_with(77, "provider response was not confirmed")
         mark_failed.assert_not_awaited()
+
+    async def test_cancelled_after_listing_never_calls_payment_provider(self):
+        subscription = {
+            "sub_id": 77, "user_id": 12345, "key_id": 9,
+            "expiry": 1_800_000_000, "fail_count": 0,
+            "days": 30, "devices": 2, "months": 1,
+            "amount_rub": 89, "payment_method_id": "pm_saved",
+        }
+        call_count = 0
+
+        async def due(*_args, **_kwargs):
+            nonlocal call_count
+            call_count += 1
+            return [subscription] if call_count == 1 else []
+
+        with (
+            patch("autorenew.get_expiring_auto_renew_subscriptions", new=AsyncMock(side_effect=due)),
+            patch("autorenew.charge_yookassa_recurrent", new=AsyncMock()) as charge,
+            patch("autorenew.defer_auto_renew_charge_retry", new=AsyncMock()) as defer,
+        ):
+            await autorenew.process_auto_renewals(MagicMock())
+        charge.assert_not_awaited()
+        defer.assert_not_awaited()
+
+    async def test_other_account_operation_prevents_recurring_charge(self):
+        subscription = {
+            "sub_id": 77, "user_id": 12345, "key_id": 9, "expiry": 1_800_000_000,
+            "fail_count": 0, "days": 30, "devices": 2, "months": 1,
+            "amount_rub": 89, "payment_method_id": "pm_saved",
+        }
+        with (
+            patch("autorenew.get_expiring_auto_renew_subscriptions", new=AsyncMock(return_value=[subscription])),
+            patch("database.try_acquire_delivery_lease", new=AsyncMock(return_value=False)),
+            patch("autorenew.charge_yookassa_recurrent", new=AsyncMock()) as charge,
+        ):
+            await autorenew.process_auto_renewals(MagicMock())
+        charge.assert_not_awaited()
+
+    async def test_discount_or_saved_card_change_invalidates_queued_charge(self):
+        subscription = {
+            "sub_id": 77, "user_id": 12345, "key_id": 9, "expiry": 1_800_000_000,
+            "fail_count": 0, "days": 30, "devices": 2, "months": 1,
+            "amount_rub": 89, "payment_method_id": "pm_saved",
+        }
+        for mutation in ({"amount_rub": 75}, {"payment_method_id": "new_method"},
+                         {"expiry": 1_800_008_888}, {"fail_count": 1}):
+            with self.subTest(mutation=mutation):
+                fresh = {**subscription, **mutation}
+                due = AsyncMock(side_effect=[[subscription], [fresh]])
+                with (
+                    patch("autorenew.get_expiring_auto_renew_subscriptions", new=due),
+                    patch("autorenew.charge_yookassa_recurrent", new=AsyncMock()) as charge,
+                ):
+                    await autorenew.process_auto_renewals(MagicMock())
+                charge.assert_not_awaited()
 
     async def test_canceled_payment_with_null_details_is_handled(self):
         subscription = {
