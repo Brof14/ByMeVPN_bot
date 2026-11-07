@@ -47,6 +47,29 @@ def main_menu_with_keys(trial_used: bool = False) -> InlineKeyboardMarkup:
     return _customer_menu(has_subscription=True, trial_used=trial_used)
 
 
+def main_menu_expired(*, key_ids: list[int]) -> InlineKeyboardMarkup:
+    """When access has ended, lead with renewal instead of an unused trial.
+
+    A single key can renew directly while users with several keys first
+    choose which subscription to extend. This does not touch pricing logic.
+    """
+    if len(key_ids) == 1:
+        renew_action = f"key_renew:{key_ids[0]}"
+    elif key_ids:
+        renew_action = "my_keys"
+    else:
+        renew_action = "buy_vpn"
+
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="Продлить VPN", callback_data=renew_action))
+    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
+    kb.row(
+        InlineKeyboardButton(text="О сервисе", callback_data="about"),
+        InlineKeyboardButton(text="Поддержка", callback_data="trouble"),
+    )
+    return kb.as_markup()
+
+
 def back_to_menu() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu"))

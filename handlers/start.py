@@ -33,7 +33,7 @@ from database import (
 )
 from app_links import build_app_login_url, build_app_redirect_url
 from keyboards import (
-    main_menu_new_user, main_menu_existing, main_menu_with_keys,
+    main_menu_new_user, main_menu_existing, main_menu_with_keys, main_menu_expired,
     back_to_menu, cancel_kb, support_url, feedback_url, app_open_kb,
 )
 from utils import send_with_photo, safe_answer
@@ -211,11 +211,10 @@ async def _send_main_menu(
             "<b>Доступ завершён</b>\n\n"
             "Продлите подписку или получите бонусные дни."
         )
-        # Check if user has keys to show appropriate menu (use direct DB check, not cache)
+        # The first action must renew the actual existing key, not reset its
+        # device choice through a new-purchase checkout.
         user_keys = await get_user_keys(user_id)
-        has_keys = len(user_keys) > 0
-        trial_used = await has_trial_used(user_id)
-        kb = main_menu_with_keys(trial_used=True) if has_keys else main_menu_existing(trial_used=True)
+        kb = main_menu_expired(key_ids=[int(k["id"]) for k in user_keys])
     else:  # active
         # Check if user has keys to show appropriate menu (use direct DB check, not cache)
         user_keys = await get_user_keys(user_id)

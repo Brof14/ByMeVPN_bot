@@ -121,6 +121,8 @@ async def cb_support_topic(callback: CallbackQuery, bot: Bot):
     rows = []
     if topic in {"billing", "devices"}:
         rows.append([InlineKeyboardButton(text="Подписка", callback_data="my_keys")])
+    if topic in {"no_connection", "no_internet", "app", "import"}:
+        rows.append([InlineKeyboardButton(text="Инструкция по подключению", callback_data="connection_guide")])
     rows.extend([
         [InlineKeyboardButton(text="Написать в поддержку", url=support_url())],
         [InlineKeyboardButton(text="← Назад", callback_data="trouble")],
