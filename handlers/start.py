@@ -79,7 +79,30 @@ async def _handle_app_login(message: Message, user_id: int, user_name: str) -> N
         if subscription_url:
             app_name = f"@{message.from_user.username}" if message.from_user.username else user_name
             app_url = build_app_login_url(subscription_url, app_name)
-            redirect_url = build_app_redirect_url(subscription_url, app_name)
+            try:
+                redirect_url = build_app_redirect_url(subscription_url, app_name)
+            except ValueError:
+                # Never put a bearer-style VPN subscription URL into an HTTP
+                # query string. Keep manual app login available until HTTPS
+                # handover is correctly configured and verified.
+                logger.warning("Secure public app URL is not configured for user %d", user_id)
+                await message.answer(
+                    "<b>Вход в приложение ByMeVPN</b>\n\n"
+                    "Автоматический переход временно недоступен. "
+                    "Для безопасности скопируйте ссылку входа и вставьте её в приложение.\n\n"
+                    f"<code>{escape(app_url)}</code>",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="Скопировать ссылку входа",
+                                              copy_text={"text": app_url[:256]})]
+                        if len(app_url) <= 256 else
+                        [InlineKeyboardButton(text="Подписка",
+                                              callback_data="my_keys")],
+                        [InlineKeyboardButton(text="Инструкция по подключению",
+                                              callback_data="connection_guide")],
+                    ]),
+                )
+                return
             await message.answer(
                 "<b>Вход в приложение ByMeVPN</b>\n\n"
                 "Нажмите «🚀 Открыть приложение» — ByMeVPN откроется и подключит подписку автоматически.\n\n"
