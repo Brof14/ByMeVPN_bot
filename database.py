@@ -5712,9 +5712,9 @@ async def create_ad_application(
 ) -> int:
     """Create a new ad application. Returns application ID.
 
-    channel_ref is the normalized channel identity (lowercased @username or
-    invite reference) — protected by a UNIQUE partial index, so the same
-    channel cannot be applied twice even when channel_id is NULL (private).
+    channel_ref is a lowercased public username or a case-sensitive private
+    invite reference. Different private invite links can point to one channel,
+    so that case still requires manual verification.
     """
     db = await get_db()
     if not channel_ref and channel_username:
@@ -5901,8 +5901,8 @@ async def channel_already_used(channel_id: int | None, channel_ref: str | None =
     db = await get_db()
     if channel_ref:
         cur = await db.execute(
-            "SELECT 1 FROM ad_applications WHERE channel_ref = ? LIMIT 1",
-            (channel_ref,),
+            "SELECT 1 FROM ad_applications WHERE channel_ref = ? OR channel_ref = ? LIMIT 1",
+            (channel_ref, channel_ref.lower()),
         )
         if await cur.fetchone():
             return True

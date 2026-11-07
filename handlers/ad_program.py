@@ -253,9 +253,9 @@ async def msg_ad_subscriber_count(message: Message, bot: Bot, state: FSMContext)
     data = await state.get_data()
     raw = (message.text or "").strip().replace(" ", "").replace("\u00a0", "")
 
-    if not raw.isdigit():
+    if not raw.isascii() or not raw.isdecimal() or len(raw) > 19 or not 1 <= int(raw) <= 2**63 - 1:
         await message.answer(
-            "❌ Пожалуйста, отправьте число подписчиков, например: <code>1284</code>",
+            "❌ Отправьте положительное число подписчиков, например: <code>1284</code>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="◀️ Отмена", callback_data="ad_program")]
@@ -341,12 +341,11 @@ async def _create_application_and_reply(
 
     await log_ad_analytics_event(user_id, "ad_application_submitted", {
         "app_id": app_id,
-        "channel_ref": channel_ref,
         "subscriber_count": subscriber_count,
         "bonus_months": bonus_months,
         "manual_count": manual_count,
     })
-    await log_ad_audit(user_id, "ad_application_created", f"app={app_id} ref={channel_ref} subs={subscriber_count}")
+    await log_ad_audit(user_id, "ad_application_created", f"app={app_id} subs={subscriber_count}")
 
     if needs_review:
         text = (
@@ -410,7 +409,7 @@ async def msg_ad_channel_input(message: Message, bot: Bot, state: FSMContext):
             ),
         )
         await state.update_data(
-            ad_channel_ref=private_ref.lower(),
+            ad_channel_ref=private_ref,
             ad_channel_username="",
             ad_channel_id=None,
             ad_chat_title="приватный канал",
@@ -845,6 +844,10 @@ async def cb_ad_admin_view(callback: CallbackQuery, bot: Bot):
     elif app["status"] == "grant_pending":
         kb.row(InlineKeyboardButton(text="↻ Повторить начисление", callback_data=f"ad_admin_approve:{app_id}"))
     elif app["status"] == "channel_pending":
+        text += (
+            "\n\n<b>Проверьте вручную:</b> принадлежность канала, число подписчиков "
+            "и прошлое участие. Разные пригласительные ссылки могут вести в один канал."
+        )
         kb.row(InlineKeyboardButton(text="✓ Канал проверен · ждать пост", callback_data=f"ad_admin_channel_ok:{app_id}"))
         kb.row(InlineKeyboardButton(text="❌ Отклонить", callback_data=f"ad_admin_reject:{app_id}"))
     elif app["status"] in ("approved", "retention_issue") and due and due <= now:

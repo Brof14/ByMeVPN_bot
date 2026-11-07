@@ -80,6 +80,17 @@ class AdForwardingTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("+AbCdEf012345", repr(analytics.await_args))
         self.assertNotIn("+AbCdEf012345", repr(audit.await_args))
 
+    async def test_channel_subscriber_count_must_fit_storage_and_be_positive(self):
+        from handlers.ad_program import msg_ad_subscriber_count
+        for value in ("0", "9" * 5000):
+            message = SimpleNamespace(from_user=SimpleNamespace(id=123), text=value, answer=AsyncMock())
+            state = SimpleNamespace(get_data=AsyncMock(return_value={}), clear=AsyncMock())
+            with patch("handlers.ad_program._create_application_and_reply", new=AsyncMock()) as create:
+                await msg_ad_subscriber_count(message, object(), state)
+            create.assert_not_awaited()
+            state.clear.assert_not_awaited()
+            message.answer.assert_awaited_once()
+
     async def test_channel_offer_explains_review_and_personal_link(self):
         from handlers.ad_program import cb_ad_program
         callback = SimpleNamespace(from_user=SimpleNamespace(id=123))
