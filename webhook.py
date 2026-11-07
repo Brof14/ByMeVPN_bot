@@ -411,12 +411,23 @@ async def _quarantine_deleted_account_payment(
         if status != "recovery_required":
             await update_payment_status(row_id, "recovery_required")
         if is_new or status != "recovery_required":
+            from html import escape
             await _notify_admin(
                 bot,
-                f"⚠️ Оплата {provider} {payment_id} поступила после удаления "
-                f"аккаунта {user_id}. Доступ не выдавался. "
-                "Нужна ручная сверка и проверка возврата.",
+                f"⚠️ Оплата {escape(str(provider))} {escape(str(payment_id))} "
+                f"поступила после удаления аккаунта {user_id}. "
+                "Доступ не выдавался. Нужна ручная сверка и проверка возврата.",
             )
+            try:
+                await bot.send_message(
+                    user_id,
+                    "Платёж подтверждён после удаления аккаунта. "
+                    "Доступ не будет активирован автоматически. "
+                    "Не оплачивайте повторно; обратитесь в @ByMeVPNSupportBot "
+                    "для проверки возврата.",
+                )
+            except Exception:
+                logger.warning("Could not notify erased user %d about late payment", user_id)
     return True
 
 
