@@ -57,6 +57,8 @@ class CustomerNavigationTests(unittest.IsolatedAsyncioTestCase):
                 await cb_support_topic(callback, object())
             keyboard = send.await_args.args[3]
             self.assertIn(desired, actions(keyboard), topic)
+            if topic == "import":
+                self.assertIn("my_keys", actions(keyboard))
             self.assertEqual(actions(keyboard)[-1], "trouble")
 
 

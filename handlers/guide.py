@@ -119,7 +119,7 @@ async def cb_support_topic(callback: CallbackQuery, bot: Bot):
         await safe_answer(callback, "Подсказка не найдена.", alert=True)
         return
     rows = []
-    if topic in {"billing", "devices"}:
+    if topic in {"billing", "devices", "import"}:
         rows.append([InlineKeyboardButton(text="Подписка", callback_data="my_keys")])
     if topic in {"no_connection", "no_internet", "app", "import"}:
         rows.append([InlineKeyboardButton(text="Инструкция по подключению", callback_data="connection_guide")])
