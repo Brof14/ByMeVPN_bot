@@ -193,6 +193,16 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([call.kwargs["user_id"] for call in delivery.await_args_list], [2101, 2201])
         self.assertEqual(len(await database.get_pending_referral_payment_rewards()), 1)
 
+    async def test_retry_order_migration_preserves_existing_rewards(self):
+        await self._seed_pair(2301, 2302)
+        await database.record_referral_payment_reward(2301, 2302, "legacy-payment")
+        db = await database.get_db()
+        await db.execute("ALTER TABLE referral_payment_rewards DROP COLUMN last_attempt_ms")
+        await db.commit()
+        await database.init_db()
+        pending = await database.get_pending_referral_payment_rewards()
+        self.assertEqual([(r["referrer_id"], r["payment_ref"]) for r in pending], [(2301, "legacy-payment")])
+
     async def test_10_second_inviter_does_not_create_a_phantom_referral(self):
         for uid in (1101, 1102, 1103):
             await database.ensure_user(uid)

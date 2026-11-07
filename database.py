@@ -159,6 +159,7 @@ CREATE TABLE IF NOT EXISTS referral_payment_rewards (
     referred_id INTEGER NOT NULL,
     payment_ref TEXT NOT NULL,
     created INTEGER DEFAULT (strftime('%s','now')),
+    last_attempt_ms INTEGER,
     UNIQUE(referrer_id, referred_id)
 );
 
@@ -500,6 +501,11 @@ async def get_db() -> aiosqlite.Connection:
 
 async def _run_migrations(db: aiosqlite.Connection) -> None:
     """Run database migrations."""
+    reward_columns = {
+        row[1] for row in await (await db.execute("PRAGMA table_info(referral_payment_rewards)")).fetchall()
+    }
+    if "last_attempt_ms" not in reward_columns:
+        await db.execute("ALTER TABLE referral_payment_rewards ADD COLUMN last_attempt_ms INTEGER")
     # Additive storage for the opt-in Google flow. This is deliberately a
     # migration rather than part of the base schema so existing SQLite files
     # are upgraded explicitly and can be verified independently before rollout.
@@ -3552,13 +3558,24 @@ async def get_pending_referral_payment_rewards(limit: int = 100) -> list[dict]:
         "FROM referral_payment_rewards r "
         "LEFT JOIN ref_bonus_claims c "
         "ON c.referrer_id=r.referrer_id AND c.referred_id=r.referred_id "
-        "WHERE COALESCE(c.claimed, 0)=0 ORDER BY r.created LIMIT ?",
+        "WHERE COALESCE(c.claimed, 0)=0 "
+        "ORDER BY r.last_attempt_ms IS NOT NULL, r.last_attempt_ms, r.created, r.referrer_id, r.referred_id LIMIT ?",
         (int(limit),),
     )
     return [
         {"referrer_id": row[0], "referred_id": row[1], "payment_ref": row[2]}
         for row in await cur.fetchall()
     ]
+
+
+async def mark_referral_payment_reward_attempt(referrer_id: int, referred_id: int) -> None:
+    """Move an attempted reward behind untouched or less recently tried rewards."""
+    db = await get_db()
+    await db.execute(
+        "UPDATE referral_payment_rewards SET last_attempt_ms=? WHERE referrer_id=? AND referred_id=?",
+        (time.time_ns() // 1_000_000, referrer_id, referred_id),
+    )
+    await db.commit()
 
 
 async def release_ref_bonus_claim(referrer_id: int, referred_id: int) -> None:

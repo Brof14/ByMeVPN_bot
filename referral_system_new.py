@@ -330,7 +330,7 @@ async def process_pending_referral_payment_rewards(bot, limit: int = 100) -> int
     """Automatically grant +30 days for paid referrals, retrying safely after outages."""
     from database import (
         get_pending_referral_payment_rewards, get_user_keys, mark_ref_bonus_claimed,
-        add_referral_event,
+        add_referral_event, mark_referral_payment_reward_attempt,
     )
     from subscription import deliver_key
     from constants import DEFAULT_DEVICE_LIMIT, REFERRAL_FIRST_PAYMENT_BONUS_DAYS
@@ -340,6 +340,7 @@ async def process_pending_referral_payment_rewards(bot, limit: int = 100) -> int
         referrer_id = int(reward["referrer_id"])
         referred_id = int(reward["referred_id"])
         try:
+            await mark_referral_payment_reward_attempt(referrer_id, referred_id)
             await add_referral_event(
                 referrer_id=referrer_id, referred_id=referred_id,
                 event_type="payment_bonus", days_awarded=REFERRAL_FIRST_PAYMENT_BONUS_DAYS,
