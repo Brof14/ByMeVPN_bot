@@ -39,6 +39,52 @@ class ExpiryReminderRegression(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Ваш заказ", send.await_args.args[2])
         self.assertEqual(state.update_data.await_args.kwargs["promo_code"], "")
 
+    async def test_valid_bound_promo_still_builds_discounted_order(self):
+        from handlers.buy import cb_select_tariff
+        callback = SimpleNamespace(data="tariff_3_2", from_user=SimpleNamespace(id=123))
+        promo = {"code": "BOUND", "promo_type": "percent", "discount_value": 30, "tariff_binding": 3}
+        state = SimpleNamespace(get_data=AsyncMock(return_value={"promo_info": promo, "promo_code": "BOUND", "promo_discount": 30}), update_data=AsyncMock())
+        with (
+            patch("handlers.buy.safe_answer", new=AsyncMock()),
+            patch("handlers.buy.send_with_photo", new=AsyncMock()) as send,
+            patch("handlers.buy.validate_promo_code", new=AsyncMock(return_value=promo)),
+            patch("handlers.buy.has_user_used_promo", new=AsyncMock(return_value=False)),
+            patch("database.save_checkout_draft", new=AsyncMock()),
+            patch("database.log_analytics_event", new=AsyncMock()),
+        ):
+            await cb_select_tariff(callback, object(), state)
+        self.assertIn("Итого: <b>221 ₽</b>", send.await_args.args[2])
+        self.assertEqual(state.update_data.await_args.kwargs["promo_code"], "BOUND")
+
+    async def test_valid_promo_allows_confirmed_checkout(self):
+        from handlers.buy import _get_checkout_params
+        promo = {"code": "BOUND", "promo_type": "percent", "discount_value": 30, "tariff_binding": 3}
+        state = SimpleNamespace(get_data=AsyncMock(return_value={
+            "months": 3, "devices": 2, "price_rub": 221, "days": 120,
+            "promo_code": "BOUND", "promo_info": promo,
+        }), update_data=AsyncMock())
+        with (
+            patch("handlers.buy.validate_promo_code", new=AsyncMock(return_value=promo)),
+            patch("handlers.buy.has_user_used_promo", new=AsyncMock(return_value=False)),
+        ):
+            result = await _get_checkout_params(state, 123)
+        self.assertEqual((result["price_rub"], result["days"], result["promo_code"]), (221, 120, "BOUND"))
+        state.update_data.assert_not_awaited()
+
+    async def test_changed_promo_requires_new_order_confirmation(self):
+        from handlers.buy import _get_checkout_params
+        promo = {"code": "BOUND", "promo_type": "percent", "discount_value": 30, "tariff_binding": 3}
+        state = SimpleNamespace(get_data=AsyncMock(return_value={
+            "months": 3, "devices": 2, "price_rub": 221, "days": 120,
+            "promo_code": "BOUND", "promo_info": promo,
+        }), update_data=AsyncMock())
+        with (
+            patch("handlers.buy.validate_promo_code", new=AsyncMock(return_value={**promo, "discount_value": 10})),
+            patch("handlers.buy.has_user_used_promo", new=AsyncMock(return_value=False)),
+        ):
+            self.assertIsNone(await _get_checkout_params(state, 123))
+        self.assertIsNone(state.update_data.await_args.kwargs["price_rub"])
+
     async def test_promo_expiring_after_order_confirmation_does_not_create_invoice(self):
         from handlers.buy import cb_pay_yookassa
         callback = SimpleNamespace(from_user=SimpleNamespace(id=123))
