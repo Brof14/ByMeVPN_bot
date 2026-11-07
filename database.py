@@ -130,6 +130,14 @@ CREATE TABLE IF NOT EXISTS delivery_leases (
     expires_at INTEGER NOT NULL
 );
 
+-- Minimal account tombstones prevent deleted users from being silently
+-- reactivated by Telegram events or by an old, otherwise valid JWT.
+CREATE TABLE IF NOT EXISTS account_tombstones (
+    user_id INTEGER PRIMARY KEY,
+    deleted_at INTEGER NOT NULL,
+    source TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS payments (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id  INTEGER NOT NULL,
@@ -1271,9 +1279,11 @@ async def ensure_user(user_id: int, username: Optional[str] = None) -> None:
     """Create/update a Telegram user record and keep its latest username."""
     db = await get_db()
     await db.execute(
-        "INSERT INTO users(user_id, username) VALUES(?, ?) "
-        "ON CONFLICT(user_id) DO UPDATE SET username=excluded.username",
-        (user_id, username),
+        "INSERT INTO users(user_id, username) "
+        "SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM account_tombstones WHERE user_id=?) "
+        "ON CONFLICT(user_id) DO UPDATE SET username=excluded.username "
+        "WHERE NOT EXISTS (SELECT 1 FROM account_tombstones WHERE user_id=excluded.user_id)",
+        (user_id, username, user_id),
     )
     await db.commit()
 
@@ -1856,6 +1866,15 @@ async def get_or_create_provisioning_intent(
     return int(row[1])
 
 
+async def is_account_tombstoned(user_id: int) -> bool:
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT 1 FROM account_tombstones WHERE user_id=? LIMIT 1",
+        (int(user_id),),
+    )
+    return await cursor.fetchone() is not None
+
+
 async def try_acquire_delivery_lease(
     user_id: int, token: str, ttl_seconds: int = 180,
 ) -> bool:
@@ -1869,6 +1888,14 @@ async def try_acquire_delivery_lease(
     db = await get_db()
     now = int(time.time())
     async with _db_semaphore:
+        # Do not start any new delivery for an erased account. Deletion itself
+        # acquires its lease *before* writing the tombstone.
+        cursor = await db.execute(
+            "SELECT 1 FROM account_tombstones WHERE user_id=? LIMIT 1",
+            (user_id,),
+        )
+        if await cursor.fetchone():
+            return False
         cursor = await db.execute(
             """INSERT INTO delivery_leases(user_id,token,expires_at)
                VALUES(?,?,?)
@@ -4618,18 +4645,81 @@ async def find_user_by_id(user_id: int) -> Optional[dict]:
     }
 
 
-async def delete_user_and_keys(user_id: int) -> list:
-    """Delete user and all their keys, return list of deleted UUIDs"""
+async def delete_user_and_keys(user_id: int) -> list[str]:
+    """Erase account-owned access and identity, keeping financial evidence.
+
+    Call ONLY after every configured 3x-ui inbound confirms remote deletion.
+    A tombstone blocks old mobile sessions and Telegram auto-registration.
+    Amounts, provider transaction IDs and refunds are retained for accounting
+    and dispute reconciliation; this is *not* an unqualified GDPR certification.
+    """
     db = await get_db()
-    # Get UUIDs before deleting
-    cur = await db.execute("SELECT uuid FROM keys WHERE user_id=?", (user_id,))
-    rows = await cur.fetchall()
-    uuids = [row[0] for row in rows if row[0]]
-    
-    await db.execute("DELETE FROM keys WHERE user_id=?", (user_id,))
-    await db.execute("DELETE FROM users WHERE user_id=?", (user_id,))
-    await db.commit()
-    return uuids
+    async with _db_semaphore:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = await db.execute(
+                "SELECT uuid FROM keys WHERE user_id=?", (user_id,),
+            )
+            uuids = [row[0] for row in await cursor.fetchall() if row[0]]
+            await db.execute(
+                "INSERT OR IGNORE INTO account_tombstones(user_id,deleted_at,source) VALUES(?,?,?)",
+                (user_id, int(time.time()), "admin"),
+            )
+            await db.execute(
+                """UPDATE auto_renew_subscriptions
+                   SET status='cancelled', payment_method_id='',
+                       payment_method_title='', payment_method_type='',
+                       next_retry_at=NULL, updated_at=strftime('%s','now')
+                   WHERE user_id=?""",
+                (user_id,),
+            )
+            # Explicit allowlist of identity/marketing records. Never delete
+            # financial transactions or payment-recovery rows in this routine.
+            known_tables = {
+                row[0] for row in await (await db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )).fetchall()
+            }
+            personal_tables = (
+                ("keys", "user_id"), ("app_users", "user_id"),
+                ("google_accounts", "user_id"), ("email_auth", "user_id"),
+                ("checkout_drafts", "user_id"), ("known_hwid_devices", "user_id"),
+                ("mobile_trial_bootstrap", "user_id"),
+                ("mobile_device_bootstraps", "user_id"),
+                ("trial_claim_reservations", "user_id"),
+                ("mobile_auth_sessions", "user_id"),
+                ("marketing_preferences", "user_id"),
+                ("analytics_events", "user_id"),
+                ("key_errors", "user_id"),
+                ("ad_applications", "user_id"), ("ad_notifications", "user_id"),
+                ("ad_audit_log", "user_id"),
+                ("giveaway_participants", "user_id"),
+                ("giveaway_notifications", "user_id"),
+                ("broadcast_recipients", "user_id"),
+                ("referral_clicks", "referrer_id"),
+                ("referrals", "referrer_id"), ("referrals", "referred_id"),
+                ("referral_events", "referrer_id"), ("referral_events", "referred_id"),
+                ("ref_bonus_claims", "referrer_id"), ("ref_bonus_claims", "referred_id"),
+                ("referral_payment_rewards", "referrer_id"),
+                ("referral_payment_rewards", "referred_id"),
+            )
+            for table, column in personal_tables:
+                if table in known_tables:
+                    await db.execute(
+                        f"DELETE FROM {table} WHERE {column}=?", (user_id,),
+                    )
+            await db.execute(
+                """UPDATE users
+                   SET username=NULL, email=NULL, referrer_id=NULL,
+                       trial_used=1, is_banned=1, ban_reason='account_deleted'
+                   WHERE user_id=?""",
+                (user_id,),
+            )
+            await db.commit()
+            return uuids
+        except Exception:
+            await db.rollback()
+            raise
 
 
 async def set_key_days(key_id: int, days: int) -> bool:
