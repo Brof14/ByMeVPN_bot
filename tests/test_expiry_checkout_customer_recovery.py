@@ -176,6 +176,29 @@ class ExpiryDatabaseRegression(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[0]["key_id"], key_id)
         self.assertEqual(rows[0]["user_id"], 9801)
 
+    async def test_legacy_fixed_and_free_day_promotions_apply_to_order(self):
+        from handlers.buy import cb_select_tariff
+        for code, legacy_type, canonical_type, expected in (
+            ("FIXED10", "fixed", "fixed_rub", "Итого: <b>79 ₽</b>"),
+            ("DAYS5", "days", "free_days", "Срок: <b>35 дней</b>"),
+        ):
+            await self.db.create_promo_code(code, promo_type=legacy_type, discount_value=10 if legacy_type == "fixed" else 5)
+            db = await self.db.get_db()
+            await db.execute("UPDATE promo_codes SET promo_type=? WHERE code=?", (legacy_type, code))
+            await db.commit()
+            promo = await self.db.validate_promo_code(code)
+            self.assertEqual(promo["promo_type"], canonical_type)
+            state = SimpleNamespace(get_data=AsyncMock(return_value={"promo_info": promo, "promo_code": code}), update_data=AsyncMock())
+            callback = SimpleNamespace(data="tariff_1_2", from_user=SimpleNamespace(id=9801))
+            with (
+                patch("handlers.buy.safe_answer", new=AsyncMock()),
+                patch("handlers.buy.send_with_photo", new=AsyncMock()) as send,
+            ):
+                await cb_select_tariff(callback, object(), state)
+            self.assertIn(expected, send.await_args.args[2])
+        listed = {p["code"]: p["promo_type"] for p in await self.db.get_all_promo_codes()}
+        self.assertEqual((listed["FIXED10"], listed["DAYS5"]), ("fixed_rub", "free_days"))
+
     async def test_crypto_checkout_consumes_promo_after_success_only_once(self):
         from handlers.buy import cb_pay_crypto
         from webhook import _process_crypto_invoice
