@@ -2438,6 +2438,30 @@ async def get_key_by_uuid(uuid: str) -> Optional[dict]:
     }
 
 
+async def suspend_key_autorenew(user_id: int, key_id: int) -> int:
+    """Disable saved tokens for a key before attempting irreversible removal.
+
+    Also cancel unbound legacy records: after removing a key they may become
+    eligible for recurring charges against the wrong VPN subscription. Other
+    *key-bound* subscriptions stay unchanged.
+    """
+    if user_id <= 0 or key_id <= 0:
+        raise ValueError("invalid key cancellation target")
+    db = await get_db()
+    async with _db_semaphore:
+        cur = await db.execute(
+            """UPDATE auto_renew_subscriptions
+               SET status='cancelled', payment_method_id='',
+                   payment_method_title='', payment_method_type='',
+                   next_retry_at=NULL, updated_at=strftime('%s','now')
+               WHERE user_id=? AND (key_id=? OR key_id IS NULL)
+                 AND (status!='cancelled' OR TRIM(COALESCE(payment_method_id,''))!='')""",
+            (user_id, key_id),
+        )
+        await db.commit()
+        return cur.rowcount
+
+
 async def delete_key(key_id: int) -> bool:
     """Delete a key without allowing an ambiguous legacy renewal to reactivate."""
     db = await get_db()
@@ -2449,10 +2473,12 @@ async def delete_key(key_id: int) -> bool:
             # Removing one of several keys may turn an unbound legacy payment
             # into a chargeable one. Require an explicit re-enable instead.
             await db.execute(
-                "UPDATE auto_renew_subscriptions "
-                "SET status='cancelled', next_retry_at=NULL, updated_at=strftime('%s','now') "
-                "WHERE user_id=? AND key_id IS NULL AND status='active'",
-                (row[0],),
+                """UPDATE auto_renew_subscriptions
+                   SET status='cancelled', payment_method_id='',
+                       payment_method_title='', payment_method_type='',
+                       next_retry_at=NULL, updated_at=strftime('%s','now')
+                   WHERE user_id=? AND (key_id=? OR key_id IS NULL)""",
+                (row[0], key_id),
             )
             cur = await db.execute("DELETE FROM keys WHERE id=?", (key_id,))
             await db.commit()
