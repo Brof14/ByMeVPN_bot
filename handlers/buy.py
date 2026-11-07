@@ -5,6 +5,7 @@ VPN purchase flow:
 import asyncio
 import time
 import logging
+import weakref
 from urllib.parse import quote_plus
 
 from aiogram import Bot, F, Router
@@ -40,7 +41,7 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 # Serialize duplicate Telegram Stars updates for the same charge within this process.
-_stars_payment_locks: dict[str, asyncio.Lock] = {}
+_stars_payment_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
 
 def _promo_purchase_keyboard() -> InlineKeyboardMarkup:
