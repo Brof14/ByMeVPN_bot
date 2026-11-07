@@ -128,6 +128,25 @@ class TestUncertainAutoRenew(unittest.IsolatedAsyncioTestCase):
                     await autorenew.process_auto_renewals(MagicMock())
                 charge.assert_not_awaited()
 
+    async def test_paid_invoice_without_durable_pending_record_never_claims_fulfillment(self):
+        sub = {
+            "sub_id": 77, "user_id": 12345, "key_id": 9, "expiry": 1_800_000_000,
+            "fail_count": 0, "days": 30, "devices": 2, "months": 1,
+            "amount_rub": 89, "payment_method_id": "pm_saved",
+        }
+        with (
+            patch("autorenew.get_expiring_auto_renew_subscriptions", new=AsyncMock(return_value=[sub])),
+            patch("autorenew.charge_yookassa_recurrent", new=AsyncMock(return_value={
+                "id": "yk-paid-untracked", "status": "succeeded",
+            })),
+            patch("database.add_yookassa_pending", new=AsyncMock(side_effect=OSError("db unavailable"))),
+            patch("autorenew.defer_auto_renew_charge_retry", new=AsyncMock()) as defer,
+            patch("webhook._process_payment", new=AsyncMock()) as fulfill,
+        ):
+            await autorenew.process_auto_renewals(MagicMock())
+        fulfill.assert_not_awaited()
+        defer.assert_awaited_once_with(77, "pending ledger write failed")
+
     async def test_canceled_payment_with_null_details_is_handled(self):
         subscription = {
             "sub_id": 79, "user_id": 12347, "key_id": 11, "expiry": 1_800_000_002,
