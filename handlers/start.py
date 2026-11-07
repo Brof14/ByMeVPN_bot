@@ -33,7 +33,7 @@ from database import (
 )
 from app_links import build_app_login_url, build_app_redirect_url
 from keyboards import (
-    main_menu_new_user, main_menu_existing, main_menu_with_keys, main_menu_expired,
+    main_menu_new_user, main_menu_existing, main_menu_with_keys, main_menu_active, main_menu_expired,
     back_to_menu, cancel_kb, support_url, feedback_url, app_open_kb,
 )
 from utils import send_with_photo, safe_answer
@@ -233,8 +233,12 @@ async def _send_main_menu(
             )
         else:
             text = "<b>Подписка активна</b>\n\nОткройте «Подписка», чтобы подключить устройство или посмотреть срок действия."
-        # Active customers are never shown the one-time trial offer.
-        kb = main_menu_with_keys(trial_used=True) if has_keys else main_menu_existing(trial_used=True)
+        # Direct connection only when there is exactly one active key.
+        # With multiple active subscriptions, let the customer choose.
+        if len(active_keys) == 1:
+            kb = main_menu_active(int(active_keys[0]["id"]))
+        else:
+            kb = main_menu_with_keys(trial_used=True) if has_keys else main_menu_existing(trial_used=True)
 
     await send_with_photo(bot, target, text, kb, photo=MENU)
 
@@ -686,10 +690,11 @@ async def cb_about(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
         "<b>О ByMeVPN</b>\n\n"
-        "VPN для телефона и компьютера. Подключение без сложных настроек.\n\n"
-        "Тарифы на 2, 5 или 10 устройств. Новым пользователям — 3 дня бесплатно.\n\n"
-        "Нашли ошибку или знаете, как улучшить сервис? Напишите нам. "
-        "За полезные сообщения можем начислить дополнительные дни после проверки."
+        "VPN для телефона и компьютера. Подключение без сложных настроек.\n"
+        "Подписка на 2, 5 или 10 устройств.\n"
+        "Первым пользователям — 3 дня бесплатно, без карты.\n\n"
+        "Нашли ошибку или полезное улучшение? Напишите нам. "
+        "За проверенное сообщение можем начислить бонусные дни."
     )
     # Keep the menu navigation in a fixed, full-width bottom row.
     from aiogram.types import InlineKeyboardMarkup
@@ -708,8 +713,8 @@ async def cb_free_vpn(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
         "<b>Бесплатные дни</b>\n\n"
-        "Приглашайте друзей или размещайте пост в своём канале.\n\n"
-        "Заметили ошибку или придумали полезное улучшение? "
+        "Приглашайте друзей или перешлите пост из нашего канала в свой.\n\n"
+        "Заметили ошибку или полезное улучшение? "
         "Напишите нам — после проверки можем начислить бонусные дни."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[

@@ -47,6 +47,20 @@ def main_menu_with_keys(trial_used: bool = False) -> InlineKeyboardMarkup:
     return _customer_menu(has_subscription=True, trial_used=trial_used)
 
 
+def main_menu_active(key_id: int) -> InlineKeyboardMarkup:
+    """Give a one-key subscriber an immediate connection path, without checkout."""
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="Подключить VPN", callback_data=f"key_instructions:{key_id}"))
+    kb.row(InlineKeyboardButton(text="Моя подписка", callback_data="my_keys"))
+    kb.row(InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn"))
+    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
+    kb.row(
+        InlineKeyboardButton(text="О сервисе", callback_data="about"),
+        InlineKeyboardButton(text="Поддержка", callback_data="trouble"),
+    )
+    return kb.as_markup()
+
+
 def main_menu_expired(*, key_ids: list[int]) -> InlineKeyboardMarkup:
     """When access has ended, lead with renewal instead of an unused trial.
 
@@ -362,12 +376,12 @@ def confirm_delete_kb(key_id: int) -> InlineKeyboardMarkup:
 
 def after_key_kb(subscription_url: str = "") -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="Подключить VPN", callback_data="connection_guide"))
     if subscription_url:
         kb.row(InlineKeyboardButton(
             text="Скопировать ссылку",
             copy_text={"text": subscription_url},
         ))
-    kb.row(InlineKeyboardButton(text="Подключить VPN", callback_data="connection_guide"))
     kb.row(
         InlineKeyboardButton(text="Подписка", callback_data="my_keys"),
         InlineKeyboardButton(text="Пригласить друга", callback_data="partner"),
@@ -400,11 +414,6 @@ def connection_guide_kb(key_id: int | None = None, subscription_url: str = "") -
     def platform_callback(name: str) -> str:
         return f"guide_{name}:{key_id}" if key_id else f"guide_{name}"
 
-    if subscription_url:
-        kb.row(InlineKeyboardButton(
-            text="Скопировать ссылку",
-            copy_text={"text": subscription_url},
-        ))
     kb.row(
         InlineKeyboardButton(text="iPhone / iPad", callback_data=platform_callback("ios")),
         InlineKeyboardButton(text="Android", callback_data=platform_callback("android")),
@@ -414,6 +423,11 @@ def connection_guide_kb(key_id: int | None = None, subscription_url: str = "") -
         InlineKeyboardButton(text="Linux", callback_data=platform_callback("linux")),
     )
     kb.row(InlineKeyboardButton(text="Другие устройства", callback_data=f"guide_more:{key_id}" if key_id else "guide_more"))
+    if subscription_url:
+        kb.row(InlineKeyboardButton(
+            text="Скопировать ссылку",
+            copy_text={"text": subscription_url},
+        ))
     back_callback = f"key_info:{key_id}" if key_id else "back_to_menu"
     back_text = "← Назад" if key_id else "← Назад в меню"
     kb.row(InlineKeyboardButton(text=back_text, callback_data=back_callback))

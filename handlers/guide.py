@@ -281,10 +281,11 @@ async def _send_platform_guide(callback: CallbackQuery, bot: Bot, platform: str,
             await safe_answer(callback, "Ключ не найден.", alert=True)
             return
         if key.get("key"):
-            guide_rows.insert(0, [InlineKeyboardButton(
+            # Install/open the client first. Manual import is a fallback,
+            # not the primary action for a customer unfamiliar with VPN.
+            guide_rows.append([InlineKeyboardButton(
                 text="Скопировать ссылку",
                 copy_text={"text": key["key"]},
-                
             )])
     kb = InlineKeyboardMarkup(inline_keyboard=[
         *guide_rows,
