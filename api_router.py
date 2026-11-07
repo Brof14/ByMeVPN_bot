@@ -270,6 +270,33 @@ def verify_simple_jwt(token: str) -> Optional[int]:
     return int(claims["user_id"]) if claims else None
 
 
+async def _is_removed_account(user_id: int) -> bool:
+    """Check account tombstones, including deployed legacy auth adapters.
+
+    Older patched runtime modules may have JWT storage methods but not the
+    new deletion helper. Create only the additive tombstone table, then make
+    the same fail-closed read instead of returning 503 for healthy sessions.
+    """
+    checker = getattr(database, "is_account_tombstoned", None)
+    if callable(checker):
+        return bool(await checker(user_id))
+
+    db = await database.get_db()
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS account_tombstones (
+            user_id INTEGER PRIMARY KEY,
+            deleted_at INTEGER NOT NULL,
+            source TEXT NOT NULL
+        )"""
+    )
+    await db.commit()
+    cursor = await db.execute(
+        "SELECT 1 FROM account_tombstones WHERE user_id=? LIMIT 1",
+        (int(user_id),),
+    )
+    return await cursor.fetchone() is not None
+
+
 async def get_current_user_id(authorization: Optional[str] = Header(None)) -> int:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
@@ -280,7 +307,7 @@ async def get_current_user_id(authorization: Optional[str] = Header(None)) -> in
     try:
         if await database.is_mobile_jwt_revoked(claims["jti"]):
             raise HTTPException(status_code=401, detail="Session has been logged out")
-        if await database.is_account_tombstoned(claims["user_id"]):
+        if await _is_removed_account(claims["user_id"]):
             raise HTTPException(status_code=401, detail="Account has been removed")
     except HTTPException:
         raise
@@ -1386,7 +1413,7 @@ async def register(req: RegisterRequest, request: Request):
     salt = secrets.token_hex(16)
     pw_hash = hash_password(req.password, salt)
     user_id = int(hashlib.md5(email.encode()).hexdigest()[:8], 16)
-    if await database.is_account_tombstoned(user_id):
+    if await _is_removed_account(user_id):
         raise HTTPException(status_code=403, detail="Этот аккаунт удалён. Обратитесь в поддержку")
     now = int(time.time())
 
@@ -1654,7 +1681,7 @@ async def refresh_token(req: RefreshRequest):
     try:
         if await database.is_mobile_jwt_revoked(claims["jti"]):
             raise HTTPException(status_code=401, detail="Сессия завершена")
-        if await database.is_account_tombstoned(claims["user_id"]):
+        if await _is_removed_account(claims["user_id"]):
             raise HTTPException(status_code=401, detail="Аккаунт удалён")
     except HTTPException:
         raise
