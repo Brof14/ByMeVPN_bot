@@ -155,10 +155,13 @@ WEBHOOK_URL = (
     os.getenv("WEBHOOK_URL") or "https://bymevpn.duckdns.org:8443/webhook/telegram"
 )
 
-# Public base URL of this webhook/API server. Used for the /app/login redirect
-# page that opens the mobile app from a Telegram inline button.
+# The app handover page may carry a secret subscription URL.
+# Default to the SAME public HTTPS origin used for the webhook, rather than
+# an unencrypted :8080 URL. Explicit overrides are checked in app_links.py.
+_webhook_origin = urlparse(WEBHOOK_URL)
 APP_PUBLIC_URL = (
-    os.getenv("APP_PUBLIC_URL") or "http://bymevpn.duckdns.org:8080"
+    os.getenv("APP_PUBLIC_URL")
+    or f"{_webhook_origin.scheme}://{_webhook_origin.netloc}"
 ).rstrip("/")
 
 # ============================================================================

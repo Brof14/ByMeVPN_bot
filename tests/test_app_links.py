@@ -27,9 +27,16 @@ class TestAppLinkBuilders(unittest.TestCase):
         url = build_app_redirect_url("https://sub.example/abc", "user")
 
         self.assertIn("/app/login?", url)
+        self.assertEqual(urlsplit(url).scheme, "https")
         query = parse_qs(urlsplit(url).query)
         self.assertEqual(query["sub"], ["https://sub.example/abc"])
         self.assertEqual(query["name"], ["user"])
+
+    def test_unsafe_public_url_cannot_carry_subscription_credentials(self):
+        with patch("app_links.APP_PUBLIC_URL", "http://public.example:8080"):
+            with self.assertRaises(ValueError):
+                build_app_redirect_url("https://sub.example/private-token", "user")
+            self.assertNotIn("sub=", build_app_redirect_url())
 
     def test_empty_login_url_opens_the_app_without_parameters(self):
         self.assertEqual(build_app_login_url(), "bymevpn://login")
@@ -111,6 +118,22 @@ class TestAppLoginHandler(unittest.IsolatedAsyncioTestCase):
             markup.inline_keyboard[1][0].copy_text.text.startswith("bymevpn://login?"),
             True,
         )
+
+    async def test_insecure_public_handover_uses_copy_only(self):
+        from handlers.start import _handle_app_login
+        message = SimpleNamespace(from_user=SimpleNamespace(username="test"), answer=AsyncMock())
+        key = {"expiry": int(time.time()) + 86400, "key": "https://sub.example/secret"}
+        with (
+            patch("handlers.start._user_state", new=AsyncMock(return_value="active")),
+            patch("handlers.start.get_user_keys", new=AsyncMock(return_value=[key])),
+            patch("app_links.APP_PUBLIC_URL", "http://public.example:8080"),
+        ):
+            await _handle_app_login(message, 123, "Test")
+        text = message.answer.await_args.args[0]
+        kb = message.answer.await_args.kwargs["reply_markup"]
+        self.assertIn("Автоматический переход временно недоступен", text)
+        self.assertFalse(any(b.url for row in kb.inline_keyboard for b in row))
+        self.assertTrue(any(b.copy_text for row in kb.inline_keyboard for b in row))
 
 
 if __name__ == "__main__":

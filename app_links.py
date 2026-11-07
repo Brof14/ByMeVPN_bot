@@ -45,7 +45,13 @@ def build_app_login_url(subscription_url: str = "", user_name: str = "") -> str:
 
 
 def build_app_redirect_url(subscription_url: str = "", user_name: str = "") -> str:
-    """Build the public HTTPS/HTTP page that opens the app with one tap."""
+    """Only hand credential-bearing subscription URLs to a trusted HTTPS origin."""
+    base = urlsplit(APP_PUBLIC_URL)
+    if subscription_url and (
+        base.scheme != "https" or not base.hostname or base.username is not None
+        or base.password is not None or base.query or base.fragment
+    ):
+        raise ValueError("APP_PUBLIC_URL must be a secure HTTPS origin for app handover")
     query = urlencode(_login_params(subscription_url, user_name))
     return f"{APP_PUBLIC_URL}/app/login" + (f"?{query}" if query else "")
 
