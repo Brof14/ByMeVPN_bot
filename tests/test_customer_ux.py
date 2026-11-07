@@ -99,7 +99,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         menu = main_menu_with_keys(trial_used=True)
         self.assertEqual(
             [b.text for row in menu.inline_keyboard for b in row],
-            ["Подписка", "Тарифы", "Бесплатные дни", "О сервисе", "Поддержка"],
+            ["Подписка", "Тарифы", "Бесплатные дни", "Поддержка"],
         )
 
     def test_device_tiers_and_periods_unchanged(self):
@@ -122,17 +122,15 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
     def test_main_menu_uses_distinct_primary_and_secondary_actions(self):
         for markup in (main_menu_new_user(), main_menu_existing(), main_menu_with_keys()):
             rows = markup.inline_keyboard
-            self.assertEqual(rows[-1][0].text, "О сервисе")
-            self.assertEqual(rows[-1][1].text, "Поддержка")
-            self.assertEqual(rows[-1][1].callback_data, "trouble")
+            self.assertEqual(rows[-1][0].text, "Поддержка")
+            self.assertEqual(rows[-1][0].callback_data, "trouble")
             buttons = [button for row in rows for button in row]
             by_action = {button.callback_data: button for button in buttons}
-            self.assertIsNone(by_action["about"].style)
-            self.assertIsNone(by_action["trouble"].style)
+             self.assertIsNone(by_action["trouble"].style)
             self.assertEqual(by_action["buy_vpn"].style, None if "my_keys" in by_action else "primary")
             self.assertIsNone(by_action["free_vpn"].style)
         menu = main_menu_with_keys()
-        self.assertEqual([len(row) for row in menu.inline_keyboard], [1, 1, 1, 2])
+        self.assertEqual([len(row) for row in menu.inline_keyboard], [1, 1, 1, 1])
         self.assertEqual(menu.inline_keyboard[0][0].style, "primary")
         self.assertEqual(menu.inline_keyboard[0][0].callback_data, "my_keys")
         self.assertEqual(menu.inline_keyboard[0][0].style, "primary")
@@ -248,12 +246,12 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Приглашение учтено", welcome)
         self.assertIn("Начните с пробного доступа", welcome)
 
-    def test_key_settings_remove_rf_routing_and_highlight_only_destructive_action(self):
+    def test_key_settings_hide_destructive_action(self):
         markup = key_settings_kb(9)
         actions = callbacks(markup)
         self.assertNotIn("rf_apps_guide:9", actions)
-        self.assertIn("key_delete:9", actions)
-        self.assertEqual(next(b for row in markup.inline_keyboard for b in row if b.callback_data == "key_delete:9").style, "danger")
+        self.assertNotIn("key_delete:9", actions)
+        self.assertIn("manage_payment_methods:9", actions)
 
     async def test_referral_offer_separates_rewards_link_and_statistics(self):
         from types import SimpleNamespace
