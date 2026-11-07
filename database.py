@@ -5441,14 +5441,14 @@ async def get_checkout_conversion_snapshot(days: int = 30) -> dict:
     cur = await db.execute(
         """SELECT COUNT(DISTINCT p.user_id)
         FROM payments p JOIN users u ON u.user_id=p.user_id
-        WHERE u.created>=? AND p.created>=u.created AND p.status='success'""",
+        WHERE u.created>=? AND p.created>=u.created AND p.status='success' AND p.amount>0""",
         (cutoff,),
     )
     paid = int((await cur.fetchone())[0])
     cur = await db.execute(
         """SELECT COUNT(DISTINCT p.user_id)
         FROM payments p JOIN users u ON u.user_id=p.user_id
-        WHERE u.created>=? AND p.created>=u.created AND p.status='success'
+        WHERE u.created>=? AND p.created>=u.created AND p.status='success' AND p.amount>0
           AND EXISTS (
             SELECT 1 FROM analytics_events e
             WHERE e.user_id=p.user_id AND e.event_type='tariffs_viewed'
@@ -5460,7 +5460,7 @@ async def get_checkout_conversion_snapshot(days: int = 30) -> dict:
     cur = await db.execute(
         """SELECT p.currency, COUNT(*), COALESCE(SUM(p.amount),0)
         FROM payments p JOIN users u ON u.user_id=p.user_id
-        WHERE u.created>=? AND p.created>=u.created AND p.status='success'
+        WHERE u.created>=? AND p.created>=u.created AND p.status='success' AND p.amount>0
         GROUP BY p.currency ORDER BY p.currency""",
         (cutoff,),
     )
@@ -5499,9 +5499,14 @@ async def get_conversion_funnel(days: int = 30) -> dict:
         SELECT c.start_source AS source,
           COUNT(DISTINCT c.user_id),
           COUNT(DISTINCT CASE WHEN e.event_type='trial_started' THEN c.user_id END),
-          COUNT(DISTINCT CASE WHEN e.event_type='subscription_created' THEN c.user_id END),
+          COUNT(DISTINCT CASE WHEN EXISTS (
+            SELECT 1 FROM payments p
+            WHERE p.user_id=c.user_id AND p.status='success' AND p.amount>0
+              AND p.created>=c.started_at
+          ) THEN c.user_id END),
           COUNT(DISTINCT CASE WHEN e.event_type='first_connection' THEN c.user_id END),
-          COUNT(DISTINCT CASE WHEN e.event_type='subscription_renewed' THEN c.user_id END)
+          COUNT(DISTINCT CASE WHEN e.event_type='subscription_renewed'
+            AND COALESCE(e.amount,0)>0 THEN c.user_id END)
         FROM cohort c JOIN users u ON u.user_id=c.user_id
         LEFT JOIN analytics_events e ON e.user_id=c.user_id AND e.timestamp>=c.started_at
         GROUP BY 1 ORDER BY 2 DESC
