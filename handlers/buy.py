@@ -75,6 +75,8 @@ async def cb_buy_vpn(callback: CallbackQuery, bot: Bot, state: FSMContext):
     devices = validate_device_limit(data.get("devices", DEFAULT_DEVICE_LIMIT))
     renew_key_id = data.get("renew_key_id")
     await state.update_data(devices=devices)
+    from database import log_analytics_event
+    await log_analytics_event(callback.from_user.id, "tariffs_viewed", devices=devices)
     
     text = _tariff_intro(devices, renewal=bool(renew_key_id))
     await send_with_photo(
@@ -152,6 +154,15 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
         promo_text = ""
 
     await state.update_data(months=months, devices=devices, price_rub=price_rub, days=days, original_price=original_price)
+    # A restart can erase MemoryStorage. Save only the choice, never its
+    # computed price, so recovering cannot silently charge an old amount.
+    try:
+        from database import save_checkout_draft
+        await save_checkout_draft(
+            callback.from_user.id, months, devices, renew_key_id=data.get("renew_key_id"),
+        )
+    except Exception:
+        logger.exception("Checkout preference could not be saved for user %d", callback.from_user.id)
     from database import log_analytics_event
     await log_analytics_event(
         callback.from_user.id, "tariff_selected", tariff=f"{months}m", devices=devices,
@@ -211,14 +222,51 @@ async def _get_checkout_params(state: FSMContext) -> dict | None:
 
 
 async def _ask_tariff_again(bot: Bot, callback: CallbackQuery) -> None:
+    """Restore the customer's plan, never resume charging without confirmation."""
     from keyboards import tariff_selection_kb
-    await send_with_photo(
-        bot, callback,
-        "<b>Время оформления истекло</b>\n\nВыберите тариф ещё раз — "
-        "это займёт несколько секунд.",
-        tariff_selection_kb(),
-        photo=PLANS,
-    )
+    from database import get_checkout_draft, log_analytics_event
+    try:
+        draft = await get_checkout_draft(callback.from_user.id)
+    except Exception:
+        logger.exception("Could not read checkout draft for user %d", callback.from_user.id)
+        draft = None
+    if draft:
+        months, devices = draft["months"], draft["devices"]
+        label = {1: "1 месяц", 3: "3 + 1 месяц", 6: "6 + 2 месяца", 12: "12 + 3 месяца"}[months]
+        renewing = int(draft.get("renew_key_id") or 0)
+        text = (
+            "<b>Оформление было прервано</b>\n\n"
+            f"Сохранён выбор: <b>{label}</b>, <b>{devices} устройств</b>.\n"
+            + ("Это продление существующей подписки. Для сохранения "
+               "её ключа нужно заново выбрать срок.\n\n"
+               if renewing else
+               "Вернитесь к заказу, чтобы проверить актуальную итоговую сумму "
+               "и заново выбрать способ оплаты.\n\n")
+            + "Если применяли промокод, активируйте его повторно через /promo КОД. "
+            "Оплата пока не создаётся."
+        )
+        if renewing:
+            # key_renew validates ownership again and restores the renewal FSM.
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Вернуться к продлению", callback_data=f"key_renew:{renewing}")],
+                [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+            ])
+        else:
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Проверить мой заказ", callback_data=f"tariff_{months}_{devices}")],
+                [InlineKeyboardButton(text="Другой тариф", callback_data=f"devtier_{devices}")],
+                [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+            ])
+        await log_analytics_event(callback.from_user.id, "checkout_recovery_shown",
+                                  tariff=f"{months}m", devices=devices)
+    else:
+        text = (
+            "<b>Оформление было прервано</b>\n\n"
+            "Выберите тариф ещё раз. Оплата не создаётся, пока вы "
+            "не подтвердите новый заказ."
+        )
+        keyboard = tariff_selection_kb()
+    await send_with_photo(bot, callback, text, keyboard, photo=PLANS)
 
 
 # Legacy handler for old period_* callbacks
