@@ -28,7 +28,7 @@ class PremiumButtonDesignTests(unittest.TestCase):
 
     def test_support_and_about_are_secondary_not_competing_ctas(self):
         by_callback = {button.callback_data: button for button in buttons(main_menu_with_keys())}
-        self.assertIsNone(by_callback["about"].style)
+        self.assertNotIn("about", by_callback)
         self.assertIsNone(by_callback["trouble"].style)
         self.assertEqual(by_callback["my_keys"].style, "primary")
 
