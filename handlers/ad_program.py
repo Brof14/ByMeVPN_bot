@@ -594,8 +594,10 @@ async def msg_ad_post_url(message: Message, bot: Bot, state: FSMContext):
         await message.answer("Заявка уже закрыта или удалена. Откройте раздел «Мои заявки».", reply_markup=back_to_menu())
         await state.clear()
         return
-    await log_ad_analytics_event(user_id, "ad_post_submitted", {"app_id": app_id, "post_url": post_url})
-    await log_ad_audit(user_id, "ad_post_submitted", f"app={app_id} url={post_url}")
+    # The post URL is stored on the application for verification. Do not copy
+    # private-channel links into general-purpose analytics and audit logs.
+    await log_ad_analytics_event(user_id, "ad_post_submitted", {"app_id": app_id})
+    await log_ad_audit(user_id, "ad_post_submitted", f"app={app_id}")
 
     text = (
         "<b>Ссылка получена</b>\n\n"
