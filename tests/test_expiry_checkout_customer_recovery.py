@@ -338,6 +338,22 @@ class ExpiryDatabaseRegression(unittest.IsolatedAsyncioTestCase):
         newest = await self.db.get_auto_renew_subscription(9801, second)
         self.assertEqual((old["status"], newest["status"]), ("cancelled", "active"))
 
+    async def test_legacy_resume_requires_exactly_one_key(self):
+        first = await self.db.add_key(9801, "https://sub.test/one", "one", "uuid-one", 30, 2)
+        await self.db.save_auto_renew_subscription(
+            9801, None, "legacy-token", payment_method_title="Old card",
+        )
+        legacy = await self.db.get_auto_renew_subscription(9801)
+        await self.db.set_auto_renew_status(legacy["id"], "cancelled")
+
+        self.assertTrue(await self.db.resume_auto_renew(9801, first))
+        self.assertEqual((await self.db.get_auto_renew_subscription(9801))["status"], "active")
+
+        await self.db.set_auto_renew_status(legacy["id"], "cancelled")
+        await self.db.add_key(9801, "https://sub.test/two", "two", "uuid-two", 30, 2)
+        self.assertFalse(await self.db.resume_auto_renew(9801, first))
+        self.assertEqual((await self.db.get_auto_renew_subscription(9801))["status"], "cancelled")
+
     async def test_ambiguous_legacy_autorenew_never_charges_and_is_explained(self):
         from handlers.keys import _load_autorenew_context, _get_payment_methods_text
         now = int(time.time())
