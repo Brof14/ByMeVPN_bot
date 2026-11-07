@@ -122,6 +122,14 @@ CREATE TABLE IF NOT EXISTS provisioning_intents (
     PRIMARY KEY(provider, provider_payment_id)
 );
 
+-- Per-user lease shared by every bot worker using this SQLite database.
+-- Acquired with a single UPSERT; stale leases are reclaimable after a crash.
+CREATE TABLE IF NOT EXISTS delivery_leases (
+    user_id INTEGER PRIMARY KEY,
+    token TEXT NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS payments (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id  INTEGER NOT NULL,
@@ -1846,6 +1854,60 @@ async def get_or_create_provisioning_intent(
     if not row or row[0] != user_id:
         raise ValueError("payment provisioning intent belongs to another user")
     return int(row[1])
+
+
+async def try_acquire_delivery_lease(
+    user_id: int, token: str, ttl_seconds: int = 180,
+) -> bool:
+    """Claim a cross-process SQLite lease for one account, without waiting.
+
+    The UPSERT is atomic even when two bot processes open separate SQLite
+    connections. A crashed holder becomes reclaimable after the TTL.
+    """
+    if user_id <= 0 or not token or ttl_seconds < 30:
+        raise ValueError("invalid delivery lease")
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        cursor = await db.execute(
+            """INSERT INTO delivery_leases(user_id,token,expires_at)
+               VALUES(?,?,?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                   token=excluded.token, expires_at=excluded.expires_at
+               WHERE delivery_leases.expires_at<=?""",
+            (user_id, token, now + ttl_seconds, now),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+
+
+async def renew_delivery_lease(
+    user_id: int, token: str, ttl_seconds: int = 180,
+) -> bool:
+    """Extend only a live lease still owned by this worker."""
+    if ttl_seconds < 30:
+        raise ValueError("invalid delivery lease")
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        cursor = await db.execute(
+            """UPDATE delivery_leases SET expires_at=?
+               WHERE user_id=? AND token=? AND expires_at>?""",
+            (now + ttl_seconds, user_id, token, now),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+
+
+async def release_delivery_lease(user_id: int, token: str) -> None:
+    """Never release a lease that another worker has subsequently acquired."""
+    db = await get_db()
+    async with _db_semaphore:
+        await db.execute(
+            "DELETE FROM delivery_leases WHERE user_id=? AND token=?",
+            (user_id, token),
+        )
+        await db.commit()
 
 
 async def get_user_keys(user_id: int) -> list[dict]:
