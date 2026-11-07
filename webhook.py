@@ -386,6 +386,40 @@ async def _mobile_crypto_order_matches(invoice_id: str, pending: dict) -> bool:
     ))
 
 
+async def _quarantine_deleted_account_payment(
+    bot: Bot, *, provider: str, payment_id: str, user_id: int,
+    amount_rub: int, days: int, devices: int,
+) -> bool:
+    """Preserve verified late charges for refund review, never restore VPN."""
+    from database import (
+        is_account_tombstoned, record_payment_idempotent,
+        update_payment_status, get_payment_by_id,
+    )
+
+    if not await is_account_tombstoned(user_id):
+        return False
+
+    is_new, row_id = await record_payment_idempotent(
+        user_id=user_id, amount=amount_rub, currency="RUB",
+        method=provider, days=days, payload=str(payment_id),
+        status="recovery_required", tariff="Deleted account — refund review",
+        devices=devices, provider=provider, provider_payment_id=str(payment_id),
+    )
+    payment = await get_payment_by_id(row_id)
+    status = payment.get("status") if payment else None
+    if status != "success":
+        if status != "recovery_required":
+            await update_payment_status(row_id, "recovery_required")
+        if is_new or status != "recovery_required":
+            await _notify_admin(
+                bot,
+                f"⚠️ Оплата {provider} {payment_id} поступила после удаления "
+                f"аккаунта {user_id}. Доступ не выдавался. "
+                "Нужна ручная сверка и проверка возврата.",
+            )
+    return True
+
+
 async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional[dict] = None) -> None:
     """
     Verify and process a succeeded YooKassa payment.
@@ -519,6 +553,12 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                     f"⚠️ Пробный платёж {payment_id}: сумма {amount_str} ₽ (ожидалось {INTRO_TRIAL_PRICE_RUB} ₽), user {user_id}. Автоматическая выдача остановлена.",
                 )
                 return
+
+        if await _quarantine_deleted_account_payment(
+            bot, provider="yookassa", payment_id=payment_id,
+            user_id=user_id, amount_rub=amount_rub, days=days, devices=devices,
+        ):
+            return
 
         from database import (
             record_payment_idempotent, update_payment_status,
@@ -908,6 +948,12 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
             record_payment_idempotent, update_payment_status,
             delete_crypto_pending,
         )
+
+        if await _quarantine_deleted_account_payment(
+            bot, provider="cryptobot", payment_id=str(invoice_id),
+            user_id=user_id, amount_rub=amount_rub, days=days, devices=devices,
+        ):
+            return
 
         tariff_name = f"Подписка {days} дней ({devices} устр.)"
         is_new, pay_db_id = await record_payment_idempotent(
