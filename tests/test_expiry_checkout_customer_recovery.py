@@ -176,6 +176,37 @@ class ExpiryDatabaseRegression(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[0]["key_id"], key_id)
         self.assertEqual(rows[0]["user_id"], 9801)
 
+    async def test_crypto_checkout_consumes_promo_after_success_only_once(self):
+        from handlers.buy import cb_pay_crypto
+        from webhook import _process_crypto_invoice
+        await self.db.create_promo_code("SALE30", promo_type="percent", discount_value=30, max_uses=10)
+        promo = await self.db.validate_promo_code("SALE30", tariff_months=1)
+        state = SimpleNamespace(get_data=AsyncMock(return_value={
+            "months": 1, "devices": 2, "price_rub": 62, "days": 30,
+            "promo_code": "SALE30", "promo_info": promo,
+        }))
+        callback = SimpleNamespace(from_user=SimpleNamespace(id=9801), message=SimpleNamespace(answer=AsyncMock()))
+        bot = SimpleNamespace(send_message=AsyncMock())
+        with (
+            patch("handlers.buy.safe_answer", new=AsyncMock()),
+            patch("handlers.buy.create_crypto_payment", new=AsyncMock(return_value=("https://example.test/invoice", "crypto-1"))),
+            patch("handlers.buy.send_with_photo", new=AsyncMock()),
+        ):
+            await cb_pay_crypto(callback, bot, state)
+        pending = await self.db.get_crypto_pending("crypto-1")
+        self.assertEqual(pending["payload"], "9801:30:2:SALE30")
+        self.assertFalse(await self.db.has_user_used_promo("SALE30", 9801))
+        invoice = {"invoice_id": "crypto-1", "status": "paid", "currency_type": "fiat", "fiat": "RUB", "amount": "62.00", "payload": pending["payload"]}
+        with (
+            patch("webhook.deliver_key", new=AsyncMock(return_value=True)) as deliver,
+            patch("referral_system_new.award_referral_for_payment", new=AsyncMock()),
+        ):
+            await _process_crypto_invoice(bot, invoice)
+            await _process_crypto_invoice(bot, invoice)
+        self.assertTrue(await self.db.has_user_used_promo("SALE30", 9801))
+        self.assertEqual((await self.db.validate_promo_code("SALE30"))["uses_count"], 1)
+        deliver.assert_awaited_once()
+
     async def test_reminder_uses_autorenew_for_expiring_key_only(self):
         from notifications import _get_active_autorenew
         key1 = await self.db.add_key(9801, "https://sub.test/1", "one", "uuid-one", 30, 2)
