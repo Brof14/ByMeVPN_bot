@@ -34,6 +34,9 @@ async def _notify_autorenew_failed(
         from keyboards import my_keys_list_kb
         from database import get_user_keys
 
+        safe_pm_title = escape(str(pm_title or "Сохранённый способ оплаты"))
+        safe_reason = escape(str(reason or ""))
+
         if disabled:
             text = (
                 f"<b>Автопродление отключено</b>\n\n"
