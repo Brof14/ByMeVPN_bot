@@ -24,7 +24,7 @@ from constants import (
 )
 from config import PRICE_1_MONTH, DAYS_1M
 from states import BuyFlow
-from keyboards import tariff_selection_kb, payment_kb
+from keyboards import tariff_selection_kb, payment_kb, support_url
 from payments import create_yookassa_payment, create_crypto_payment, claim_yookassa_checkout, release_yookassa_checkout, crypto_invoice_payload
 from subscription import deliver_key
 from database import (
@@ -182,6 +182,21 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
             promo_text = ""
     else:
         promo_text = ""
+
+    if price_rub <= 0:
+        await state.update_data(price_rub=None, days=None)
+        await send_with_photo(
+            bot, callback,
+            "<b>Промокод покрывает стоимость</b>\n\n"
+            "Заказ с нулевой суммой пока нельзя оформить автоматически. "
+            "Промокод не использован: выберите другой срок или напишите в поддержку.",
+            InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Написать в поддержку", url=support_url())],
+                [InlineKeyboardButton(text="← К тарифам", callback_data=f"devtier_{devices}")],
+            ]),
+            photo=PLANS,
+        )
+        return
 
     await state.update_data(
         months=months, devices=devices, price_rub=price_rub, days=days,
