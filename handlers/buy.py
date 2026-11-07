@@ -25,7 +25,7 @@ from constants import (
 from config import PRICE_1_MONTH, DAYS_1M
 from states import BuyFlow
 from keyboards import tariff_selection_kb, payment_kb
-from payments import create_yookassa_payment, create_crypto_payment, claim_yookassa_checkout, release_yookassa_checkout
+from payments import create_yookassa_payment, create_crypto_payment, claim_yookassa_checkout, release_yookassa_checkout, crypto_invoice_payload
 from subscription import deliver_key
 from database import (
     ensure_user,
@@ -495,7 +495,10 @@ async def cb_pay_crypto(callback: CallbackQuery, bot: Bot, state: FSMContext):
     # Never expose an invoice unless its durable ledger record exists.
     try:
         from database import add_crypto_pending
-        saved = await add_crypto_pending(invoice_id, user_id, days, devices, price_rub)
+        saved = await add_crypto_pending(
+            invoice_id, user_id, days, devices, price_rub,
+            payload=crypto_invoice_payload(user_id, days, devices, promo_code),
+        )
         if saved is False:
             raise RuntimeError("Crypto pending invoice persistence returned false")
     except Exception as exc:

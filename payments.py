@@ -12,6 +12,11 @@ from yookassa_http import yookassa_client
 
 logger = logging.getLogger(__name__)
 
+
+def crypto_invoice_payload(user_id: int, days: int, devices: int, promo_code: Optional[str] = None) -> str:
+    """Canonical Telegram checkout payload, shared with its durable ledger."""
+    return f"{user_id}:{days}:{devices}:{promo_code or ''}"
+
 _yookassa_checkout_users: set[int] = set()
 
 
@@ -320,7 +325,7 @@ async def create_crypto_payment(
             "Оплата подписки ByMeVPN"
             if external_payload else f"User ID: {user_id}, Days: {days}, Devices: {devices}"
         ),
-        "payload": external_payload or f"{user_id}:{days}:{devices}:{promo_code or ''}",
+        "payload": external_payload or crypto_invoice_payload(user_id, days, devices, promo_code),
     }
 
     logger.info("create_crypto_payment: user_id=%d days=%d devices=%d amount=%d", user_id, days, devices, amount_rub)

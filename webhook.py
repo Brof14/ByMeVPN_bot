@@ -786,6 +786,18 @@ def _crypto_invoice_matches_pending(invoice: dict, pending: dict) -> bool:
     return True
 
 
+def _crypto_pending_promo(pending: dict) -> str | None:
+    """Read a Telegram-order promo only from its verified durable payload."""
+    payload = pending.get("payload") or ""
+    parts = payload.split(":", 3)
+    if len(parts) != 4:
+        return None
+    expected = (str(pending.get("user_id")), str(pending.get("days")), str(pending.get("devices")))
+    if tuple(parts[:3]) != expected:
+        return None
+    return parts[3] or None
+
+
 async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
     """
     Process a Crypto Bot (@send) invoice reported as paid by CryptoPaymentMonitor.
@@ -963,14 +975,20 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
 
         if success:
             await update_payment_status(pay_db_id, "success")
+            promo_code = _crypto_pending_promo(pending)
+            if promo_code:
+                try:
+                    from database import has_user_used_promo
+                    recorded = await use_promo_code(promo_code, user_id)
+                    if not recorded and not await has_user_used_promo(promo_code, user_id):
+                        logger.error("Crypto promo usage needs reconciliation for invoice %s", invoice_id)
+                except Exception:
+                    logger.exception("Crypto promo usage needs reconciliation for invoice %s", invoice_id)
             await mark_crypto_processed(invoice_id)
             try:
                 await delete_crypto_pending(invoice_id)
             except Exception:
                 pass
-            promo_code = pending.get("promo_code")
-            if promo_code:
-                await use_promo_code(promo_code, user_id)
             logger.info("CryptoBot invoice %s successfully fulfilled for user %d", invoice_id, user_id)
 
             # Referral reward: single canonical path (mirrors YooKassa's rule).
