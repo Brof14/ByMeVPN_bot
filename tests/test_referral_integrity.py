@@ -196,9 +196,11 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
         db = await database.get_db()
         await db.execute("INSERT INTO referrals(referrer_id, referred_id) VALUES(?,?)", (1202, 1203))
         await db.commit()
+        await database.add_referral_event(1202, 1203, "registration_bonus", days_awarded=15)
         self.assertEqual(await database.get_referrals_missing_signup_bonus(1202), [])
         self.assertEqual(await database.get_referrals_missing_signup_bonus(1201), [1203])
         self.assertEqual((await database.get_referral_stats_enhanced(1202))["total_registrations"], 0)
+        self.assertEqual((await database.get_referral_stats_enhanced(1202))["total_bonus_days"], 0)
         self.assertEqual(await database.get_referred_users_list(1202), [])
         from growth_metrics import referral_growth_snapshot
         self.assertEqual((await referral_growth_snapshot(days=30))["invited"], 1)
