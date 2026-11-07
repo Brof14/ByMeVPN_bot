@@ -258,7 +258,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         self.assertIn("<b>Приглашение друзей</b>", text)
         self.assertIn("+15 дней", text)
         self.assertIn("+30 дней", text)
-        self.assertIn("Получено: <b>15 дней</b>", text)
+        self.assertIn("Начислено или ожидает начисления: <b>15 дней</b>", text)
         self.assertIn("Приглашено: <b>1</b> · оплатили: <b>1</b>", text)
         buttons = [b for row in send.call_args.args[3].inline_keyboard for b in row]
         copied = next(b for b in buttons if b.text == "Скопировать ссылку")

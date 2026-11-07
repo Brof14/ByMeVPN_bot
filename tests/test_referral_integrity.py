@@ -166,6 +166,17 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(delivery.await_args.kwargs["payload"], "ref_bonus_911_922")
         self.assertFalse(await database.get_pending_referral_payment_rewards())
 
+    async def test_09_retry_repairs_missing_payment_event(self):
+        """A crash after recording a reward must not permanently hide a conversion."""
+        from unittest.mock import AsyncMock, patch
+        await self._seed_pair(referrer_id=1011, referred_id=1022)
+        with patch("database.add_referral_event", new=AsyncMock(side_effect=RuntimeError("db unavailable"))):
+            self.assertFalse(await award_referral_for_payment(1022, "payment-1022", bot=None))
+        await award_referral_for_payment(1022, "payment-1022", bot=None)
+        await award_referral_for_payment(1022, "payment-1022", bot=None)
+        events = await database.get_referral_events(1011)
+        self.assertEqual(len([e for e in events if e["referred_id"] == 1022 and e["event_type"] == "payment_bonus"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
