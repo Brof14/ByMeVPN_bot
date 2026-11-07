@@ -1004,7 +1004,26 @@ async def cb_ad_admin_approve(callback: CallbackQuery, bot: Bot):
         )
         return
 
-    await update_ad_application(app_id, status="approved", expected_statuses=["grant_pending"])
+    try:
+        updated = await update_ad_application(app_id, status="approved", expected_statuses=["grant_pending"])
+    except Exception:
+        logger.exception("Could not close ad application %d after delivery", app_id)
+        updated = False
+    if not updated:
+        try:
+            current = await get_ad_application_by_id(app_id)
+        except Exception:
+            current = None
+        if current and current["status"] == "approved":
+            text = f"Заявка #{app_id} уже подтверждена и закрыта."
+        else:
+            text = (
+                f"⚠️ Бонус по заявке #{app_id} выдан, но статус заявки не подтверждён. "
+                "Нужна сверка; не выдавайте бонус повторно вручную."
+            )
+            logger.error("Ad application %d needs status reconciliation after delivery", app_id)
+        await send_or_edit_safe(bot, callback, text, _ad_admin_kb())
+        return
 
     await log_ad_audit(callback.from_user.id, "ad_approved", f"app={app_id} user={user_id} days={days}")
     await log_ad_analytics_event(user_id, "ad_approved", {"app_id": app_id, "days": days})
