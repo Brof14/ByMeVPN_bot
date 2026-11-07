@@ -175,7 +175,7 @@ async def _send_urgent_notification(bot: Bot, item: dict) -> None:
     text = (
         f"<b>До окончания подписки — {days_left} {get_day_word(days_left)}</b>\n\n"
         f"Доступ активен до <b>{date_str}</b>. Продлите подписку, чтобы пользоваться VPN и дальше.\n\n"
-        + (f"🎁 Промокод <code>{promo_code}</code> даёт <b>30% скидки</b> до {promo_expiry}.\n\n" if promo_expiry else "")
+        + (f"🎁 Промокод <code>{promo_code}</code> даёт <b>30% скидки</b> до {promo_expiry}, пока не исчерпан лимит применений.\n\n" if promo_expiry else "")
         + "Откройте тарифы, чтобы выбрать срок и лимит устройств."
     )
 
@@ -204,7 +204,7 @@ async def _send_warning_notification(bot: Bot, item: dict) -> None:
     text = (
         f"<b>Подписка активна до {date_str}</b>\n"
         f"Осталось {days_left} {get_day_word(days_left)}. Продлите заранее, чтобы сохранить непрерывный доступ. Ключи и настройки останутся прежними.\n\n"
-        + (f"🎁 Промокод <code>{promo_code}</code> — <b>30% скидки</b> до {promo_expiry}.\n\n" if promo_expiry else "")
+        + (f"🎁 Промокод <code>{promo_code}</code> — <b>30% скидки</b> до {promo_expiry}, пока не исчерпан лимит применений.\n\n" if promo_expiry else "")
         + "Откройте тарифы, чтобы выбрать срок и лимит устройств."
     )
 
