@@ -141,6 +141,8 @@ CREATE TABLE IF NOT EXISTS referrals (
     referrer_id INTEGER NOT NULL,
     referred_id INTEGER NOT NULL,
     bonus_given INTEGER DEFAULT 0,
+    signup_bonus_retry INTEGER NOT NULL DEFAULT 0,
+    signup_attempt_ms INTEGER,
     created     INTEGER DEFAULT (strftime('%s','now')),
     UNIQUE(referrer_id, referred_id)
 );
@@ -501,6 +503,13 @@ async def get_db() -> aiosqlite.Connection:
 
 async def _run_migrations(db: aiosqlite.Connection) -> None:
     """Run database migrations."""
+    referral_columns = {
+        row[1] for row in await (await db.execute("PRAGMA table_info(referrals)")).fetchall()
+    }
+    if "signup_bonus_retry" not in referral_columns:
+        await db.execute("ALTER TABLE referrals ADD COLUMN signup_bonus_retry INTEGER NOT NULL DEFAULT 0")
+    if "signup_attempt_ms" not in referral_columns:
+        await db.execute("ALTER TABLE referrals ADD COLUMN signup_attempt_ms INTEGER")
     reward_columns = {
         row[1] for row in await (await db.execute("PRAGMA table_info(referral_payment_rewards)")).fetchall()
     }
@@ -1515,8 +1524,8 @@ async def set_referrer(user_id: int, referrer_id: int) -> None:
     # Record only the inviter actually attached to the user. A repeated or
     # concurrent request for a different inviter must not create a phantom row.
     await db.execute(
-        "INSERT OR IGNORE INTO referrals(referrer_id, referred_id) "
-        "SELECT referrer_id, user_id FROM users WHERE user_id=? AND referrer_id=?",
+        "INSERT OR IGNORE INTO referrals(referrer_id, referred_id, signup_bonus_retry) "
+        "SELECT referrer_id, user_id, 1 FROM users WHERE user_id=? AND referrer_id=?",
         (user_id, referrer_id),
     )
     await db.commit()
@@ -2595,6 +2604,31 @@ async def get_referrals_missing_signup_bonus(referrer_id: int, limit: int = 100)
         (referrer_id, int(limit)),
     )
     return [row[0] for row in await cur.fetchall()]
+
+
+async def get_pending_signup_bonus_retries(limit: int = 10) -> list[tuple[int, int]]:
+    """Queue only new referrals explicitly registered after automatic retry was added."""
+    db = await get_db()
+    cur = await db.execute(
+        """SELECT r.referrer_id, r.referred_id FROM referrals r
+        JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id
+        WHERE r.signup_bonus_retry=1 AND NOT EXISTS (
+            SELECT 1 FROM referral_events e WHERE e.referrer_id=r.referrer_id
+              AND e.referred_id=r.referred_id AND e.event_type='registration_bonus'
+        )
+        ORDER BY r.signup_attempt_ms IS NOT NULL, r.signup_attempt_ms, r.created, r.id LIMIT ?""",
+        (int(limit),),
+    )
+    return [(row[0], row[1]) for row in await cur.fetchall()]
+
+
+async def mark_signup_bonus_retry_attempt(referrer_id: int, referred_id: int) -> None:
+    db = await get_db()
+    await db.execute(
+        "UPDATE referrals SET signup_attempt_ms=? WHERE referrer_id=? AND referred_id=?",
+        (time.time_ns() // 1_000_000, referrer_id, referred_id),
+    )
+    await db.commit()
 
 
 async def has_referral_event(referrer_id: int, referred_id: int, event_type: str) -> bool:

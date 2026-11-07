@@ -221,8 +221,10 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
         from referral_system_new import process_pending_referral_signup_rewards
         await self._seed_pair(2601, 2602)
         db = await database.get_db()
-        await db.execute("UPDATE referrals SET signup_bonus_retry=0 WHERE referred_id=?", (2602,))
+        await db.execute("ALTER TABLE referrals DROP COLUMN signup_bonus_retry")
+        await db.execute("ALTER TABLE referrals DROP COLUMN signup_attempt_ms")
         await db.commit()
+        await database.init_db()
         self.assertEqual(await process_pending_referral_signup_rewards(None), 0)
 
     async def test_10_second_inviter_does_not_create_a_phantom_referral(self):

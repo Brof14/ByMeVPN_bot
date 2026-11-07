@@ -80,6 +80,20 @@ async def retry_pending_signup_bonuses(bot, referrer_id: int) -> int:
     return len(pending) - completed
 
 
+async def process_pending_referral_signup_rewards(bot, limit: int = 10) -> int:
+    """Retry a bounded batch of newly registered signup rewards automatically."""
+    from database import get_pending_signup_bonus_retries, mark_signup_bonus_retry_attempt
+
+    completed = 0
+    for referrer_id, referred_id in await get_pending_signup_bonus_retries(limit=limit):
+        try:
+            await mark_signup_bonus_retry_attempt(referrer_id, referred_id)
+            completed += bool(await award_referral_signup_bonus(bot, referrer_id, referred_id))
+        except Exception:
+            logger.exception("Signup bonus retry failed: referrer=%s referred=%s", referrer_id, referred_id)
+    return completed
+
+
 async def claim_referral_bonus(bot, referrer_id: int, referred_id: int, bonus_type: str) -> bool:
     """
     Claim a referral bonus for the referrer.
