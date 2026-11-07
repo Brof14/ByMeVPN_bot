@@ -280,6 +280,8 @@ async def get_current_user_id(authorization: Optional[str] = Header(None)) -> in
     try:
         if await database.is_mobile_jwt_revoked(claims["jti"]):
             raise HTTPException(status_code=401, detail="Session has been logged out")
+        if await database.is_account_tombstoned(claims["user_id"]):
+            raise HTTPException(status_code=401, detail="Account has been removed")
     except HTTPException:
         raise
     except Exception as exc:
@@ -1384,6 +1386,8 @@ async def register(req: RegisterRequest, request: Request):
     salt = secrets.token_hex(16)
     pw_hash = hash_password(req.password, salt)
     user_id = int(hashlib.md5(email.encode()).hexdigest()[:8], 16)
+    if await database.is_account_tombstoned(user_id):
+        raise HTTPException(status_code=403, detail="Этот аккаунт удалён. Обратитесь в поддержку")
     now = int(time.time())
 
     await db.execute(
@@ -1650,6 +1654,8 @@ async def refresh_token(req: RefreshRequest):
     try:
         if await database.is_mobile_jwt_revoked(claims["jti"]):
             raise HTTPException(status_code=401, detail="Сессия завершена")
+        if await database.is_account_tombstoned(claims["user_id"]):
+            raise HTTPException(status_code=401, detail="Аккаунт удалён")
     except HTTPException:
         raise
     except Exception as exc:
