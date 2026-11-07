@@ -283,7 +283,7 @@ class ExpiryDatabaseRegression(unittest.IsolatedAsyncioTestCase):
             user_id=9801, key_id=None, payment_method_id="pm-legacy", payment_method_title="Card",
             payment_method_type="bank_card", months=1, days=30, devices=2, amount_rub=89,
         )
-        self.assertIsNone((await _get_active_autorenew(9801, key1))["key_id"])
+        self.assertIsNone(await _get_active_autorenew(9801, key1))
 
     async def test_key_screen_and_unlink_choose_active_legacy_subscription(self):
         from handlers.keys import _load_autorenew_context
@@ -304,6 +304,28 @@ class ExpiryDatabaseRegression(unittest.IsolatedAsyncioTestCase):
         legacy = await self.db.get_auto_renew_subscription(9801)
         self.assertEqual(legacy["status"], "cancelled")
         self.assertFalse(legacy["payment_method_id"])
+
+    async def test_ambiguous_legacy_autorenew_never_charges_and_is_explained(self):
+        from handlers.keys import _load_autorenew_context, _get_payment_methods_text
+        now = int(time.time())
+        expired = await self.db.add_key(9801, "https://sub.test/a", "a", "uuid-a", 30, 2, expiry=now - 60)
+        await self.db.add_key(9801, "https://sub.test/b", "b", "uuid-b", 30, 2, expiry=now + 86400)
+        await self.db.save_auto_renew_subscription(
+            user_id=9801, key_id=None, payment_method_id="legacy-active", payment_method_title="Card",
+            payment_method_type="bank_card", months=1, days=30, devices=2, amount_rub=89,
+        )
+        self.assertFalse(await self.db.get_expiring_auto_renew_subscriptions(now=now))
+        sub, title, expiry = await _load_autorenew_context(9801, expired)
+        self.assertIn("нескольк", _get_payment_methods_text(title, sub=sub, expiry_str=expiry).lower())
+
+    async def test_unambiguous_legacy_autorenew_remains_eligible(self):
+        now = int(time.time())
+        await self.db.add_key(9801, "https://sub.test/one", "one", "uuid-one", 30, 2, expiry=now - 60)
+        sub_id = await self.db.save_auto_renew_subscription(
+            user_id=9801, key_id=None, payment_method_id="legacy-active", payment_method_title="Card",
+            payment_method_type="bank_card", months=1, days=30, devices=2, amount_rub=89,
+        )
+        self.assertEqual([item["sub_id"] for item in await self.db.get_expiring_auto_renew_subscriptions(now=now)], [sub_id])
 
 
 class PromoAccountingAlerts(unittest.IsolatedAsyncioTestCase):
