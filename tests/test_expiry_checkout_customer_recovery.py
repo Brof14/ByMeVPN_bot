@@ -207,6 +207,18 @@ class ExpiryDatabaseRegression(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.db.validate_promo_code("SALE30"))["uses_count"], 1)
         deliver.assert_awaited_once()
 
+    async def test_crypto_payload_mismatch_never_delivers_or_consumes_promo(self):
+        from webhook import _process_crypto_invoice
+        await self.db.create_promo_code("SALE30", promo_type="percent", discount_value=30, max_uses=10)
+        await self.db.add_crypto_pending("crypto-bad", 9801, 30, 2, 62, payload="9801:30:2:SALE30")
+        invoice = {"invoice_id": "crypto-bad", "status": "paid", "currency_type": "fiat", "fiat": "RUB", "amount": "62.00", "payload": "9801:30:2:OTHER"}
+        bot = SimpleNamespace(send_message=AsyncMock())
+        with patch("webhook.deliver_key", new=AsyncMock()) as deliver:
+            await _process_crypto_invoice(bot, invoice)
+        deliver.assert_not_awaited()
+        self.assertFalse(await self.db.has_user_used_promo("SALE30", 9801))
+        self.assertIsNotNone(await self.db.get_crypto_pending("crypto-bad"))
+
     async def test_reminder_uses_autorenew_for_expiring_key_only(self):
         from notifications import _get_active_autorenew
         key1 = await self.db.add_key(9801, "https://sub.test/1", "one", "uuid-one", 30, 2)
