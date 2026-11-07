@@ -52,6 +52,38 @@ class TestGiveawayAutomation(unittest.IsolatedAsyncioTestCase):
             await run_giveaway_automation(bot)
         self.assertTrue(await database.has_referral_event(701, 702, "registration_bonus"))
 
+    async def test_verified_ad_reward_is_retried_automatically_after_failure(self):
+        from handlers.ad_program import process_pending_ad_rewards
+        await database.ensure_user(801)
+        app_id = await database.create_ad_application(
+            user_id=801, channel_id=-100801, channel_username="channel801",
+            subscriber_count=20, bonus_months=2, channel_ref="channel801", status="grant_pending",
+        )
+        bot = SimpleNamespace(send_message=AsyncMock())
+        delivery = AsyncMock(side_effect=[False, True])
+        with patch("subscription.deliver_key", new=delivery):
+            self.assertEqual(await process_pending_ad_rewards(bot), 0)
+            self.assertEqual((await database.get_ad_application_by_id(app_id))["status"], "grant_pending")
+            self.assertEqual(await process_pending_ad_rewards(bot), 1)
+            self.assertEqual(await process_pending_ad_rewards(bot), 0)
+        self.assertEqual((await database.get_ad_application_by_id(app_id))["status"], "approved")
+        self.assertEqual([call.kwargs["payload"] for call in delivery.await_args_list], [f"ad_bonus_{app_id}"] * 2)
+
+    async def test_failed_verified_ad_reward_does_not_block_other_partners(self):
+        from handlers.ad_program import process_pending_ad_rewards
+        for user_id in (811, 812):
+            await database.ensure_user(user_id)
+            await database.create_ad_application(
+                user_id=user_id, channel_id=-100000 - user_id, channel_username=f"channel{user_id}",
+                subscriber_count=20, bonus_months=2, channel_ref=f"channel{user_id}", status="grant_pending",
+            )
+        bot = SimpleNamespace(send_message=AsyncMock())
+        delivery = AsyncMock(side_effect=lambda **kw: kw["user_id"] == 812)
+        with patch("subscription.deliver_key", new=delivery):
+            self.assertEqual(await process_pending_ad_rewards(bot, limit=1), 0)
+            self.assertEqual(await process_pending_ad_rewards(bot, limit=1), 1)
+        self.assertEqual([call.kwargs["user_id"] for call in delivery.await_args_list], [811, 812])
+
     async def test_monthly_campaign_is_created_once_and_respects_opt_out(self):
         from giveaway_automation import run_giveaway_automation
 
