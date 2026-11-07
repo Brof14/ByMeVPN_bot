@@ -604,6 +604,14 @@ def _stars_invoice_error(pre: PreCheckoutQuery) -> str | None:
 @router.pre_checkout_query()
 async def pre_checkout(pre: PreCheckoutQuery):
     error = _stars_invoice_error(pre)
+    if not error:
+        from database import is_account_tombstoned
+        try:
+            if await is_account_tombstoned(pre.from_user.id):
+                error = "Аккаунт удалён. Новые оплаты заблокированы. Обратитесь в поддержку."
+        except Exception:
+            logger.exception("Stars pre-checkout account status check failed")
+            error = "Не удалось проверить аккаунт. Повторите оплату позже."
     if error:
         await pre.answer(ok=False, error_message=error)
     else:
