@@ -224,6 +224,7 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
         from referral_system_new import process_pending_referral_signup_rewards
         await self._seed_pair(2601, 2602)
         db = await database.get_db()
+        await db.execute("DROP INDEX idx_referrals_signup_retry")
         await db.execute("ALTER TABLE referrals DROP COLUMN signup_bonus_retry")
         await db.execute("ALTER TABLE referrals DROP COLUMN signup_attempt_ms")
         await db.commit()

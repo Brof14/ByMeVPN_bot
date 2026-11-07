@@ -510,6 +510,12 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         await db.execute("ALTER TABLE referrals ADD COLUMN signup_bonus_retry INTEGER NOT NULL DEFAULT 0")
     if "signup_attempt_ms" not in referral_columns:
         await db.execute("ALTER TABLE referrals ADD COLUMN signup_attempt_ms INTEGER")
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_referrals_signup_retry ON referrals(signup_attempt_ms) WHERE signup_bonus_retry=1"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_referral_events_pair_type ON referral_events(referrer_id, referred_id, event_type)"
+    )
     reward_columns = {
         row[1] for row in await (await db.execute("PRAGMA table_info(referral_payment_rewards)")).fetchall()
     }
@@ -2627,6 +2633,15 @@ async def mark_signup_bonus_retry_attempt(referrer_id: int, referred_id: int) ->
     await db.execute(
         "UPDATE referrals SET signup_attempt_ms=? WHERE referrer_id=? AND referred_id=?",
         (time.time_ns() // 1_000_000, referrer_id, referred_id),
+    )
+    await db.commit()
+
+
+async def complete_signup_bonus_retry(referrer_id: int, referred_id: int) -> None:
+    db = await get_db()
+    await db.execute(
+        "UPDATE referrals SET signup_bonus_retry=0 WHERE referrer_id=? AND referred_id=?",
+        (referrer_id, referred_id),
     )
     await db.commit()
 
