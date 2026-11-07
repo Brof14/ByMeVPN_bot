@@ -490,9 +490,49 @@ async def cb_pay_crypto(callback: CallbackQuery, bot: Bot, state: FSMContext):
 # Pre-checkout confirmation (required by Telegram for Stars)
 # ---------------------------------------------------------------------------
 
+def _stars_invoice_error(pre: PreCheckoutQuery) -> str | None:
+    """Validate an issued invoice before authorizing a Telegram Stars charge.
+
+    No database access or mutable FSM values: the immutable invoice payload
+    and the server's canonical pricing are the only accepted references.
+    """
+    invalid = "Счёт устарел или некорректен. Выберите тариф ещё раз."
+    try:
+        if pre.currency != "XTR" or int(pre.total_amount) <= 0:
+            return invalid
+        parts = pre.invoice_payload.split("_")
+        if len(parts) < 7 or parts[0] != "stars":
+            return invalid
+        user_id, days, devices, months = map(int, parts[1:5])
+        if user_id != pre.from_user.id or devices not in VALID_DEVICE_LIMITS:
+            return invalid
+        if months not in (1, 3, 6, 12) or not parts[-1].isdigit():
+            return invalid
+        from constants import MAX_GRANT_DAYS
+        if not 0 < days <= MAX_GRANT_DAYS:
+            return invalid
+        expected_amount, expected_days = get_price_for_months(months, devices)
+        has_promo = bool("_".join(parts[5:-1]))
+        amount = int(pre.total_amount)
+        if has_promo:
+            # Promo terms may reduce amount or add days; they were applied at
+            # invoice creation. Never permit a larger or shorter package.
+            if amount > expected_amount or days < expected_days:
+                return invalid
+        elif amount != expected_amount or days != expected_days:
+            return invalid
+    except (ValueError, TypeError, AttributeError, IndexError):
+        return invalid
+    return None
+
+
 @router.pre_checkout_query()
 async def pre_checkout(pre: PreCheckoutQuery):
-    await pre.answer(ok=True)
+    error = _stars_invoice_error(pre)
+    if error:
+        await pre.answer(ok=False, error_message=error)
+    else:
+        await pre.answer(ok=True)
 
 
 # ---------------------------------------------------------------------------
