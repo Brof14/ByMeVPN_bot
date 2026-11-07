@@ -264,6 +264,19 @@ class TestTelegramAuthSessions(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(result.get("status") == "authenticated" for result in results), 1)
         self.assertEqual(sum(result.get("status") == "expired" for result in results), 1)
 
+    async def test_removed_account_cannot_use_old_access_or_refresh_tokens(self):
+        from fastapi import HTTPException
+
+        await database.ensure_user(98765)
+        token = api_router.create_simple_jwt(98765, "test@example.invalid")
+        await database.delete_user_and_keys(98765)
+        with self.assertRaises(HTTPException) as access:
+            await api_router.get_current_user_id(f"Bearer {token}")
+        self.assertEqual(access.exception.status_code, 401)
+        with self.assertRaises(HTTPException) as refresh:
+            await api_router.refresh_token(api_router.RefreshRequest(refresh=f"ref_{token}"))
+        self.assertEqual(refresh.exception.status_code, 401)
+
     async def test_logout_revokes_access_and_refresh_for_one_session(self):
         from fastapi import HTTPException
 
