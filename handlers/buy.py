@@ -355,6 +355,10 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
         url = await create_yookassa_payment(
             price_rub, f"ByMeVPN {days} дней ({devices} устр.)", user_id, days, devices, promo_code=promo_code, months=months,
         )
+    except Exception as exc:
+        # A provider timeout is ambiguous. Never leak internal error details to customers.
+        logger.error("YooKassa checkout failed for user %d (%s)", user_id, type(exc).__name__)
+        url = None
     finally:
         release_yookassa_checkout(user_id)
 
@@ -420,9 +424,13 @@ async def cb_pay_crypto(callback: CallbackQuery, bot: Bot, state: FSMContext):
     promo_code: str = params["promo_code"]
     user_id = callback.from_user.id
 
-    result = await create_crypto_payment(
-        price_rub, f"ByMeVPN {days} дней ({devices} устр.)", user_id, days, devices, promo_code=promo_code,
-    )
+    try:
+        result = await create_crypto_payment(
+            price_rub, f"ByMeVPN {days} дней ({devices} устр.)", user_id, days, devices, promo_code=promo_code,
+        )
+    except Exception as exc:
+        logger.error("Crypto Pay checkout failed for user %d (%s)", user_id, type(exc).__name__)
+        result = None
 
     if not result:
         await safe_answer(
@@ -432,16 +440,33 @@ async def cb_pay_crypto(callback: CallbackQuery, bot: Bot, state: FSMContext):
         )
         return
 
+    url, invoice_id = result
+
+    # Never expose an invoice unless its durable ledger record exists.
+    try:
+        from database import add_crypto_pending
+        saved = await add_crypto_pending(invoice_id, user_id, days, devices, price_rub)
+        if saved is False:
+            raise RuntimeError("Crypto pending invoice persistence returned false")
+    except Exception as exc:
+        logger.error("Crypto pending invoice not recorded for user %d (%s)",
+                     user_id, type(exc).__name__)
+        await callback.message.answer(
+            "Не удалось сохранить заказ Crypto Pay. Ссылка на оплату не выдаётся. "
+            "Если деньги уже списались, не платите повторно — напишите в поддержку.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Написать в поддержку",
+                                      url="https://t.me/ByMeVPNSupportBot")],
+                [InlineKeyboardButton(text="← К тарифам", callback_data=f"devtier_{devices}")],
+            ]),
+        )
+        return
+
     from database import log_analytics_event
     await log_analytics_event(
         user_id, "checkout_started", tariff=f"{months}m", devices=devices,
         amount=price_rub, payment_provider="cryptobot",
     )
-
-    url, invoice_id = result
-
-    from database import add_crypto_pending
-    await add_crypto_pending(invoice_id, user_id, days, devices, price_rub)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"₿ Оплатить {price_rub} ₽", url=url, )],

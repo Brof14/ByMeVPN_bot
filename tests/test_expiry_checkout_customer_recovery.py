@@ -1,0 +1,139 @@
+"""Regression for direct renewal, connection onboarding and provider failure recovery."""
+import tempfile
+import time
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+
+class ExpiryReminderRegression(unittest.IsolatedAsyncioTestCase):
+    async def test_direct_renewal_preserves_expiring_key(self):
+        from notifications import _send_urgent_notification
+        bot = SimpleNamespace(send_message=AsyncMock())
+        item = {"user_id": 123, "key_id": 456, "expiry": int(time.time()) + 2 * 86400}
+        with (
+            patch("notifications._get_active_autorenew", new=AsyncMock(return_value=None)),
+            patch("notifications._optional_renewal_promo", new=AsyncMock(return_value=(None, None))),
+        ):
+            await _send_urgent_notification(bot, item)
+        buttons = bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard
+        self.assertEqual(buttons[0][0].callback_data, "key_renew:456")
+
+    async def test_optional_promo_failure_never_blocks_expiry_notice(self):
+        from notifications import _send_warning_notification
+        bot = SimpleNamespace(send_message=AsyncMock())
+        item = {"user_id": 123, "key_id": 7, "expiry": int(time.time()) + 10 * 86400}
+        with (
+            patch("notifications._get_active_autorenew", new=AsyncMock(return_value=None)),
+            patch("notifications.is_promotional_opted_out", new=AsyncMock(return_value=False)),
+            patch("notifications.get_or_create_renewal_promo", new=AsyncMock(side_effect=RuntimeError("db outage"))),
+        ):
+            await _send_warning_notification(bot, item)
+        text = bot.send_message.await_args.args[1]
+        self.assertNotIn("30% скидки", text)
+        self.assertEqual(
+            bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard[0][0].callback_data,
+            "key_renew:7",
+        )
+
+
+class ExpiryDatabaseRegression(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        import database
+        self.db = database
+        self.old_path, self.old_pool = database.DB_FILE, database._db_pool
+        self.tmp = tempfile.TemporaryDirectory()
+        database.DB_FILE, database._db_pool = str(Path(self.tmp.name) / "expiry.db"), None
+        await database.init_db()
+        await database.ensure_user(9801)
+
+    async def asyncTearDown(self):
+        await self.db.close_db()
+        self.db.DB_FILE, self.db._db_pool = self.old_path, self.old_pool
+        self.tmp.cleanup()
+
+    async def test_expiry_lookup_returns_stable_key_id(self):
+        key_id = await self.db.add_key(9801, "https://sub.test/123", "VPN", "uuid-1", 30, 2)
+        database = await self.db.get_db()
+        await database.execute("UPDATE keys SET expiry=? WHERE id=?", (int(time.time()) + 2*86400, key_id))
+        await database.commit()
+        rows = await self.db.get_keys_nearing_expiry(1, 3)
+        self.assertEqual(rows[0]["key_id"], key_id)
+        self.assertEqual(rows[0]["user_id"], 9801)
+
+
+class PlatformGuideRegression(unittest.IsolatedAsyncioTestCase):
+    async def test_one_active_key_is_selected_from_general_guide(self):
+        from handlers.guide import cb_guide_menu
+        callback = SimpleNamespace(from_user=SimpleNamespace(id=123))
+        keys = [
+            {"id": 41, "expiry": int(time.time()) + 86400},
+            {"id": 2, "expiry": int(time.time()) - 86400},
+        ]
+        with (
+            patch("handlers.guide.safe_answer", new=AsyncMock()),
+            patch("handlers.guide._track_guide_event", new=AsyncMock()),
+            patch("database.get_user_keys", new=AsyncMock(return_value=keys)),
+            patch("handlers.guide.send_or_edit", new=AsyncMock()) as send,
+        ):
+            await cb_guide_menu(callback, object())
+        markup = send.await_args.args[3]
+        actions = [b.callback_data for row in markup.inline_keyboard for b in row]
+        self.assertIn("guide_android:41", actions)
+        self.assertIn("guide_ios:41", actions)
+
+    async def test_multiple_active_keys_avoid_choosing_wrong_subscription(self):
+        from handlers.guide import cb_guide_menu
+        callback = SimpleNamespace(from_user=SimpleNamespace(id=123))
+        keys = [{"id": i, "expiry": int(time.time()) + 86400} for i in (41, 42)]
+        with (
+            patch("handlers.guide.safe_answer", new=AsyncMock()),
+            patch("handlers.guide._track_guide_event", new=AsyncMock()),
+            patch("database.get_user_keys", new=AsyncMock(return_value=keys)),
+            patch("handlers.guide.send_or_edit", new=AsyncMock()) as send,
+        ):
+            await cb_guide_menu(callback, object())
+        actions = [b.callback_data for row in send.await_args.args[3].inline_keyboard for b in row]
+        self.assertIn("guide_android", actions)
+        self.assertNotIn("guide_android:41", actions)
+
+
+class PaymentProviderFailures(unittest.IsolatedAsyncioTestCase):
+    def callback(self):
+        return SimpleNamespace(from_user=SimpleNamespace(id=123), message=SimpleNamespace(answer=AsyncMock()))
+
+    def state(self):
+        return SimpleNamespace(get_data=AsyncMock(return_value={
+            "months": 6, "devices": 2, "price_rub": 552, "days": 240, "promo_code": "",
+        }))
+
+    async def test_yookassa_error_does_not_crash_or_leave_checkout_lock(self):
+        from handlers.buy import cb_pay_yookassa
+        callback = self.callback()
+        with (
+            patch("handlers.buy.safe_answer", new=AsyncMock()),
+            patch("handlers.buy.claim_yookassa_checkout", return_value=True),
+            patch("handlers.buy.release_yookassa_checkout") as release,
+            patch("handlers.buy.create_yookassa_payment", new=AsyncMock(side_effect=RuntimeError("network"))),
+        ):
+            await cb_pay_yookassa(callback, object(), self.state())
+        release.assert_called_once_with(123)
+        self.assertIn("Не удалось открыть оплату", callback.message.answer.await_args.args[0])
+
+    async def test_crypto_invoice_never_shown_if_persistence_failed(self):
+        from handlers.buy import cb_pay_crypto
+        callback = self.callback()
+        with (
+            patch("handlers.buy.safe_answer", new=AsyncMock()),
+            patch("handlers.buy.create_crypto_payment", new=AsyncMock(return_value=("https://pay.example/invoice", "inv1"))),
+            patch("database.add_crypto_pending", new=AsyncMock(side_effect=RuntimeError("storage down"))),
+            patch("handlers.buy.send_with_photo", new=AsyncMock()) as send,
+        ):
+            await cb_pay_crypto(callback, object(), self.state())
+        send.assert_not_awaited()
+        self.assertIn("Не удалось сохранить заказ", callback.message.answer.await_args.args[0])
+
+
+if __name__ == "__main__":
+    unittest.main()

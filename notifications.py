@@ -131,6 +131,28 @@ async def _send_autorenew_upcoming(bot: Bot, item: dict, sub: dict) -> None:
     return True
 
 
+def _renewal_callback(item: dict) -> str:
+    """Preserve the expiring key and its device tier when renewing from a reminder."""
+    try:
+        key_id = int(item.get("key_id") or 0)
+    except (TypeError, ValueError):
+        key_id = 0
+    return f"key_renew:{key_id}" if key_id > 0 else "buy_vpn"
+
+
+async def _optional_renewal_promo(user_id: int) -> tuple[str | None, dict | None]:
+    """An optional marketing offer must never block the service reminder."""
+    if await is_promotional_opted_out(user_id):
+        return None, None
+    try:
+        code = await get_or_create_renewal_promo(user_id)
+        promo = await validate_promo_code(code) if code else None
+        return code, promo
+    except Exception:
+        logger.exception("Optional renewal promotion unavailable for user %d", user_id)
+        return None, None
+
+
 async def _send_urgent_notification(bot: Bot, item: dict) -> None:
     """Send urgent notification for keys expiring in 1-3 days."""
     sub = await _get_active_autorenew(item["user_id"])
@@ -140,11 +162,7 @@ async def _send_urgent_notification(bot: Bot, item: dict) -> None:
     date_str = datetime.fromtimestamp(item["expiry"]).strftime("%d.%m.%Y")
     days_left = max(1, int((item["expiry"] - int(time.time())) / 86400))
 
-    promo_code = None
-    if not await is_promotional_opted_out(item["user_id"]):
-        promo_code = await get_or_create_renewal_promo(item["user_id"])
-
-    promo = await validate_promo_code(promo_code) if promo_code else None
+    promo_code, promo = await _optional_renewal_promo(item["user_id"])
     promo_expiry = datetime.fromtimestamp(promo["expires_at"]).strftime("%d.%m.%Y") if promo else None
     text = (
         f"<b>До окончания подписки — {days_left} {get_day_word(days_left)}</b>\n\n"
@@ -154,7 +172,7 @@ async def _send_urgent_notification(bot: Bot, item: dict) -> None:
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Продлить подписку", callback_data="buy_vpn", )],
+        [InlineKeyboardButton(text="Продлить подписку", callback_data=_renewal_callback(item), )],
         [InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn")],
         *([[InlineKeyboardButton(text="Применить промокод", callback_data=f"activate_promo:{promo_code}")]] if promo_expiry else []),
     ])
@@ -173,11 +191,7 @@ async def _send_warning_notification(bot: Bot, item: dict) -> None:
     date_str = datetime.fromtimestamp(item["expiry"]).strftime("%d.%m.%Y")
     days_left = max(1, int((item["expiry"] - int(time.time())) / 86400))
 
-    promo_code = None
-    if not await is_promotional_opted_out(item["user_id"]):
-        promo_code = await get_or_create_renewal_promo(item["user_id"])
-
-    promo = await validate_promo_code(promo_code) if promo_code else None
+    promo_code, promo = await _optional_renewal_promo(item["user_id"])
     promo_expiry = datetime.fromtimestamp(promo["expires_at"]).strftime("%d.%m.%Y") if promo else None
     text = (
         f"<b>Подписка активна до {date_str}</b>\n"
@@ -187,7 +201,7 @@ async def _send_warning_notification(bot: Bot, item: dict) -> None:
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Продлить подписку", callback_data="buy_vpn", )],
+        [InlineKeyboardButton(text="Продлить подписку", callback_data=_renewal_callback(item), )],
         [InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn")],
         *([[InlineKeyboardButton(text="Применить промокод", callback_data=f"activate_promo:{promo_code}")]] if promo_expiry else []),
     ])
@@ -212,7 +226,7 @@ async def _send_early_notification(bot: Bot, item: dict) -> None:
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Посмотреть тарифы", callback_data="buy_vpn", )],
+        [InlineKeyboardButton(text="Посмотреть тарифы", callback_data=_renewal_callback(item), )],
         [InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn")]
     ])
 

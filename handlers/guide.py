@@ -1,5 +1,6 @@
 """Short, platform-specific ByMeVPN setup guide using Happ's official downloads."""
 import logging
+import time
 from html import escape
 
 from aiogram import Bot, F, Router
@@ -36,8 +37,19 @@ async def cb_guide_menu(callback: CallbackQuery, bot: Bot):
         "<b>Подключение</b>\n\n"
         "Выберите устройство."
     )
+    # Open the actual active key directly when there is exactly one.
+    # With multiple active keys, let the customer choose explicitly.
+    key_id = None
+    try:
+        from database import get_user_keys
+        keys = await get_user_keys(callback.from_user.id)
+        active = [key for key in keys if int(key.get("expiry") or 0) > int(time.time())]
+        if len(active) == 1:
+            key_id = int(active[0]["id"])
+    except Exception:
+        logger.warning("Unable to resolve active key for connection guide (user=%s)", callback.from_user.id)
     await _track_guide_event(callback.from_user.id, "connection_guide_open")
-    await send_or_edit(bot, callback, text, connection_guide_kb(), photo=CONNECTION)
+    await send_or_edit(bot, callback, text, connection_guide_kb(key_id), photo=CONNECTION)
 
 
 @router.callback_query(F.data.startswith("connection_guide:"))
