@@ -263,6 +263,10 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         buttons = [b for row in send.call_args.args[3].inline_keyboard for b in row]
         copied = next(b for b in buttons if b.text == "Скопировать ссылку")
         self.assertEqual(copied.copy_text.text, "https://t.me/ByMeVPNbot?start=123")
+        post = next(b for b in buttons if b.text == "Скопировать текст для канала")
+        self.assertIn("https://t.me/ByMeVPNbot?start=123", post.copy_text.text)
+        self.assertIn("3 дня бесплатно", post.copy_text.text)
+        self.assertLessEqual(len(post.copy_text.text), 256)
 
     def test_back_is_full_width_and_support_is_not_mixed_into_navigation(self):
         back = back_to_menu().inline_keyboard
