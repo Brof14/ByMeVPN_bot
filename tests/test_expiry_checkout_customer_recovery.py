@@ -305,6 +305,39 @@ class ExpiryDatabaseRegression(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(legacy["status"], "cancelled")
         self.assertFalse(legacy["payment_method_id"])
 
+    async def test_account_payment_controls_prefer_active_token_over_newer_canceled_card(self):
+        first = await self.db.add_key(9801, "https://sub.test/first", "first", "uuid-first", 30, 2)
+        second = await self.db.add_key(9801, "https://sub.test/second", "second", "uuid-second", 30, 2)
+        await self.db.save_auto_renew_subscription(
+            9801, first, "pm-active", payment_method_title="Active",
+        )
+        await self.db.save_auto_renew_subscription(
+            9801, second, "pm-canceled", payment_method_title="Canceled",
+        )
+        await self.db.set_auto_renew_status_by_key(9801, second, "cancelled")
+        selected = await self.db.get_auto_renew_subscription(9801)
+        self.assertEqual(selected["key_id"], first)
+
+        result = await self.db.unlink_auto_renew_payment_method(9801)
+        self.assertTrue(result["unlinked"])
+        active = await self.db.get_auto_renew_subscription(9801, first)
+        canceled = await self.db.get_auto_renew_subscription(9801, second)
+        self.assertEqual((active["status"], active["payment_method_id"]), ("cancelled", ""))
+        self.assertEqual((canceled["status"], canceled["payment_method_id"]), ("cancelled", "pm-canceled"))
+
+    async def test_account_resume_does_not_activate_every_saved_card(self):
+        first = await self.db.add_key(9801, "https://sub.test/first", "first", "uuid-first", 30, 2)
+        second = await self.db.add_key(9801, "https://sub.test/second", "second", "uuid-second", 30, 2)
+        for key_id in (first, second):
+            await self.db.save_auto_renew_subscription(
+                9801, key_id, f"pm-{key_id}", payment_method_title="Saved",
+            )
+            await self.db.set_auto_renew_status_by_key(9801, key_id, "cancelled")
+        self.assertTrue(await self.db.resume_auto_renew(9801))
+        old = await self.db.get_auto_renew_subscription(9801, first)
+        newest = await self.db.get_auto_renew_subscription(9801, second)
+        self.assertEqual((old["status"], newest["status"]), ("cancelled", "active"))
+
     async def test_ambiguous_legacy_autorenew_never_charges_and_is_explained(self):
         from handlers.keys import _load_autorenew_context, _get_payment_methods_text
         now = int(time.time())
