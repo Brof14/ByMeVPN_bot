@@ -12,20 +12,20 @@ def buttons(keyboard):
 
 
 class TariffDesignTests(unittest.TestCase):
-    def test_bonus_months_are_explicit_without_unicode_gifts(self):
+    def test_tariffs_show_actual_days_without_implying_free_months(self):
         keyboard = tariff_selection_kb(devices=2)
         labels = {b.callback_data: b.text for b in buttons(keyboard)}
-        self.assertIn("4 мес. (3+1)", labels["tariff_3_2"])
-        self.assertIn("8 мес. (6+2)", labels["tariff_6_2"])
-        self.assertIn("15 мес. (12+3)", labels["tariff_12_2"])
-        self.assertIn("Лучшая цена", labels["tariff_12_2"])
+        self.assertIn("120 дней", labels["tariff_3_2"])
+        self.assertIn("240 дней", labels["tariff_6_2"])
+        self.assertIn("450 дней", labels["tariff_12_2"])
+        self.assertIn("Выгоднее за 30 дней", labels["tariff_12_2"])
         self.assertTrue(all("🎁" not in text for text in labels.values()))
         with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "1"}):
             premium = tariff_selection_kb(devices=2)
         bonus_buttons = [b for b in buttons(premium) if b.callback_data and b.callback_data.startswith("tariff_") and not b.callback_data.startswith("tariff_1_")]
         self.assertEqual(
             [b.icon_custom_emoji_id for b in bonus_buttons],
-            ["5301299389245985629", "5301163762768707871", "5301192569114366400"],
+            ["6023880246128810031"] * 3,
         )
 
     def test_crypto_has_no_bitcoin_character(self):

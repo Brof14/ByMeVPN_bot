@@ -23,7 +23,7 @@ class ConversionUXTests(unittest.TestCase):
             for months, rubles in zip((1, 3, 6, 12), totals):
                 text = actions[f"tariff_{months}_{limit}"]
                 self.assertIn(f"{rubles} ₽", text)
-                self.assertIn("₽/мес.", text)
+                self.assertIn("₽/30 дней", text)
                 self.assertNotIn("в подарок", text)  # Charged for all included months.
 
 

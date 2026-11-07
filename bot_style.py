@@ -210,7 +210,7 @@ def _icon_for(text: str, callback: str, *, copy: bool, destructive: bool, back: 
         return ICON_IDS[platform]
     for month in (1, 3, 6, 12):
         if callback.startswith(f"tariff_{month}_"):
-            return ICON_IDS[f"tariff_{month}"]
+            return ICON_IDS["tariff_1"]
     if callback.startswith("autorenew_enable:"):
         return ICON_IDS["notifications_on"]
     if callback.startswith(("autorenew_unbind", "autorenew_cancel")):

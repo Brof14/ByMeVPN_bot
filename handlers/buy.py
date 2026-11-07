@@ -56,7 +56,7 @@ def _tariff_intro(devices: int, *, renewal: bool = False) -> str:
     return (
         f"<b>{title}</b>\n\n"
         f"Устройства: <b>{devices}</b>\n"
-        "Выберите срок. На кнопках — полная сумма и цена за месяц."
+        "Выберите срок. На кнопках — полная сумма и цена за 30 дней."
     )
 
 
@@ -232,7 +232,7 @@ async def _ask_tariff_again(bot: Bot, callback: CallbackQuery) -> None:
         draft = None
     if draft:
         months, devices = draft["months"], draft["devices"]
-        label = {1: "1 месяц", 3: "3 + 1 месяц", 6: "6 + 2 месяца", 12: "12 + 3 месяца"}[months]
+        label = f"{get_price_for_months(months, devices)[1]} дней"
         renewing = int(draft.get("renew_key_id") or 0)
         text = (
             "<b>Оформление было прервано</b>\n\n"

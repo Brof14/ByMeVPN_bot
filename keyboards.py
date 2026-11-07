@@ -113,7 +113,7 @@ def authorized_user_menu() -> InlineKeyboardMarkup:
 
 
 def tariff_selection_kb(devices: int = DEFAULT_DEVICE_LIMIT, discount_percent: int = 0) -> InlineKeyboardMarkup:
-    """Tariff selection with device tiers (2, 5, 10 devices) and duration bonuses."""
+    """Tariff selection with device tiers and actual subscription durations."""
     devices = validate_device_limit(devices)
     kb = InlineKeyboardBuilder()
 
@@ -131,14 +131,7 @@ def tariff_selection_kb(devices: int = DEFAULT_DEVICE_LIMIT, discount_percent: i
     # No invisible totals or misleading free months: the existing billing
     # calculation charges for all 1/4/8/15 included months. Show the actual
     # payable amount and effective monthly rate without changing a kopeck.
-    tariff_rows = [
-        (1, "1 мес."),
-        (3, "4 мес. (3+1)"),
-        (6, "8 мес. (6+2)"),
-        (12, "15 мес. (12+3)"),
-    ]
-
-    for months, period_label in tariff_rows:
+    for months in (1, 3, 6, 12):
         total_price, included_days = get_price_for_months(months, devices)
         if discount_percent > 0:
             total_price = round(total_price * (100 - discount_percent) / 100)
@@ -146,11 +139,11 @@ def tariff_selection_kb(devices: int = DEFAULT_DEVICE_LIMIT, discount_percent: i
             monthly_display = f"≈{total_price / months_included:.2f}".rstrip("0").rstrip(".")
         else:
             monthly_display = str(get_monthly_display(months, devices))
-        text = f"{period_label} · {total_price} ₽ · {monthly_display} ₽/мес."
+        text = f"{included_days} дней · {total_price} ₽ · {monthly_display} ₽/30 дней"
         if discount_percent > 0:
             text += f" · −{discount_percent}%"
-        if months == 12:
-            text += " · Лучшая цена"
+        if months == 12 and discount_percent < 100:
+            text += " · Выгоднее за 30 дней"
         kb.row(InlineKeyboardButton(text=text, callback_data=f"tariff_{months}_{devices}"))
 
     kb.row(InlineKeyboardButton(text="← Назад", callback_data="back_to_menu"))

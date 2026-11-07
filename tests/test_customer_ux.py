@@ -281,7 +281,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             if button.callback_data and button.callback_data.startswith("tariff_")
         ]
         three_months = next(button for button in tariff_buttons if button.callback_data == "tariff_3_2")
-        self.assertIn("4 мес. (3+1) · 316 ₽ · 79 ₽/мес.", three_months.text)
+        self.assertIn("120 дней · 316 ₽ · 79 ₽/30 дней", three_months.text)
         self.assertIsNone(three_months.style)
         self.assertEqual(
             [button.style for button in tariff_buttons],
