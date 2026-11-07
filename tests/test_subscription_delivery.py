@@ -1,4 +1,5 @@
 """Regression tests for subscription delivery failure paths."""
+import asyncio
 import os
 import sys
 import time
@@ -17,6 +18,42 @@ import subscription
 
 
 class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
+    async def test_concurrent_rewards_preserve_both_extensions(self):
+        initial = int(time.time()) + 90 * 86400
+        state = {"expiry": initial}
+
+        async def get_keys(_user_id):
+            expiry = state["expiry"]
+            await asyncio.sleep(0)
+            return [{"id": 7, "key": "https://example.test/sub", "expiry": expiry, "limit_ip": 2}]
+
+        async def set_expiry(_key_id, expiry, **_kwargs):
+            state["expiry"] = expiry
+            await asyncio.sleep(0)
+            return True
+
+        async def intent(_method, _payload, _user_id, expiry):
+            await asyncio.sleep(0)
+            return expiry
+
+        with (
+            patch("subscription.get_user_keys", new=AsyncMock(side_effect=get_keys)),
+            patch("subscription.set_key_expiry", new=AsyncMock(side_effect=set_expiry)),
+            patch("subscription.database.get_or_create_provisioning_intent", new=AsyncMock(side_effect=intent)),
+            patch("xui_client.update_xui_user", new=AsyncMock(return_value={"ok": True})),
+            patch("xui_client.get_user_subscription_links", new=AsyncMock(return_value=[])),
+            patch("subscription._send_delivery_message", new=AsyncMock(return_value=True)),
+        ):
+            results = await asyncio.gather(*(
+                subscription.deliver_key(
+                    bot=MagicMock(), user_id=123, chat_id=123, config_name="ByMeVPN_123",
+                    days=15, is_paid=True, amount=0, method="ref_signup_bonus", payload=f"reward_{number}",
+                )
+                for number in (1, 2)
+            ))
+        self.assertEqual(results, [True, True])
+        self.assertEqual(state["expiry"], initial + 30 * 86400)
+
     async def test_retried_signup_reward_does_not_shorten_newer_subscription(self):
         expiry = int(time.time()) + 90 * 86400
         key = {"id": 7, "key": "https://example.test/sub", "expiry": expiry, "limit_ip": 2}
