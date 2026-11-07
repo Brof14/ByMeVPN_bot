@@ -52,7 +52,7 @@ No validated 100/100 certification is possible without the external gates below.
 - [ ] Run end-to-end provider payments/refunds, repeat webhooks, duplicate orders, 3DS/SCA, failed provisioning and recovered order.
 - [ ] Test 3x-ui multi-inbound lifecycle, partial errors, add/renew/delete and reconciliation on staging.
 - [ ] Test and document encrypted backup upload, restore, VPS rollback and blast radius.
-- [ ] Implement account deletion compliant with billing cancellation and retained financial evidence.
+- [x] PR #69 implements guarded account deletion, recurring cancellation, tombstones and retained financial evidence **in code**. [ ] Stage multi-inbound deletion, refund/retention policy and client confirmation UX before production acceptance.
 - [ ] Review draft #14 security contract and secret-based JWT rotation in staging before merging.
 - [ ] Ingest actual provider fees, hosting, acquisition costs, refund outcomes and bonus-day cost before claiming profitability.
 - [ ] Observe real acquisition-to-paid, paid renewal and referral cohorts before claiming conversion uplift.
