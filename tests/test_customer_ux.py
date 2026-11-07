@@ -323,7 +323,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         }
         with (
             patch("database.get_auto_renew_subscription", new=AsyncMock(return_value=sub)),
-            patch("database.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("database.get_user_keys", new=AsyncMock(return_value=[{"id": 5, "expiry": 1_800_000_000}])),
             patch("handlers.keys.get_key_by_id", new=AsyncMock(return_value={"user_id": 123, "expiry": 1_800_000_000})),
         ):
             loaded, title, _ = await _load_autorenew_context(123, 5)
