@@ -17,6 +17,13 @@ class _Request:
 
 
 class TestCryptoPayInvoiceValidation(unittest.TestCase):
+    def test_promo_is_read_only_from_matching_telegram_order_payload(self):
+        pending = {"user_id": 98, "days": 30, "devices": 2, "payload": "98:30:2:SALE30"}
+        self.assertEqual(webhook._crypto_pending_promo(pending), "SALE30")
+        self.assertIsNone(webhook._crypto_pending_promo({**pending, "payload": "bm1_mobile_order"}))
+        self.assertIsNone(webhook._crypto_pending_promo({**pending, "payload": "99:30:2:SALE30"}))
+        self.assertIsNone(webhook._crypto_pending_promo({**pending, "payload": None}))
+
     def test_paid_crypto_invoice_must_match_server_owned_rub_order(self):
         pending = {"amount_rub": 79, "payload": "bm1_expected"}
 

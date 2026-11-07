@@ -61,18 +61,20 @@ async def get_or_create_renewal_promo(user_id: int) -> str:
     Uses a shared code approach: checks for existing active promo codes and reuses them.
     """
     # Try to find existing active 30% promo codes that are valid
-    from database import get_all_promo_codes
+    from database import get_all_promo_codes, has_user_used_promo
     promo_codes = await get_all_promo_codes()
+    now = int(time.time())
 
     # Look for an existing 30% discount promo code that's active and valid
     for promo in promo_codes:
         if (promo["is_active"] and
             promo["promo_type"] == "percent" and
             promo["discount_value"] == 30 and
-            promo["uses_count"] < promo["max_uses"]):
-            # Check if still valid
-            import time
-            if promo["expires_at"] > int(time.time()):
+            promo["uses_count"] < promo["max_uses"] and
+            promo["tariff_binding"] is None and
+            promo["start_date"] is not None and
+            promo["start_date"] <= now < promo["expires_at"]):
+            if not await has_user_used_promo(promo["code"], user_id):
                 return promo["code"]
 
     # Keep existing discount and usage limits, but retry code collisions rather
@@ -91,11 +93,15 @@ async def get_or_create_renewal_promo(user_id: int) -> str:
     raise RuntimeError("Could not create a unique renewal promo code after 5 attempts")
 
 
-async def _get_active_autorenew(user_id: int) -> dict | None:
-    """Return the active auto-renew subscription row for a user, if any."""
+async def _get_active_autorenew(user_id: int, key_id: int | None) -> dict | None:
+    """Find auto-renew for this key, including applicable legacy rows."""
+    if not key_id:
+        return None
     try:
-        from database import get_auto_renew_subscription
-        sub = await get_auto_renew_subscription(user_id)
+        from database import get_auto_renew_subscription, get_user_keys
+        sub = await get_auto_renew_subscription(user_id, key_id, include_legacy=True)
+        if sub and sub.get("key_id") is None and len(await get_user_keys(user_id)) != 1:
+            return None
         if sub and sub.get("status") == "active" and (sub.get("payment_method_id") or "").strip():
             return sub
     except Exception as e:
@@ -159,7 +165,7 @@ async def _optional_renewal_promo(user_id: int) -> tuple[str | None, dict | None
 
 async def _send_urgent_notification(bot: Bot, item: dict) -> None:
     """Send urgent notification for keys expiring in 1-3 days."""
-    sub = await _get_active_autorenew(item["user_id"])
+    sub = await _get_active_autorenew(item["user_id"], item.get("key_id"))
     if sub:
         return await _send_autorenew_upcoming(bot, item, sub)
 
@@ -171,7 +177,7 @@ async def _send_urgent_notification(bot: Bot, item: dict) -> None:
     text = (
         f"<b>До окончания подписки — {days_left} {get_day_word(days_left)}</b>\n\n"
         f"Доступ активен до <b>{date_str}</b>. Продлите подписку, чтобы пользоваться VPN и дальше.\n\n"
-        + (f"🎁 Промокод <code>{promo_code}</code> даёт <b>30% скидки</b> до {promo_expiry}.\n\n" if promo_expiry else "")
+        + (f"🎁 Промокод <code>{promo_code}</code> даёт <b>30% скидки</b> до {promo_expiry}, пока не исчерпан лимит применений.\n\n" if promo_expiry else "")
         + "Откройте тарифы, чтобы выбрать срок и лимит устройств."
     )
 
@@ -187,7 +193,7 @@ async def _send_urgent_notification(bot: Bot, item: dict) -> None:
 
 async def _send_warning_notification(bot: Bot, item: dict) -> None:
     """Send warning notification for keys expiring in 7-14 days."""
-    sub = await _get_active_autorenew(item["user_id"])
+    sub = await _get_active_autorenew(item["user_id"], item.get("key_id"))
     if sub:
         # Keep renewal messages to one clear reminder in the final days.
         return False
@@ -200,7 +206,7 @@ async def _send_warning_notification(bot: Bot, item: dict) -> None:
     text = (
         f"<b>Подписка активна до {date_str}</b>\n"
         f"Осталось {days_left} {get_day_word(days_left)}. Продлите заранее, чтобы сохранить непрерывный доступ. Ключи и настройки останутся прежними.\n\n"
-        + (f"🎁 Промокод <code>{promo_code}</code> — <b>30% скидки</b> до {promo_expiry}.\n\n" if promo_expiry else "")
+        + (f"🎁 Промокод <code>{promo_code}</code> — <b>30% скидки</b> до {promo_expiry}, пока не исчерпан лимит применений.\n\n" if promo_expiry else "")
         + "Откройте тарифы, чтобы выбрать срок и лимит устройств."
     )
 
@@ -216,7 +222,7 @@ async def _send_warning_notification(bot: Bot, item: dict) -> None:
 
 async def _send_early_notification(bot: Bot, item: dict) -> None:
     """Send early notification for keys expiring in 21-30 days."""
-    sub = await _get_active_autorenew(item["user_id"])
+    sub = await _get_active_autorenew(item["user_id"], item.get("key_id"))
     if sub:
         # An auto-renewing customer only gets the pre-charge reminder close to billing.
         return False

@@ -84,7 +84,7 @@ class VPNDeletionSafetyTests(unittest.IsolatedAsyncioTestCase):
     async def test_all_inbounds_empty_is_retry_safe(self):
         self.assertTrue(await self._delete_with_panel({12: False, 15: False}, lookup_uuid=None))
 
-    async def _handler_delete(self, *, remote: bool, db_deleted: bool):
+    async def _handler_delete(self, *, remote: bool, db_deleted: bool, unsettled: bool = False):
         callback = SimpleNamespace(
             data="key_delete_confirm:7", from_user=SimpleNamespace(id=123),
             message=SimpleNamespace(answer=AsyncMock()),
@@ -95,6 +95,7 @@ class VPNDeletionSafetyTests(unittest.IsolatedAsyncioTestCase):
                 "id": 7, "user_id": 123, "remark": "ByMeVPN", "expiry": 1900000000
             })),
             patch.object(keys, "get_user_keys", new=AsyncMock(return_value=[{"id": 7}])),
+            patch("database.has_recent_unsettled_checkout", new=AsyncMock(return_value=unsettled)),
             patch("database.get_auto_renew_subscription", new=AsyncMock(return_value={"status": "active"})),
             patch("database.cancel_auto_renew", new=AsyncMock(return_value={"cancelled": True})),
             patch("database.resume_auto_renew", new=AsyncMock()) as resume,
@@ -103,9 +104,19 @@ class VPNDeletionSafetyTests(unittest.IsolatedAsyncioTestCase):
                 return_value=db_deleted, side_effect=db_deleted if isinstance(db_deleted, Exception) else None
             )) as delete_db,
             patch("database.log_key_error", new=AsyncMock()),
+            patch("database.try_acquire_delivery_lease", new=AsyncMock(return_value=True)),
+            patch("database.release_delivery_lease", new=AsyncMock()),
         ):
             await keys.cb_key_delete_confirm(callback, object())
         return callback.message.answer, resume, delete_db
+
+    async def test_pending_checkout_prevents_key_deletion_and_billing_changes(self):
+        answer, resume, delete_db = await self._handler_delete(
+            remote=True, db_deleted=True, unsettled=True,
+        )
+        delete_db.assert_not_awaited()
+        resume.assert_not_awaited()
+        self.assertIn("платёж", answer.await_args.args[0])
 
     async def test_partial_panel_failure_never_reenables_autopay(self):
         answer, resume, delete_db = await self._handler_delete(remote=False, db_deleted=True)

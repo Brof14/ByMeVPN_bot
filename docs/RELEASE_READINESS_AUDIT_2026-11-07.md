@@ -27,7 +27,7 @@ of every Telegram screen.
 | Admin and growth reporting | `handlers/admin.py`, `growth_metrics.py` | Registration cohorts, verified successful payments and currency split | No margin/cost dataset means no defensible profit report |
 | Telegram branding | `bot_style.py`, `bot_assets.py` | Semantic premium IDs and client button tests exist | Live entitlement plus actual rendering unverified |
 | Login/API | `api_router.py`, `google_signin.py`, `telegram_auth_storage_compat.py` | Strong JWT configuration, tests/code contracts reviewed | Real OAuth client/server integration and security review needed |
-| Data lifecycle and deletion | `api_router.py` | Account-delete route knowingly reports HTTP 501 instead of false success | **Blocker for a complete account-deletion feature** |
+| Data lifecycle and deletion | `api_router.py`, `database.py` | PR #69 implements confirmed account deletion with fail-closed server revocation, tombstones and retained fiscal records | **Deployment/acceptance blocker** until staged multi-inbound, retention-policy and client UX checks |
 | Operations | `main.py`, `config.py`, `background_tasks.py`, `deploy/` | Container/CIs reviewed | No production backup/restore or live load evidence |
 
 ## Confirmed defects addressed through GitHub

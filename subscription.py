@@ -3,7 +3,9 @@ Core subscription logic: ask config name → create VPN key → deliver.
 """
 import asyncio
 import logging
+import secrets
 import time
+import weakref
 from datetime import datetime
 
 from aiogram import Bot, Router
@@ -27,6 +29,10 @@ logger = logging.getLogger(__name__)
 
 # Create router for subscription handlers
 router = Router()
+
+# Serialise deliveries for the same account within this process. Other bot
+# processes and direct panel writers still require independent coordination.
+_delivery_locks = weakref.WeakValueDictionary()
 
 
 async def _send_delivery_message(
@@ -90,6 +96,93 @@ async def deliver_key(
     skip_referral_bonus: bool = False,
     delivery_target=None,
 ) -> bool:
+    # Keep the lightweight in-process lock to avoid needless contention.
+    # The SQLite lease below also serializes workers running in *other* bot
+    # processes against the same persistent database file.
+    lock = _delivery_locks.get(user_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _delivery_locks[user_id] = lock
+    async with lock:
+        token = secrets.token_urlsafe(24)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 15
+        try:
+            while True:
+                if await database.try_acquire_delivery_lease(user_id, token):
+                    break
+                if loop.time() >= deadline:
+                    logger.warning("Delivery already running for user %d in another worker", user_id)
+                    return False
+                await asyncio.sleep(0.2)
+        except Exception:
+            logger.exception("Cannot safely acquire cross-process delivery lease for user %d", user_id)
+            return False
+
+        stop_heartbeat = asyncio.Event()
+        lost_lease = asyncio.Event()
+
+        async def heartbeat() -> None:
+            while not stop_heartbeat.is_set():
+                try:
+                    await asyncio.wait_for(stop_heartbeat.wait(), timeout=30)
+                    return
+                except asyncio.TimeoutError:
+                    pass
+                try:
+                    if not await database.renew_delivery_lease(user_id, token):
+                        logger.error("Delivery lease ownership lost for user %d", user_id)
+                        lost_lease.set()
+                        return
+                except Exception:
+                    logger.exception("Delivery lease renewal failed for user %d", user_id)
+                    lost_lease.set()
+                    return
+
+        heartbeat_task = asyncio.create_task(heartbeat())
+        try:
+            delivered = await _deliver_key_unlocked(
+                bot, user_id, chat_id, config_name, days, limit_ip, is_paid,
+                amount, currency, method, payload, extend_existing,
+                skip_referral_bonus, delivery_target,
+            )
+            # Confirm ownership at the end as well: a stalled event loop may
+            # miss its heartbeat while another worker reclaims an expired lease.
+            try:
+                still_owner = await database.renew_delivery_lease(user_id, token)
+            except Exception:
+                logger.exception("Could not confirm delivery lease at completion for user %d", user_id)
+                still_owner = False
+            if lost_lease.is_set() or not still_owner:
+                # The remote update may have succeeded. A deterministic retry /
+                # manual reconciliation is safer than falsely claiming delivery.
+                logger.error("Unconfirmed provisioning after delivery lease loss for user %d", user_id)
+                return False
+            return delivered
+        finally:
+            stop_heartbeat.set()
+            await heartbeat_task
+            try:
+                await database.release_delivery_lease(user_id, token)
+            except Exception:
+                logger.exception("Could not release delivery lease for user %d", user_id)
+
+async def _deliver_key_unlocked(
+    bot: Bot,
+    user_id: int,
+    chat_id: int,
+    config_name: str,
+    days: int,
+    limit_ip: int = 2,
+    is_paid: bool = False,
+    amount: int = 0,
+    currency: str = "RUB",
+    method: str = "trial",
+    payload: str = "",
+    extend_existing: bool = True,
+    skip_referral_bonus: bool = False,
+    delivery_target=None,
+) -> bool:
     """
     Создать или обновить клиента в 3x-ui, сохранить в БД, отправить ссылку на подписку пользователю.
     Гарантирует сохранение существующего UUID и ссылки на подписку.
@@ -118,6 +211,12 @@ async def deliver_key(
                 new_expiry = await database.get_or_create_provisioning_intent(
                     method, payload, user_id, new_expiry
                 )
+            if is_paid and payload and old_expiry and new_expiry < old_expiry:
+                # Another operation has moved the subscription past this old
+                # order intent. Applying it would shorten paid access; leave
+                # the order pending for reconciliation instead.
+                logger.error("Order %s requires reconciliation for user %d", payload, user_id)
+                return False
 
             # Set the immutable target, rather than applying relative days.
             success = await set_key_expiry(key_id, new_expiry, limit_ip=limit_ip)
@@ -258,6 +357,9 @@ async def deliver_key(
                 target_expiry = await database.get_or_create_provisioning_intent(
                     method, payload, user_id, target_expiry
                 )
+            if is_paid and payload and target_expiry < int(xui_client.get("expiry_time") or 0) // 1000:
+                logger.error("Order %s requires panel reconciliation for user %d", payload, user_id)
+                return False
             xui_res = await update_xui_user(
                 user_id, new_expiry_ms=target_expiry * 1000, limit_ip=0, limit_hwid=limit_ip
             )

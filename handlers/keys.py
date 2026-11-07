@@ -390,7 +390,13 @@ def _get_payment_methods_text(
     active = bool(sub and sub.get("status") == "active")
     amount = sub.get("amount_rub", 0) if sub else 0
     days = sub.get("days", 30) if sub else 30
-    if active:
+    if active and sub.get("ambiguous_key"):
+        status = "⚠️ Требуется уточнить подписку"
+        next_charge = (
+            "Сохранённое автопродление не привязано к ключу: их несколько или нет ни одного. "
+            "Автоматического списания не будет до уточнения. Продлите нужную подписку вручную или обратитесь в поддержку."
+        )
+    elif active:
         next_charge = f"Следующее продление: <b>{amount} ₽</b> за {days} дней."
         if expiry_str:
             next_charge += f"\nДата: <b>{expiry_str}</b>."
@@ -414,7 +420,9 @@ async def _load_autorenew_context(user_id: int, key_id: int) -> tuple[dict | Non
     """Load (sub, card_title, expiry_str) for payment-method screens."""
     from database import get_auto_renew_subscription, get_user_keys
 
-    sub = await get_auto_renew_subscription(user_id, key_id if key_id > 0 else None)
+    sub = await get_auto_renew_subscription(user_id, key_id if key_id > 0 else None, include_legacy=True)
+    if sub and sub.get("key_id") is None:
+        sub["ambiguous_key"] = len(await get_user_keys(user_id)) != 1
     card_title = ""
     if sub and sub.get("payment_method_id"):
         card_title = (sub.get("payment_method_title") or "").strip()
@@ -472,7 +480,7 @@ async def cb_autorenew_unbind_prompt(callback: CallbackQuery, bot: Bot):
         await send_or_edit(bot, callback, text, kb, photo=AUTO_RENEWAL)
         return
 
-    warning = "Будущие списания прекратятся."
+    warning = "Списания по выбранному автопродлению прекратятся."
     if expiry_str:
         warning += f" Доступ сохранится до <b>{expiry_str}</b>."
 
@@ -483,6 +491,27 @@ async def cb_autorenew_unbind_prompt(callback: CallbackQuery, bot: Bot):
         "Доступ сохранится до конца оплаченного срока. Автопродление можно подключить снова при следующей оплате через ЮKassa."
     )
     await send_or_edit(bot, callback, text, autorenew_cancel_confirm_kb(key_id), photo=AUTO_RENEWAL)
+
+
+async def _run_billing_change_under_lease(user_id: int, operation):
+    """Serialize card cancellation/resumption with recurring invoice creation."""
+    import asyncio
+    import secrets
+    from database import try_acquire_delivery_lease, release_delivery_lease
+
+    token = secrets.token_urlsafe(24)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 15
+    while True:
+        if await try_acquire_delivery_lease(user_id, token):
+            break
+        if loop.time() >= deadline:
+            raise TimeoutError("another account operation is in progress")
+        await asyncio.sleep(0.25)
+    try:
+        return await operation()
+    finally:
+        await release_delivery_lease(user_id, token)
 
 
 @router.callback_query(F.data.startswith("autorenew_unbind_confirm:"))
@@ -496,7 +525,21 @@ async def cb_autorenew_unbind_confirm(callback: CallbackQuery, bot: Bot):
     from database import unlink_auto_renew_payment_method
     from aiogram.types import InlineKeyboardMarkup
 
-    res = await unlink_auto_renew_payment_method(user_id, key_id if key_id > 0 else None)
+    try:
+        res = await _run_billing_change_under_lease(
+            user_id,
+            lambda: unlink_auto_renew_payment_method(user_id, key_id if key_id > 0 else None),
+        )
+    except Exception:
+        logger.exception("Cannot safely unlink recurring payment method for user %d", user_id)
+        await send_or_edit(
+            bot, callback,
+            "Не удалось подтвердить отключение автопродления. "
+            "Проверьте статус подписки и повторите попытку.",
+            key_settings_kb(key_id) if key_id > 0 else back_to_menu(),
+            photo=AUTO_RENEWAL,
+        )
+        return
 
     expiry_str = ""
     if res.get("expires_at"):
@@ -509,11 +552,11 @@ async def cb_autorenew_unbind_confirm(callback: CallbackQuery, bot: Bot):
     )
 
     if not res.get("unlinked"):
-        text = "Сохранённый способ оплаты не найден. Новых списаний не будет."
+        text = "Для этой подписки сохранённый способ оплаты не найден. Проверьте настройки других подписок."
     else:
         text = (
             "<b>Автопродление отключено</b>\n\n"
-            "Новых списаний не будет.\n"
+            "По отключённому автопродлению новых списаний не будет. Проверьте настройки других подписок.\n"
             f"{keep_line}\n\n"
             "Автопродление можно подключить снова при следующей оплате через ЮKassa."
         )
@@ -534,7 +577,21 @@ async def cb_autorenew_enable(callback: CallbackQuery, bot: Bot):
     from database import resume_auto_renew
     from aiogram.types import InlineKeyboardMarkup
 
-    reenabled = await resume_auto_renew(user_id, key_id if key_id > 0 else None)
+    try:
+        reenabled = await _run_billing_change_under_lease(
+            user_id,
+            lambda: resume_auto_renew(user_id, key_id if key_id > 0 else None),
+        )
+    except Exception:
+        logger.exception("Cannot safely resume recurring payment method for user %d", user_id)
+        await send_or_edit(
+            bot, callback,
+            "Не удалось подтвердить включение автопродления. "
+            "Возможна другая операция с подпиской. Повторите позже.",
+            key_settings_kb(key_id) if key_id > 0 else back_to_menu(),
+            photo=AUTO_RENEWAL,
+        )
+        return
     if reenabled:
         text = (
             "🔔 <b>Автопродление включено</b>\n\n"
@@ -725,86 +782,111 @@ async def cb_key_delete_confirm(callback: CallbackQuery, bot: Bot):
     remark = escape(k.get("remark") or f"Ключ #{key_id}")
     user_id = callback.from_user.id
 
-    # The bot currently uses one 3x-ui client per Telegram user. Removing
-    # one saved key must not delete that shared server client while other key
-    # records remain.
-    existing_keys = await get_user_keys(user_id)
-    other_keys = [item for item in existing_keys if item.get("id") != key_id]
+    async def _delete_under_account_lease():
+        # Re-check ownership inside the same lease used by renewals and key
+        # provisioning. Do not use a key loaded before the lease was taken.
+        current = await get_key_by_id(key_id)
+        if not current or current["user_id"] != user_id:
+            await callback.message.answer("Ключ уже удалён или недоступен.")
+            return
 
-    # Stop billing first. A remote timeout may happen after a partial deletion;
-    # restarting charges without verifying remaining access is unsafe.
-    from database import get_auto_renew_subscription, cancel_auto_renew, resume_auto_renew
-    auto_renew = await get_auto_renew_subscription(user_id, key_id)
-    renew_was_active = bool(auto_renew and auto_renew.get("status") == "active")
-    if renew_was_active:
-        cancelled = await cancel_auto_renew(user_id, key_id)
-        if not cancelled.get("cancelled"):
+        from database import has_recent_unsettled_checkout
+        if await has_recent_unsettled_checkout(user_id):
             await callback.message.answer(
-                "⚠️ Не удалось отключить автопродление. Ключ не удалён; попробуйте ещё раз или напишите в поддержку."
+                "Удаление подписки пока недоступно: недавний платёж "
+                "ещё может завершиться. Проверьте его статус и повторите позже."
             )
             return
 
-    if not other_keys:
-        ok = await delete_xui_user(user_id)
-        if not ok:
-            await _report_unconfirmed_deletion(
-                callback, user_id, key_id, "panel_unverified",
-                "Удаление на всех VPN-серверах пока не подтверждено. "
-                "Автопродление не будет включено автоматически. "
-                "Напишите в поддержку для проверки. Повторно оплачивать не нужно.",
-            )
+        # The bot currently uses one 3x-ui client per Telegram user. Removing
+        # one saved key must not delete that shared server client while other key
+        # records remain.
+        existing_keys = await get_user_keys(user_id)
+        other_keys = [item for item in existing_keys if item.get("id") != key_id]
+
+        # Stop billing first. A remote timeout may happen after a partial deletion;
+        # restarting charges without verifying remaining access is unsafe.
+        from database import get_auto_renew_subscription, cancel_auto_renew, resume_auto_renew
+        auto_renew = await get_auto_renew_subscription(user_id, key_id)
+        renew_was_active = bool(auto_renew and auto_renew.get("status") == "active")
+        if renew_was_active:
+            cancelled = await cancel_auto_renew(user_id, key_id)
+            if not cancelled.get("cancelled"):
+                await callback.message.answer(
+                    "⚠️ Не удалось отключить автопродление. Ключ не удалён; попробуйте ещё раз или напишите в поддержку."
+                )
+                return
+
+        if not other_keys:
+            ok = await delete_xui_user(user_id)
+            if not ok:
+                await _report_unconfirmed_deletion(
+                    callback, user_id, key_id, "panel_unverified",
+                    "Удаление на всех VPN-серверах пока не подтверждено. "
+                    "Автопродление не будет включено автоматически. "
+                    "Напишите в поддержку для проверки. Повторно оплачивать не нужно.",
+                )
+                return
+
+        try:
+            deleted = await delete_key_by_id(key_id)
+        except Exception:
+            # The remote user may already be gone. Never reactivate billing or
+            # let a database outage hide this partially completed deletion.
+            logger.exception("Key %d removal failed after remote reconciliation", key_id)
+            deleted = False
+        if not deleted:
+            if other_keys and renew_was_active:
+                # No remote client was touched; restoring billing is safe only here.
+                await resume_auto_renew(user_id, key_id)
+            if not other_keys:
+                await _report_unconfirmed_deletion(
+                    callback, user_id, key_id, "database_after_panel",
+                    "VPN-доступ на серверах удалён, но запись в боте осталась. "
+                    "Автопродление не возобновлено. Не оплачивайте повторно. "
+                    "Напишите в поддержку, чтобы завершить операцию.",
+                )
+            else:
+                logger.error("Could not delete key row %d for user %d", key_id, user_id)
+                await callback.message.answer(
+                    "Не удалось обновить подписку. Попробуйте ещё раз или напишите в поддержку."
+                )
             return
+
+        logger.info("Key %d deleted by user %d (other_keys=%d)", key_id, user_id, len(other_keys))
+
+        keys = await get_user_keys(user_id)
+        if not keys:
+            await send_with_photo(
+                bot, callback,
+                f"Ключ «{remark}» удалён. Подключение по нему отключено.",
+                back_to_menu(),
+                photo=KEY,
+            )
+        elif len(keys) == 1:
+            text, keyboard = await _key_info_content(user_id, keys[0])
+            await send_or_edit(bot, callback, f"Ключ «{remark}» удалён.\n\n{text}", keyboard, photo=KEY)
+        else:
+            text = (
+                f"Ключ «{remark}» удалён.\n\n"
+                "Остальные подписки и подключения работают как прежде. Выберите нужную подписку ниже."
+            )
+            now = int(time.time())
+            active = [key for key in keys if int(key.get("expiry") or 0) > now]
+            expired = [key for key in keys if int(key.get("expiry") or 0) <= now]
+            if not active and expired:
+                await send_with_photo(bot, callback, "<b>История подписок</b>", key_history_kb(expired), photo=KEY)
+            else:
+                await send_with_photo(bot, callback, text, my_keys_list_kb(active, has_history=bool(expired)), photo=KEY)
 
     try:
-        deleted = await delete_key_by_id(key_id)
+        await _run_billing_change_under_lease(user_id, _delete_under_account_lease)
     except Exception:
-        # The remote user may already be gone. Never reactivate billing or
-        # let a database outage hide this partially completed deletion.
-        logger.exception("Key %d removal failed after remote reconciliation", key_id)
-        deleted = False
-    if not deleted:
-        if other_keys and renew_was_active:
-            # No remote client was touched; restoring billing is safe only here.
-            await resume_auto_renew(user_id, key_id)
-        if not other_keys:
-            await _report_unconfirmed_deletion(
-                callback, user_id, key_id, "database_after_panel",
-                "VPN-доступ на серверах удалён, но запись в боте осталась. "
-                "Автопродление не возобновлено. Не оплачивайте повторно. "
-                "Напишите в поддержку, чтобы завершить операцию.",
-            )
-        else:
-            logger.error("Could not delete key row %d for user %d", key_id, user_id)
-            await callback.message.answer(
-                "Не удалось обновить подписку. Попробуйте ещё раз или напишите в поддержку."
-            )
-        return
-
-    logger.info("Key %d deleted by user %d (other_keys=%d)", key_id, user_id, len(other_keys))
-
-    keys = await get_user_keys(user_id)
-    if not keys:
-        await send_with_photo(
-            bot, callback,
-            f"Ключ «{remark}» удалён. Подключение по нему отключено.",
-            back_to_menu(),
-            photo=KEY,
+        logger.exception("Could not safely serialize key deletion for user %d", user_id)
+        await callback.message.answer(
+            "Подписка занята другой операцией или временно недоступна. "
+            "Удаление не подтверждено — проверьте состояние подписки и повторите позже."
         )
-    elif len(keys) == 1:
-        text, keyboard = await _key_info_content(user_id, keys[0])
-        await send_or_edit(bot, callback, f"Ключ «{remark}» удалён.\n\n{text}", keyboard, photo=KEY)
-    else:
-        text = (
-            f"Ключ «{remark}» удалён.\n\n"
-            "Остальные подписки и подключения работают как прежде. Выберите нужную подписку ниже."
-        )
-        now = int(time.time())
-        active = [key for key in keys if int(key.get("expiry") or 0) > now]
-        expired = [key for key in keys if int(key.get("expiry") or 0) <= now]
-        if not active and expired:
-            await send_with_photo(bot, callback, "<b>История подписок</b>", key_history_kb(expired), photo=KEY)
-        else:
-            await send_with_photo(bot, callback, text, my_keys_list_kb(active, has_history=bool(expired)), photo=KEY)
 
 # ---------------------------------------------------------------------------
 # Referral bonus activation

@@ -646,9 +646,11 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
         self.assertGreaterEqual(trial_used.await_count, 2)
         self.assertTrue(all(call.args == (7654321,) for call in trial_used.await_args_list))
         claim_trial.assert_awaited_once_with(7654321)
-        create_bootstrap.assert_awaited_once_with(
-            7654321, device_binding(7654321, self.hwid), bootstrap_expiry,
-        )
+        create_bootstrap.assert_awaited_once()
+        bootstrap_user, bootstrap_device, actual_expiry = create_bootstrap.await_args.args
+        self.assertEqual((bootstrap_user, bootstrap_device), (7654321, device_binding(7654321, self.hwid)))
+        self.assertGreaterEqual(actual_expiry, bootstrap_expiry)
+        self.assertLessEqual(actual_expiry, int(api_router.time.time()) + api_router.MOBILE_TRIAL_BOOTSTRAP_TTL_SECONDS)
         self.assertEqual(result["status"], "trial")
         self.assertEqual(result["max_devices"], 2)
         self.assertTrue(result["entitlement_bootstrap"])

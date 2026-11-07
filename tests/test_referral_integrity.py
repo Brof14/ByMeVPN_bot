@@ -158,13 +158,156 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
         bot = type("BotStub", (), {"send_message": AsyncMock()})()
         with patch("subscription.deliver_key", new=delivery):
             self.assertEqual(await process_pending_referral_payment_rewards(bot), 0)
+            self.assertEqual(await process_pending_referral_payment_rewards(bot), 0)
+            self.assertEqual(delivery.await_count, 1)
+            db = await database.get_db()
+            await db.execute("UPDATE referral_payment_rewards SET last_attempt_ms=0 WHERE referred_id=?", (922,))
+            await db.commit()
             self.assertEqual(await process_pending_referral_payment_rewards(bot), 1)
             self.assertEqual(await process_pending_referral_payment_rewards(bot), 0)
 
         self.assertEqual(delivery.await_count, 2)
         self.assertEqual(delivery.await_args.kwargs["days"], 30)
+        self.assertTrue(delivery.await_args.kwargs["is_paid"])
+        self.assertEqual(delivery.await_args.kwargs["amount"], 0)
         self.assertEqual(delivery.await_args.kwargs["payload"], "ref_bonus_911_922")
         self.assertFalse(await database.get_pending_referral_payment_rewards())
+
+    async def test_09_retry_repairs_missing_payment_event(self):
+        """A crash after recording a reward must not permanently hide a conversion."""
+        from unittest.mock import AsyncMock, patch
+        await self._seed_pair(referrer_id=1011, referred_id=1022)
+        with patch("database.add_referral_event", new=AsyncMock(side_effect=RuntimeError("db unavailable"))):
+            self.assertFalse(await award_referral_for_payment(1022, "payment-1022", bot=None))
+        await award_referral_for_payment(1022, "payment-1022", bot=None)
+        await award_referral_for_payment(1022, "payment-1022", bot=None)
+        events = await database.get_referral_events(1011)
+        self.assertEqual(len([e for e in events if e["referred_id"] == 1022 and e["event_type"] == "payment_bonus"]), 1)
+
+    async def test_failed_reward_does_not_starve_other_pending_rewards(self):
+        from unittest.mock import AsyncMock, patch
+        await self._seed_pair(2101, 2102)
+        await self._seed_pair(2201, 2202)
+        await database.record_referral_payment_reward(2101, 2102, "pay-first")
+        await database.record_referral_payment_reward(2201, 2202, "pay-second")
+        delivery = AsyncMock(side_effect=lambda **kw: kw["user_id"] == 2201)
+        bot = type("BotStub", (), {"send_message": AsyncMock()})()
+        with patch("subscription.deliver_key", new=delivery):
+            self.assertEqual(await process_pending_referral_payment_rewards(bot, limit=1), 0)
+            self.assertEqual(await process_pending_referral_payment_rewards(bot, limit=1), 1)
+        self.assertEqual([call.kwargs["user_id"] for call in delivery.await_args_list], [2101, 2201])
+        self.assertEqual(len(await database.get_pending_referral_payment_rewards()), 1)
+
+    async def test_pending_payment_reward_requires_actual_referrer(self):
+        from unittest.mock import AsyncMock, patch
+        await self._seed_pair(2151, 2153)
+        await database.ensure_user(2152)
+        await database.record_referral_payment_reward(2152, 2153, "wrong-inviter")
+        await database.record_referral_payment_reward(2151, 2153, "actual-inviter")
+        bot = type("BotStub", (), {"send_message": AsyncMock()})()
+        with patch("subscription.deliver_key", new=AsyncMock(return_value=True)) as delivery:
+            self.assertEqual(await process_pending_referral_payment_rewards(bot), 1)
+        self.assertEqual(delivery.await_args.kwargs["user_id"], 2151)
+        self.assertTrue(await database.has_referral_payment_reward(2152, 2153))
+
+    async def test_retry_order_migration_preserves_existing_rewards(self):
+        await self._seed_pair(2301, 2302)
+        await database.record_referral_payment_reward(2301, 2302, "legacy-payment")
+        db = await database.get_db()
+        await db.execute("ALTER TABLE referral_payment_rewards DROP COLUMN last_attempt_ms")
+        await db.commit()
+        await database.init_db()
+        pending = await database.get_pending_referral_payment_rewards()
+        self.assertEqual([(r["referrer_id"], r["payment_ref"]) for r in pending], [(2301, "legacy-payment")])
+
+    async def test_new_signup_rewards_retry_automatically_without_starving_queue(self):
+        from unittest.mock import AsyncMock, patch
+        from referral_system_new import process_pending_referral_signup_rewards
+        await self._seed_pair(2401, 2402)
+        await self._seed_pair(2501, 2502)
+        delivery = AsyncMock(side_effect=lambda **kw: kw["user_id"] == 2501)
+        bot = type("BotStub", (), {"send_message": AsyncMock()})()
+        with patch("subscription.deliver_key", new=delivery):
+            self.assertEqual(await process_pending_referral_signup_rewards(bot, limit=1), 0)
+            self.assertEqual(await process_pending_referral_signup_rewards(bot, limit=1), 1)
+        self.assertEqual([call.kwargs["user_id"] for call in delivery.await_args_list], [2401, 2501])
+        self.assertFalse(await database.has_referral_event(2401, 2402, "registration_bonus"))
+        self.assertTrue(await database.has_referral_event(2501, 2502, "registration_bonus"))
+        db = await database.get_db()
+        cur = await db.execute("SELECT signup_bonus_retry FROM referrals WHERE referred_id=?", (2502,))
+        self.assertEqual((await cur.fetchone())[0], 0)
+
+    async def test_legacy_referrals_are_not_enqueued_automatically(self):
+        from referral_system_new import process_pending_referral_signup_rewards
+        await self._seed_pair(2601, 2602)
+        db = await database.get_db()
+        await db.execute("DROP INDEX idx_referrals_signup_retry")
+        await db.execute("ALTER TABLE referrals DROP COLUMN signup_bonus_retry")
+        await db.execute("ALTER TABLE referrals DROP COLUMN signup_attempt_ms")
+        await db.commit()
+        await database.init_db()
+        self.assertEqual(await process_pending_referral_signup_rewards(None), 0)
+
+    async def test_10_second_inviter_does_not_create_a_phantom_referral(self):
+        for uid in (1101, 1102, 1103):
+            await database.ensure_user(uid)
+        await database.set_referrer(1103, 1101)
+        await database.set_referrer(1103, 1102)
+        self.assertEqual(await database.get_referrer(1103), 1101)
+        self.assertEqual(await database.count_referrals(1101), 1)
+        self.assertEqual(await database.count_referrals(1102), 0)
+        self.assertEqual(await database.get_referrals_missing_signup_bonus(1102), [])
+
+    async def test_11_historical_phantom_does_not_block_retry_queue(self):
+        for uid in (1201, 1202, 1203):
+            await database.ensure_user(uid)
+        await database.set_referrer(1203, 1201)
+        db = await database.get_db()
+        await db.execute("INSERT INTO referrals(referrer_id, referred_id) VALUES(?,?)", (1202, 1203))
+        await db.commit()
+        await database.add_referral_event(1202, 1203, "registration_bonus", days_awarded=15)
+        self.assertEqual(await database.get_referrals_missing_signup_bonus(1202), [])
+        self.assertEqual(await database.get_referrals_missing_signup_bonus(1201), [1203])
+        self.assertEqual((await database.get_referral_stats_enhanced(1202))["total_registrations"], 0)
+        self.assertEqual((await database.get_referral_stats_enhanced(1202))["total_bonus_days"], 0)
+        self.assertEqual(await database.get_referred_users_list(1202), [])
+        from growth_metrics import referral_growth_snapshot
+        self.assertEqual((await referral_growth_snapshot(days=30))["invited"], 1)
+
+    async def test_12_private_invite_matches_legacy_lowercase_application(self):
+        await database.create_ad_application(
+            user_id=1301, channel_id=None, channel_username="", subscriber_count=20,
+            bonus_months=2, channel_ref="+abcdef012345", status="channel_pending",
+        )
+        self.assertTrue(await database.channel_already_used(None, "+AbCdEf012345"))
+
+    async def test_same_channel_cannot_be_submitted_concurrently_under_different_names(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        import aiosqlite
+        async with aiosqlite.connect(TEST_DB_PATH, timeout=5) as first, aiosqlite.connect(TEST_DB_PATH, timeout=5) as second:
+            with patch("database.get_db", new=AsyncMock(side_effect=[first, second])):
+                results = await asyncio.gather(*(
+                    database.create_ad_application(
+                        user_id=user_id, channel_id=-100123, channel_username=alias,
+                        subscriber_count=20, bonus_months=2, channel_ref=alias,
+                    )
+                    for user_id, alias in ((1302, "firstalias"), (1303, "secondalias"))
+                ), return_exceptions=True)
+        self.assertEqual(sum(isinstance(result, int) for result in results), 1)
+        self.assertEqual(sum(isinstance(result, Exception) for result in results), 1)
+
+    async def test_13_concurrent_signup_reward_conflict_is_reported_as_success(self):
+        from unittest.mock import AsyncMock, patch
+        from referral_system_new import award_referral_signup_bonus
+        with (
+            patch("database.get_referrer", new=AsyncMock(return_value=1401)),
+            patch("database.has_referral_event", new=AsyncMock(side_effect=[False, True])),
+            patch("database.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("database.add_referral_event", new=AsyncMock(return_value=0)),
+            patch("subscription.deliver_key", new=AsyncMock(return_value=True)),
+        ):
+            self.assertTrue(await award_referral_signup_bonus(None, 1401, 1402))
 
 
 if __name__ == "__main__":

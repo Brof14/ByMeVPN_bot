@@ -23,7 +23,7 @@
 | Mac | MacBook / Apple icons | `5323440478232783499` |
 | Android TV | Television / TopicIcons | `5355012477883004708` |
 
-The four tariff premium icons are distinct, mapped by callback (not by dynamic price text): one-month calendar `6023880246128810031`, 3+1 outlined gift `5301299389245985629`, 6+2 gift tile `5301163762768707871`, 12+3 starred gift `5301192569114366400`. The starred gift is a decorative icon only — **not** a claim that Telegram Premium is included. The actual text and prices remain the existing purchase contract.
+Tariff buttons use the catalog calendar `6023880246128810031` for all durations. Gift icons were removed from these buttons because the current calculation charges for the full included period. The actual prices and durations remain the existing purchase contract.
 
 ## UX release checklist
 1. Check button icons on Android Telegram, iOS Telegram and Telegram Desktop, both dark and light theme. Compare stroke weight, cropping, animation, tap targets and legibility; replace visibly mismatched exceptions after actual visual review.

@@ -297,6 +297,23 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
         used_again = await database.use_promo_code(code, user_id)
         self.assertFalse(used_again, "Cannot reuse single-use promo code")
 
+    async def test_promo_usage_rolls_back_if_counter_update_fails(self):
+        await database.create_promo_code("ATOMIC", promo_type="percent", discount_value=20, max_uses=5)
+        db = await database.get_db()
+        await db.execute("""CREATE TRIGGER reject_promo_counter BEFORE UPDATE OF uses_count ON promo_codes
+                          BEGIN SELECT RAISE(ABORT, 'counter failure'); END""")
+        await db.commit()
+
+        self.assertFalse(await database.use_promo_code("ATOMIC", 999008))
+        self.assertFalse(await database.has_user_used_promo("ATOMIC", 999008))
+        self.assertEqual((await database.validate_promo_code("ATOMIC"))["uses_count"], 0)
+
+    async def test_concurrent_promo_recording_counts_user_once(self):
+        await database.create_promo_code("ONCE", promo_type="percent", discount_value=20, max_uses=5)
+        results = await asyncio.gather(*(database.use_promo_code("ONCE", 999009) for _ in range(5)))
+        self.assertEqual(sum(results), 1)
+        self.assertEqual((await database.validate_promo_code("ONCE"))["uses_count"], 1)
+
     # ------------------------------------------------------------------------
     # Test 8: Pricing helper and single source of truth (All 12 combinations)
     # ------------------------------------------------------------------------

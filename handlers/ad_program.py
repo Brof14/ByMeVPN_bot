@@ -157,12 +157,13 @@ async def cb_ad_program(callback: CallbackQuery, bot: Bot, state: FSMContext):
 
     text = (
         "<b>VPN за рекламу</b>\n\n"
-        "Перешлите пост из @ByMeVPN в свой канал и получите бонусные месяцы.\n\n"
-        "Не меняйте текст и не добавляйте своё. Сохраните репост на 30 дней."
+        "Перешлите пост из @ByMeVPN в свой канал. Бонус начисляется после проверки канала и публикации.\n\n"
+        "Сохраните репост без изменений на 30 дней. Своей ссылкой для приглашений можно поделиться отдельным сообщением."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Проверить канал", callback_data="ad_check_channel")],
         [InlineKeyboardButton(text="Размер бонусов", callback_data="ad_bonus_tiers")],
+        [InlineKeyboardButton(text="Моя ссылка и приглашения", callback_data="partner")],
         [InlineKeyboardButton(text="Мои заявки", callback_data="ad_my_applications")],
         [InlineKeyboardButton(text="← Назад", callback_data="free_vpn")],
     ])
@@ -252,9 +253,9 @@ async def msg_ad_subscriber_count(message: Message, bot: Bot, state: FSMContext)
     data = await state.get_data()
     raw = (message.text or "").strip().replace(" ", "").replace("\u00a0", "")
 
-    if not raw.isdigit():
+    if not raw.isascii() or not raw.isdecimal() or len(raw) > 19 or not 1 <= int(raw) <= 2**63 - 1:
         await message.answer(
-            "❌ Пожалуйста, отправьте число подписчиков, например: <code>1284</code>",
+            "❌ Отправьте положительное число подписчиков, например: <code>1284</code>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="◀️ Отмена", callback_data="ad_program")]
@@ -340,12 +341,11 @@ async def _create_application_and_reply(
 
     await log_ad_analytics_event(user_id, "ad_application_submitted", {
         "app_id": app_id,
-        "channel_ref": channel_ref,
         "subscriber_count": subscriber_count,
         "bonus_months": bonus_months,
         "manual_count": manual_count,
     })
-    await log_ad_audit(user_id, "ad_application_created", f"app={app_id} ref={channel_ref} subs={subscriber_count}")
+    await log_ad_audit(user_id, "ad_application_created", f"app={app_id} subs={subscriber_count}")
 
     if needs_review:
         text = (
@@ -409,7 +409,7 @@ async def msg_ad_channel_input(message: Message, bot: Bot, state: FSMContext):
             ),
         )
         await state.update_data(
-            ad_channel_ref=private_ref.lower(),
+            ad_channel_ref=private_ref,
             ad_channel_username="",
             ad_channel_id=None,
             ad_chat_title="приватный канал",
@@ -430,13 +430,23 @@ async def msg_ad_channel_input(message: Message, bot: Bot, state: FSMContext):
         )
         return
 
+    if chat.type != "channel":
+        await message.answer(
+            "Эта ссылка ведёт не на канал. Отправьте ссылку на Telegram-канал.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Отмена", callback_data="ad_program")]
+            ]),
+        )
+        return
+
     subscriber_count = None
     try:
         subscriber_count = await bot.get_chat_member_count(chat.id)
     except Exception:
         pass  # bot is not a member — that's fine, user will provide the count
 
-    if subscriber_count is None:
+    if (not isinstance(subscriber_count, int) or isinstance(subscriber_count, bool)
+            or not 1 <= subscriber_count <= 2**63 - 1):
         await state.update_data(
             ad_channel_ref=public_username.lower(),
             ad_channel_username=public_username,
@@ -446,8 +456,8 @@ async def msg_ad_channel_input(message: Message, bot: Bot, state: FSMContext):
         await _ask_subscriber_count(
             bot, message, state,
             prompt=(
-                f"<b>Канал найден: {chat.title or '@' + public_username}</b>\n\n"
-                "Telegram не даёт боту увидеть число подписчиков (бот не участник канала).\n\n"
+                f"<b>Канал найден: {escape(chat.title or '@' + public_username)}</b>\n\n"
+                "Не удалось получить корректное число подписчиков от Telegram.\n\n"
                 "Отправьте <b>текущее число подписчиков</b> одним числом, "
                 "например: <code>1284</code>\n"
                 "Данные проверит администратор при одобрении."
@@ -584,8 +594,10 @@ async def msg_ad_post_url(message: Message, bot: Bot, state: FSMContext):
         await message.answer("Заявка уже закрыта или удалена. Откройте раздел «Мои заявки».", reply_markup=back_to_menu())
         await state.clear()
         return
-    await log_ad_analytics_event(user_id, "ad_post_submitted", {"app_id": app_id, "post_url": post_url})
-    await log_ad_audit(user_id, "ad_post_submitted", f"app={app_id} url={post_url}")
+    # The post URL is stored on the application for verification. Do not copy
+    # private-channel links into general-purpose analytics and audit logs.
+    await log_ad_analytics_event(user_id, "ad_post_submitted", {"app_id": app_id})
+    await log_ad_audit(user_id, "ad_post_submitted", f"app={app_id}")
 
     text = (
         "<b>Ссылка получена</b>\n\n"
@@ -835,7 +847,8 @@ async def cb_ad_admin_view(callback: CallbackQuery, bot: Bot):
     if app["status"] in ("post_submitted", "active_30_days"):
         text += (
             "\n\n<b>Проверьте вручную:</b> сообщение переслано из @ByMeVPN "
-            "без изменений. По одной ссылке Telegram Bot API этого не подтверждает."
+            "без изменений и заявитель управляет каналом. Одна ссылка на пост "
+            "не подтверждает ни происхождение репоста, ни владение каналом."
         )
         kb.row(
             InlineKeyboardButton(text="Подтвердить репост и выдать бонус", callback_data=f"ad_admin_approve:{app_id}"),
@@ -844,6 +857,10 @@ async def cb_ad_admin_view(callback: CallbackQuery, bot: Bot):
     elif app["status"] == "grant_pending":
         kb.row(InlineKeyboardButton(text="↻ Повторить начисление", callback_data=f"ad_admin_approve:{app_id}"))
     elif app["status"] == "channel_pending":
+        text += (
+            "\n\n<b>Проверьте вручную:</b> принадлежность канала, число подписчиков "
+            "и прошлое участие. Разные пригласительные ссылки могут вести в один канал."
+        )
         kb.row(InlineKeyboardButton(text="✓ Канал проверен · ждать пост", callback_data=f"ad_admin_channel_ok:{app_id}"))
         kb.row(InlineKeyboardButton(text="❌ Отклонить", callback_data=f"ad_admin_reject:{app_id}"))
     elif app["status"] in ("approved", "retention_issue") and due and due <= now:
@@ -914,6 +931,46 @@ async def send_or_edit_safe(bot: Bot, callback: CallbackQuery, text: str, kb) ->
     await send_with_photo(bot, callback, text, kb)
 
 
+async def _deliver_verified_ad_reward(bot: Bot, app: dict) -> bool:
+    """Deliver only a reward already approved for provisioning."""
+    app_id, user_id = app["id"], app["user_id"]
+    try:
+        from subscription import deliver_key
+        keys = await get_user_keys(user_id)
+        existing = max(keys, key=lambda key: key.get("expiry", 0)) if keys else None
+        return await deliver_key(
+            bot=bot, user_id=user_id, chat_id=user_id,
+            config_name=f"ByMeVPN_{user_id}", days=int(app["bonus_months"]) * 30,
+            limit_ip=existing.get("limit_ip", 2) if existing else 2,
+            is_paid=True, amount=0, method="ad_bonus", payload=f"ad_bonus_{app_id}",
+            extend_existing=True,
+        )
+    except Exception:
+        logger.exception("Failed to grant ad bonus for app %d", app_id)
+        return False
+
+
+async def process_pending_ad_rewards(bot: Bot, limit: int = 10) -> int:
+    """Retry rewards for manually verified posts, with fair bounded batches."""
+    from database import get_pending_ad_reward_retries, mark_ad_reward_attempt
+
+    completed = 0
+    for app in await get_pending_ad_reward_retries(limit):
+        try:
+            await mark_ad_reward_attempt(app["id"])
+            if not await _deliver_verified_ad_reward(bot, app):
+                continue
+            if await update_ad_application(app["id"], status="approved", expected_statuses=["grant_pending"]):
+                completed += 1
+                await log_ad_audit(None, "ad_approved_retry", f"app={app['id']} user={app['user_id']}")
+                await log_ad_analytics_event(app["user_id"], "ad_approved", {
+                    "app_id": app["id"], "days": int(app["bonus_months"]) * 30,
+                })
+        except Exception:
+            logger.exception("Ad bonus retry failed for app %d", app["id"])
+    return completed
+
+
 @router.callback_query(F.data.startswith("ad_admin_approve:"))
 async def cb_ad_admin_approve(callback: CallbackQuery, bot: Bot):
     if not _is_admin(callback.from_user.id):
@@ -940,22 +997,7 @@ async def cb_ad_admin_approve(callback: CallbackQuery, bot: Bot):
         if not marked:
             await safe_answer(callback, "Заявка уже обрабатывается.", alert=True)
             return
-    try:
-        from subscription import deliver_key
-        keys = await get_user_keys(user_id)
-        existing_key = max(keys, key=lambda k: k.get("expiry", 0)) if keys else None
-        devices = existing_key.get("limit_ip", 2) if existing_key else 2
-        success = await deliver_key(
-            bot=bot, user_id=user_id, chat_id=user_id,
-            config_name=f"ByMeVPN_{user_id}", days=days, limit_ip=devices,
-            # A deterministic provisioning intent makes retries safe without
-            # creating a payment record or changing the subscription price.
-            is_paid=True, amount=0, method="ad_bonus", payload=f"ad_bonus_{app_id}",
-            extend_existing=True,
-        )
-    except Exception as e:
-        logger.error("Failed to grant ad bonus for app %d: %s", app_id, e)
-        success = False
+    success = await _deliver_verified_ad_reward(bot, app)
 
     if not success:
         await log_ad_audit(callback.from_user.id, "ad_bonus_pending", f"app={app_id} user={user_id}")
@@ -966,7 +1008,26 @@ async def cb_ad_admin_approve(callback: CallbackQuery, bot: Bot):
         )
         return
 
-    await update_ad_application(app_id, status="approved", expected_statuses=["grant_pending"])
+    try:
+        updated = await update_ad_application(app_id, status="approved", expected_statuses=["grant_pending"])
+    except Exception:
+        logger.exception("Could not close ad application %d after delivery", app_id)
+        updated = False
+    if not updated:
+        try:
+            current = await get_ad_application_by_id(app_id)
+        except Exception:
+            current = None
+        if current and current["status"] == "approved":
+            text = f"Заявка #{app_id} уже подтверждена и закрыта."
+        else:
+            text = (
+                f"⚠️ Бонус по заявке #{app_id} выдан, но статус заявки не подтверждён. "
+                "Нужна сверка; не выдавайте бонус повторно вручную."
+            )
+            logger.error("Ad application %d needs status reconciliation after delivery", app_id)
+        await send_or_edit_safe(bot, callback, text, _ad_admin_kb())
+        return
 
     await log_ad_audit(callback.from_user.id, "ad_approved", f"app={app_id} user={user_id} days={days}")
     await log_ad_analytics_event(user_id, "ad_approved", {"app_id": app_id, "days": days})

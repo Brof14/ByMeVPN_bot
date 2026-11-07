@@ -131,13 +131,69 @@ class TestGoogleLoginClosed(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.exception.status_code, 503)
 
 
-class TestAccountDeletionUnavailable(unittest.IsolatedAsyncioTestCase):
-    async def test_delete_me_does_not_claim_success_without_deleting_account(self):
+class TestSelfServiceAccountDeletion(unittest.IsolatedAsyncioTestCase):
+    async def test_delete_requires_explicit_confirmation(self):
         from fastapi import HTTPException
-
-        with self.assertRaises(HTTPException) as result:
+        with self.assertRaises(HTTPException) as error:
             await api_router.delete_me(user_id=98765)
-        self.assertEqual(result.exception.status_code, 501)
+        self.assertEqual(error.exception.status_code, 400)
+
+    async def test_failed_panel_removal_does_not_erase_local_account(self):
+        from fastapi import HTTPException
+        with (
+            patch.object(database, "try_acquire_delivery_lease", new=AsyncMock(return_value=True)),
+            patch.object(database, "suspend_all_user_autorenew", new=AsyncMock(return_value=1)) as suspend,
+            patch.object(database, "has_recent_unsettled_checkout", new=AsyncMock(return_value=False)),
+            patch("xui_client.delete_xui_user", new=AsyncMock(return_value=False)),
+            patch.object(database, "delete_user_and_keys", new=AsyncMock()) as erase,
+            patch.object(database, "renew_delivery_lease", new=AsyncMock()) as renew,
+            patch.object(database, "release_delivery_lease", new=AsyncMock()) as release,
+        ):
+            with self.assertRaises(HTTPException) as error:
+                await api_router.delete_me(user_id=98765, confirmation="DELETE")
+        self.assertEqual(error.exception.status_code, 503)
+        suspend.assert_awaited_once_with(98765)
+        erase.assert_not_awaited()
+        renew.assert_not_awaited()
+        release.assert_awaited_once()
+
+    async def test_recent_checkout_blocks_irreversible_panel_deletion(self):
+        from fastapi import HTTPException
+        with (
+            patch.object(database, "try_acquire_delivery_lease", new=AsyncMock(return_value=True)),
+            patch.object(database, "suspend_all_user_autorenew", new=AsyncMock(return_value=1)),
+            patch.object(database, "has_recent_unsettled_checkout", new=AsyncMock(return_value=True)),
+            patch("xui_client.delete_xui_user", new=AsyncMock()) as panel,
+            patch.object(database, "release_delivery_lease", new=AsyncMock()),
+        ):
+            with self.assertRaises(HTTPException) as error:
+                await api_router.delete_me(user_id=98765, confirmation="DELETE")
+        self.assertEqual(error.exception.status_code, 409)
+        panel.assert_not_awaited()
+
+    async def test_success_erases_only_after_panel_is_confirmed(self):
+        steps = []
+        async def suspend(_user):
+            steps.append("billing")
+        async def panel(_user):
+            steps.append("panel")
+            return True
+        async def erase(_user, **kwargs):
+            steps.append("sqlite")
+            self.assertEqual(kwargs["source"], "self_service")
+        with (
+            patch.object(database, "try_acquire_delivery_lease", new=AsyncMock(return_value=True)),
+            patch.object(database, "suspend_all_user_autorenew", new=AsyncMock(side_effect=suspend)),
+            patch.object(database, "has_recent_unsettled_checkout", new=AsyncMock(return_value=False)),
+            patch("xui_client.delete_xui_user", new=AsyncMock(side_effect=panel)),
+            patch.object(database, "renew_delivery_lease", new=AsyncMock(return_value=True)),
+            patch.object(database, "delete_user_and_keys", new=AsyncMock(side_effect=erase)),
+            patch.object(database, "release_delivery_lease", new=AsyncMock()),
+        ):
+            response = await api_router.delete_me(user_id=98765, confirmation="DELETE")
+        self.assertEqual(steps, ["billing", "panel", "sqlite"])
+        self.assertEqual(response["status"], "deleted")
+        self.assertTrue(response["recurring_charges_disabled"])
 
 
 class TestTelegramAuthSessions(unittest.IsolatedAsyncioTestCase):
@@ -263,6 +319,19 @@ class TestTelegramAuthSessions(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(sum(result.get("status") == "authenticated" for result in results), 1)
         self.assertEqual(sum(result.get("status") == "expired" for result in results), 1)
+
+    async def test_removed_account_cannot_use_old_access_or_refresh_tokens(self):
+        from fastapi import HTTPException
+
+        await database.ensure_user(98765)
+        token = api_router.create_simple_jwt(98765, "test@example.invalid")
+        await database.delete_user_and_keys(98765)
+        with self.assertRaises(HTTPException) as access:
+            await api_router.get_current_user_id(f"Bearer {token}")
+        self.assertEqual(access.exception.status_code, 401)
+        with self.assertRaises(HTTPException) as refresh:
+            await api_router.refresh_token(api_router.RefreshRequest(refresh=f"ref_{token}"))
+        self.assertEqual(refresh.exception.status_code, 401)
 
     async def test_logout_revokes_access_and_refresh_for_one_session(self):
         from fastapi import HTTPException

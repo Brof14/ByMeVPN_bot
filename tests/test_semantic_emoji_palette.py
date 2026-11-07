@@ -53,7 +53,7 @@ class SemanticPremiumEmojiTests(unittest.TestCase):
         self.assertEqual(secondary["guide_macos:31"].icon_custom_emoji_id, ICON_IDS["macos"])
         self.assertEqual(secondary["guide_android_tv:31"].icon_custom_emoji_id, ICON_IDS["android_tv"])
 
-    def test_four_tariff_icons_are_distinct_without_any_price_or_callback_edits(self):
+    def test_tariff_icons_use_calendar_without_implying_a_gift(self):
         with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "1"}):
             for devices in (2, 5, 10):
                 marked = by_callback(tariff_selection_kb(devices=devices))
@@ -63,8 +63,8 @@ class SemanticPremiumEmojiTests(unittest.TestCase):
                     action = f"tariff_{months}_{devices}"
                     self.assertIn(action, marked)
                     icons.append(marked[action].icon_custom_emoji_id)
-                    self.assertEqual(marked[action].icon_custom_emoji_id, ICON_IDS[role])
-                self.assertEqual(len(set(icons)), 4)
+                    self.assertEqual(marked[action].icon_custom_emoji_id, ICON_IDS["tariff_1"])
+                self.assertEqual(len(set(icons)), 1)
                 self.assertEqual(
                     [marked[f"tariff_{m}_{devices}"].style for m in (1, 3, 6, 12)],
                     [None, None, "primary", None],

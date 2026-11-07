@@ -17,6 +17,11 @@ router = Router()
 
 
 def partner_main_kb(link: str) -> InlineKeyboardMarkup:
+    post_text = (
+        "ByMeVPN — VPN без сложных настроек.\n"
+        "Для новых пользователей — 3 дня бесплатно, без карты.\n\n"
+        f"Попробовать: {link}"
+    )
     share_text = quote_plus(
         "Попробуй ByMeVPN — VPN без сложных настроек.\n"
         "3 дня бесплатно, без карты."
@@ -24,6 +29,7 @@ def partner_main_kb(link: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Поделиться", url=f"https://t.me/share/url?url={quote_plus(link)}&text={share_text}", )],
         [InlineKeyboardButton(text="Скопировать ссылку", copy_text={"text": link})],
+        [InlineKeyboardButton(text="Скопировать текст для канала", copy_text={"text": post_text})],
         [InlineKeyboardButton(text="Мои приглашения", callback_data="partner_referrals_list")],
         [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu")],
     ])
@@ -51,7 +57,7 @@ async def cb_partner(callback: CallbackQuery, bot: Bot):
         "+15 дней за регистрацию друга.\n"
         "+30 дней за его первую подходящую оплату.\n\n"
         f"Приглашено: <b>{registrations}</b> · оплатили: <b>{paid_referrals}</b>\n"
-        f"Получено: <b>{bonus_days} дней</b>"
+        f"Начислено или ожидает начисления: <b>{bonus_days} дней</b>"
         f"{pending_note}"
     )
     await send_with_photo(bot, callback, text, partner_main_kb(link), photo=REFERRALS)
@@ -71,7 +77,7 @@ async def cb_partner_referrals_list(callback: CallbackQuery, bot: Bot):
             lines.append(
                 f"\n{i}. {format_timestamp(user['registration_date'])}\n"
                 f"   {status} · {payment}\n"
-                f"   Начислено: <b>+{user['bonus_days_awarded']} дней</b>"
+                f"   Начислено или ожидает начисления: <b>+{user['bonus_days_awarded']} дней</b>"
             )
         if len(referred_users) > 20:
             lines.append(f"\nПоказаны последние 20 из {len(referred_users)}.")

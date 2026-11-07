@@ -36,6 +36,84 @@ class TestGiveawayAutomation(unittest.IsolatedAsyncioTestCase):
             except FileNotFoundError:
                 pass
 
+    async def test_scheduler_recovers_new_signup_reward(self):
+        from giveaway_automation import run_giveaway_automation
+        await database.ensure_user(701)
+        await database.ensure_user(702)
+        await database.set_referrer(702, 701)
+        bot = SimpleNamespace(
+            send_message=AsyncMock(),
+            get_me=AsyncMock(return_value=SimpleNamespace(username="ByMeVPNbot")),
+        )
+        with (
+            patch("subscription.deliver_key", new=AsyncMock(return_value=True)),
+            patch("giveaway_automation._notify_admins", new=AsyncMock()),
+        ):
+            await run_giveaway_automation(bot)
+        self.assertTrue(await database.has_referral_event(701, 702, "registration_bonus"))
+
+    async def test_verified_ad_reward_is_retried_automatically_after_failure(self):
+        from handlers.ad_program import process_pending_ad_rewards
+        await database.ensure_user(801)
+        app_id = await database.create_ad_application(
+            user_id=801, channel_id=-100801, channel_username="channel801",
+            subscriber_count=20, bonus_months=2, channel_ref="channel801", status="grant_pending",
+        )
+        bot = SimpleNamespace(send_message=AsyncMock())
+        delivery = AsyncMock(side_effect=[False, True])
+        with patch("subscription.deliver_key", new=delivery):
+            self.assertEqual(await process_pending_ad_rewards(bot), 0)
+            self.assertEqual((await database.get_ad_application_by_id(app_id))["status"], "grant_pending")
+            self.assertEqual(await process_pending_ad_rewards(bot), 1)
+            self.assertEqual(await process_pending_ad_rewards(bot), 0)
+        self.assertEqual((await database.get_ad_application_by_id(app_id))["status"], "approved")
+        self.assertEqual([call.kwargs["payload"] for call in delivery.await_args_list], [f"ad_bonus_{app_id}"] * 2)
+
+    async def test_scheduler_recovers_verified_ad_reward(self):
+        from giveaway_automation import run_giveaway_automation
+        await database.ensure_user(805)
+        app_id = await database.create_ad_application(
+            user_id=805, channel_id=-100805, channel_username="channel805",
+            subscriber_count=20, bonus_months=2, channel_ref="channel805", status="grant_pending",
+        )
+        bot = SimpleNamespace(
+            send_message=AsyncMock(),
+            get_me=AsyncMock(return_value=SimpleNamespace(username="ByMeVPNbot")),
+        )
+        with (
+            patch("subscription.deliver_key", new=AsyncMock(return_value=True)),
+            patch("giveaway_automation._notify_admins", new=AsyncMock()),
+        ):
+            await run_giveaway_automation(bot)
+        self.assertEqual((await database.get_ad_application_by_id(app_id))["status"], "approved")
+
+    async def test_failed_verified_ad_reward_does_not_block_other_partners(self):
+        from handlers.ad_program import process_pending_ad_rewards
+        for user_id in (811, 812):
+            await database.ensure_user(user_id)
+            await database.create_ad_application(
+                user_id=user_id, channel_id=-100000 - user_id, channel_username=f"channel{user_id}",
+                subscriber_count=20, bonus_months=2, channel_ref=f"channel{user_id}", status="grant_pending",
+            )
+        bot = SimpleNamespace(send_message=AsyncMock())
+        delivery = AsyncMock(side_effect=lambda **kw: kw["user_id"] == 812)
+        with patch("subscription.deliver_key", new=delivery):
+            self.assertEqual(await process_pending_ad_rewards(bot, limit=1), 0)
+            self.assertEqual(await process_pending_ad_rewards(bot, limit=1), 1)
+        self.assertEqual([call.kwargs["user_id"] for call in delivery.await_args_list], [811, 812])
+
+    async def test_pending_ad_reward_migration_preserves_application(self):
+        await database.ensure_user(821)
+        app_id = await database.create_ad_application(
+            user_id=821, channel_id=-100821, channel_username="channel821",
+            subscriber_count=20, bonus_months=2, channel_ref="channel821", status="grant_pending",
+        )
+        db = await database.get_db()
+        await db.execute("ALTER TABLE ad_applications DROP COLUMN grant_attempt_ms")
+        await db.commit()
+        await database.init_db()
+        self.assertEqual([app["id"] for app in await database.get_pending_ad_reward_retries()], [app_id])
+
     async def test_monthly_campaign_is_created_once_and_respects_opt_out(self):
         from giveaway_automation import run_giveaway_automation
 
@@ -145,6 +223,13 @@ class TestGiveawayAutomation(unittest.IsolatedAsyncioTestCase):
                 await db.execute("UPDATE referrals SET created=? WHERE referred_id=?", (now - 10, referred_id))
                 await db.commit()
 
+        # Historical inconsistent rows must not qualify a different inviter.
+        db = await database.get_db()
+        await db.execute(
+            "INSERT INTO referrals(referrer_id, referred_id, created) VALUES(?,?,?)",
+            (805, 9000 + 801 * 10, now - 10),
+        )
+        await db.commit()
         for user_id, count in referral_counts.items():
             status = await database.get_giveaway_entry_status(giveaway_id, user_id)
             self.assertEqual(status["qualified"], count > 0)

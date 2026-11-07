@@ -8,6 +8,7 @@ import secrets
 import time
 import json
 import logging
+import math
 from typing import Optional
 import aiosqlite
 from cache import cache_user_info, invalidate_user_cache, invalidate_subscription_cache
@@ -121,6 +122,22 @@ CREATE TABLE IF NOT EXISTS provisioning_intents (
     PRIMARY KEY(provider, provider_payment_id)
 );
 
+-- Per-user lease shared by every bot worker using this SQLite database.
+-- Acquired with a single UPSERT; stale leases are reclaimable after a crash.
+CREATE TABLE IF NOT EXISTS delivery_leases (
+    user_id INTEGER PRIMARY KEY,
+    token TEXT NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+
+-- Minimal account tombstones prevent deleted users from being silently
+-- reactivated by Telegram events or by an old, otherwise valid JWT.
+CREATE TABLE IF NOT EXISTS account_tombstones (
+    user_id INTEGER PRIMARY KEY,
+    deleted_at INTEGER NOT NULL,
+    source TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS payments (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id  INTEGER NOT NULL,
@@ -140,6 +157,8 @@ CREATE TABLE IF NOT EXISTS referrals (
     referrer_id INTEGER NOT NULL,
     referred_id INTEGER NOT NULL,
     bonus_given INTEGER DEFAULT 0,
+    signup_bonus_retry INTEGER NOT NULL DEFAULT 0,
+    signup_attempt_ms INTEGER,
     created     INTEGER DEFAULT (strftime('%s','now')),
     UNIQUE(referrer_id, referred_id)
 );
@@ -158,6 +177,7 @@ CREATE TABLE IF NOT EXISTS referral_payment_rewards (
     referred_id INTEGER NOT NULL,
     payment_ref TEXT NOT NULL,
     created INTEGER DEFAULT (strftime('%s','now')),
+    last_attempt_ms INTEGER,
     UNIQUE(referrer_id, referred_id)
 );
 
@@ -499,6 +519,24 @@ async def get_db() -> aiosqlite.Connection:
 
 async def _run_migrations(db: aiosqlite.Connection) -> None:
     """Run database migrations."""
+    referral_columns = {
+        row[1] for row in await (await db.execute("PRAGMA table_info(referrals)")).fetchall()
+    }
+    if "signup_bonus_retry" not in referral_columns:
+        await db.execute("ALTER TABLE referrals ADD COLUMN signup_bonus_retry INTEGER NOT NULL DEFAULT 0")
+    if "signup_attempt_ms" not in referral_columns:
+        await db.execute("ALTER TABLE referrals ADD COLUMN signup_attempt_ms INTEGER")
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_referrals_signup_retry ON referrals(signup_attempt_ms) WHERE signup_bonus_retry=1"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_referral_events_pair_type ON referral_events(referrer_id, referred_id, event_type)"
+    )
+    reward_columns = {
+        row[1] for row in await (await db.execute("PRAGMA table_info(referral_payment_rewards)")).fetchall()
+    }
+    if "last_attempt_ms" not in reward_columns:
+        await db.execute("ALTER TABLE referral_payment_rewards ADD COLUMN last_attempt_ms INTEGER")
     # Additive storage for the opt-in Google flow. This is deliberately a
     # migration rather than part of the base schema so existing SQLite files
     # are upgraded explicitly and can be verified independently before rollout.
@@ -974,12 +1012,16 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
                 approved_at INTEGER,
                 rejected_at INTEGER,
                 rejection_reason TEXT,
+                grant_attempt_ms INTEGER,
                 UNIQUE(user_id, channel_id)
             )
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_ad_applications_user ON ad_applications(user_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_ad_applications_status ON ad_applications(status)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_ad_applications_channel ON ad_applications(channel_id)")
+        ad_columns = {row[1] for row in await (await db.execute("PRAGMA table_info(ad_applications)")).fetchall()}
+        if "grant_attempt_ms" not in ad_columns:
+            await db.execute("ALTER TABLE ad_applications ADD COLUMN grant_attempt_ms INTEGER")
         logger.info("Migration: created ad_applications table")
     except Exception as e:
         logger.warning("Migration: ad_applications notice: %s", e)
@@ -1237,9 +1279,11 @@ async def ensure_user(user_id: int, username: Optional[str] = None) -> None:
     """Create/update a Telegram user record and keep its latest username."""
     db = await get_db()
     await db.execute(
-        "INSERT INTO users(user_id, username) VALUES(?, ?) "
-        "ON CONFLICT(user_id) DO UPDATE SET username=excluded.username",
-        (user_id, username),
+        "INSERT INTO users(user_id, username) "
+        "SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM account_tombstones WHERE user_id=?) "
+        "ON CONFLICT(user_id) DO UPDATE SET username=excluded.username "
+        "WHERE NOT EXISTS (SELECT 1 FROM account_tombstones WHERE user_id=excluded.user_id)",
+        (user_id, username, user_id),
     )
     await db.commit()
 
@@ -1502,13 +1546,16 @@ async def set_referrer(user_id: int, referrer_id: int) -> None:
         "INSERT OR IGNORE INTO users(user_id) VALUES(?)", (user_id,)
     )
     await db.execute(
-        "UPDATE users SET referrer_id=? WHERE user_id=? AND referrer_id IS NULL",
-        (referrer_id, user_id),
+        "UPDATE users SET referrer_id=? WHERE user_id=? AND referrer_id IS NULL "
+        "AND NOT EXISTS (SELECT 1 FROM account_tombstones WHERE user_id=?)",
+        (referrer_id, user_id, user_id),
     )
-    # Track referral
+    # Record only the inviter actually attached to the user. A repeated or
+    # concurrent request for a different inviter must not create a phantom row.
     await db.execute(
-        "INSERT OR IGNORE INTO referrals(referrer_id, referred_id) VALUES(?,?)",
-        (referrer_id, user_id),
+        "INSERT OR IGNORE INTO referrals(referrer_id, referred_id, signup_bonus_retry) "
+        "SELECT referrer_id, user_id, 1 FROM users WHERE user_id=? AND referrer_id=?",
+        (user_id, referrer_id),
     )
     await db.commit()
 
@@ -1818,6 +1865,77 @@ async def get_or_create_provisioning_intent(
     if not row or row[0] != user_id:
         raise ValueError("payment provisioning intent belongs to another user")
     return int(row[1])
+
+
+async def is_account_tombstoned(user_id: int) -> bool:
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT 1 FROM account_tombstones WHERE user_id=? LIMIT 1",
+        (int(user_id),),
+    )
+    return await cursor.fetchone() is not None
+
+
+async def try_acquire_delivery_lease(
+    user_id: int, token: str, ttl_seconds: int = 180,
+) -> bool:
+    """Claim a cross-process SQLite lease for one account, without waiting.
+
+    The UPSERT is atomic even when two bot processes open separate SQLite
+    connections. A crashed holder becomes reclaimable after the TTL.
+    """
+    if user_id <= 0 or not token or ttl_seconds < 30:
+        raise ValueError("invalid delivery lease")
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        # Do not start any new delivery for an erased account. Deletion itself
+        # acquires its lease *before* writing the tombstone.
+        cursor = await db.execute(
+            "SELECT 1 FROM account_tombstones WHERE user_id=? LIMIT 1",
+            (user_id,),
+        )
+        if await cursor.fetchone():
+            return False
+        cursor = await db.execute(
+            """INSERT INTO delivery_leases(user_id,token,expires_at)
+               VALUES(?,?,?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                   token=excluded.token, expires_at=excluded.expires_at
+               WHERE delivery_leases.expires_at<=?""",
+            (user_id, token, now + ttl_seconds, now),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+
+
+async def renew_delivery_lease(
+    user_id: int, token: str, ttl_seconds: int = 180,
+) -> bool:
+    """Extend only a live lease still owned by this worker."""
+    if ttl_seconds < 30:
+        raise ValueError("invalid delivery lease")
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        cursor = await db.execute(
+            """UPDATE delivery_leases SET expires_at=?
+               WHERE user_id=? AND token=? AND expires_at>?""",
+            (now + ttl_seconds, user_id, token, now),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+
+
+async def release_delivery_lease(user_id: int, token: str) -> None:
+    """Never release a lease that another worker has subsequently acquired."""
+    db = await get_db()
+    async with _db_semaphore:
+        await db.execute(
+            "DELETE FROM delivery_leases WHERE user_id=? AND token=?",
+            (user_id, token),
+        )
+        await db.commit()
 
 
 async def get_user_keys(user_id: int) -> list[dict]:
@@ -2320,18 +2438,64 @@ async def get_key_by_uuid(uuid: str) -> Optional[dict]:
     }
 
 
-async def delete_key(key_id: int) -> bool:
+async def suspend_key_autorenew(user_id: int, key_id: int) -> int:
+    """Disable saved tokens for a key before attempting irreversible removal.
+
+    Also cancel unbound legacy records: after removing a key they may become
+    eligible for recurring charges against the wrong VPN subscription. Other
+    *key-bound* subscriptions stay unchanged.
+    """
+    if user_id <= 0 or key_id <= 0:
+        raise ValueError("invalid key cancellation target")
     db = await get_db()
-    cur = await db.execute("DELETE FROM keys WHERE id=?", (key_id,))
-    await db.commit()
-    return cur.rowcount > 0
+    async with _db_semaphore:
+        cur = await db.execute(
+            """UPDATE auto_renew_subscriptions
+               SET status='cancelled', payment_method_id='',
+                   payment_method_title='', payment_method_type='',
+                   next_retry_at=NULL, updated_at=strftime('%s','now')
+               WHERE user_id=? AND (key_id=? OR key_id IS NULL)
+                 AND (status!='cancelled' OR TRIM(COALESCE(payment_method_id,''))!='')""",
+            (user_id, key_id),
+        )
+        await db.commit()
+        return cur.rowcount
+
+
+async def delete_key(key_id: int) -> bool:
+    """Delete a key without allowing an ambiguous legacy renewal to reactivate."""
+    db = await get_db()
+    async with _db_semaphore:
+        row = await (await db.execute("SELECT user_id FROM keys WHERE id=?", (key_id,))).fetchone()
+        if not row:
+            return False
+        try:
+            # Removing one of several keys may turn an unbound legacy payment
+            # into a chargeable one. Require an explicit re-enable instead.
+            await db.execute(
+                """UPDATE auto_renew_subscriptions
+                   SET status='cancelled', payment_method_id='',
+                       payment_method_title='', payment_method_type='',
+                       next_retry_at=NULL, updated_at=strftime('%s','now')
+                   WHERE user_id=? AND (key_id=? OR key_id IS NULL)""",
+                (row[0], key_id),
+            )
+            cur = await db.execute("DELETE FROM keys WHERE id=?", (key_id,))
+            await db.commit()
+            return cur.rowcount > 0
+        except Exception:
+            await db.rollback()
+            raise
 
 
 async def delete_key_by_uuid(uuid: str) -> bool:
     db = await get_db()
-    cur = await db.execute("DELETE FROM keys WHERE uuid=?", (uuid,))
-    await db.commit()
-    return cur.rowcount > 0
+    cursor = await db.execute("SELECT id FROM keys WHERE uuid=?", (uuid,))
+    key_ids = [row[0] for row in await cursor.fetchall()]
+    removed = False
+    for key_id in key_ids:
+        removed = await delete_key(key_id) or removed
+    return removed
 
 
 async def get_expired_keys() -> list[dict]:
@@ -2349,15 +2513,29 @@ async def get_expired_keys() -> list[dict]:
 
 
 async def cleanup_expired_keys() -> int:
-    """Remove expired keys and return count of removed keys."""
+    """Delete expired keys and cancel legacy billing in the same transaction."""
     expired = await get_expired_keys()
     if not expired:
         return 0
-    
     db = await get_db()
-    for key in expired:
-        await db.execute("DELETE FROM keys WHERE id=?", (key["id"],))
-    await db.commit()
+    async with _db_semaphore:
+        try:
+            # Otherwise the cleanup could turn an ambiguous unbound recurring
+            # charge into a chargeable subscription with exactly one key.
+            await db.executemany(
+                "UPDATE auto_renew_subscriptions "
+                "SET status='cancelled', next_retry_at=NULL, updated_at=strftime('%s','now') "
+                "WHERE user_id=? AND key_id IS NULL AND status='active'",
+                [(user_id,) for user_id in {key["user_id"] for key in expired}],
+            )
+            await db.executemany(
+                "DELETE FROM keys WHERE id=?",
+                [(key["id"],) for key in expired],
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
     return len(expired)
 
 
@@ -2520,7 +2698,9 @@ async def get_user_payments(user_id: int) -> list[dict]:
 async def get_referrals(referrer_id: int) -> list[dict]:
     db = await get_db()
     cur = await db.execute(
-        "SELECT referred_id, created FROM referrals WHERE referrer_id=? ORDER BY created DESC",
+        "SELECT r.referred_id, r.created FROM referrals r "
+        "JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id "
+        "WHERE r.referrer_id=? ORDER BY r.created DESC",
         (referrer_id,),
     )
     rows = await cur.fetchall()
@@ -2533,7 +2713,9 @@ async def get_referrals(referrer_id: int) -> list[dict]:
 async def count_referrals(referrer_id: int) -> int:
     db = await get_db()
     cur = await db.execute(
-        "SELECT COUNT(*) FROM referrals WHERE referrer_id=?",
+        "SELECT COUNT(*) FROM referrals r "
+        "JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id "
+        "WHERE r.referrer_id=?",
         (referrer_id,),
     )
     row = await cur.fetchone()
@@ -2548,7 +2730,7 @@ async def add_referral_event(
     description: str = None,
 ) -> int:
     db = await get_db()
-    if event_type == "registration_bonus":
+    if event_type in ("registration_bonus", "payment_bonus"):
         cur = await db.execute(
             """INSERT INTO referral_events(referrer_id, referred_id, event_type, days_awarded, description)
             SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (
@@ -2572,6 +2754,7 @@ async def get_referrals_missing_signup_bonus(referrer_id: int, limit: int = 100)
     db = await get_db()
     cur = await db.execute(
         """SELECT r.referred_id FROM referrals r
+        JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id
         WHERE r.referrer_id = ? AND NOT EXISTS (
             SELECT 1 FROM referral_events e
             WHERE e.referrer_id=r.referrer_id AND e.referred_id=r.referred_id
@@ -2581,6 +2764,50 @@ async def get_referrals_missing_signup_bonus(referrer_id: int, limit: int = 100)
         (referrer_id, int(limit)),
     )
     return [row[0] for row in await cur.fetchall()]
+
+
+async def get_pending_signup_bonus_retries(limit: int = 10) -> list[tuple[int, int]]:
+    """Queue only new referrals explicitly registered after automatic retry was added."""
+    db = await get_db()
+    cur = await db.execute(
+        """SELECT r.referrer_id, r.referred_id FROM referrals r
+        JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id
+        WHERE r.signup_bonus_retry=1 AND NOT EXISTS (
+            SELECT 1 FROM referral_events e WHERE e.referrer_id=r.referrer_id
+              AND e.referred_id=r.referred_id AND e.event_type='registration_bonus'
+        )
+        ORDER BY r.signup_attempt_ms IS NOT NULL, r.signup_attempt_ms, r.created, r.id LIMIT ?""",
+        (int(limit),),
+    )
+    return [(row[0], row[1]) for row in await cur.fetchall()]
+
+
+async def mark_signup_bonus_retry_attempt(referrer_id: int, referred_id: int) -> None:
+    db = await get_db()
+    await db.execute(
+        "UPDATE referrals SET signup_attempt_ms=? WHERE referrer_id=? AND referred_id=?",
+        (time.time_ns() // 1_000_000, referrer_id, referred_id),
+    )
+    await db.commit()
+
+
+async def complete_signup_bonus_retry(referrer_id: int, referred_id: int) -> None:
+    db = await get_db()
+    await db.execute(
+        "UPDATE referrals SET signup_bonus_retry=0 WHERE referrer_id=? AND referred_id=?",
+        (referrer_id, referred_id),
+    )
+    await db.commit()
+
+
+async def has_referral_event(referrer_id: int, referred_id: int, event_type: str) -> bool:
+    """Check one reward without loading the referrer's entire event history."""
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT 1 FROM referral_events WHERE referrer_id=? AND referred_id=? AND event_type=? LIMIT 1",
+        (referrer_id, referred_id, event_type),
+    )
+    return await cur.fetchone() is not None
 
 
 async def get_referral_events(referrer_id: int) -> list[dict]:
@@ -2963,10 +3190,24 @@ async def save_auto_renew_subscription(
     return sub_id
 
 
-async def get_auto_renew_subscription(user_id: int, key_id: Optional[int] = None) -> Optional[dict]:
+async def get_auto_renew_subscription(
+    user_id: int, key_id: Optional[int] = None, *, include_legacy: bool = False,
+) -> Optional[dict]:
     """Get auto-renew subscription record for user and optional key."""
     db = await get_db()
-    if key_id:
+    if key_id and include_legacy:
+        cur = await db.execute(
+            """SELECT id, user_id, key_id, payment_method_id, payment_method_title,
+                      payment_method_type, months, days, devices, amount_rub,
+                      status, fail_count, last_charge_at, last_charge_status,
+                      next_retry_at, created_at, updated_at
+               FROM auto_renew_subscriptions
+               WHERE user_id = ? AND (key_id = ? OR key_id IS NULL)
+               ORDER BY (status='active' AND TRIM(COALESCE(payment_method_id, '')) != '') DESC,
+                        (key_id IS NULL), id DESC LIMIT 1""",
+            (user_id, key_id),
+        )
+    elif key_id:
         cur = await db.execute(
             """SELECT id, user_id, key_id, payment_method_id, payment_method_title,
                       payment_method_type, months, days, devices, amount_rub,
@@ -2985,7 +3226,7 @@ async def get_auto_renew_subscription(user_id: int, key_id: Optional[int] = None
                       next_retry_at, created_at, updated_at
                FROM auto_renew_subscriptions
                WHERE user_id = ?
-               ORDER BY id DESC LIMIT 1""",
+               ORDER BY (status='active' AND TRIM(COALESCE(payment_method_id, '')) != '') DESC, (TRIM(COALESCE(payment_method_id, '')) != '') DESC, id DESC LIMIT 1""",
             (user_id,),
         )
     row = await cur.fetchone()
@@ -3034,6 +3275,66 @@ async def set_auto_renew_status_by_key(user_id: int, key_id: int, status: str) -
     return cur.rowcount > 0
 
 
+async def has_recent_unsettled_checkout(
+    user_id: int, lookback_seconds: int = 7200,
+) -> bool:
+    """Do not destroy a customer while a newly created invoice may settle.
+
+    Pending checkout rows can survive after an expired provider invoice, so
+    block only the recent window and leave older records for reconciliation.
+    """
+    db = await get_db()
+    cutoff = int(time.time()) - int(lookback_seconds)
+    for table in ("yookassa_pending", "crypto_pending", "yookassa_trial_pending"):
+        cursor = await db.execute(
+            f"SELECT 1 FROM {table} WHERE user_id=? AND created>=? LIMIT 1",
+            (user_id, cutoff),
+        )
+        if await cursor.fetchone():
+            return True
+
+    # A mobile checkout can be in the external provider's creation phase
+    # before it has an invoice ID or a row in either pending ledger.
+    cursor = await db.execute(
+        """SELECT 1 FROM mobile_payment_requests
+           WHERE user_id=? AND created_at>=?
+             AND (creation_state='creating'
+               OR (payment_id IS NOT NULL AND NOT EXISTS (
+                   SELECT 1 FROM payments p
+                   WHERE p.provider=CASE mobile_payment_requests.provider
+                       WHEN 'crypto' THEN 'cryptobot'
+                       ELSE mobile_payment_requests.provider END
+                     AND p.provider_payment_id=mobile_payment_requests.payment_id
+                     AND p.status='success')))
+           LIMIT 1""",
+        (user_id, cutoff),
+    )
+    return await cursor.fetchone() is not None
+
+
+async def suspend_all_user_autorenew(user_id: int) -> int:
+    """Fail closed for admin/account deletion: disable *every* saved token.
+
+    Never change paid key expiry here. Financial history is retained and
+    no future recurring charge can be initiated from the stored tokens.
+    """
+    if user_id <= 0:
+        raise ValueError("invalid account id")
+    db = await get_db()
+    async with _db_semaphore:
+        cursor = await db.execute(
+            """UPDATE auto_renew_subscriptions
+               SET status='cancelled', payment_method_id='',
+                   payment_method_title='', payment_method_type='',
+                   next_retry_at=NULL, updated_at=strftime('%s','now')
+               WHERE user_id=? AND (status!='cancelled'
+                   OR TRIM(COALESCE(payment_method_id,''))!='')""",
+            (user_id,),
+        )
+        await db.commit()
+        return cursor.rowcount
+
+
 async def cancel_auto_renew(user_id: int, key_id: Optional[int] = None) -> dict:
     """
     Disable future recurring charges for the user.
@@ -3056,7 +3357,7 @@ async def cancel_auto_renew(user_id: int, key_id: Optional[int] = None) -> dict:
         )
     else:
         cur = await db.execute(
-            "SELECT id, payment_method_title FROM auto_renew_subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+            "SELECT id, payment_method_title FROM auto_renew_subscriptions WHERE user_id = ? ORDER BY (status='active' AND TRIM(COALESCE(payment_method_id, '')) != '') DESC, (TRIM(COALESCE(payment_method_id, '')) != '') DESC, id DESC LIMIT 1",
             (user_id,),
         )
     row = await cur.fetchone()
@@ -3101,13 +3402,14 @@ async def unlink_auto_renew_payment_method(user_id: int, key_id: Optional[int] =
         cur = await db.execute(
             "SELECT id, payment_method_title FROM auto_renew_subscriptions "
             "WHERE user_id=? AND (key_id=? OR key_id IS NULL) "
-            "ORDER BY (key_id IS NULL), id DESC LIMIT 1",
+            "ORDER BY (status='active' AND TRIM(COALESCE(payment_method_id, '')) != '') DESC, "
+            "(key_id IS NULL), id DESC LIMIT 1",
             (user_id, key_id),
         )
     else:
         cur = await db.execute(
             "SELECT id, payment_method_title FROM auto_renew_subscriptions "
-            "WHERE user_id=? ORDER BY id DESC LIMIT 1",
+            "WHERE user_id=? ORDER BY (status='active' AND TRIM(COALESCE(payment_method_id, '')) != '') DESC, (TRIM(COALESCE(payment_method_id, '')) != '') DESC, id DESC LIMIT 1",
             (user_id,),
         )
     row = await cur.fetchone()
@@ -3140,14 +3442,22 @@ async def resume_auto_renew(user_id: int, key_id: Optional[int] = None) -> bool:
     if key_id:
         cur = await db.execute(
             "UPDATE auto_renew_subscriptions SET status = 'active', fail_count = 0, next_retry_at = NULL, "
-            "updated_at = strftime('%s','now') WHERE user_id = ? AND key_id = ? AND payment_method_id != ''",
-            (user_id, key_id),
+            "updated_at = strftime('%s','now') WHERE user_id = ? AND id = ("
+            "SELECT id FROM auto_renew_subscriptions "
+            "WHERE user_id = ? AND TRIM(COALESCE(payment_method_id, '')) != '' "
+            "AND (key_id = ? OR (key_id IS NULL AND "
+            "(SELECT COUNT(*) FROM keys WHERE user_id = ?) = 1)) "
+            "ORDER BY (key_id IS NULL), id DESC LIMIT 1)",
+            (user_id, user_id, key_id, user_id),
         )
     else:
         cur = await db.execute(
             "UPDATE auto_renew_subscriptions SET status = 'active', fail_count = 0, next_retry_at = NULL, "
-            "updated_at = strftime('%s','now') WHERE user_id = ? AND payment_method_id != ''",
-            (user_id,),
+            "updated_at = strftime('%s','now') WHERE user_id = ? AND id = ("
+            "SELECT id FROM auto_renew_subscriptions WHERE user_id = ? "
+            "AND TRIM(COALESCE(payment_method_id, '')) != '' "
+            "ORDER BY (status='active') DESC, id DESC LIMIT 1)",
+            (user_id, user_id),
         )
     await db.commit()
     reenabled = cur.rowcount > 0
@@ -3310,6 +3620,8 @@ async def get_expiring_auto_renew_subscriptions(now: Optional[int] = None) -> li
            FROM auto_renew_subscriptions s
            JOIN keys k ON (s.key_id = k.id OR (s.key_id IS NULL AND k.user_id = s.user_id))
            WHERE s.status = 'active'
+             AND TRIM(COALESCE(s.payment_method_id, '')) != ''
+             AND (s.key_id IS NOT NULL OR (SELECT COUNT(*) FROM keys all_keys WHERE all_keys.user_id=s.user_id)=1)
              AND k.expiry <= ?
              AND k.expiry > (? - 7 * 86400)
              AND (s.last_charge_at IS NULL OR s.last_charge_at < k.expiry)
@@ -3512,21 +3824,34 @@ async def has_referral_payment_reward(referrer_id: int, referred_id: int) -> boo
     return await cur.fetchone() is not None
 
 
-async def get_pending_referral_payment_rewards(limit: int = 100) -> list[dict]:
+async def get_pending_referral_payment_rewards(limit: int = 100, *, retry_before_ms: int | None = None) -> list[dict]:
     """Paid referral bonuses whose automatic day delivery still needs retrying."""
     db = await get_db()
     cur = await db.execute(
         "SELECT r.referrer_id, r.referred_id, r.payment_ref "
         "FROM referral_payment_rewards r "
+        "JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id "
         "LEFT JOIN ref_bonus_claims c "
         "ON c.referrer_id=r.referrer_id AND c.referred_id=r.referred_id "
-        "WHERE COALESCE(c.claimed, 0)=0 ORDER BY r.created LIMIT ?",
-        (int(limit),),
+        "WHERE COALESCE(c.claimed, 0)=0 "
+        "AND (? IS NULL OR r.last_attempt_ms IS NULL OR r.last_attempt_ms <= ?) "
+        "ORDER BY r.last_attempt_ms IS NOT NULL, r.last_attempt_ms, r.created, r.referrer_id, r.referred_id LIMIT ?",
+        (retry_before_ms, retry_before_ms, int(limit)),
     )
     return [
         {"referrer_id": row[0], "referred_id": row[1], "payment_ref": row[2]}
         for row in await cur.fetchall()
     ]
+
+
+async def mark_referral_payment_reward_attempt(referrer_id: int, referred_id: int) -> None:
+    """Move an attempted reward behind untouched or less recently tried rewards."""
+    db = await get_db()
+    await db.execute(
+        "UPDATE referral_payment_rewards SET last_attempt_ms=? WHERE referrer_id=? AND referred_id=?",
+        (time.time_ns() // 1_000_000, referrer_id, referred_id),
+    )
+    await db.commit()
 
 
 async def release_ref_bonus_claim(referrer_id: int, referred_id: int) -> None:
@@ -3995,7 +4320,9 @@ async def get_referral_stats(user_id: int) -> dict:
     
     # Количество приглашённых
     cur = await db.execute(
-        "SELECT COUNT(*) FROM referrals WHERE referrer_id=?",
+        "SELECT COUNT(*) FROM referrals r "
+        "JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id "
+        "WHERE r.referrer_id=?",
         (user_id,)
     )
     total_referrals = (await cur.fetchone())[0]
@@ -4057,7 +4384,9 @@ async def get_referral_stats_enhanced(referrer_id: int) -> dict:
     
     # Total registrations (users who registered via referral)
     cur = await db.execute(
-        "SELECT COUNT(*) FROM referrals WHERE referrer_id=?",
+        "SELECT COUNT(*) FROM referrals r "
+        "JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id "
+        "WHERE r.referrer_id=?",
         (referrer_id,)
     )
     total_registrations = (await cur.fetchone())[0]
@@ -4067,6 +4396,7 @@ async def get_referral_stats_enhanced(referrer_id: int) -> dict:
         """
         SELECT COUNT(DISTINCT r.referred_id)
         FROM referrals r
+        INNER JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id
         INNER JOIN keys k ON r.referred_id = k.user_id
         WHERE r.referrer_id=? AND k.expiry > ?
         """,
@@ -4080,6 +4410,7 @@ async def get_referral_stats_enhanced(referrer_id: int) -> dict:
         """
         SELECT COUNT(DISTINCT r.referred_id)
         FROM referrals r
+        INNER JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id
         INNER JOIN referral_events e ON e.referrer_id=r.referrer_id
             AND e.referred_id=r.referred_id AND e.event_type='payment_bonus'
         WHERE r.referrer_id=?
@@ -4091,9 +4422,11 @@ async def get_referral_stats_enhanced(referrer_id: int) -> dict:
     # Total bonus days earned from referral_events
     cur = await db.execute(
         """
-        SELECT COALESCE(SUM(days_awarded), 0)
-        FROM referral_events
-        WHERE referrer_id=?
+        SELECT COALESCE(SUM(e.days_awarded), 0)
+        FROM referral_events e
+        JOIN referrals r ON r.referrer_id=e.referrer_id AND r.referred_id=e.referred_id
+        JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id
+        WHERE e.referrer_id=?
         """,
         (referrer_id,)
     )
@@ -4126,6 +4459,7 @@ async def get_referred_users_list(referrer_id: int) -> list[dict]:
                (SELECT COALESCE(SUM(days_awarded), 0) FROM referral_events 
                 WHERE referrer_id=? AND referred_id=r.referred_id) as bonus_days
         FROM referrals r
+        JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id
         WHERE r.referrer_id=?
         ORDER BY r.created DESC
         """,
@@ -4375,18 +4709,90 @@ async def find_user_by_id(user_id: int) -> Optional[dict]:
     }
 
 
-async def delete_user_and_keys(user_id: int) -> list:
-    """Delete user and all their keys, return list of deleted UUIDs"""
-    db = await get_db()
-    # Get UUIDs before deleting
-    cur = await db.execute("SELECT uuid FROM keys WHERE user_id=?", (user_id,))
-    rows = await cur.fetchall()
-    uuids = [row[0] for row in rows if row[0]]
-    
-    await db.execute("DELETE FROM keys WHERE user_id=?", (user_id,))
-    await db.execute("DELETE FROM users WHERE user_id=?", (user_id,))
-    await db.commit()
-    return uuids
+async def delete_user_and_keys(user_id: int, *, source: str = "admin") -> list[str]:
+    """Erase account-owned access and identity, keeping financial evidence.
+
+    Call ONLY after every configured 3x-ui inbound confirms remote deletion.
+    A tombstone blocks old mobile sessions and Telegram auto-registration.
+    Amounts, provider transaction IDs and refunds are retained for accounting
+    and dispute reconciliation; this is *not* an unqualified GDPR certification.
+    """
+    # Use an independent writer connection. Other legacy helpers do not all
+    # share _db_semaphore; their statements must never accidentally enter this
+    # irreversible multi-table deletion transaction.
+    async with _db_semaphore:
+        async with aiosqlite.connect(DB_FILE) as db:
+            await db.execute("PRAGMA busy_timeout=30000")
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    "SELECT uuid FROM keys WHERE user_id=?", (user_id,),
+                )
+                uuids = [row[0] for row in await cursor.fetchall() if row[0]]
+                await db.execute(
+                    "INSERT OR IGNORE INTO account_tombstones(user_id,deleted_at,source) VALUES(?,?,?)",
+                    (user_id, int(time.time()), source if source in ("admin", "self_service") else "admin"),
+                )
+                await db.execute(
+                    """UPDATE auto_renew_subscriptions
+                       SET status='cancelled', payment_method_id='',
+                           payment_method_title='', payment_method_type='',
+                           next_retry_at=NULL, updated_at=strftime('%s','now')
+                       WHERE user_id=?""",
+                    (user_id,),
+                )
+                # Explicit allowlist of identity/marketing records. Never delete
+                # financial transactions or payment-recovery rows in this routine.
+                known_tables = {
+                    row[0] for row in await (await db.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )).fetchall()
+                }
+                personal_tables = (
+                    ("keys", "user_id"), ("app_users", "user_id"),
+                    ("google_accounts", "user_id"), ("email_auth", "user_id"),
+                    ("checkout_drafts", "user_id"), ("known_hwid_devices", "user_id"),
+                    ("mobile_trial_bootstrap", "user_id"),
+                    ("mobile_device_bootstraps", "user_id"),
+                    ("trial_claim_reservations", "user_id"),
+                    ("mobile_auth_sessions", "user_id"),
+                    ("marketing_preferences", "user_id"),
+                    ("analytics_events", "user_id"),
+                    ("key_errors", "user_id"),
+                    ("ad_applications", "user_id"), ("ad_notifications", "user_id"),
+                    ("ad_audit_log", "user_id"),
+                    ("giveaway_participants", "user_id"),
+                    ("giveaway_notifications", "user_id"),
+                    ("broadcast_recipients", "user_id"),
+                    ("referral_clicks", "referrer_id"),
+                    ("referrals", "referrer_id"), ("referrals", "referred_id"),
+                    ("referral_events", "referrer_id"), ("referral_events", "referred_id"),
+                    ("ref_bonus_claims", "referrer_id"), ("ref_bonus_claims", "referred_id"),
+                    ("referral_payment_rewards", "referrer_id"),
+                    ("referral_payment_rewards", "referred_id"),
+                )
+                for table, column in personal_tables:
+                    if table in known_tables:
+                        await db.execute(
+                            f"DELETE FROM {table} WHERE {column}=?", (user_id,),
+                        )
+                await db.execute(
+                    """UPDATE users
+                       SET username=NULL, email=NULL, referrer_id=NULL,
+                           trial_used=1, is_banned=1, ban_reason='account_deleted'
+                       WHERE user_id=?""",
+                    (user_id,),
+                )
+                await db.commit()
+                try:
+                    invalidate_user_cache(user_id)
+                    invalidate_subscription_cache(user_id)
+                except Exception:
+                    logger.warning("Could not invalidate caches after account erasure for %d", user_id)
+                return uuids
+            except Exception:
+                await db.rollback()
+                raise
 
 
 async def set_key_days(key_id: int, days: int) -> bool:
@@ -4926,6 +5332,11 @@ async def update_user_email(user_id: int, email: str) -> bool:
 # Promo Codes
 # ---------------------------------------------------------------------------
 
+def _canonical_promo_type(promo_type: str) -> str:
+    """Keep existing admin-created aliases compatible with checkout."""
+    return {"fixed": "fixed_rub", "days": "free_days"}.get(promo_type, promo_type)
+
+
 async def create_promo_code(
     code: str,
     promo_type: str = "percent",
@@ -4946,7 +5357,7 @@ async def create_promo_code(
         await db.execute(
             "INSERT INTO promo_codes(code, promo_type, discount_value, max_uses, uses_count, tariff_binding, start_date, expires_at, is_active, created) "
             "VALUES(?,?,?,?,?,?,?,?,?,?)",
-            (code.upper(), promo_type, discount_value, max_uses, 0, tariff_binding, start_date, expires_at, 1, current_time)
+            (code.upper(), _canonical_promo_type(promo_type), discount_value, max_uses, 0, tariff_binding, start_date, expires_at, 1, current_time)
         )
         await db.commit()
         return True
@@ -4970,6 +5381,24 @@ async def validate_promo_code(code: str, tariff_months: int = None) -> Optional[
     if not row:
         return None
 
+    promo_type = _canonical_promo_type(row[1])
+    try:
+        value = float(row[2])
+        if not math.isfinite(value) or value <= 0:
+            return None
+        if promo_type == "percent":
+            if value > 100:
+                return None
+            discount_value = row[2]
+        elif promo_type in ("fixed_rub", "free_days"):
+            if not value.is_integer():
+                return None
+            discount_value = int(value)
+        else:
+            return None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
     # Check if not started yet
     if row[6] > current_time:
         return None
@@ -4989,8 +5418,8 @@ async def validate_promo_code(code: str, tariff_months: int = None) -> Optional[
 
     return {
         "code": row[0],
-        "promo_type": row[1],
-        "discount_value": row[2],
+        "promo_type": promo_type,
+        "discount_value": discount_value,
         "max_uses": row[3],
         "uses_count": row[4],
         "tariff_binding": row[5],
@@ -5010,33 +5439,27 @@ async def has_user_used_promo(code: str, user_id: int) -> bool:
 
 
 async def use_promo_code(code: str, user_id: int) -> bool:
-    """Mark promo code as used by user."""
-    db = await get_db()
-    current_time = int(time.time())
-    
+    """Record a fulfilled order's promo usage and counter as one transaction."""
     try:
-        # Check if user already used this code
-        cur = await db.execute(
-            "SELECT 1 FROM promo_code_uses WHERE code=? AND user_id=?",
-            (code.upper(), user_id)
-        )
-        if await cur.fetchone():
-            return False  # Already used
-        
-        # Record usage
-        await db.execute(
-            "INSERT INTO promo_code_uses(code, user_id, used_at) VALUES(?,?,?)",
-            (code.upper(), user_id, current_time)
-        )
-        
-        # Increment uses count
-        await db.execute(
-            "UPDATE promo_codes SET uses_count = uses_count + 1 WHERE code=?",
-            (code.upper(),)
-        )
-        
-        await db.commit()
-        return True
+        # A dedicated connection keeps this transaction separate from unrelated
+        # coroutines sharing the regular connection. Existing paid orders must
+        # still be recorded even if the code has since expired or hit its cap.
+        async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            cur = await db.execute(
+                """INSERT OR IGNORE INTO promo_code_uses(code, user_id, used_at)
+                   SELECT code, ?, ? FROM promo_codes WHERE code=?""",
+                (user_id, int(time.time()), code.upper()),
+            )
+            if cur.rowcount != 1:
+                await db.rollback()
+                return False
+            await db.execute(
+                "UPDATE promo_codes SET uses_count = uses_count + 1 WHERE code=?",
+                (code.upper(),),
+            )
+            await db.commit()
+            return True
     except Exception as e:
         logger.error("Failed to use promo code: %s", e)
         return False
@@ -5057,7 +5480,7 @@ async def get_all_promo_codes() -> list[dict]:
         return [
             {
                 "code": row[0],
-                "promo_type": row[1],
+                "promo_type": _canonical_promo_type(row[1]),
                 "discount_value": row[2],
                 "max_uses": row[3],
                 "uses_count": row[4],
@@ -5698,9 +6121,9 @@ async def create_ad_application(
 ) -> int:
     """Create a new ad application. Returns application ID.
 
-    channel_ref is the normalized channel identity (lowercased @username or
-    invite reference) — protected by a UNIQUE partial index, so the same
-    channel cannot be applied twice even when channel_id is NULL (private).
+    channel_ref is a lowercased public username or a case-sensitive private
+    invite reference. Different private invite links can point to one channel,
+    so that case still requires manual verification.
     """
     db = await get_db()
     if not channel_ref and channel_username:
@@ -5708,10 +6131,17 @@ async def create_ad_application(
     cur = await db.execute(
         """INSERT INTO ad_applications
         (user_id, channel_id, channel_username, subscriber_count, bonus_months, campaign_id, channel_ref, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (user_id, channel_id, channel_username, subscriber_count, bonus_months, campaign_id, channel_ref, status)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (
+            SELECT 1 FROM ad_applications
+            WHERE (? IS NOT NULL AND channel_id=?)
+               OR (? IS NOT NULL AND (channel_ref=? OR channel_ref=?))
+        )""",
+        (user_id, channel_id, channel_username, subscriber_count, bonus_months, campaign_id, channel_ref, status,
+         channel_id, channel_id, channel_ref, channel_ref, channel_ref.lower() if channel_ref else channel_ref),
     )
     await db.commit()
+    if cur.rowcount != 1:
+        raise ValueError("unique channel application already exists")
     return cur.lastrowid
 
 
@@ -5783,6 +6213,25 @@ async def get_ad_applications_by_statuses(statuses: list[str], limit: int = 20) 
         }
         for r in rows
     ]
+
+
+async def get_pending_ad_reward_retries(limit: int = 10) -> list[dict]:
+    db = await get_db()
+    cur = await db.execute(
+        """SELECT id, user_id, bonus_months FROM ad_applications WHERE status='grant_pending'
+           ORDER BY grant_attempt_ms IS NOT NULL, grant_attempt_ms, created_at, id LIMIT ?""",
+        (int(limit),),
+    )
+    return [{"id": row[0], "user_id": row[1], "bonus_months": row[2]} for row in await cur.fetchall()]
+
+
+async def mark_ad_reward_attempt(app_id: int) -> None:
+    db = await get_db()
+    await db.execute(
+        "UPDATE ad_applications SET grant_attempt_ms=? WHERE id=? AND status='grant_pending'",
+        (time.time_ns() // 1_000_000, app_id),
+    )
+    await db.commit()
 
 
 async def get_ad_applications_due_for_retention(now: int | None = None, limit: int = 100) -> list[dict]:
@@ -5887,8 +6336,8 @@ async def channel_already_used(channel_id: int | None, channel_ref: str | None =
     db = await get_db()
     if channel_ref:
         cur = await db.execute(
-            "SELECT 1 FROM ad_applications WHERE channel_ref = ? LIMIT 1",
-            (channel_ref,),
+            "SELECT 1 FROM ad_applications WHERE channel_ref = ? OR channel_ref = ? LIMIT 1",
+            (channel_ref, channel_ref.lower()),
         )
         if await cur.fetchone():
             return True
@@ -6060,7 +6509,9 @@ async def get_giveaway_entry_status(giveaway_id: int, user_id: int) -> dict | No
     cur = await db.execute(
         """SELECT g.is_active, g.end_date, COALESCE(g.period_start,g.created_at),
         EXISTS(SELECT 1 FROM giveaway_participants p WHERE p.giveaway_id=g.id AND p.user_id=?),
-        (SELECT COUNT(*) FROM referrals r WHERE r.referrer_id=?
+        (SELECT COUNT(*) FROM referrals r
+          JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id
+          WHERE r.referrer_id=?
           AND r.created>=COALESCE(g.period_start,g.created_at) AND r.created<g.end_date)
         FROM giveaways g WHERE g.id=?""",
         (user_id, user_id, giveaway_id),
@@ -6323,7 +6774,9 @@ async def pick_giveaway_winners(giveaway_id: int) -> list[int]:
             ranked = []
             for uid in participant_ids:
                 count_cur = await db.execute(
-                    "SELECT COUNT(*) FROM referrals WHERE referrer_id=? AND created>=? AND created<?",
+                    "SELECT COUNT(*) FROM referrals r "
+                    "JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id "
+                    "WHERE r.referrer_id=? AND r.created>=? AND r.created<?",
                     (uid, int(g_row[5]), int(g_row[2])),
                 )
                 count = int((await count_cur.fetchone())[0] or 0)

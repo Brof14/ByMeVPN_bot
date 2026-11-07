@@ -19,6 +19,16 @@ def actions(keyboard):
 
 
 class AdminNavigationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_promo_value_rejects_nonfinite_and_fractional_days(self):
+        from handlers.admin import receive_promo_value
+        for value, promo_type in (("nan", "percent"), ("2.5", "days"), ("3.5", "fixed")):
+            message = SimpleNamespace(from_user=SimpleNamespace(id=1), text=value, answer=AsyncMock())
+            state = SimpleNamespace(get_data=AsyncMock(return_value={"promo_type": promo_type}), update_data=AsyncMock(), set_state=AsyncMock())
+            with patch("handlers.admin._is_admin", return_value=True):
+                await receive_promo_value(message, state)
+            state.update_data.assert_not_awaited()
+            state.set_state.assert_not_awaited()
+            message.answer.assert_awaited_once()
     def test_home_is_task_focused(self):
         home = _main_kb()
         self.assertEqual(len(home.inline_keyboard), 5)

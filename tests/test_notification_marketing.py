@@ -8,6 +8,27 @@ from notifications import _send_urgent_notification, _send_warning_notification
 
 
 class TestNotificationMarketing(unittest.IsolatedAsyncioTestCase):
+    async def test_renewal_offer_skips_used_future_and_tariff_bound_codes(self):
+        from notifications import get_or_create_renewal_promo
+        now = int(time.time())
+        base = {"is_active": True, "promo_type": "percent", "discount_value": 30,
+                "uses_count": 0, "max_uses": 10, "start_date": now - 10,
+                "expires_at": now + 86400, "tariff_binding": None}
+        codes = [
+            {**base, "code": "FUTURE", "start_date": now + 3600},
+            {**base, "code": "BOUND", "tariff_binding": 12},
+            {**base, "code": "USED"},
+            {**base, "code": "AVAILABLE"},
+        ]
+        with (
+            patch("database.get_all_promo_codes", new=AsyncMock(return_value=codes)),
+            patch("database.has_user_used_promo", new=AsyncMock(side_effect=lambda code, user: code == "USED")),
+            patch("notifications.create_promo_code", new=AsyncMock()) as create,
+        ):
+            result = await get_or_create_renewal_promo(901)
+        self.assertEqual(result, "AVAILABLE")
+        create.assert_not_awaited()
+
     async def test_expiry_offer_states_exact_promo_deadline_and_clear_actions(self):
         bot = SimpleNamespace(send_message=AsyncMock())
         item = {"user_id": 901, "expiry": int(time.time()) + 2 * 86400}
@@ -23,6 +44,7 @@ class TestNotificationMarketing(unittest.IsolatedAsyncioTestCase):
         self.assertIn("До окончания подписки", text)
         self.assertIn("30% скидки", text)
         self.assertIn("до ", text)
+        self.assertIn("лимит применений", text)
         self.assertNotIn("🚨", text)
         keyboard = bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard
         self.assertEqual(keyboard[0][0].callback_data, "buy_vpn")

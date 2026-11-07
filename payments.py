@@ -3,6 +3,7 @@ import hashlib
 import time
 import uuid
 import logging
+from html import escape
 from async_utils import monitor_performance
 from typing import Optional
 import httpx
@@ -11,6 +12,37 @@ from config import YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY, CRYPTO_BOT_TOKEN
 from yookassa_http import yookassa_client
 
 logger = logging.getLogger(__name__)
+
+
+async def record_fulfilled_promo(bot, code: str, user_id: int, provider: str, payment_id: str) -> bool:
+    """Record promo use after delivery; alert if accounting needs reconciliation."""
+    from config import ADMIN_IDS
+    from database import has_user_used_promo, use_promo_code
+
+    try:
+        if await use_promo_code(code, user_id) or await has_user_used_promo(code, user_id):
+            return True
+    except Exception:
+        logger.exception("Could not record promo usage for %s payment %s", provider, payment_id)
+
+    logger.error("Promo usage needs reconciliation for %s payment %s", provider, payment_id)
+    notice = (
+        "⚠️ Подписка выдана, но использование промокода не удалось подтвердить. "
+        "Нужна сверка учёта; повторно выдавать подписку не нужно.\n"
+        f"Платёж: {escape(str(provider))} / <code>{escape(str(payment_id))}</code>\n"
+        f"Пользователь: <code>{user_id}</code>; промокод: <code>{escape(str(code))}</code>"
+    )
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, notice, parse_mode="HTML")
+        except Exception:
+            logger.warning("Could not notify admin about promo reconciliation")
+    return False
+
+
+def crypto_invoice_payload(user_id: int, days: int, devices: int, promo_code: Optional[str] = None) -> str:
+    """Canonical Telegram checkout payload, shared with its durable ledger."""
+    return f"{user_id}:{days}:{devices}:{promo_code or ''}"
 
 _yookassa_checkout_users: set[int] = set()
 
@@ -254,8 +286,8 @@ async def charge_yookassa_recurrent(
         "metadata": metadata,
     }
 
-    logger.info("charge_yookassa_recurrent: user_id=%d key_id=%d days=%d devices=%d amount=%d pm=%s",
-                user_id, key_id, days, devices, amount_rub, payment_method_id)
+    logger.info("charge_yookassa_recurrent: user_id=%d key_id=%d days=%d devices=%d amount=%d",
+                user_id, key_id, days, devices, amount_rub)
 
     try:
         async with yookassa_client(timeout=20.0) as client:
@@ -320,7 +352,7 @@ async def create_crypto_payment(
             "Оплата подписки ByMeVPN"
             if external_payload else f"User ID: {user_id}, Days: {days}, Devices: {devices}"
         ),
-        "payload": external_payload or f"{user_id}:{days}:{devices}:{promo_code or ''}",
+        "payload": external_payload or crypto_invoice_payload(user_id, days, devices, promo_code),
     }
 
     logger.info("create_crypto_payment: user_id=%d days=%d devices=%d amount=%d", user_id, days, devices, amount_rub)

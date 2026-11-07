@@ -5,6 +5,7 @@ VPN purchase flow:
 import asyncio
 import time
 import logging
+import weakref
 from urllib.parse import quote_plus
 
 from aiogram import Bot, F, Router
@@ -24,13 +25,13 @@ from constants import (
 )
 from config import PRICE_1_MONTH, DAYS_1M
 from states import BuyFlow
-from keyboards import tariff_selection_kb, payment_kb
-from payments import create_yookassa_payment, create_crypto_payment, claim_yookassa_checkout, release_yookassa_checkout
+from keyboards import tariff_selection_kb, payment_kb, support_url
+from payments import create_yookassa_payment, create_crypto_payment, claim_yookassa_checkout, release_yookassa_checkout, crypto_invoice_payload, record_fulfilled_promo
 from subscription import deliver_key
 from database import (
     ensure_user,
     record_payment_idempotent, update_payment_status,
-    use_promo_code, validate_promo_code, has_user_used_promo,
+    validate_promo_code, has_user_used_promo,
 )
 from utils import send_with_photo, send_or_edit, safe_answer
 from bot_assets import PLANS, RENEWAL, PAYMENT, PROMO_CODE
@@ -40,7 +41,7 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 # Serialize duplicate Telegram Stars updates for the same charge within this process.
-_stars_payment_locks: dict[str, asyncio.Lock] = {}
+_stars_payment_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
 
 def _promo_purchase_keyboard() -> InlineKeyboardMarkup:
@@ -50,13 +51,15 @@ def _promo_purchase_keyboard() -> InlineKeyboardMarkup:
     ]])
 
 
-def _tariff_intro(devices: int, *, renewal: bool = False) -> str:
+def _tariff_intro(devices: int, *, renewal: bool = False, promo_binding: int | None = None) -> str:
     """Shared copy for tariff choice, preserving all prices and durations."""
     title = "Продление" if renewal else "Тарифы"
     return (
         f"<b>{title}</b>\n\n"
         f"Устройства: <b>{devices}</b>\n"
-        "Выберите срок. На кнопках — полная сумма и цена за месяц."
+        "Выберите срок. На кнопках — полная сумма и цена за 30 дней."
+        + (f"\nПромокод действует на срок {get_price_for_months(promo_binding, devices)[1]} дней."
+           if promo_binding in (1, 3, 6, 12) else "")
     )
 
 
@@ -72,17 +75,18 @@ async def cb_buy_vpn(callback: CallbackQuery, bot: Bot, state: FSMContext):
     # Check if user has active promo code
     data = await state.get_data()
     promo_discount = data.get("promo_discount", 0)
+    promo_binding = (data.get("promo_info") or {}).get("tariff_binding")
     devices = validate_device_limit(data.get("devices", DEFAULT_DEVICE_LIMIT))
     renew_key_id = data.get("renew_key_id")
     await state.update_data(devices=devices)
     from database import log_analytics_event
     await log_analytics_event(callback.from_user.id, "tariffs_viewed", devices=devices)
     
-    text = _tariff_intro(devices, renewal=bool(renew_key_id))
+    text = _tariff_intro(devices, renewal=bool(renew_key_id), promo_binding=promo_binding)
     await send_with_photo(
         bot, callback,
         text,
-        tariff_selection_kb(devices=devices, discount_percent=promo_discount),
+        tariff_selection_kb(devices=devices, discount_percent=promo_discount, promo_tariff_months=promo_binding),
         photo=RENEWAL if renew_key_id else PLANS,
     )
 
@@ -99,14 +103,15 @@ async def cb_select_devtier(callback: CallbackQuery, bot: Bot, state: FSMContext
 
     data = await state.get_data()
     promo_discount = data.get("promo_discount", 0)
+    promo_binding = (data.get("promo_info") or {}).get("tariff_binding")
     await state.update_data(devices=devices)
 
     renew_key_id = data.get("renew_key_id")
-    text = _tariff_intro(devices, renewal=bool(renew_key_id))
+    text = _tariff_intro(devices, renewal=bool(renew_key_id), promo_binding=promo_binding)
     await send_with_photo(
         bot, callback,
         text,
-        tariff_selection_kb(devices=devices, discount_percent=promo_discount),
+        tariff_selection_kb(devices=devices, discount_percent=promo_discount, promo_tariff_months=promo_binding),
         photo=RENEWAL if renew_key_id else PLANS,
     )
 
@@ -130,8 +135,34 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
     price_rub, days = get_price_for_months(months, devices)
 
     # Check for promo discount
-    promo_info = data.get("promo_info", {})
+    promo_info = data.get("promo_info") or {}
+    promo_code = data.get("promo_code") or promo_info.get("code", "")
     original_price = price_rub
+
+    binding = promo_info.get("tariff_binding")
+    promo_mismatch = binding is not None and binding != months
+    if promo_mismatch:
+        # The selected button already displayed the full price. Keep the code
+        # unused so the customer may activate it again for an eligible tariff.
+        promo_info = {}
+        promo_code = ""
+    if promo_info:
+        try:
+            current_promo = await validate_promo_code(promo_code, tariff_months=months) if promo_code else None
+            already_used = await has_user_used_promo(promo_code, callback.from_user.id) if current_promo else False
+        except Exception:
+            logger.exception("Could not verify promo eligibility for user %d", callback.from_user.id)
+            await send_with_photo(bot, callback, "Не удалось проверить промокод. Попробуйте ещё раз.", tariff_selection_kb(devices=devices), photo=PLANS)
+            return
+        if not current_promo or already_used:
+            await state.update_data(promo_info={}, promo_code="", promo_discount=0, price_rub=None, days=None)
+            await send_with_photo(
+                bot, callback,
+                "<b>Промокод больше недоступен</b>\n\nВыберите тариф заново или введите другой промокод.",
+                tariff_selection_kb(devices=devices), photo=PLANS,
+            )
+            return
+        promo_info = current_promo
 
     logger.info(f"Selecting tariff: months={months}, devices={devices}, original_price={original_price}, promo_info={promo_info}")
 
@@ -153,7 +184,26 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
     else:
         promo_text = ""
 
-    await state.update_data(months=months, devices=devices, price_rub=price_rub, days=days, original_price=original_price)
+    if price_rub <= 0:
+        await state.update_data(price_rub=None, days=None)
+        await send_with_photo(
+            bot, callback,
+            "<b>Промокод покрывает стоимость</b>\n\n"
+            "Заказ с нулевой суммой пока нельзя оформить автоматически. "
+            "Промокод не использован: выберите другой срок или напишите в поддержку.",
+            InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Написать в поддержку", url=support_url())],
+                [InlineKeyboardButton(text="← К тарифам", callback_data=f"devtier_{devices}")],
+            ]),
+            photo=PLANS,
+        )
+        return
+
+    await state.update_data(
+        months=months, devices=devices, price_rub=price_rub, days=days,
+        original_price=original_price, promo_info=promo_info, promo_code=promo_code,
+        promo_discount=promo_info.get("discount_value", 0) if promo_info.get("promo_type") == "percent" else 0,
+    )
     # A restart can erase MemoryStorage. Save only the choice, never its
     # computed price, so recovering cannot silently charge an old amount.
     try:
@@ -178,6 +228,9 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
         f"Итого: <b>{price_rub} ₽</b>{promo_text}\n"
     )
 
+    if promo_mismatch:
+        text += "Промокод действует на другой срок и не применён. Его можно активировать снова.\n"
+
     if promo_info and promo_info.get("promo_type") in ["percent", "fixed_rub"]:
         text += f"<s>Без скидки: {original_price} ₽</s>\n"
 
@@ -200,7 +253,7 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
 # Step 3: Choose payment method
 # ---------------------------------------------------------------------------
 
-async def _get_checkout_params(state: FSMContext) -> dict | None:
+async def _get_checkout_params(state: FSMContext, user_id: int) -> dict | None:
     """
     Read the tariff selected in the buy flow.
 
@@ -210,11 +263,30 @@ async def _get_checkout_params(state: FSMContext) -> dict | None:
     tariff.
     """
     data = await state.get_data()
-    if "price_rub" not in data or "days" not in data:
+    if data.get("price_rub") is None or data.get("days") is None:
         return None
+    try:
+        price_rub, days = int(data["price_rub"]), int(data["days"])
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if price_rub <= 0 or days <= 0:
+        return None
+    promo_code = data.get("promo_code", "")
+    if promo_code:
+        snapshot = data.get("promo_info") or {}
+        try:
+            current = await validate_promo_code(promo_code, tariff_months=int(data.get("months", 1)))
+            used = await has_user_used_promo(promo_code, user_id) if current else False
+        except Exception:
+            logger.exception("Could not verify checkout promo for user %d", user_id)
+            return None
+        fields = ("promo_type", "discount_value", "tariff_binding")
+        if not current or used or any(current.get(field) != snapshot.get(field) for field in fields):
+            await state.update_data(promo_info={}, promo_code="", promo_discount=0, price_rub=None, days=None)
+            return None
     return {
-        "price_rub": int(data["price_rub"]),
-        "days": int(data["days"]),
+        "price_rub": price_rub,
+        "days": days,
         "months": int(data.get("months", 1)),
         "devices": validate_device_limit(data.get("devices", DEFAULT_DEVICE_LIMIT)),
         "promo_code": data.get("promo_code", ""),
@@ -232,7 +304,7 @@ async def _ask_tariff_again(bot: Bot, callback: CallbackQuery) -> None:
         draft = None
     if draft:
         months, devices = draft["months"], draft["devices"]
-        label = {1: "1 месяц", 3: "3 + 1 месяц", 6: "6 + 2 месяца", 12: "12 + 3 месяца"}[months]
+        label = f"{get_price_for_months(months, devices)[1]} дней"
         renewing = int(draft.get("renew_key_id") or 0)
         text = (
             "<b>Оформление было прервано</b>\n\n"
@@ -288,7 +360,7 @@ async def cb_select_period_legacy(callback: CallbackQuery, bot: Bot, state: FSMC
 @router.callback_query(F.data == "pay_stars")
 async def cb_pay_stars(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await safe_answer(callback)
-    params = await _get_checkout_params(state)
+    params = await _get_checkout_params(state, callback.from_user.id)
     if not params:
         await _ask_tariff_again(bot, callback)
         return
@@ -337,7 +409,7 @@ async def cb_pay_stars(callback: CallbackQuery, bot: Bot, state: FSMContext):
 @router.callback_query(F.data == "pay_yookassa")
 async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await safe_answer(callback)
-    params = await _get_checkout_params(state)
+    params = await _get_checkout_params(state, callback.from_user.id)
     if not params:
         await _ask_tariff_again(bot, callback)
         return
@@ -413,7 +485,7 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
 @router.callback_query(F.data == "pay_crypto")
 async def cb_pay_crypto(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await safe_answer(callback)
-    params = await _get_checkout_params(state)
+    params = await _get_checkout_params(state, callback.from_user.id)
     if not params:
         await _ask_tariff_again(bot, callback)
         return
@@ -445,7 +517,10 @@ async def cb_pay_crypto(callback: CallbackQuery, bot: Bot, state: FSMContext):
     # Never expose an invoice unless its durable ledger record exists.
     try:
         from database import add_crypto_pending
-        saved = await add_crypto_pending(invoice_id, user_id, days, devices, price_rub)
+        saved = await add_crypto_pending(
+            invoice_id, user_id, days, devices, price_rub,
+            payload=crypto_invoice_payload(user_id, days, devices, promo_code),
+        )
         if saved is False:
             raise RuntimeError("Crypto pending invoice persistence returned false")
     except Exception as exc:
@@ -529,6 +604,14 @@ def _stars_invoice_error(pre: PreCheckoutQuery) -> str | None:
 @router.pre_checkout_query()
 async def pre_checkout(pre: PreCheckoutQuery):
     error = _stars_invoice_error(pre)
+    if not error:
+        from database import is_account_tombstoned
+        try:
+            if await is_account_tombstoned(pre.from_user.id):
+                error = "Аккаунт удалён. Новые оплаты заблокированы. Обратитесь в поддержку."
+        except Exception:
+            logger.exception("Stars pre-checkout account status check failed")
+            error = "Не удалось проверить аккаунт. Повторите оплату позже."
     if error:
         await pre.answer(ok=False, error_message=error)
     else:
@@ -542,6 +625,48 @@ async def pre_checkout(pre: PreCheckoutQuery):
 @router.message(F.successful_payment)
 async def on_successful_payment(message: Message, bot: Bot, state: FSMContext):
     user_id = message.from_user.id
+    from database import is_account_tombstoned
+    if await is_account_tombstoned(user_id):
+        # This update can arrive after account erasure even if the pre-checkout
+        # was approved earlier. Record the charge without recreating VPN access.
+        payment = message.successful_payment
+        charge_id = payment.telegram_payment_charge_id or payment.invoice_payload
+        is_new, _ = await record_payment_idempotent(
+            user_id=user_id,
+            amount=payment.total_amount,
+            currency=payment.currency,
+            method="stars",
+            days=0,
+            payload=charge_id,
+            status="recovery_required",
+            tariff="Deleted account — manual refund review",
+            devices=DEFAULT_DEVICE_LIMIT,
+            provider="stars",
+            provider_payment_id=charge_id,
+        )
+        if is_new:
+            from html import escape
+            from config import ADMIN_ID
+            try:
+                await bot.send_message(
+                    ADMIN_ID,
+                    "⚠️ Stars оплата после удаления аккаунта. "
+                    f"Пользователь <code>{user_id}</code>, "
+                    f"платёж <code>{escape(str(charge_id))}</code>. "
+                    "Не выдавайте доступ автоматически; проверьте возврат вручную.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                logger.exception("Could not alert admin about late Stars charge after deletion")
+        try:
+            await message.answer(
+                "Оплата получена после удаления аккаунта. "
+                "Доступ не активируется автоматически. Не оплачивайте повторно; "
+                "обратитесь в @ByMeVPNSupportBot для проверки возврата."
+            )
+        except Exception:
+            logger.warning("Could not notify user %d about late Stars charge", user_id)
+        return
     await ensure_user(user_id, message.from_user.username)
 
     payment = message.successful_payment
@@ -672,7 +797,7 @@ async def _process_successful_stars_payment(
     if success:
         await update_payment_status(pay_db_id, "success")
         if promo_code:
-            await use_promo_code(promo_code, user_id)
+            await record_fulfilled_promo(bot, promo_code, user_id, "stars", charge_id)
         await state.clear()
 
         # Referral reward: single canonical path (idempotent, one per pair).

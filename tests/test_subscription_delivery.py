@@ -1,4 +1,5 @@
 """Regression tests for subscription delivery failure paths."""
+import asyncio
 import os
 import sys
 import time
@@ -17,6 +18,169 @@ import subscription
 
 
 class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        # Provisioning tests exercise panel/DB state transitions; cross-process
+        # lease semantics are covered separately against a real SQLite file.
+        for name in (
+            "try_acquire_delivery_lease",
+            "renew_delivery_lease",
+            "release_delivery_lease",
+        ):
+            mock = AsyncMock(return_value=True if name != "release_delivery_lease" else None)
+            patcher = patch(f"subscription.database.{name}", new=mock)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    async def test_cannot_provision_when_lease_acquisition_fails(self):
+        subscription.database.try_acquire_delivery_lease.side_effect = OSError("SQLite unavailable")
+        with patch("subscription._deliver_key_unlocked", new=AsyncMock()) as provision:
+            result = await subscription.deliver_key(
+                MagicMock(), 123, 123, "key", 30,
+            )
+        self.assertFalse(result)
+        provision.assert_not_awaited()
+
+    async def test_lease_lost_during_provisioning_requires_reconciliation(self):
+        subscription.database.renew_delivery_lease.return_value = False
+        with patch("subscription._deliver_key_unlocked", new=AsyncMock(return_value=True)) as provision:
+            result = await subscription.deliver_key(
+                MagicMock(), 123, 123, "key", 30,
+            )
+        self.assertFalse(result)
+        provision.assert_awaited_once()
+        subscription.database.release_delivery_lease.assert_awaited_once()
+
+    async def test_retried_paid_orders_and_rewards_never_shorten_newer_access(self):
+        expiry = int(time.time()) + 90 * 86400
+        for method in ("ad_bonus", "giveaway_prize", "yookassa", "cryptobot", "stars"):
+            for panel_only in (False, True):
+                with self.subTest(method=method, panel_only=panel_only):
+                    key = {"id": 7, "key": "https://example.test/sub", "expiry": expiry, "limit_ip": 2}
+                    panel = {"expiry_time": expiry * 1000, "subscription_url": "https://example.test/sub", "uuid": "uuid"}
+                    with (
+                        patch("subscription.get_user_keys", new=AsyncMock(return_value=[] if panel_only else [key])),
+                        patch("xui_client.get_xui_client_details", new=AsyncMock(return_value=panel)),
+                        patch("subscription.database.get_or_create_provisioning_intent", new=AsyncMock(return_value=expiry - 30 * 86400)),
+                        patch("subscription.set_key_expiry", new=AsyncMock(return_value=True)) as set_expiry,
+                        patch("xui_client.update_xui_user", new=AsyncMock(return_value=None)) as update_panel,
+                        patch("subscription.log_key_error", new=AsyncMock()),
+                        patch("subscription.add_key", new=AsyncMock()) as add_key,
+                    ):
+                        result = await subscription.deliver_key(
+                            bot=MagicMock(), user_id=123, chat_id=123, config_name="ByMeVPN_123",
+                            days=30, is_paid=True, amount=0, method=method, payload=f"{method}_1",
+                        )
+                    self.assertFalse(result)
+                    set_expiry.assert_not_awaited()
+                    update_panel.assert_not_awaited()
+                    add_key.assert_not_awaited()
+
+    async def test_different_users_can_be_provisioned_concurrently(self):
+        entered = []
+        both_entered = asyncio.Event()
+
+        async def delivery(*args, **kwargs):
+            entered.append(args[1])
+            if len(entered) == 2:
+                both_entered.set()
+            await asyncio.wait_for(both_entered.wait(), timeout=1)
+            return True
+
+        with patch("subscription._deliver_key_unlocked", new=AsyncMock(side_effect=delivery)):
+            results = await asyncio.gather(*(
+                subscription.deliver_key(MagicMock(), user_id, user_id, "key", 30)
+                for user_id in (123, 456)
+            ))
+        self.assertEqual(results, [True, True])
+
+    async def test_concurrent_rewards_preserve_both_extensions(self):
+        initial = int(time.time()) + 90 * 86400
+        state = {"expiry": initial}
+
+        async def get_keys(_user_id):
+            expiry = state["expiry"]
+            await asyncio.sleep(0)
+            return [{"id": 7, "key": "https://example.test/sub", "expiry": expiry, "limit_ip": 2}]
+
+        async def set_expiry(_key_id, expiry, **_kwargs):
+            state["expiry"] = expiry
+            await asyncio.sleep(0)
+            return True
+
+        async def intent(_method, _payload, _user_id, expiry):
+            await asyncio.sleep(0)
+            return expiry
+
+        with (
+            patch("subscription.get_user_keys", new=AsyncMock(side_effect=get_keys)),
+            patch("subscription.set_key_expiry", new=AsyncMock(side_effect=set_expiry)),
+            patch("subscription.database.get_or_create_provisioning_intent", new=AsyncMock(side_effect=intent)),
+            patch("xui_client.update_xui_user", new=AsyncMock(return_value={"ok": True})),
+            patch("xui_client.get_user_subscription_links", new=AsyncMock(return_value=[])),
+            patch("subscription._send_delivery_message", new=AsyncMock(return_value=True)),
+        ):
+            results = await asyncio.gather(*(
+                subscription.deliver_key(
+                    bot=MagicMock(), user_id=123, chat_id=123, config_name="ByMeVPN_123",
+                    days=15, is_paid=True, amount=0, method="ref_signup_bonus", payload=f"reward_{number}",
+                )
+                for number in (1, 2)
+            ))
+        self.assertEqual(results, [True, True])
+        self.assertEqual(state["expiry"], initial + 30 * 86400)
+
+    async def test_retried_signup_reward_does_not_shorten_newer_subscription(self):
+        expiry = int(time.time()) + 90 * 86400
+        key = {"id": 7, "key": "https://example.test/sub", "expiry": expiry, "limit_ip": 2}
+        with (
+            patch("subscription.get_user_keys", new=AsyncMock(return_value=[key])),
+            patch("subscription.database.get_or_create_provisioning_intent", new=AsyncMock(return_value=expiry - 30 * 86400)),
+            patch("subscription.set_key_expiry", new=AsyncMock()) as set_expiry,
+        ):
+            result = await subscription.deliver_key(
+                bot=MagicMock(), user_id=123, chat_id=123, config_name="ByMeVPN_123",
+                days=15, is_paid=True, amount=0, method="ref_signup_bonus", payload="ref_signup_123_456",
+            )
+        self.assertFalse(result)
+        set_expiry.assert_not_awaited()
+
+    async def test_retried_referral_reward_does_not_shorten_panel_only_subscription(self):
+        expiry = int(time.time()) + 90 * 86400
+        panel_client = {"expiry_time": expiry * 1000, "subscription_url": "https://example.test/sub", "uuid": "uuid"}
+        with (
+            patch("subscription.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value=panel_client)),
+            patch("subscription.database.get_or_create_provisioning_intent", new=AsyncMock(return_value=expiry - 30 * 86400)),
+            patch("xui_client.update_xui_user", new=AsyncMock()) as update_panel,
+            patch("subscription.add_key", new=AsyncMock()) as add_key,
+        ):
+            result = await subscription.deliver_key(
+                bot=MagicMock(), user_id=123, chat_id=123, config_name="ByMeVPN_123",
+                days=30, is_paid=True, amount=0, method="ref_bonus", payload="ref_bonus_123_456",
+            )
+        self.assertFalse(result)
+        update_panel.assert_not_awaited()
+        add_key.assert_not_awaited()
+
+    async def test_retried_referral_reward_does_not_shorten_newer_subscription(self):
+        existing_expiry = int(time.time()) + 90 * 86400
+        key = {"id": 7, "key": "https://example.test/sub", "expiry": existing_expiry, "limit_ip": 2}
+        with (
+            patch("subscription.get_user_keys", new=AsyncMock(return_value=[key])),
+            patch("subscription.database.get_or_create_provisioning_intent", new=AsyncMock(return_value=existing_expiry - 30 * 86400)),
+            patch("subscription.set_key_expiry", new=AsyncMock()) as set_expiry,
+            patch("xui_client.update_xui_user", new=AsyncMock()) as update_panel,
+            patch("xui_client.get_user_subscription_links", new=AsyncMock(return_value=[])),
+            patch("subscription._send_delivery_message", new=AsyncMock(return_value=True)),
+        ):
+            result = await subscription.deliver_key(
+                bot=MagicMock(), user_id=123, chat_id=123, config_name="ByMeVPN_123",
+                days=30, is_paid=True, amount=0, method="ref_bonus", payload="ref_bonus_123_456",
+            )
+        self.assertFalse(result)
+        set_expiry.assert_not_awaited()
+        update_panel.assert_not_awaited()
+
     async def test_existing_panel_client_is_not_imported_when_update_fails(self):
         """Never claim delivery or persist a key from a stale panel snapshot."""
         bot = MagicMock()

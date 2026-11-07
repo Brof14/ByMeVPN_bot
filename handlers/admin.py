@@ -8,6 +8,8 @@ import asyncio
 from html import escape
 import io
 import logging
+import math
+import time
 from datetime import datetime
 from urllib.parse import urlsplit
 
@@ -281,7 +283,7 @@ async def cb_admin_referral_funnel(callback: CallbackQuery):
         f"С первой подходящей оплатой: <b>{stats['paying']}</b>\n"
         f"Без подтверждённой оплаты: <b>{stats['unconverted']}</b>\n"
         f"Конверсия: <b>{stats['conversion_pct']:.1f}%</b>\n"
-        f"Начислено за них: <b>{stats['bonus_days']} бонусных дней</b>\n\n"
+        f"Начислено или ожидает начисления: <b>{stats['bonus_days']} бонусных дней</b>\n\n"
         "Когорта — пользователи, приглашённые за 30 дней. "
         "Оплаты и бонусы учитываются на момент отчёта.\n"
         "Бонусные дни — не денежная прибыль и не стоимость привлечения."
@@ -1247,101 +1249,253 @@ async def cb_admin_del_key_confirm(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith("admin_del_key:"))
 async def cb_admin_del_key(callback: CallbackQuery, bot: Bot):
-    """Actually delete the key after confirmation."""
+    """Remove a key only after billing and remote revocation are reconciled."""
     if not _is_admin(callback.from_user.id):
-        await safe_answer(callback, "Нет доступа.", alert=True); return
-    await safe_answer(callback)
-    
-    parts = callback.data.split(":")
-    key_id = int(parts[1])
-    user_id = int(parts[2])
-    
-    from database import get_key_by_id, delete_key_by_id
-    k = await get_key_by_id(key_id)
-
-    if not k or int(k.get("user_id", 0)) != user_id:
-        await safe_answer(callback, "Ключ не найден у указанного пользователя.", alert=True)
+        await safe_answer(callback, "Нет доступа.", alert=True)
         return
+    await safe_answer(callback)
 
-    user_keys = await get_user_keys(user_id)
-    other_keys = [item for item in user_keys if item.get("id") != key_id]
-    deleted_from_panel = True
-    if not other_keys and k.get("uuid"):
-        deleted_from_panel = await delete_xui_user(user_id)
-        if not deleted_from_panel:
+    parts = callback.data.split(":")
+    if len(parts) != 3 or not all(part.isdecimal() for part in parts[1:]):
+        await callback.message.answer("Некорректная ссылка на ключ.")
+        return
+    key_id, user_id = map(int, parts[1:])
+    from database import (
+        get_key_by_id, delete_key_by_id, suspend_key_autorenew,
+        has_recent_unsettled_checkout,
+    )
+    from handlers.keys import _run_billing_change_under_lease
+
+    async def remove_under_account_lease():
+        # Stale admin panels and simultaneous purchases must never authorize
+        # the deletion of a different user's subscription.
+        key = await get_key_by_id(key_id)
+        if not key or int(key.get("user_id", 0)) != user_id:
+            await callback.message.answer("Ключ уже удалён или принадлежит другому пользователю.")
+            return
+
+        if await has_recent_unsettled_checkout(user_id):
             await callback.message.answer(
-                "⚠️ Не удалось удалить клиента с 3x-ui. Запись в БД сохранена; повторите позже."
+                "Удаление отложено: недавний платёж ещё может завершиться. "
+                "Сначала проверьте его в журнале платежей."
             )
             return
 
-    deleted_from_db = await delete_key_by_id(key_id)
-    if not deleted_from_db:
-        await callback.message.answer("⚠️ Не удалось удалить запись ключа из БД.")
-        return
+        existing = await get_user_keys(user_id)
+        other_keys = [item for item in existing if item.get("id") != key_id]
 
-    status_msg = f"✅ Запись ключа #{key_id} удалена"
-    if other_keys:
-        status_msg += "\nДругие ключи и общий VPN-доступ сохранены."
-    await callback.answer(status_msg, show_alert=True)
+        # Billing must be disabled before remote deletion. Removing only one
+        # key-bound method would leave unbound legacy cards chargeable when
+        # multiple saved keys become a single remaining key.
+        await suspend_key_autorenew(user_id, key_id)
 
-    # Refresh keys list
-    keys = await get_user_keys(user_id)
-    if not keys:
-        await callback.message.edit_text(
-            f"🗝 <b>Ключи пользователя {user_id}</b>\n\n"
-            f"✅ Все ключи удалены.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="◀️ Назад к пользователю", callback_data=f"admin_user:{user_id}")]
-            ])
-        )
-    else:
-        import time
+        if not other_keys:
+            # Never infer panel absence from a missing SQLite UUID. A shared
+            # 3x-ui client can exist even if local credentials are incomplete.
+            try:
+                panel_deleted = await delete_xui_user(user_id)
+            except Exception:
+                logger.exception("Admin key deletion could not verify panel for user %d", user_id)
+                panel_deleted = False
+            if not panel_deleted:
+                await callback.message.answer(
+                    "Удаление клиента на всех серверах 3x-ui не подтверждено. "
+                    "Запись ключа сохранена; автосписания отключены. "
+                    "Проверьте панель вручную перед повторной попыткой."
+                )
+                return
+
+        try:
+            deleted = await delete_key_by_id(key_id)
+        except Exception:
+            logger.exception("Admin key deletion failed in SQLite after panel step for %d", key_id)
+            deleted = False
+        if not deleted:
+            await callback.message.answer(
+                "Не удалось удалить ключ из БД. Автосписания отключены. "
+                "Если VPN уже удалён, требуется ручная сверка — не создавайте дубликат."
+            )
+            return
+
+        keys = await get_user_keys(user_id)
+        if not keys:
+            await callback.message.edit_text(
+                f"Ключ #{key_id} удалён, сохранённые автосписания отключены. "
+                "Других ключей нет.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="← К пользователю", callback_data=f"admin_user:{user_id}")],
+                ]),
+            )
+            return
+
+        lines = [f"<b>Ключ #{key_id} удалён</b>\n",
+                 "Остальные подписки и общий VPN-клиент сохранены.\n"]
         now = int(time.time())
-        lines = [f"🗝 <b>Ключи {user_id}:</b>\n"]
-        for k2 in keys:
-            s = "✅" if k2["expiry"] > now else "❌"
-            lines.append(f"{s} #{k2['id']} {k2.get('remark','')} — до {fmt_date(k2['expiry'])}")
+        for item in keys:
+            status = "Активен" if int(item.get("expiry") or 0) > now else "Истёк"
+            lines.append(
+                f"#{item['id']} — {status}, до {fmt_date(item['expiry'])}"
+            )
         await callback.message.edit_text(
-            "\n".join(lines), parse_mode="HTML",
-            reply_markup=_keys_kb(keys, user_id)
+            "\n".join(lines),
+            parse_mode="HTML",
+            reply_markup=_keys_kb(keys, user_id),
+        )
+
+    try:
+        await _run_billing_change_under_lease(user_id, remove_under_account_lease)
+    except Exception:
+        logger.exception("Admin key deletion unavailable for user %d, key %d", user_id, key_id)
+        await callback.message.answer(
+            "Не удалось безопасно завершить удаление. "
+            "Проверьте статус ключа и оплаты; при необходимости выполните ручную сверку."
         )
 
 
 # ── Delete user ────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("admin_del_user:"))
-async def cb_del_user(callback: CallbackQuery, bot: Bot):
+async def cb_del_user_prompt(callback: CallbackQuery):
+    """Require a second explicit tap before irreversible administrator deletion."""
     if not _is_admin(callback.from_user.id):
-        await safe_answer(callback, "Нет доступа.", alert=True); return
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
     await safe_answer(callback)
     uid = int(callback.data.split(":")[1])
+    if uid in ADMIN_IDS:
+        await callback.message.edit_text("Удаление учётной записи администратора через бота запрещено.", reply_markup=_back_kb())
+        return
+    await callback.message.edit_text(
+        f"<b>Удалить пользователя {uid}?</b>\n\n"
+        "Все сохранённые способы автосписания будут отключены. Затем бот "
+        "попытается удалить VPN-клиента со всех серверов. Только после "
+        "подтверждения удаления в 3x-ui будут удалены локальные ключи.\n\n"
+        "Уже оплаченный доступ может быть потерян. Финансовые записи сохраняются для сверки.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Да, удалить доступ", callback_data=f"admin_del_user_confirm:{uid}", style="danger")],
+            [InlineKeyboardButton(text="Отмена", callback_data=f"admin_user:{uid}")],
+        ]),
+    )
+
+
+@router.callback_query(F.data.startswith("admin_del_user_confirm:"))
+async def cb_del_user(callback: CallbackQuery, bot: Bot):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    uid = int(callback.data.split(":")[1])
+    if uid in ADMIN_IDS:
+        await callback.message.edit_text("Удаление администратора через бота запрещено.", reply_markup=_back_kb())
+        return
+
+    from database import (
+        try_acquire_delivery_lease, renew_delivery_lease,
+        release_delivery_lease, suspend_all_user_autorenew,
+    )
+    from secrets import token_urlsafe
+
+    token = token_urlsafe(24)
     try:
-        uuids = await delete_user_and_keys(uid)
-    except Exception as e:
-        logger.exception("Failed to delete user %d from database: %s", uid, e)
+        acquired = await try_acquire_delivery_lease(uid, token)
+    except Exception:
+        logger.exception("Admin deletion could not acquire lease for user %d", uid)
+        acquired = False
+    if not acquired:
         await callback.message.edit_text(
-            f"❌ Не удалось удалить пользователя <code>{uid}</code> из БД. "
-            "Удаление VPN-клиента не выполнялось.",
-            parse_mode="HTML",
+            "У пользователя выполняется другая операция или недоступна база данных. "
+            "Удаление не началось. Повторите позже.",
             reply_markup=_back_kb(),
         )
         return
 
-    # 3x-ui has one client per Telegram user; passing a UUID here was incorrect.
-    panel_deleted = await delete_xui_user(uid)
-    text = (
-        f"🗑 Пользователь <code>{uid}</code> и записи его ключей удалены из БД."
-    )
-    if panel_deleted:
-        text += "\nVPN-клиент удалён из 3x-ui."
-    else:
-        text += "\n⚠️ Клиент не удалён из 3x-ui. Требуется ручная очистка панели."
-        logger.error("User %d removed from DB but 3x-ui cleanup failed", uid)
-    await callback.message.edit_text(
-        text,
-        parse_mode="HTML",
-        reply_markup=_back_kb(),
-    )
+    try:
+        try:
+            await suspend_all_user_autorenew(uid)
+        except Exception:
+            logger.exception("Admin deletion cannot disable recurring billing for user %d", uid)
+            await callback.message.edit_text(
+                "Не удалось отключить автосписания. Удаление VPN и данных отменено.",
+                reply_markup=_back_kb(),
+            )
+            return
+
+        # An invoice created just before removal may still be paid by the
+        # provider. Do not revoke this account while fulfillment is uncertain.
+        from database import has_recent_unsettled_checkout
+        try:
+            pending_payment = await has_recent_unsettled_checkout(uid)
+        except Exception:
+            logger.exception("Admin deletion cannot check pending charges for user %d", uid)
+            await callback.message.edit_text(
+                "Не удалось проверить незавершённые оплаты. Автосписания "
+                "отключены; VPN и данные сохранены. Повторите позже.",
+                reply_markup=_back_kb(),
+            )
+            return
+        if pending_payment:
+            await callback.message.edit_text(
+                "Недавно созданная оплата ещё может завершиться. "
+                "Автосписания отключены; удаление отложено до сверки платежа.",
+                reply_markup=_back_kb(),
+            )
+            return
+
+        try:
+            panel_deleted = await delete_xui_user(uid)
+        except Exception:
+            logger.exception("Admin deletion panel check failed for user %d", uid)
+            panel_deleted = False
+        if not panel_deleted:
+            logger.error("Admin deletion requires panel reconciliation for user %d", uid)
+            await callback.message.edit_text(
+                f"Удаление пользователя <code>{uid}</code> в 3x-ui не подтверждено. "
+                "Локальные данные сохранены, автосписания отключены. "
+                "Проверьте все VPN-серверы вручную.",
+                parse_mode="HTML",
+                reply_markup=_back_kb(),
+            )
+            return
+
+        # Prevent a reclaimed lease from silently deleting local state while
+        # a concurrent writer is changing the user's subscription.
+        try:
+            owned = await renew_delivery_lease(uid, token)
+        except Exception:
+            owned = False
+        if not owned:
+            logger.error("Admin deletion lost delivery lease for user %d", uid)
+            await callback.message.edit_text(
+                "Удаление VPN на серверах подтверждено, но блокировка БД потеряна. "
+                "Автосписания отключены. Требуется ручная сверка данных.",
+                reply_markup=_back_kb(),
+            )
+            return
+
+        try:
+            await delete_user_and_keys(uid)
+        except Exception:
+            logger.exception("Admin deletion DB cleanup failed after panel removal for user %d", uid)
+            await callback.message.edit_text(
+                f"VPN-клиент <code>{uid}</code> удалён из 3x-ui, но очистка БД не завершена. "
+                "Автосписания отключены. Требуется ручная сверка; не начисляйте дни вслепую.",
+                parse_mode="HTML",
+                reply_markup=_back_kb(),
+            )
+            return
+
+        await callback.message.edit_text(
+            f"VPN-клиент <code>{uid}</code> удалён из 3x-ui, локальные ключи и учётная запись удалены. "
+            "Автосписания отключены; финансовые записи сохранены для сверки.",
+            parse_mode="HTML",
+            reply_markup=_back_kb(),
+        )
+    finally:
+        try:
+            await release_delivery_lease(uid, token)
+        except Exception:
+            logger.exception("Admin deletion could not release delivery lease for user %d", uid)
 
 
 # ── Reset trial ────────────────────────────────────────────────────────────
@@ -3177,6 +3331,13 @@ async def receive_promo_value(message: Message, state: FSMContext):
         data = await state.get_data()
         promo_type = data["promo_type"]
 
+        if not math.isfinite(value):
+            await message.answer("❌ Введите конечное число.")
+            return
+        if promo_type in ("fixed", "days") and not value.is_integer():
+            await message.answer("❌ Введите целое число рублей или дней.")
+            return
+
         if promo_type == "percent" and (value < 1 or value > 100):
             await message.answer("❌ Процент должен быть от 1 до 100.")
             return
@@ -3187,7 +3348,7 @@ async def receive_promo_value(message: Message, state: FSMContext):
             await message.answer("❌ Количество дней должно быть от 1 до 365.")
             return
 
-        await state.update_data(discount_value=value)
+        await state.update_data(discount_value=int(value) if promo_type in ("fixed", "days") else value)
         await state.set_state(AdminFlow.promo_uses)
         await message.answer(
             "Введите максимальное количество использований (например: 100 или 999999 для безлимита):",

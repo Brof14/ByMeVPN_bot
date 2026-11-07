@@ -198,6 +198,24 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(update.await_args_list[0].kwargs["status"], "grant_pending")
         self.assertEqual(update.await_args_list[-1].kwargs["status"], "approved")
 
+    async def test_ad_admin_is_not_told_application_closed_if_status_update_failed(self):
+        from types import SimpleNamespace
+        from handlers.ad_program import cb_ad_admin_approve
+        app = {"id": 72, "user_id": 123, "status": "post_submitted", "bonus_months": 2}
+        callback = SimpleNamespace(from_user=SimpleNamespace(id=1), data="ad_admin_approve:72")
+        with (
+            patch("handlers.ad_program._is_admin", return_value=True),
+            patch("handlers.ad_program.safe_answer", new=AsyncMock()),
+            patch("handlers.ad_program.get_ad_application_by_id", new=AsyncMock(side_effect=[app, {**app, "status": "grant_pending"}])),
+            patch("handlers.ad_program.update_ad_application", new=AsyncMock(side_effect=[True, False])),
+            patch("handlers.ad_program._deliver_verified_ad_reward", new=AsyncMock(return_value=True)),
+            patch("handlers.ad_program.send_with_photo", new=AsyncMock()) as send,
+            patch("handlers.ad_program.log_ad_audit", new=AsyncMock()),
+            patch("handlers.ad_program.log_ad_analytics_event", new=AsyncMock()),
+        ):
+            await cb_ad_admin_approve(callback, SimpleNamespace())
+        self.assertIn("сверк", send.await_args.args[2].lower())
+
     def test_guide_device_selector_uses_compact_two_column_rows(self):
         markup = connection_guide_kb()
         self.assertEqual([len(row) for row in markup.inline_keyboard[:2]], [2, 2])
@@ -258,11 +276,15 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         self.assertIn("<b>Приглашение друзей</b>", text)
         self.assertIn("+15 дней", text)
         self.assertIn("+30 дней", text)
-        self.assertIn("Получено: <b>15 дней</b>", text)
+        self.assertIn("Начислено или ожидает начисления: <b>15 дней</b>", text)
         self.assertIn("Приглашено: <b>1</b> · оплатили: <b>1</b>", text)
         buttons = [b for row in send.call_args.args[3].inline_keyboard for b in row]
         copied = next(b for b in buttons if b.text == "Скопировать ссылку")
         self.assertEqual(copied.copy_text.text, "https://t.me/ByMeVPNbot?start=123")
+        post = next(b for b in buttons if b.text == "Скопировать текст для канала")
+        self.assertIn("https://t.me/ByMeVPNbot?start=123", post.copy_text.text)
+        self.assertIn("3 дня бесплатно", post.copy_text.text)
+        self.assertLessEqual(len(post.copy_text.text), 256)
 
     def test_back_is_full_width_and_support_is_not_mixed_into_navigation(self):
         back = back_to_menu().inline_keyboard
@@ -281,7 +303,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             if button.callback_data and button.callback_data.startswith("tariff_")
         ]
         three_months = next(button for button in tariff_buttons if button.callback_data == "tariff_3_2")
-        self.assertIn("4 мес. (3+1) · 316 ₽ · 79 ₽/мес.", three_months.text)
+        self.assertIn("120 дней · 316 ₽ · 79 ₽/30 дней", three_months.text)
         self.assertIsNone(three_months.style)
         self.assertEqual(
             [button.style for button in tariff_buttons],
@@ -301,7 +323,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         }
         with (
             patch("database.get_auto_renew_subscription", new=AsyncMock(return_value=sub)),
-            patch("database.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("database.get_user_keys", new=AsyncMock(return_value=[{"id": 5, "expiry": 1_800_000_000}])),
             patch("handlers.keys.get_key_by_id", new=AsyncMock(return_value={"user_id": 123, "expiry": 1_800_000_000})),
         ):
             loaded, title, _ = await _load_autorenew_context(123, 5)

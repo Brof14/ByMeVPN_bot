@@ -386,6 +386,51 @@ async def _mobile_crypto_order_matches(invoice_id: str, pending: dict) -> bool:
     ))
 
 
+async def _quarantine_deleted_account_payment(
+    bot: Bot, *, provider: str, payment_id: str, user_id: int,
+    amount_rub: int, days: int, devices: int,
+) -> bool:
+    """Preserve verified late charges for refund review, never restore VPN."""
+    from database import (
+        is_account_tombstoned, record_payment_idempotent,
+        update_payment_status, get_payment_by_id,
+    )
+
+    if not await is_account_tombstoned(user_id):
+        return False
+
+    is_new, row_id = await record_payment_idempotent(
+        user_id=user_id, amount=amount_rub, currency="RUB",
+        method=provider, days=days, payload=str(payment_id),
+        status="recovery_required", tariff="Deleted account — refund review",
+        devices=devices, provider=provider, provider_payment_id=str(payment_id),
+    )
+    payment = await get_payment_by_id(row_id)
+    status = payment.get("status") if payment else None
+    if status != "success":
+        if status != "recovery_required":
+            await update_payment_status(row_id, "recovery_required")
+        if is_new or status != "recovery_required":
+            from html import escape
+            await _notify_admin(
+                bot,
+                f"⚠️ Оплата {escape(str(provider))} {escape(str(payment_id))} "
+                f"поступила после удаления аккаунта {user_id}. "
+                "Доступ не выдавался. Нужна ручная сверка и проверка возврата.",
+            )
+            try:
+                await bot.send_message(
+                    user_id,
+                    "Платёж подтверждён после удаления аккаунта. "
+                    "Доступ не будет активирован автоматически. "
+                    "Не оплачивайте повторно; обратитесь в @ByMeVPNSupportBot "
+                    "для проверки возврата.",
+                )
+            except Exception:
+                logger.warning("Could not notify erased user %d about late payment", user_id)
+    return True
+
+
 async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional[dict] = None) -> None:
     """
     Verify and process a succeeded YooKassa payment.
@@ -418,14 +463,16 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
 
         # ── Step 3: Extract metadata ──
         metadata = payment.get("metadata", {})
-        logger.info("Webhook: payment_id=%s metadata=%s", payment_id, metadata)
+        # Provider metadata can contain PII and user-controlled text.
+        # Only payment IDs and explicit validation outcomes belong in logs.
+        logger.info("Webhook: verifying payment_id=%s", payment_id)
         try:
             user_id = int(metadata["user_id"])
             raw_days = int(metadata["days"])
             devices = int(metadata.get("devices", 1))
         except (KeyError, ValueError, TypeError) as e:
-            logger.error("Webhook: bad metadata in payment %s: %s — %s", payment_id, metadata, e)
-            await _notify_admin(bot, f"⚠️ YooKassa payment {payment_id}: bad metadata {metadata}")
+            logger.error("Webhook: invalid metadata for payment %s (%s)", payment_id, type(e).__name__)
+            await _notify_admin(bot, f"⚠️ YooKassa payment {payment_id}: некорректные метаданные. Требуется сверка.")
             return
 
         from constants import normalize_days
@@ -518,9 +565,15 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                 )
                 return
 
+        if await _quarantine_deleted_account_payment(
+            bot, provider="yookassa", payment_id=payment_id,
+            user_id=user_id, amount_rub=amount_rub, days=days, devices=devices,
+        ):
+            return
+
         from database import (
             record_payment_idempotent, update_payment_status,
-            use_promo_code, delete_yookassa_pending,
+            delete_yookassa_pending,
         )
 
         # Idempotent DB record
@@ -619,7 +672,8 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                 pass
             promo_code = metadata.get("promo_code")
             if promo_code and not is_trial:
-                await use_promo_code(promo_code, user_id)
+                from payments import record_fulfilled_promo
+                await record_fulfilled_promo(bot, promo_code, user_id, "yookassa", payment_id)
             logger.info("YooKassa payment %s successfully fulfilled for user %d", payment_id, user_id)
 
             # Auto-renew handling
@@ -734,7 +788,7 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                         devices=devices,
                         amount_rub=amount_rub,
                     )
-                    logger.info("Saved auto-renew subscription for user %d (key=%s, pm_id=%s)", user_id, key_id, pm_id)
+                    logger.info("Saved auto-renew subscription for user %d (key=%s)", user_id, key_id)
                     try:
                         await bot.send_message(
                             chat_id=user_id,
@@ -784,6 +838,18 @@ def _crypto_invoice_matches_pending(invoice: dict, pending: dict) -> bool:
     if expected_payload and invoice.get("payload") != expected_payload:
         return False
     return True
+
+
+def _crypto_pending_promo(pending: dict) -> str | None:
+    """Read a Telegram-order promo only from its verified durable payload."""
+    payload = pending.get("payload") or ""
+    parts = payload.split(":", 3)
+    if len(parts) != 4:
+        return None
+    expected = (str(pending.get("user_id")), str(pending.get("days")), str(pending.get("devices")))
+    if tuple(parts[:3]) != expected:
+        return None
+    return parts[3] or None
 
 
 async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
@@ -891,8 +957,14 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
 
         from database import (
             record_payment_idempotent, update_payment_status,
-            use_promo_code, delete_crypto_pending,
+            delete_crypto_pending,
         )
+
+        if await _quarantine_deleted_account_payment(
+            bot, provider="cryptobot", payment_id=str(invoice_id),
+            user_id=user_id, amount_rub=amount_rub, days=days, devices=devices,
+        ):
+            return
 
         tariff_name = f"Подписка {days} дней ({devices} устр.)"
         is_new, pay_db_id = await record_payment_idempotent(
@@ -963,14 +1035,15 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
 
         if success:
             await update_payment_status(pay_db_id, "success")
+            promo_code = _crypto_pending_promo(pending)
+            if promo_code:
+                from payments import record_fulfilled_promo
+                await record_fulfilled_promo(bot, promo_code, user_id, "cryptobot", str(invoice_id))
             await mark_crypto_processed(invoice_id)
             try:
                 await delete_crypto_pending(invoice_id)
             except Exception:
                 pass
-            promo_code = pending.get("promo_code")
-            if promo_code:
-                await use_promo_code(promo_code, user_id)
             logger.info("CryptoBot invoice %s successfully fulfilled for user %d", invoice_id, user_id)
 
             # Referral reward: single canonical path (mirrors YooKassa's rule).
