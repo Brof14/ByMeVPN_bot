@@ -377,6 +377,41 @@ async def _wait_until_10_00_moscow() -> None:
     await asyncio.sleep(seconds_until_target)
 
 
+async def _record_verified_first_connection(bot: Bot, item: dict, signal: str) -> None:
+    """Once per account, celebrate verified connectivity and offer sharing.
+
+    This is optional customer outreach, never a requirement to use the VPN.
+    Promotional opt-outs are respected; a Telegram failure cannot revert
+    a successfully recorded VPN connection.
+    """
+    await update_connection_reminder(item["key_id"], "connected")
+    from database import log_analytics_event_once
+    first = await log_analytics_event_once(
+        item["user_id"], "first_connection", f"3x-ui {signal} observed"
+    )
+    if not first:
+        return
+    try:
+        if await is_promotional_opted_out(item["user_id"]):
+            return
+        await bot.send_message(
+            item["user_id"],
+            "<b>Подключение подтверждено</b>\n\n"
+            "ByMeVPN работает. Если сервис пригодился, поделитесь им с другом.\n"
+            "+15 дней за регистрацию друга и +30 дней за его первую подходящую оплату.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Пригласить друга", callback_data="partner")],
+                [InlineKeyboardButton(text="Отключить предложения", callback_data="marketing_optout")],
+            ]),
+        )
+    except Exception as exc:
+        logger.info(
+            "Optional first-connection message unavailable for user %d (%s)",
+            item["user_id"], type(exc).__name__,
+        )
+
+
 async def _connection_reminder_pass(bot: Bot) -> None:
     """Process due one-time first-connection nudges without false positives."""
     from xui_client import get_xui_user, get_xui_connection_info
@@ -395,9 +430,7 @@ async def _connection_reminder_pass(bot: Bot) -> None:
             continue
 
         if int(panel_user["used_traffic"]) > int(item["traffic_baseline"]):
-            await update_connection_reminder(key_id, "connected")
-            from database import log_analytics_event_once
-            await log_analytics_event_once(item["user_id"], "first_connection", "3x-ui traffic observed")
+            await _record_verified_first_connection(bot, item, "traffic")
             continue
 
         # A client can establish a tunnel before any payload traffic is counted.
@@ -408,9 +441,7 @@ async def _connection_reminder_pass(bot: Bot) -> None:
             logger.warning("Deferring first-connection reminder: online status unavailable for key %s: %s", key_id, exc)
             continue
         if connection_info.get("is_online"):
-            await update_connection_reminder(key_id, "connected")
-            from database import log_analytics_event_once
-            await log_analytics_event_once(item["user_id"], "first_connection", "3x-ui online status observed")
+            await _record_verified_first_connection(bot, item, "online status")
             continue
 
         try:

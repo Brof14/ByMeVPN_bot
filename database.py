@@ -5308,19 +5308,28 @@ async def log_analytics_event(
         logger.debug("Failed to log analytics event %s: %s", event_type, e)
 
 
-async def log_analytics_event_once(user_id: int, event_type: str, details: Optional[str] = None) -> None:
-    """Record a per-user milestone once, safe to call from retrying workers."""
+async def log_analytics_event_once(
+    user_id: int, event_type: str, details: Optional[str] = None,
+) -> bool:
+    """Insert one milestone per user, returning whether this was its first insert.
+
+    The single atomic SQL INSERT plus shared writer guard allows retrying
+    workers to skip duplicate notifications without introducing a new table.
+    """
     try:
         db = await get_db()
-        await db.execute(
-            "INSERT INTO analytics_events(user_id,event_type,timestamp,details) "
-            "SELECT ?,?,strftime('%s','now'),? WHERE NOT EXISTS "
-            "(SELECT 1 FROM analytics_events WHERE user_id=? AND event_type=?)",
-            (int(user_id), str(event_type), details, int(user_id), str(event_type)),
-        )
-        await db.commit()
-    except Exception as e:
-        logger.debug("Failed to record milestone %s: %s", event_type, e)
+        async with _db_semaphore:
+            cur = await db.execute(
+                "INSERT INTO analytics_events(user_id,event_type,timestamp,details) "
+                "SELECT ?,?,strftime('%s','now'),? WHERE NOT EXISTS "
+                "(SELECT 1 FROM analytics_events WHERE user_id=? AND event_type=?)",
+                (int(user_id), str(event_type), details, int(user_id), str(event_type)),
+            )
+            await db.commit()
+            return cur.rowcount == 1
+    except Exception as exc:
+        logger.debug("Failed to record milestone %s: %s", event_type, exc)
+        return False
 
 
 async def get_conversion_funnel(days: int = 30) -> dict:
