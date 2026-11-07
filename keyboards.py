@@ -398,10 +398,17 @@ def app_open_kb(redirect_url: str, deep_link: str = "") -> InlineKeyboardMarkup:
         url=redirect_url,
     ))
     if deep_link:
-        kb.row(InlineKeyboardButton(
-            text="Скопировать ссылку входа",
-            copy_text={"text": deep_link},
-        ))
+        if len(deep_link) <= 256:
+            kb.row(InlineKeyboardButton(
+                text="Скопировать ссылку входа",
+                copy_text={"text": deep_link},
+            ))
+        else:
+            # Telegram CopyTextButton is limited to 256 characters.
+            # A long credential must not make the entire login message fail.
+            kb.row(InlineKeyboardButton(
+                text="Моя подписка", callback_data="my_keys",
+            ))
     return kb.as_markup()
 
 
