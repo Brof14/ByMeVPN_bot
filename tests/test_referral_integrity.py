@@ -203,6 +203,28 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
         pending = await database.get_pending_referral_payment_rewards()
         self.assertEqual([(r["referrer_id"], r["payment_ref"]) for r in pending], [(2301, "legacy-payment")])
 
+    async def test_new_signup_rewards_retry_automatically_without_starving_queue(self):
+        from unittest.mock import AsyncMock, patch
+        from referral_system_new import process_pending_referral_signup_rewards
+        await self._seed_pair(2401, 2402)
+        await self._seed_pair(2501, 2502)
+        delivery = AsyncMock(side_effect=lambda **kw: kw["user_id"] == 2501)
+        bot = type("BotStub", (), {"send_message": AsyncMock()})()
+        with patch("subscription.deliver_key", new=delivery):
+            self.assertEqual(await process_pending_referral_signup_rewards(bot, limit=1), 0)
+            self.assertEqual(await process_pending_referral_signup_rewards(bot, limit=1), 1)
+        self.assertEqual([call.kwargs["user_id"] for call in delivery.await_args_list], [2401, 2501])
+        self.assertFalse(await database.has_referral_event(2401, 2402, "registration_bonus"))
+        self.assertTrue(await database.has_referral_event(2501, 2502, "registration_bonus"))
+
+    async def test_legacy_referrals_are_not_enqueued_automatically(self):
+        from referral_system_new import process_pending_referral_signup_rewards
+        await self._seed_pair(2601, 2602)
+        db = await database.get_db()
+        await db.execute("UPDATE referrals SET signup_bonus_retry=0 WHERE referred_id=?", (2602,))
+        await db.commit()
+        self.assertEqual(await process_pending_referral_signup_rewards(None), 0)
+
     async def test_10_second_inviter_does_not_create_a_phantom_referral(self):
         for uid in (1101, 1102, 1103):
             await database.ensure_user(uid)
