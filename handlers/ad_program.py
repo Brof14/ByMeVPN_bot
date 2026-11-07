@@ -845,7 +845,8 @@ async def cb_ad_admin_view(callback: CallbackQuery, bot: Bot):
     if app["status"] in ("post_submitted", "active_30_days"):
         text += (
             "\n\n<b>Проверьте вручную:</b> сообщение переслано из @ByMeVPN "
-            "без изменений. По одной ссылке Telegram Bot API этого не подтверждает."
+            "без изменений и заявитель управляет каналом. Одна ссылка на пост "
+            "не подтверждает ни происхождение репоста, ни владение каналом."
         )
         kb.row(
             InlineKeyboardButton(text="Подтвердить репост и выдать бонус", callback_data=f"ad_admin_approve:{app_id}"),
