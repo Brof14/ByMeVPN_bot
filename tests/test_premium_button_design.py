@@ -27,10 +27,13 @@ class PremiumButtonDesignTests(unittest.TestCase):
         self.assertEqual(by_callback["free_vpn"].icon_custom_emoji_id, "6023826881160157558")
 
     def test_support_and_about_are_available_and_colored(self):
-        by_callback = {button.callback_data: button for button in buttons(main_menu_with_keys())}
+        menu = main_menu_with_keys()
+        by_callback = {button.callback_data: button for button in buttons(menu) if button.callback_data}
         self.assertIn("about", by_callback)
         self.assertEqual(by_callback["about"].style, "primary")
-        self.assertEqual(by_callback["trouble"].style, "primary")
+        self.assertEqual(menu.inline_keyboard[-1][0].text, "О сервисе")
+        self.assertEqual(menu.inline_keyboard[-1][1].text, "Поддержка")
+        self.assertTrue(menu.inline_keyboard[-1][1].url.startswith("https://t.me/ByMeVPNSupportBot"))
         self.assertEqual(by_callback["my_keys"].style, "primary")
 
     def test_trial_and_destructive_actions_are_distinct(self):
@@ -72,13 +75,17 @@ class PremiumButtonDesignTests(unittest.TestCase):
             self.assertIn("Подписка", text)
             actions = [b.callback_data for row in send.await_args.args[3].inline_keyboard for b in row]
             self.assertIn("my_keys", actions)
-            self.assertIn("trouble", actions)
+            support = next(b for row in send.await_args.args[3].inline_keyboard for b in row if b.text == "Написать в поддержку")
+            self.assertTrue(support.url.startswith("https://t.me/ByMeVPNSupportBot"))
 
     def test_existing_tariffs_and_key_actions_remain_intact(self):
         tariffs = [b.callback_data for b in buttons(tariff_selection_kb(devices=5))]
         self.assertEqual([s for s in tariffs if s and s.startswith("devtier_")], ["devtier_2","devtier_5","devtier_10"])
         self.assertEqual([s for s in tariffs if s and s.startswith("tariff_")], ["tariff_1_5","tariff_3_5","tariff_6_5","tariff_12_5"])
-        with patch("app_links.BOT_TOKEN", "test-bot-token"):
+        with (
+            patch("app_links.BOT_TOKEN", "test-bot-token"),
+            patch("app_links.APP_CONNECT_PAGE_URL", "https://example.test:8443"),
+        ):
             key = buttons(key_detail_kb(42, subscription_url="https://example.com/sub/42"))
         self.assertTrue(any(b.url and "/connect?ticket=" in b.url for b in key))
         self.assertIn("key_renew:42", [b.callback_data for b in key])

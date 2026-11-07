@@ -116,26 +116,27 @@ class TestMobileWebhookContract(unittest.IsolatedAsyncioTestCase):
     async def test_yookassa_accepts_only_exact_owner_plan_and_server_terms(self):
         order = {
             "user_id": 987654321, "request_id": "request-test", "plan_code": "3m",
-            "provider": "yookassa", "devices": 5, "payment_id": "invoice-test",
+            "provider": "yookassa", "devices": 5, "amount_rub": 396, "payment_id": "invoice-test",
         }
+        metadata = {"plan_code": "3m_d5", "amount_rub": "396", "days": "120", "months": "3"}
         with patch(
             "database.get_mobile_payment_request_by_invoice", new=AsyncMock(return_value=order),
         ) as lookup:
             valid = await webhook._mobile_yookassa_order_matches(
                 "invoice-test", 987654321, 120, 5, 396,
-                {"plan_code": "3m_d5"},
+                metadata,
             )
             wrong_owner = await webhook._mobile_yookassa_order_matches(
                 "invoice-test", 123, 120, 5, 396,
-                {"plan_code": "3m_d5"},
+                metadata,
             )
             wrong_price = await webhook._mobile_yookassa_order_matches(
                 "invoice-test", 987654321, 120, 5, 1,
-                {"plan_code": "3m_d5"},
+                metadata,
             )
             wrong_tier = await webhook._mobile_yookassa_order_matches(
                 "invoice-test", 987654321, 120, 5, 396,
-                {"plan_code": "3m_d10"},
+                {**metadata, "plan_code": "3m_d10"},
             )
         self.assertTrue(valid)
         self.assertFalse(wrong_owner)
@@ -146,23 +147,27 @@ class TestMobileWebhookContract(unittest.IsolatedAsyncioTestCase):
     async def test_legacy_mobile_invoice_marker_uses_same_order_guard(self):
         order = {
             "user_id": 987654321, "request_id": "request-test", "plan_code": "1m",
-            "provider": "yookassa", "devices": 5, "payment_id": "legacy-mobile-invoice",
+            "provider": "yookassa", "devices": 5, "amount_rub": 109,
+            "payment_id": "legacy-mobile-invoice",
         }
         with patch(
             "database.get_mobile_payment_request_by_invoice", new=AsyncMock(return_value=order),
         ) as lookup:
-            self.assertTrue(await webhook._mobile_yookassa_order_matches(
-                "legacy-mobile-invoice", 987654321, 30, 5, 109,
-                {"plan_code": "1m_d5"},
-            ))
-        lookup.assert_awaited_once_with("yookassa", "legacy-mobile-invoice")
+            with patch.object(webhook, "_mobile_v2_yookassa_order_matches", new=AsyncMock(return_value=True)) as legacy:
+                self.assertTrue(await webhook._mobile_yookassa_order_matches_for_payment(
+                    {"status": "succeeded"}, "legacy-mobile-invoice", 987654321,
+                    30, 5, 109, {"mobile_v2": "1"},
+                ))
+        legacy.assert_awaited_once_with({"status": "succeeded"})
+        lookup.assert_not_awaited()
 
     async def test_crypto_requires_matching_invoice_owner_and_catalog_terms(self):
         order = {
             "user_id": 987654321, "request_id": "request-test", "plan_code": "6m",
-            "provider": "crypto", "devices": 10, "payment_id": "crypto-invoice-test",
+            "provider": "crypto", "devices": 10, "amount_rub": 654,
+            "payment_id": "crypto-invoice-test",
         }
-        pending = {"user_id": 987654321, "days": 240, "devices": 10, "amount_rub": 872}
+        pending = {"user_id": 987654321, "days": 240, "devices": 10, "amount_rub": 654}
         with patch(
             "database.get_mobile_payment_request_by_invoice", new=AsyncMock(return_value=order),
         ):

@@ -15,7 +15,7 @@ class TestSectionArtwork(unittest.IsolatedAsyncioTestCase):
             "IPHONE", "WINDOWS", "LINUX", "RENEWAL", "PAYMENT", "PROMO_CODE",
             "LEGAL", "AUTO_RENEWAL",
         )
-        landmarks = {"MENU", "ABOUT", "REFERRALS", "AD_PROGRAM", "PLANS", "KEY", "CONNECTION"}
+        landmarks = set(names)
         for name in names:
             photo = getattr(bot_assets, name)
             self.assertEqual(
@@ -48,7 +48,7 @@ class TestSectionArtwork(unittest.IsolatedAsyncioTestCase):
             patch("handlers.start.send_with_photo", new=AsyncMock()) as send,
         ):
             await cb_free_vpn(callback, object())
-        self.assertIsNone(bot_assets.display_artwork(send.call_args.kwargs["photo"]))
+        self.assertEqual(send.call_args.kwargs["photo"], bot_assets.FREE_VPN)
 
     async def test_tariff_screen_uses_plans_banner(self):
         from handlers.buy import cb_buy_vpn
@@ -67,11 +67,18 @@ class TestSectionArtwork(unittest.IsolatedAsyncioTestCase):
             await cb_buy_vpn(callback, object(), state)
         self.assertEqual(send.call_args.kwargs["photo"], bot_assets.PLANS)
 
-    async def test_platform_guides_are_text_first(self):
+    async def test_platform_guides_use_matching_artwork(self):
         from handlers.guide import _send_platform_guide
 
         callback = SimpleNamespace(from_user=SimpleNamespace(id=5))
         platforms = ("ios", "android", "windows", "linux", "macos")
+        expected = {
+            "ios": bot_assets.IPHONE,
+            "android": bot_assets.ANDROID,
+            "windows": bot_assets.WINDOWS,
+            "linux": bot_assets.LINUX,
+            "macos": bot_assets.IPHONE,
+        }
         with (
             patch("handlers.guide.safe_answer", new=AsyncMock()),
             patch("handlers.guide._track_guide_event", new=AsyncMock()),
@@ -79,7 +86,7 @@ class TestSectionArtwork(unittest.IsolatedAsyncioTestCase):
         ):
             for platform in platforms:
                 await _send_platform_guide(callback, object(), platform)
-                self.assertIsNone(send.call_args.kwargs.get("photo"), platform)
+                self.assertEqual(send.call_args.kwargs.get("photo"), expected[platform], platform)
 
     async def test_ad_program_applies_its_artwork_to_all_screens(self):
         from handlers.ad_program import send_with_photo

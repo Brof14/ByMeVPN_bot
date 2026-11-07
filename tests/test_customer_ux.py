@@ -122,11 +122,13 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
     def test_main_menu_uses_distinct_primary_and_secondary_actions(self):
         for markup in (main_menu_new_user(), main_menu_existing(), main_menu_with_keys()):
             rows = markup.inline_keyboard
-            self.assertEqual(rows[-1][0].text, "Поддержка")
-            self.assertEqual(rows[-1][0].callback_data, "trouble")
+            self.assertEqual(rows[-1][0].text, "О сервисе")
+            self.assertEqual(rows[-1][0].callback_data, "about")
+            self.assertEqual(rows[-1][1].text, "Поддержка")
+            self.assertTrue(rows[-1][1].url.startswith("https://t.me/ByMeVPNSupportBot"))
             buttons = [button for row in rows for button in row]
             by_action = {button.callback_data: button for button in buttons}
-            self.assertEqual(by_action["trouble"].style, "primary")
+            self.assertEqual(by_action["about"].style, "primary")
             self.assertEqual(by_action["buy_vpn"].style, "primary")
             self.assertEqual(by_action["free_vpn"].style, "primary")
         menu = main_menu_with_keys()
@@ -272,12 +274,12 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
 
         text = send.call_args.args[2]
         self.assertIn("<b>Поделитесь ByMeVPN с другом</b>", text)
-        self.assertIn("+15 дней", text)
+        self.assertIn("15 дней", text)
         self.assertIn("ещё <b>30 дней</b>", text)
         self.assertIn("Бонусных дней начислено: <b>15</b>", text)
         self.assertIn("Ваши приглашения: <b>1</b> · с оплатой: <b>1</b>", text)
         buttons = [b for row in send.call_args.args[3].inline_keyboard for b in row]
-        copied = next(b for b in buttons if b.text == "Скопировать ссылку")
+        copied = next(b for b in buttons if b.text == "🔗 Скопировать ссылку")
         self.assertEqual(copied.copy_text.text, "https://t.me/ByMeVPNbot?start=123")
         self.assertFalse(any(b.text == "Скопировать текст для канала" for b in buttons))
 

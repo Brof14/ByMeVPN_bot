@@ -84,7 +84,7 @@ class SemanticPremiumEmojiTests(unittest.TestCase):
         self.assertEqual(actions[0], "my_keys")
         self.assertIn("my_keys", actions)
         self.assertTrue(all(b.style in {"primary", "success", "danger"} for b in all_buttons(kb)))
-        self.assertEqual(kb.inline_keyboard[-1][-1].callback_data, "trouble")
+        self.assertTrue(kb.inline_keyboard[-1][-1].url.startswith("https://t.me/ByMeVPNSupportBot"))
 
     def test_delivery_and_platform_guide_prioritize_connection(self):
         kb = after_key_kb("https://example.test/sub")

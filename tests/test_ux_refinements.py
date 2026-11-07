@@ -39,6 +39,13 @@ class TariffDesignTests(unittest.TestCase):
             ["5301299389245985629", "5301163762768707871", "5301192569114366400"],
         )
 
+    def test_five_device_selector_is_short_and_three_plus_one_has_no_extra_claim(self):
+        keyboard = tariff_selection_kb(devices=5)
+        labels = {b.callback_data: b.text for b in buttons(keyboard)}
+        self.assertIn("5 устройств", labels["devtier_5"])
+        self.assertNotIn("оптимально", labels["devtier_5"].lower())
+        self.assertNotIn("выгодно", labels["tariff_3_5"].lower())
+
     def test_crypto_has_no_bitcoin_character(self):
         keyboard = payment_kb(316, 120, devices=2)
         crypto = next(b for b in buttons(keyboard) if b.callback_data == "pay_crypto")
@@ -158,8 +165,10 @@ class AdForwardingTests(unittest.IsolatedAsyncioTestCase):
             await cb_ad_program(callback, object(), state)
         text = send.await_args.args[2]
         self.assertIn("после проверки", text)
-        self.assertIn("отдельным сообщением", text)
-        self.assertIn("partner", [b.callback_data for b in buttons(send.await_args.args[3])])
+        self.assertIn("официальный пост", text)
+        actions = [b.callback_data for b in buttons(send.await_args.args[3])]
+        self.assertIn("ad_check_channel", actions)
+        self.assertNotIn("partner", actions)
 
     def test_ad_post_link_only_from_official_channel(self):
         from handlers.ad_program import official_ad_post_url
@@ -236,7 +245,7 @@ class AdForwardingTests(unittest.IsolatedAsyncioTestCase):
         update.assert_not_awaited()
         self.assertIn("канале из вашей заявки", message.answer.await_args.args[0])
 
-    async def test_about_and_free_days_offer_feedback_without_promising_automatic_bonus(self):
+    async def test_about_and_free_days_keep_their_requested_minimal_actions(self):
         from handlers.start import cb_about, cb_free_vpn
         callback = SimpleNamespace(from_user=SimpleNamespace(id=123))
         for handler in (cb_about, cb_free_vpn):
@@ -245,13 +254,11 @@ class AdForwardingTests(unittest.IsolatedAsyncioTestCase):
                 patch("handlers.start.send_with_photo", new=AsyncMock()) as send,
             ):
                 await handler(callback, object())
-            text = send.await_args.args[2]
-            self.assertIn("ошибк", text)
-            self.assertIn("можем начислить", text)
             kb = send.await_args.args[3]
-            feedback = next(b for b in buttons(kb) if b.text == "Сообщить об ошибке или идее")
-            self.assertTrue(feedback.url.startswith("https://t.me/ByMeVPNSupportBot"))
+            self.assertFalse(any(b.text == "Сообщить об ошибке или идее" for b in buttons(kb)))
             self.assertEqual(kb.inline_keyboard[-1][0].callback_data, "back_to_menu")
+            if handler is cb_about:
+                self.assertFalse(any(b.text in {"Тарифы", "Подключение"} for b in buttons(kb)))
 
     async def test_get_post_displays_forward_instruction_not_template(self):
         from handlers.ad_program import cb_ad_get_post

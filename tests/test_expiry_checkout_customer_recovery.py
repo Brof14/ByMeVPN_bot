@@ -54,7 +54,7 @@ class ExpiryReminderRegression(unittest.IsolatedAsyncioTestCase):
             patch("database.log_analytics_event", new=AsyncMock()),
         ):
             await cb_select_tariff(callback, object(), state)
-        self.assertIn("Итого: <b>221 ₽</b>", send.await_args.args[2])
+        self.assertIn("Итого: <b>166 ₽</b>", send.await_args.args[2])
         self.assertEqual(state.update_data.await_args.kwargs["promo_code"], "BOUND")
 
     async def test_zero_price_promo_does_not_offer_an_unpayable_invoice(self):
@@ -83,7 +83,7 @@ class ExpiryReminderRegression(unittest.IsolatedAsyncioTestCase):
         from handlers.buy import _get_checkout_params
         promo = {"code": "BOUND", "promo_type": "percent", "discount_value": 30, "tariff_binding": 3}
         state = SimpleNamespace(get_data=AsyncMock(return_value={
-            "months": 3, "devices": 2, "price_rub": 221, "days": 120,
+            "months": 3, "devices": 2, "price_rub": 166, "days": 120,
             "promo_code": "BOUND", "promo_info": promo,
         }), update_data=AsyncMock())
         with (
@@ -91,14 +91,14 @@ class ExpiryReminderRegression(unittest.IsolatedAsyncioTestCase):
             patch("handlers.buy.has_user_used_promo", new=AsyncMock(return_value=False)),
         ):
             result = await _get_checkout_params(state, 123)
-        self.assertEqual((result["price_rub"], result["days"], result["promo_code"]), (221, 120, "BOUND"))
+        self.assertEqual((result["price_rub"], result["days"], result["promo_code"]), (166, 120, "BOUND"))
         state.update_data.assert_not_awaited()
 
     async def test_changed_promo_requires_new_order_confirmation(self):
         from handlers.buy import _get_checkout_params
         promo = {"code": "BOUND", "promo_type": "percent", "discount_value": 30, "tariff_binding": 3}
         state = SimpleNamespace(get_data=AsyncMock(return_value={
-            "months": 3, "devices": 2, "price_rub": 221, "days": 120,
+            "months": 3, "devices": 2, "price_rub": 166, "days": 120,
             "promo_code": "BOUND", "promo_info": promo,
         }), update_data=AsyncMock())
         with (
