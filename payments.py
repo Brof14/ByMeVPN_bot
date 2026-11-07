@@ -33,19 +33,24 @@ _yookassa_recurring_supported: Optional[bool] = None
 
 async def _remember_yookassa_checkout(
     payment_id: Optional[str], user_id: int, days: int, devices: int, amount_rub: int,
-) -> None:
-    """Persist a checkout ID so polling can recover payments after long outages."""
+) -> bool:
+    """Require durable recovery tracking before exposing a checkout link.
+
+    The provider may have created an unpaid invoice. Without its ID persisted,
+    a lost webhook cannot be reconciled by the payment monitor. Fail closed:
+    do not direct the customer to a checkout that cannot be recovered.
+    """
     if not payment_id:
         logger.error("YooKassa created a checkout without an ID (user=%d)", user_id)
-        return
+        return False
     try:
         from database import add_yookassa_pending
 
         await add_yookassa_pending(payment_id, user_id, days, devices, amount_rub)
+        return True
     except Exception:
-        # The checkout is already created. Keep returning its URL, but make the
-        # missing recovery record visible so the user is not blocked from paying.
-        logger.exception("Could not persist YooKassa checkout %s for recovery", payment_id)
+        logger.exception("Could not persist YooKassa checkout %s for recovery; not exposing payment URL", payment_id)
+        return False
 
 
 def is_yookassa_recurring_supported() -> bool:
@@ -128,7 +133,8 @@ async def create_yookassa_payment(
             r.raise_for_status()
             data = r.json()
             url = data["confirmation"]["confirmation_url"]
-            await _remember_yookassa_checkout(data.get("id"), user_id, days, devices, amount_rub)
+            if not await _remember_yookassa_checkout(data.get("id"), user_id, days, devices, amount_rub):
+                return None
             logger.info("YooKassa payment created for user %d: %s", user_id, data.get("id"))
             if return_payment_details:
                 return {"payment_url": url, "payment_id": str(data.get("id") or ""), "status": data.get("status")}
@@ -152,7 +158,8 @@ async def create_yookassa_payment(
                     r2.raise_for_status()
                     data = r2.json()
                     url = data["confirmation"]["confirmation_url"]
-                    await _remember_yookassa_checkout(data.get("id"), user_id, days, devices, amount_rub)
+                    if not await _remember_yookassa_checkout(data.get("id"), user_id, days, devices, amount_rub):
+                        return None
                     logger.info("YooKassa fallback standard payment created for user %d: %s", user_id, data.get("id"))
                     if return_payment_details:
                         return {"payment_url": url, "payment_id": str(data.get("id") or ""), "status": data.get("status")}
