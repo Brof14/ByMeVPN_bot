@@ -318,6 +318,18 @@ class ExpiryDatabaseRegression(unittest.IsolatedAsyncioTestCase):
         sub, title, expiry = await _load_autorenew_context(9801, expired)
         self.assertIn("нескольк", _get_payment_methods_text(title, sub=sub, expiry_str=expiry).lower())
 
+    async def test_autorenew_without_payment_token_is_not_scheduled(self):
+        now = int(time.time())
+        key_id = await self.db.add_key(
+            9801, "https://sub.test/no-token", "no-token", "uuid-no-token",
+            30, 2, expiry=now - 60,
+        )
+        await self.db.save_auto_renew_subscription(
+            user_id=9801, key_id=key_id, payment_method_id="  ",
+            payment_method_title="Card", months=1, days=30, devices=2, amount_rub=89,
+        )
+        self.assertEqual(await self.db.get_expiring_auto_renew_subscriptions(now=now), [])
+
     async def test_unambiguous_legacy_autorenew_remains_eligible(self):
         from notifications import _get_active_autorenew
         now = int(time.time())
