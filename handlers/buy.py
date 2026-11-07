@@ -50,13 +50,15 @@ def _promo_purchase_keyboard() -> InlineKeyboardMarkup:
     ]])
 
 
-def _tariff_intro(devices: int, *, renewal: bool = False) -> str:
+def _tariff_intro(devices: int, *, renewal: bool = False, promo_binding: int | None = None) -> str:
     """Shared copy for tariff choice, preserving all prices and durations."""
     title = "Продление" if renewal else "Тарифы"
     return (
         f"<b>{title}</b>\n\n"
         f"Устройства: <b>{devices}</b>\n"
         "Выберите срок. На кнопках — полная сумма и цена за 30 дней."
+        + (f"\nПромокод действует на срок {get_price_for_months(promo_binding, devices)[1]} дней."
+           if promo_binding in (1, 3, 6, 12) else "")
     )
 
 
@@ -72,17 +74,18 @@ async def cb_buy_vpn(callback: CallbackQuery, bot: Bot, state: FSMContext):
     # Check if user has active promo code
     data = await state.get_data()
     promo_discount = data.get("promo_discount", 0)
+    promo_binding = (data.get("promo_info") or {}).get("tariff_binding")
     devices = validate_device_limit(data.get("devices", DEFAULT_DEVICE_LIMIT))
     renew_key_id = data.get("renew_key_id")
     await state.update_data(devices=devices)
     from database import log_analytics_event
     await log_analytics_event(callback.from_user.id, "tariffs_viewed", devices=devices)
     
-    text = _tariff_intro(devices, renewal=bool(renew_key_id))
+    text = _tariff_intro(devices, renewal=bool(renew_key_id), promo_binding=promo_binding)
     await send_with_photo(
         bot, callback,
         text,
-        tariff_selection_kb(devices=devices, discount_percent=promo_discount),
+        tariff_selection_kb(devices=devices, discount_percent=promo_discount, promo_tariff_months=promo_binding),
         photo=RENEWAL if renew_key_id else PLANS,
     )
 
@@ -99,14 +102,15 @@ async def cb_select_devtier(callback: CallbackQuery, bot: Bot, state: FSMContext
 
     data = await state.get_data()
     promo_discount = data.get("promo_discount", 0)
+    promo_binding = (data.get("promo_info") or {}).get("tariff_binding")
     await state.update_data(devices=devices)
 
     renew_key_id = data.get("renew_key_id")
-    text = _tariff_intro(devices, renewal=bool(renew_key_id))
+    text = _tariff_intro(devices, renewal=bool(renew_key_id), promo_binding=promo_binding)
     await send_with_photo(
         bot, callback,
         text,
-        tariff_selection_kb(devices=devices, discount_percent=promo_discount),
+        tariff_selection_kb(devices=devices, discount_percent=promo_discount, promo_tariff_months=promo_binding),
         photo=RENEWAL if renew_key_id else PLANS,
     )
 
@@ -130,8 +134,33 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
     price_rub, days = get_price_for_months(months, devices)
 
     # Check for promo discount
-    promo_info = data.get("promo_info", {})
+    promo_info = data.get("promo_info") or {}
+    promo_code = data.get("promo_code") or promo_info.get("code", "")
     original_price = price_rub
+
+    binding = promo_info.get("tariff_binding")
+    if binding is not None and binding != months:
+        # The selected button already displayed the full price. Keep the code
+        # unused so the customer may activate it again for an eligible tariff.
+        promo_info = {}
+        promo_code = ""
+    if promo_info:
+        try:
+            current_promo = await validate_promo_code(promo_code, tariff_months=months) if promo_code else None
+            already_used = await has_user_used_promo(promo_code, callback.from_user.id) if current_promo else False
+        except Exception:
+            logger.exception("Could not verify promo eligibility for user %d", callback.from_user.id)
+            await send_with_photo(bot, callback, "Не удалось проверить промокод. Попробуйте ещё раз.", tariff_selection_kb(devices=devices), photo=PLANS)
+            return
+        if not current_promo or already_used:
+            await state.update_data(promo_info={}, promo_code="", promo_discount=0)
+            await send_with_photo(
+                bot, callback,
+                "<b>Промокод больше недоступен</b>\n\nВыберите тариф заново или введите другой промокод.",
+                tariff_selection_kb(devices=devices), photo=PLANS,
+            )
+            return
+        promo_info = current_promo
 
     logger.info(f"Selecting tariff: months={months}, devices={devices}, original_price={original_price}, promo_info={promo_info}")
 
@@ -153,7 +182,11 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
     else:
         promo_text = ""
 
-    await state.update_data(months=months, devices=devices, price_rub=price_rub, days=days, original_price=original_price)
+    await state.update_data(
+        months=months, devices=devices, price_rub=price_rub, days=days,
+        original_price=original_price, promo_info=promo_info, promo_code=promo_code,
+        promo_discount=promo_info.get("discount_value", 0) if promo_info.get("promo_type") == "percent" else 0,
+    )
     # A restart can erase MemoryStorage. Save only the choice, never its
     # computed price, so recovering cannot silently charge an old amount.
     try:
@@ -200,7 +233,7 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
 # Step 3: Choose payment method
 # ---------------------------------------------------------------------------
 
-async def _get_checkout_params(state: FSMContext) -> dict | None:
+async def _get_checkout_params(state: FSMContext, user_id: int) -> dict | None:
     """
     Read the tariff selected in the buy flow.
 
@@ -212,6 +245,19 @@ async def _get_checkout_params(state: FSMContext) -> dict | None:
     data = await state.get_data()
     if "price_rub" not in data or "days" not in data:
         return None
+    promo_code = data.get("promo_code", "")
+    if promo_code:
+        snapshot = data.get("promo_info") or {}
+        try:
+            current = await validate_promo_code(promo_code, tariff_months=int(data.get("months", 1)))
+            used = await has_user_used_promo(promo_code, user_id) if current else False
+        except Exception:
+            logger.exception("Could not verify checkout promo for user %d", user_id)
+            return None
+        fields = ("promo_type", "discount_value", "tariff_binding")
+        if not current or used or any(current.get(field) != snapshot.get(field) for field in fields):
+            await state.update_data(promo_info={}, promo_code="", promo_discount=0)
+            return None
     return {
         "price_rub": int(data["price_rub"]),
         "days": int(data["days"]),
@@ -288,7 +334,7 @@ async def cb_select_period_legacy(callback: CallbackQuery, bot: Bot, state: FSMC
 @router.callback_query(F.data == "pay_stars")
 async def cb_pay_stars(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await safe_answer(callback)
-    params = await _get_checkout_params(state)
+    params = await _get_checkout_params(state, callback.from_user.id)
     if not params:
         await _ask_tariff_again(bot, callback)
         return
@@ -337,7 +383,7 @@ async def cb_pay_stars(callback: CallbackQuery, bot: Bot, state: FSMContext):
 @router.callback_query(F.data == "pay_yookassa")
 async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await safe_answer(callback)
-    params = await _get_checkout_params(state)
+    params = await _get_checkout_params(state, callback.from_user.id)
     if not params:
         await _ask_tariff_again(bot, callback)
         return
@@ -413,7 +459,7 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
 @router.callback_query(F.data == "pay_crypto")
 async def cb_pay_crypto(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await safe_answer(callback)
-    params = await _get_checkout_params(state)
+    params = await _get_checkout_params(state, callback.from_user.id)
     if not params:
         await _ask_tariff_again(bot, callback)
         return

@@ -112,7 +112,10 @@ def authorized_user_menu() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def tariff_selection_kb(devices: int = DEFAULT_DEVICE_LIMIT, discount_percent: int = 0) -> InlineKeyboardMarkup:
+def tariff_selection_kb(
+    devices: int = DEFAULT_DEVICE_LIMIT, discount_percent: int = 0,
+    promo_tariff_months: int | None = None,
+) -> InlineKeyboardMarkup:
     """Tariff selection with device tiers and actual subscription durations."""
     devices = validate_device_limit(devices)
     kb = InlineKeyboardBuilder()
@@ -133,14 +136,15 @@ def tariff_selection_kb(devices: int = DEFAULT_DEVICE_LIMIT, discount_percent: i
     # payable amount and effective monthly rate without changing a kopeck.
     for months in (1, 3, 6, 12):
         total_price, included_days = get_price_for_months(months, devices)
-        if discount_percent > 0:
+        applies = discount_percent > 0 and (promo_tariff_months is None or promo_tariff_months == months)
+        if applies:
             total_price = round(total_price * (100 - discount_percent) / 100)
             months_included = included_days // 30
             monthly_display = f"≈{total_price / months_included:.2f}".rstrip("0").rstrip(".")
         else:
             monthly_display = str(get_monthly_display(months, devices))
         text = f"{included_days} дней · {total_price} ₽ · {monthly_display} ₽/30 дней"
-        if discount_percent > 0:
+        if applies:
             text += f" · −{discount_percent}%"
         if months == 12 and discount_percent == 0:
             text += " · Выгоднее за 30 дней"

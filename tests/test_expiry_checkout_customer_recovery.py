@@ -17,12 +17,13 @@ class ExpiryReminderRegression(unittest.IsolatedAsyncioTestCase):
             patch("handlers.buy.safe_answer", new=AsyncMock()),
             patch("handlers.buy.send_with_photo", new=AsyncMock()) as send,
             patch("handlers.buy.validate_promo_code", new=AsyncMock()) as validate,
+            patch("database.save_checkout_draft", new=AsyncMock()),
+            patch("database.log_analytics_event", new=AsyncMock()),
         ):
             await cb_select_tariff(callback, object(), state)
-        state.update_data.assert_not_awaited()
         validate.assert_not_awaited()
-        self.assertIn("промокод", send.await_args.args[2].lower())
-        self.assertNotIn("Ваш заказ", send.await_args.args[2])
+        self.assertIn("Итого: <b>89 ₽</b>", send.await_args.args[2])
+        self.assertEqual(state.update_data.await_args.kwargs["promo_code"], "")
 
     async def test_expired_promo_does_not_create_discounted_order(self):
         from handlers.buy import cb_select_tariff
@@ -36,6 +37,27 @@ class ExpiryReminderRegression(unittest.IsolatedAsyncioTestCase):
         ):
             await cb_select_tariff(callback, object(), state)
         self.assertNotIn("Ваш заказ", send.await_args.args[2])
+        self.assertEqual(state.update_data.await_args.kwargs["promo_code"], "")
+
+    async def test_promo_expiring_after_order_confirmation_does_not_create_invoice(self):
+        from handlers.buy import cb_pay_yookassa
+        callback = SimpleNamespace(from_user=SimpleNamespace(id=123))
+        state = SimpleNamespace(
+            get_data=AsyncMock(return_value={
+                "months": 1, "devices": 2, "price_rub": 62, "days": 30,
+                "promo_code": "EXPIRED", "promo_info": {"code": "EXPIRED", "promo_type": "percent", "discount_value": 30, "tariff_binding": None},
+            }),
+            update_data=AsyncMock(),
+        )
+        with (
+            patch("handlers.buy.safe_answer", new=AsyncMock()),
+            patch("handlers.buy.validate_promo_code", new=AsyncMock(return_value=None)),
+            patch("handlers.buy._ask_tariff_again", new=AsyncMock()) as retry,
+            patch("handlers.buy.create_yookassa_payment", new=AsyncMock()) as create,
+        ):
+            await cb_pay_yookassa(callback, object(), state)
+        create.assert_not_awaited()
+        retry.assert_awaited_once()
         self.assertEqual(state.update_data.await_args.kwargs["promo_code"], "")
     async def test_other_key_autorenew_does_not_hide_manual_renewal(self):
         from notifications import _send_urgent_notification
