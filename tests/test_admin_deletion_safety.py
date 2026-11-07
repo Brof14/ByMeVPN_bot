@@ -225,6 +225,40 @@ class CancelAllMethodsTests(unittest.IsolatedAsyncioTestCase):
         )).fetchone())[0]
         self.assertEqual(count, 0)
 
+    async def test_suspend_target_key_preserves_other_key_bound_recurring_method(self):
+        first = await database.add_key(123, "https://sub.test/a", "a", "uuid-a", 30, 2)
+        second = await database.add_key(123, "https://sub.test/b", "b", "uuid-b", 30, 2)
+        await database.save_auto_renew_subscription(123, first, "card-first")
+        await database.save_auto_renew_subscription(123, second, "card-second")
+        await database.save_auto_renew_subscription(123, None, "card-legacy")
+
+        changed = await database.suspend_key_autorenew(123, first)
+        self.assertEqual(changed, 2)
+        db = await database.get_db()
+        rows = await (await db.execute(
+            "SELECT key_id,status,payment_method_id FROM auto_renew_subscriptions "
+            "WHERE user_id=123 ORDER BY id"
+        )).fetchall()
+        by_key = {row[0]: (row[1], row[2]) for row in rows}
+        self.assertEqual(by_key[first], ("cancelled", ""))
+        self.assertEqual(by_key[None], ("cancelled", ""))
+        self.assertEqual(by_key[second], ("active", "card-second"))
+
+    async def test_key_deletion_atomically_erases_target_recurring_token(self):
+        first = await database.add_key(123, "https://sub.test/a", "a", "uuid-a", 30, 2)
+        second = await database.add_key(123, "https://sub.test/b", "b", "uuid-b", 30, 2)
+        await database.save_auto_renew_subscription(123, first, "card-first")
+        await database.save_auto_renew_subscription(123, second, "card-second")
+        self.assertTrue(await database.delete_key(first))
+        db = await database.get_db()
+        rows = await (await db.execute(
+            "SELECT key_id,status,payment_method_id FROM auto_renew_subscriptions "
+            "WHERE user_id=123 ORDER BY key_id"
+        )).fetchall()
+        by_key = {row[0]: (row[1], row[2]) for row in rows}
+        self.assertEqual(by_key[first], ("cancelled", ""))
+        self.assertEqual(by_key[second], ("active", "card-second"))
+
     async def test_all_saved_methods_are_removed_without_touching_paid_access(self):
         first = await database.add_key(123, "https://sub.test/one", "one", "uuid-1", 30, 2)
         second = await database.add_key(123, "https://sub.test/two", "two", "uuid-2", 30, 5)
