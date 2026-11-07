@@ -291,6 +291,16 @@ async def award_referral_for_payment(
             return False
 
         bonus_added = await record_referral_payment_reward(referrer_id, user_id, payment_ref)
+        # Repair the reporting event on every retry: the reward insert and the
+        # event are separate commits, so a crash can occur between them.
+        from database import add_referral_event
+        await add_referral_event(
+            referrer_id=referrer_id,
+            referred_id=user_id,
+            event_type="payment_bonus",
+            days_awarded=REFERRAL_FIRST_PAYMENT_BONUS_DAYS,
+            description=f"First paid subscription; payment={payment_ref}",
+        )
         if not bonus_added:
             logger.info(
                 "Referral reward already exists for referrer %d / referred %d (payment %s)",
@@ -300,16 +310,8 @@ async def award_referral_for_payment(
                 await process_pending_referral_payment_rewards(bot)
             return False
 
-        from database import add_referral_event
-        await add_referral_event(
-            referrer_id=referrer_id,
-            referred_id=user_id,
-            event_type="payment_bonus",
-            days_awarded=REFERRAL_FIRST_PAYMENT_BONUS_DAYS,
-            description=f"First paid subscription; payment={payment_ref}",
-        )
         logger.info(
-            "Referral reward +%d days awarded: referrer=%d, referred=%d, payment=%s",
+            "Referral reward +%d days recorded: referrer=%d, referred=%d, payment=%s",
             REFERRAL_FIRST_PAYMENT_BONUS_DAYS, referrer_id, user_id, payment_ref,
         )
 
@@ -325,6 +327,7 @@ async def process_pending_referral_payment_rewards(bot, limit: int = 100) -> int
     """Automatically grant +30 days for paid referrals, retrying safely after outages."""
     from database import (
         get_pending_referral_payment_rewards, get_user_keys, mark_ref_bonus_claimed,
+        add_referral_event,
     )
     from subscription import deliver_key
     from constants import DEFAULT_DEVICE_LIMIT, REFERRAL_FIRST_PAYMENT_BONUS_DAYS
@@ -333,14 +336,21 @@ async def process_pending_referral_payment_rewards(bot, limit: int = 100) -> int
     for reward in await get_pending_referral_payment_rewards(limit=limit):
         referrer_id = int(reward["referrer_id"])
         referred_id = int(reward["referred_id"])
-        keys = await get_user_keys(referrer_id)
-        latest = max(keys, key=lambda key: key.get("expiry", 0)) if keys else None
         try:
+            await add_referral_event(
+                referrer_id=referrer_id, referred_id=referred_id,
+                event_type="payment_bonus", days_awarded=REFERRAL_FIRST_PAYMENT_BONUS_DAYS,
+                description=f"First paid subscription; payment={reward['payment_ref']}",
+            )
+            keys = await get_user_keys(referrer_id)
+            latest = max(keys, key=lambda key: key.get("expiry", 0)) if keys else None
             success = await deliver_key(
                 bot=bot, user_id=referrer_id, chat_id=referrer_id,
                 config_name=f"ByMeVPN_{referrer_id}", days=REFERRAL_FIRST_PAYMENT_BONUS_DAYS,
                 limit_ip=latest.get("limit_ip", DEFAULT_DEVICE_LIMIT) if latest else DEFAULT_DEVICE_LIMIT,
-                is_paid=False, amount=0, method="ref_bonus",
+                # A fixed provisioning intent prevents duplicate extensions on retry.
+                # amount=0 ensures this bonus does not become a payment record.
+                is_paid=True, amount=0, method="ref_bonus",
                 payload=f"ref_bonus_{referrer_id}_{referred_id}", extend_existing=True,
             )
             if not success:

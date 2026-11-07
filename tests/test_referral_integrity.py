@@ -163,6 +163,8 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(delivery.await_count, 2)
         self.assertEqual(delivery.await_args.kwargs["days"], 30)
+        self.assertTrue(delivery.await_args.kwargs["is_paid"])
+        self.assertEqual(delivery.await_args.kwargs["amount"], 0)
         self.assertEqual(delivery.await_args.kwargs["payload"], "ref_bonus_911_922")
         self.assertFalse(await database.get_pending_referral_payment_rewards())
 

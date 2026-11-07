@@ -2548,7 +2548,7 @@ async def add_referral_event(
     description: str = None,
 ) -> int:
     db = await get_db()
-    if event_type == "registration_bonus":
+    if event_type in ("registration_bonus", "payment_bonus"):
         cur = await db.execute(
             """INSERT INTO referral_events(referrer_id, referred_id, event_type, days_awarded, description)
             SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (
