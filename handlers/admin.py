@@ -1377,6 +1377,27 @@ async def cb_del_user(callback: CallbackQuery, bot: Bot):
             )
             return
 
+        # An invoice created just before removal may still be paid by the
+        # provider. Do not revoke this account while fulfillment is uncertain.
+        from database import has_recent_unsettled_checkout
+        try:
+            pending_payment = await has_recent_unsettled_checkout(uid)
+        except Exception:
+            logger.exception("Admin deletion cannot check pending charges for user %d", uid)
+            await callback.message.edit_text(
+                "Не удалось проверить незавершённые оплаты. Автосписания "
+                "отключены; VPN и данные сохранены. Повторите позже.",
+                reply_markup=_back_kb(),
+            )
+            return
+        if pending_payment:
+            await callback.message.edit_text(
+                "Недавно созданная оплата ещё может завершиться. "
+                "Автосписания отключены; удаление отложено до сверки платежа.",
+                reply_markup=_back_kb(),
+            )
+            return
+
         try:
             panel_deleted = await delete_xui_user(uid)
         except Exception:
