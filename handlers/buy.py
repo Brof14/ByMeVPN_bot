@@ -153,7 +153,7 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
             await send_with_photo(bot, callback, "Не удалось проверить промокод. Попробуйте ещё раз.", tariff_selection_kb(devices=devices), photo=PLANS)
             return
         if not current_promo or already_used:
-            await state.update_data(promo_info={}, promo_code="", promo_discount=0)
+            await state.update_data(promo_info={}, promo_code="", promo_discount=0, price_rub=None, days=None)
             await send_with_photo(
                 bot, callback,
                 "<b>Промокод больше недоступен</b>\n\nВыберите тариф заново или введите другой промокод.",
@@ -243,7 +243,7 @@ async def _get_checkout_params(state: FSMContext, user_id: int) -> dict | None:
     tariff.
     """
     data = await state.get_data()
-    if "price_rub" not in data or "days" not in data:
+    if data.get("price_rub") is None or data.get("days") is None:
         return None
     promo_code = data.get("promo_code", "")
     if promo_code:
@@ -256,7 +256,7 @@ async def _get_checkout_params(state: FSMContext, user_id: int) -> dict | None:
             return None
         fields = ("promo_type", "discount_value", "tariff_binding")
         if not current or used or any(current.get(field) != snapshot.get(field) for field in fields):
-            await state.update_data(promo_info={}, promo_code="", promo_discount=0)
+            await state.update_data(promo_info={}, promo_code="", promo_discount=0, price_rub=None, days=None)
             return None
     return {
         "price_rub": int(data["price_rub"]),
