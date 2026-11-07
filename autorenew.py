@@ -5,6 +5,7 @@ and executes recurrent debits via YooKassa API.
 """
 import asyncio
 import logging
+from html import escape
 import time
 from typing import Optional
 
