@@ -12,8 +12,7 @@ class ConversionUXTests(unittest.TestCase):
         menu = after_key_kb("https://example.test/sub/1")
         rows = menu.inline_keyboard
         self.assertEqual(rows[0][0].callback_data, "connection_guide")
-        self.assertEqual(rows[1][0].text, "Скопировать ссылку")
-        self.assertEqual([b.callback_data for b in rows[2]], ["my_keys", "partner"])
+        self.assertEqual([b.callback_data for b in rows[1]], ["my_keys", "partner"])
         self.assertEqual(rows[-1][0].callback_data, "back_to_menu")
 
     def test_tariffs_show_real_payable_total_and_monthly_rate(self):
