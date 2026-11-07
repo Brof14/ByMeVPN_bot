@@ -33,15 +33,14 @@ async def process_referral_click(referrer_id: int, referred_id: int, user_agent:
 
 async def award_referral_signup_bonus(bot, referrer_id: int, referred_id: int) -> bool:
     """Grant the existing +15-day signup reward with a retry-safe target expiry."""
-    from database import get_referrer, get_referral_events, get_user_keys, add_referral_event
+    from database import get_referrer, has_referral_event, get_user_keys, add_referral_event
     from subscription import deliver_key
     from constants import DEFAULT_DEVICE_LIMIT
     from constants import REFERRAL_SIGNUP_BONUS_DAYS
 
     if await get_referrer(referred_id) != referrer_id:
         return False
-    events = await get_referral_events(referrer_id)
-    if any(e["referred_id"] == referred_id and e["event_type"] == "registration_bonus" for e in events):
+    if await has_referral_event(referrer_id, referred_id, "registration_bonus"):
         return True
 
     keys = await get_user_keys(referrer_id)
@@ -65,8 +64,7 @@ async def award_referral_signup_bonus(bot, referrer_id: int, referred_id: int) -
     if inserted:
         return True
     # Another worker may have recorded the same reward while delivery ran.
-    events = await get_referral_events(referrer_id)
-    return any(e["referred_id"] == referred_id and e["event_type"] == "registration_bonus" for e in events)
+    return await has_referral_event(referrer_id, referred_id, "registration_bonus")
 
 
 async def retry_pending_signup_bonuses(bot, referrer_id: int) -> int:

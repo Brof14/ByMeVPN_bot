@@ -2591,6 +2591,16 @@ async def get_referrals_missing_signup_bonus(referrer_id: int, limit: int = 100)
     return [row[0] for row in await cur.fetchall()]
 
 
+async def has_referral_event(referrer_id: int, referred_id: int, event_type: str) -> bool:
+    """Check one reward without loading the referrer's entire event history."""
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT 1 FROM referral_events WHERE referrer_id=? AND referred_id=? AND event_type=? LIMIT 1",
+        (referrer_id, referred_id, event_type),
+    )
+    return await cur.fetchone() is not None
+
+
 async def get_referral_events(referrer_id: int) -> list[dict]:
     db = await get_db()
     cur = await db.execute(
