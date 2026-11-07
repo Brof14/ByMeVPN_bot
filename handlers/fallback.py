@@ -1,65 +1,38 @@
-"""
-Fallback handler: handle unknown commands only.
-Must be last registered router.
+"""Fallback for unknown commands and text; never erase customer chat history.
 
-CRITICAL: both handlers require StateFilter(None) — a fallback must NEVER
-consume a message while ANY FSM flow is active (admin inputs, ad rejection
-reason, email auth, payout amount, giveaway, purchase). An active state with
-no matching handler leaves the message unanswered, which is strictly better
-than the fallback destroying the flow's input.
+Keep this router last and restrict it to idle FSM state. Do not log raw
+customer text (it can contain login URLs, subscription links, or credentials).
 """
-import logging
-
 from aiogram import Bot, Router, F
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message
+from aiogram.types import Message, InlineKeyboardMarkup
 
 from async_utils import monitor_performance
+from bot_style import themed_button as InlineKeyboardButton
 
-logger = logging.getLogger(__name__)
 router = Router()
+
+
+async def _show_menu_hint(message: Message, *, unknown_command: bool = False) -> None:
+    caption = "Команда не найдена. Откройте меню." if unknown_command else (
+        "Не удалось распознать сообщение. Откройте меню."
+    )
+    await message.answer(
+        caption,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Открыть меню", callback_data="back_to_menu")
+        ]]),
+    )
 
 
 @router.message(F.command, StateFilter(None))
 @monitor_performance("fallback_command")
-async def fallback_command(message: Message, bot: Bot, state: FSMContext):
-    """Handle unknown commands only."""
-    logger.info(f"Fallback handling unknown command: {message.text}")
-    
-    from database import ensure_user, has_ever_had_key, has_trial_used
-    from keyboards import main_menu_new_user, main_menu_existing
-    from utils import LOGO_URL
-    from handlers.start import _clean_chat, _send_main_menu
-
-    user_id = message.from_user.id
-    await ensure_user(user_id, message.from_user.username)
-
-    # Clean previous messages but keep user's message (anchor message_id + 1) - reduced from 50 to 5
-    await _clean_chat(bot, message.chat.id, message.message_id + 1, count=5)
-
-    # Use optimized main menu sender
-    name = message.from_user.first_name or "друг"
-    await _send_main_menu(bot, message, user_id, name)
+async def fallback_command(message: Message, bot: Bot, state: FSMContext) -> None:
+    await _show_menu_hint(message, unknown_command=True)
 
 
 @router.message(F.text & ~F.command, StateFilter(None))
 @monitor_performance("fallback_text")
-async def fallback_text(message: Message, bot: Bot, state: FSMContext):
-    """Handle unknown text messages and show main menu."""
-    logger.info(f"Fallback handling unknown text: {message.text}")
-    
-    from database import ensure_user, has_ever_had_key, has_trial_used
-    from keyboards import main_menu_new_user, main_menu_existing
-    from utils import LOGO_URL
-    from handlers.start import _clean_chat, _send_main_menu
-
-    user_id = message.from_user.id
-    await ensure_user(user_id, message.from_user.username)
-
-    # Clean previous messages but keep user's message (anchor message_id + 1) - reduced from 50 to 5
-    await _clean_chat(bot, message.chat.id, message.message_id + 1, count=5)
-
-    # Use optimized main menu sender
-    name = message.from_user.first_name or "друг"
-    await _send_main_menu(bot, message, user_id, name)
+async def fallback_text(message: Message, bot: Bot, state: FSMContext) -> None:
+    await _show_menu_hint(message)

@@ -976,47 +976,50 @@ async def delete_xui_hwid_device(user_id: int, device_id: int) -> bool:
     return False
 
 
+async def _xui_user_absent_on_all_inbounds(api: AsyncApi, email: str) -> bool:
+    """Verify absence on every configured inbound; unreadable data is failure."""
+    if not XUI_INBOUND_IDS:
+        return False
+    for inbound_id in XUI_INBOUND_IDS:
+        inbound = await _api_call_with_retry(api.inbound.get_by_id, inbound_id)
+        clients = getattr(inbound, "client_stats", None)
+        if clients is None:
+            raise RuntimeError(f"Cannot verify 3x-ui inbound {inbound_id}")
+        if any(str(getattr(client, "email", "")) == email for client in clients):
+            return False
+    return True
+
+
 async def delete_xui_user(user_id: int) -> bool:
-    email = str(user_id)
-    inbound_ids = XUI_INBOUND_IDS  # Use configured inbound IDs
-    logger.info("delete_xui_user: email=%s inbounds=%s", email, inbound_ids)
+    """Delete and verify all configured instances, safely repeatable after timeouts."""
+    email = str(int(user_id))
+    if not XUI_INBOUND_IDS:
+        logger.error("Refusing unverified deletion: no configured 3x-ui inbounds")
+        return False
 
     try:
         api = await _get_api()
-
         client_uuid = await _find_client_uuid(api, email)
-
-        if not client_uuid:
-            logger.info("delete_xui_user: client %s not found — already deleted?", email)
-            return True
-
-        # Delete from all inbounds in parallel (same as creation)
-        delete_tasks = []
-        for inbound_id in inbound_ids:
-            async def delete_from_inbound(iid):
+        if client_uuid:
+            async def delete_from_inbound(inbound_id: int) -> None:
                 try:
-                    logger.info("Deleting client %s (uuid=%s) from inbound %d", email, client_uuid, iid)
-                    await _api_call_with_retry(api.client.delete, iid, client_uuid)
-                    logger.info("Deleted client %s from inbound %d", email, iid)
-                    return True
-                except Exception as del_err:
-                    logger.debug("Failed to delete client %s from inbound %d: %s", email, iid, del_err)
-                    return False
-            
-            delete_tasks.append(delete_from_inbound(inbound_id))
-        
-        results = await asyncio.gather(*delete_tasks, return_exceptions=True)
-        success_count = sum(1 for r in results if r is True)
-        
-        if success_count == 0:
-            logger.warning("Failed to delete client %s from any inbound", email)
-            return False
-        
-        logger.info("Deleted client %s from %d/%d inbounds", email, success_count, len(inbound_ids))
-        return True
+                    await _api_call_with_retry(api.client.delete, inbound_id, client_uuid)
+                except Exception as exc:
+                    # A lost acknowledgement may follow a successful mutation.
+                    # The verified readback below determines the real outcome.
+                    logger.warning(
+                        "User %s deletion on inbound %d needs reconciliation (%s)",
+                        email, inbound_id, type(exc).__name__,
+                    )
 
-    except Exception as e:
-        logger.exception("delete_xui_user FAILED for user=%d: %s", user_id, e)
+            await asyncio.gather(*(delete_from_inbound(iid) for iid in XUI_INBOUND_IDS))
+
+        verified = await _xui_user_absent_on_all_inbounds(api, email)
+        if not verified:
+            logger.error("3x-ui user %s remains on at least one inbound", email)
+        return verified
+    except Exception as exc:
+        logger.error("Unable to confirm 3x-ui deletion for user %s (%s)", email, type(exc).__name__)
         return False
 
 

@@ -687,6 +687,31 @@ async def cb_key_delete(callback: CallbackQuery, bot: Bot):
 # Delete key — confirmed
 # ---------------------------------------------------------------------------
 
+async def _report_unconfirmed_deletion(
+    callback: CallbackQuery, user_id: int, key_id: int,
+    stage: str, customer_text: str,
+) -> None:
+    """Persist a reconciliation incident without hiding the customer error."""
+    from database import log_key_error
+    logger.error("Unconfirmed deletion for user=%d key=%d stage=%s", user_id, key_id, stage)
+    try:
+        await log_key_error(
+            user_id, "key_delete_reconciliation", "Manual verification required",
+            {"key_id": key_id, "stage": stage},
+        )
+    except Exception:
+        logger.exception("Could not record key %d reconciliation incident", key_id)
+    from aiogram.types import InlineKeyboardMarkup
+    from keyboards import support_url
+    await callback.message.answer(
+        customer_text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Написать в поддержку", url=support_url())],
+            [InlineKeyboardButton(text="Подписка", callback_data="my_keys")],
+        ]),
+    )
+
+
 @router.callback_query(F.data.startswith("key_delete_confirm:"))
 async def cb_key_delete_confirm(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
@@ -706,8 +731,8 @@ async def cb_key_delete_confirm(callback: CallbackQuery, bot: Bot):
     existing_keys = await get_user_keys(user_id)
     other_keys = [item for item in existing_keys if item.get("id") != key_id]
 
-    # Stop billing before removing its key. If remote deletion fails, restore
-    # the previous auto-renew state so the user's subscription is unchanged.
+    # Stop billing first. A remote timeout may happen after a partial deletion;
+    # restarting charges without verifying remaining access is unsafe.
     from database import get_auto_renew_subscription, cancel_auto_renew, resume_auto_renew
     auto_renew = await get_auto_renew_subscription(user_id, key_id)
     renew_was_active = bool(auto_renew and auto_renew.get("status") == "active")
@@ -722,21 +747,37 @@ async def cb_key_delete_confirm(callback: CallbackQuery, bot: Bot):
     if not other_keys:
         ok = await delete_xui_user(user_id)
         if not ok:
-            if renew_was_active:
-                await resume_auto_renew(user_id, key_id)
-            logger.error("Could not delete user %d from 3x-ui (key_id=%d); DB row retained", user_id, key_id)
-            await callback.message.answer(
-                "⚠️ Не удалось подтвердить удаление на VPN-сервере. Запись сохранена; "
-                "попробуйте позже или обратитесь в поддержку."
+            await _report_unconfirmed_deletion(
+                callback, user_id, key_id, "panel_unverified",
+                "Удаление на всех VPN-серверах пока не подтверждено. "
+                "Автопродление не будет включено автоматически. "
+                "Напишите в поддержку для проверки. Повторно оплачивать не нужно.",
             )
             return
 
-    deleted = await delete_key_by_id(key_id)
+    try:
+        deleted = await delete_key_by_id(key_id)
+    except Exception:
+        # The remote user may already be gone. Never reactivate billing or
+        # let a database outage hide this partially completed deletion.
+        logger.exception("Key %d removal failed after remote reconciliation", key_id)
+        deleted = False
     if not deleted:
-        if renew_was_active:
+        if other_keys and renew_was_active:
+            # No remote client was touched; restoring billing is safe only here.
             await resume_auto_renew(user_id, key_id)
-        logger.error("Could not delete key row %d for user %d", key_id, user_id)
-        await callback.message.answer("⚠️ Не удалось удалить запись. Попробуйте позже.")
+        if not other_keys:
+            await _report_unconfirmed_deletion(
+                callback, user_id, key_id, "database_after_panel",
+                "VPN-доступ на серверах удалён, но запись в боте осталась. "
+                "Автопродление не возобновлено. Не оплачивайте повторно. "
+                "Напишите в поддержку, чтобы завершить операцию.",
+            )
+        else:
+            logger.error("Could not delete key row %d for user %d", key_id, user_id)
+            await callback.message.answer(
+                "Не удалось обновить подписку. Попробуйте ещё раз или напишите в поддержку."
+            )
         return
 
     logger.info("Key %d deleted by user %d (other_keys=%d)", key_id, user_id, len(other_keys))
