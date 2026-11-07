@@ -2,13 +2,18 @@
 import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from constants import get_price_for_months
 from handlers.buy import pre_checkout
 
 
 class StarsPreCheckoutTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        patcher = patch("database.is_account_tombstoned", new=AsyncMock(return_value=False))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def invoice(self, *, uid=911, months=3, devices=2, days=None,
                 amount=None, promo="", currency="XTR"):
         expected_amount, expected_days = get_price_for_months(months, devices)
@@ -25,6 +30,20 @@ class StarsPreCheckoutTests(unittest.IsolatedAsyncioTestCase):
         pre = self.invoice()
         await pre_checkout(pre)
         pre.answer.assert_awaited_once_with(ok=True)
+
+    async def test_deleted_account_invoice_is_rejected(self):
+        pre = self.invoice()
+        with patch("database.is_account_tombstoned", new=AsyncMock(return_value=True)):
+            await pre_checkout(pre)
+        self.assertFalse(pre.answer.await_args.kwargs["ok"])
+        self.assertIn("удалён", pre.answer.await_args.kwargs["error_message"])
+
+    async def test_account_state_outage_fails_closed(self):
+        pre = self.invoice()
+        with patch("database.is_account_tombstoned", new=AsyncMock(side_effect=OSError("disk"))):
+            await pre_checkout(pre)
+        self.assertFalse(pre.answer.await_args.kwargs["ok"])
+        self.assertIn("Повторите", pre.answer.await_args.kwargs["error_message"])
 
     async def test_cross_account_invoice_is_rejected(self):
         pre = self.invoice(uid=11)
