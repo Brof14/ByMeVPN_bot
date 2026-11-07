@@ -3076,7 +3076,7 @@ async def get_auto_renew_subscription(
                       next_retry_at, created_at, updated_at
                FROM auto_renew_subscriptions
                WHERE user_id = ?
-               ORDER BY id DESC LIMIT 1""",
+               ORDER BY (status='active' AND TRIM(COALESCE(payment_method_id, '')) != '') DESC, (TRIM(COALESCE(payment_method_id, '')) != '') DESC, id DESC LIMIT 1""",
             (user_id,),
         )
     row = await cur.fetchone()
@@ -3147,7 +3147,7 @@ async def cancel_auto_renew(user_id: int, key_id: Optional[int] = None) -> dict:
         )
     else:
         cur = await db.execute(
-            "SELECT id, payment_method_title FROM auto_renew_subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+            "SELECT id, payment_method_title FROM auto_renew_subscriptions WHERE user_id = ? ORDER BY (status='active' AND TRIM(COALESCE(payment_method_id, '')) != '') DESC, (TRIM(COALESCE(payment_method_id, '')) != '') DESC, id DESC LIMIT 1",
             (user_id,),
         )
     row = await cur.fetchone()
@@ -3199,7 +3199,7 @@ async def unlink_auto_renew_payment_method(user_id: int, key_id: Optional[int] =
     else:
         cur = await db.execute(
             "SELECT id, payment_method_title FROM auto_renew_subscriptions "
-            "WHERE user_id=? ORDER BY id DESC LIMIT 1",
+            "WHERE user_id=? ORDER BY (status='active' AND TRIM(COALESCE(payment_method_id, '')) != '') DESC, (TRIM(COALESCE(payment_method_id, '')) != '') DESC, id DESC LIMIT 1",
             (user_id,),
         )
     row = await cur.fetchone()
@@ -3238,8 +3238,11 @@ async def resume_auto_renew(user_id: int, key_id: Optional[int] = None) -> bool:
     else:
         cur = await db.execute(
             "UPDATE auto_renew_subscriptions SET status = 'active', fail_count = 0, next_retry_at = NULL, "
-            "updated_at = strftime('%s','now') WHERE user_id = ? AND payment_method_id != ''",
-            (user_id,),
+            "updated_at = strftime('%s','now') WHERE user_id = ? AND id = ("
+            "SELECT id FROM auto_renew_subscriptions WHERE user_id = ? "
+            "AND TRIM(COALESCE(payment_method_id, '')) != '' "
+            "ORDER BY (status='active') DESC, id DESC LIMIT 1)",
+            (user_id, user_id),
         )
     await db.commit()
     reenabled = cur.rowcount > 0
