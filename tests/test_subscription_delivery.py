@@ -31,6 +31,25 @@ class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
+    async def test_cannot_provision_when_lease_acquisition_fails(self):
+        subscription.database.try_acquire_delivery_lease.side_effect = OSError("SQLite unavailable")
+        with patch("subscription._deliver_key_unlocked", new=AsyncMock()) as provision:
+            result = await subscription.deliver_key(
+                MagicMock(), 123, 123, "key", 30,
+            )
+        self.assertFalse(result)
+        provision.assert_not_awaited()
+
+    async def test_lease_lost_during_provisioning_requires_reconciliation(self):
+        subscription.database.renew_delivery_lease.return_value = False
+        with patch("subscription._deliver_key_unlocked", new=AsyncMock(return_value=True)) as provision:
+            result = await subscription.deliver_key(
+                MagicMock(), 123, 123, "key", 30,
+            )
+        self.assertFalse(result)
+        provision.assert_awaited_once()
+        subscription.database.release_delivery_lease.assert_awaited_once()
+
     async def test_retried_paid_orders_and_rewards_never_shorten_newer_access(self):
         expiry = int(time.time()) + 90 * 86400
         for method in ("ad_bonus", "giveaway_prize", "yookassa", "cryptobot", "stars"):
