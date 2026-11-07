@@ -360,6 +360,25 @@ class ExpiryDatabaseRegression(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await self.db.resume_auto_renew(9801, first))
         self.assertEqual((await self.db.get_auto_renew_subscription(9801))["status"], "cancelled")
 
+    async def test_deleting_one_key_cannot_reactivate_unbound_legacy_billing(self):
+        now = int(time.time())
+        first = await self.db.add_key(
+            9801, "https://sub.test/first", "first", "uuid-first", 30, 2, expiry=now + 86400,
+        )
+        await self.db.add_key(
+            9801, "https://sub.test/expired", "expired", "uuid-expired", 30, 2,
+            expiry=now - 60,
+        )
+        await self.db.save_auto_renew_subscription(
+            9801, None, "legacy-active", payment_method_title="Legacy",
+        )
+        self.assertEqual(await self.db.get_expiring_auto_renew_subscriptions(now=now), [])
+        self.assertTrue(await self.db.delete_key(first))
+        self.assertEqual(await self.db.get_expiring_auto_renew_subscriptions(now=now), [])
+        legacy = await self.db.get_auto_renew_subscription(9801)
+        self.assertEqual(legacy["status"], "cancelled")
+        self.assertEqual(legacy["payment_method_id"], "legacy-active")
+
     async def test_ambiguous_legacy_autorenew_never_charges_and_is_explained(self):
         from handlers.keys import _load_autorenew_context, _get_payment_methods_text
         now = int(time.time())
