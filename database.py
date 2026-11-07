@@ -4129,9 +4129,11 @@ async def get_referral_stats_enhanced(referrer_id: int) -> dict:
     # Total bonus days earned from referral_events
     cur = await db.execute(
         """
-        SELECT COALESCE(SUM(days_awarded), 0)
-        FROM referral_events
-        WHERE referrer_id=?
+        SELECT COALESCE(SUM(e.days_awarded), 0)
+        FROM referral_events e
+        JOIN referrals r ON r.referrer_id=e.referrer_id AND r.referred_id=e.referred_id
+        JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id
+        WHERE e.referrer_id=?
         """,
         (referrer_id,)
     )

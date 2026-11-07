@@ -17,6 +17,11 @@ router = Router()
 
 
 def partner_main_kb(link: str) -> InlineKeyboardMarkup:
+    post_text = (
+        "ByMeVPN — VPN без сложных настроек.\n"
+        "Для новых пользователей — 3 дня бесплатно, без карты.\n\n"
+        f"Попробовать: {link}"
+    )
     share_text = quote_plus(
         "Попробуй ByMeVPN — VPN без сложных настроек.\n"
         "3 дня бесплатно, без карты."
@@ -24,6 +29,7 @@ def partner_main_kb(link: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Поделиться", url=f"https://t.me/share/url?url={quote_plus(link)}&text={share_text}", )],
         [InlineKeyboardButton(text="Скопировать ссылку", copy_text={"text": link})],
+        [InlineKeyboardButton(text="Скопировать текст для канала", copy_text={"text": post_text})],
         [InlineKeyboardButton(text="Мои приглашения", callback_data="partner_referrals_list")],
         [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu")],
     ])
