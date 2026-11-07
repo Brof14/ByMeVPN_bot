@@ -489,9 +489,6 @@ async def get_db() -> aiosqlite.Connection:
     global _db_pool
     if _db_pool is None:
         _db_pool = await aiosqlite.connect(DB_FILE)
-        if os.getenv("GITHUB_ACTIONS") and DB_FILE.endswith("test_referral_vpnbot.db"):
-            import traceback
-            logger.warning("CI-POOL-CREATE %s\n%s", repr(_db_pool), "".join(traceback.format_stack(limit=12)))
         await _db_pool.execute("PRAGMA journal_mode=WAL")
         await _db_pool.execute("PRAGMA synchronous=NORMAL")
         await _db_pool.execute("PRAGMA cache_size=20000")  # Increased cache

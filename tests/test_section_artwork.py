@@ -59,6 +59,9 @@ class TestSectionArtwork(unittest.IsolatedAsyncioTestCase):
         )
         with (
             patch("handlers.buy.safe_answer", new=AsyncMock()),
+            # This is a visual contract test, not a real analytics writer.
+            # Don't leak an aiosqlite thread from a mocked Telegram callback.
+            patch("database.log_analytics_event", new=AsyncMock()),
             patch("handlers.buy.send_with_photo", new=AsyncMock()) as send,
         ):
             await cb_buy_vpn(callback, object(), state)
