@@ -61,18 +61,20 @@ async def get_or_create_renewal_promo(user_id: int) -> str:
     Uses a shared code approach: checks for existing active promo codes and reuses them.
     """
     # Try to find existing active 30% promo codes that are valid
-    from database import get_all_promo_codes
+    from database import get_all_promo_codes, has_user_used_promo
     promo_codes = await get_all_promo_codes()
+    now = int(time.time())
 
     # Look for an existing 30% discount promo code that's active and valid
     for promo in promo_codes:
         if (promo["is_active"] and
             promo["promo_type"] == "percent" and
             promo["discount_value"] == 30 and
-            promo["uses_count"] < promo["max_uses"]):
-            # Check if still valid
-            import time
-            if promo["expires_at"] > int(time.time()):
+            promo["uses_count"] < promo["max_uses"] and
+            promo["tariff_binding"] is None and
+            promo["start_date"] is not None and
+            promo["start_date"] <= now < promo["expires_at"]):
+            if not await has_user_used_promo(promo["code"], user_id):
                 return promo["code"]
 
     # Keep existing discount and usage limits, but retry code collisions rather
