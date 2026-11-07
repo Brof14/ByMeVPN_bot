@@ -179,6 +179,20 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
         events = await database.get_referral_events(1011)
         self.assertEqual(len([e for e in events if e["referred_id"] == 1022 and e["event_type"] == "payment_bonus"]), 1)
 
+    async def test_failed_reward_does_not_starve_other_pending_rewards(self):
+        from unittest.mock import AsyncMock, patch
+        await self._seed_pair(2101, 2102)
+        await self._seed_pair(2201, 2202)
+        await database.record_referral_payment_reward(2101, 2102, "pay-first")
+        await database.record_referral_payment_reward(2201, 2202, "pay-second")
+        delivery = AsyncMock(side_effect=lambda **kw: kw["user_id"] == 2201)
+        bot = type("BotStub", (), {"send_message": AsyncMock()})()
+        with patch("subscription.deliver_key", new=delivery):
+            self.assertEqual(await process_pending_referral_payment_rewards(bot, limit=1), 0)
+            self.assertEqual(await process_pending_referral_payment_rewards(bot, limit=1), 1)
+        self.assertEqual([call.kwargs["user_id"] for call in delivery.await_args_list], [2101, 2201])
+        self.assertEqual(len(await database.get_pending_referral_payment_rewards()), 1)
+
     async def test_10_second_inviter_does_not_create_a_phantom_referral(self):
         for uid in (1101, 1102, 1103):
             await database.ensure_user(uid)
