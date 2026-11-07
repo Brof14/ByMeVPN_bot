@@ -146,9 +146,16 @@ async def deliver_key(
                 amount, currency, method, payload, extend_existing,
                 skip_referral_bonus, delivery_target,
             )
-            if lost_lease.is_set():
-                # The remote update may have succeeded. An explicit retry /
-                # reconciliation is safer than falsely claiming fulfillment.
+            # Confirm ownership at the end as well: a stalled event loop may
+            # miss its heartbeat while another worker reclaims an expired lease.
+            try:
+                still_owner = await database.renew_delivery_lease(user_id, token)
+            except Exception:
+                logger.exception("Could not confirm delivery lease at completion for user %d", user_id)
+                still_owner = False
+            if lost_lease.is_set() or not still_owner:
+                # The remote update may have succeeded. A deterministic retry /
+                # manual reconciliation is safer than falsely claiming delivery.
                 logger.error("Unconfirmed provisioning after delivery lease loss for user %d", user_id)
                 return False
             return delivered
