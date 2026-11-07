@@ -3610,6 +3610,7 @@ async def get_pending_referral_payment_rewards(limit: int = 100) -> list[dict]:
     cur = await db.execute(
         "SELECT r.referrer_id, r.referred_id, r.payment_ref "
         "FROM referral_payment_rewards r "
+        "JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id "
         "LEFT JOIN ref_bonus_claims c "
         "ON c.referrer_id=r.referrer_id AND c.referred_id=r.referred_id "
         "WHERE COALESCE(c.claimed, 0)=0 "
