@@ -98,8 +98,10 @@ async def _get_active_autorenew(user_id: int, key_id: int | None) -> dict | None
     if not key_id:
         return None
     try:
-        from database import get_auto_renew_subscription
+        from database import get_auto_renew_subscription, get_user_keys
         sub = await get_auto_renew_subscription(user_id, key_id, include_legacy=True)
+        if sub and sub.get("key_id") is None and len(await get_user_keys(user_id)) != 1:
+            return None
         if sub and sub.get("status") == "active" and (sub.get("payment_method_id") or "").strip():
             return sub
     except Exception as e:

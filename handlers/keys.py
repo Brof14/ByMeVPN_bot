@@ -390,7 +390,13 @@ def _get_payment_methods_text(
     active = bool(sub and sub.get("status") == "active")
     amount = sub.get("amount_rub", 0) if sub else 0
     days = sub.get("days", 30) if sub else 30
-    if active:
+    if active and sub.get("ambiguous_key"):
+        status = "⚠️ Требуется уточнить подписку"
+        next_charge = (
+            "Сохранённое автопродление не привязано к ключу: их несколько или нет ни одного. "
+            "Автоматического списания не будет до уточнения. Продлите нужную подписку вручную или обратитесь в поддержку."
+        )
+    elif active:
         next_charge = f"Следующее продление: <b>{amount} ₽</b> за {days} дней."
         if expiry_str:
             next_charge += f"\nДата: <b>{expiry_str}</b>."
@@ -415,6 +421,8 @@ async def _load_autorenew_context(user_id: int, key_id: int) -> tuple[dict | Non
     from database import get_auto_renew_subscription, get_user_keys
 
     sub = await get_auto_renew_subscription(user_id, key_id if key_id > 0 else None, include_legacy=True)
+    if sub and sub.get("key_id") is None:
+        sub["ambiguous_key"] = len(await get_user_keys(user_id)) != 1
     card_title = ""
     if sub and sub.get("payment_method_id"):
         card_title = (sub.get("payment_method_title") or "").strip()

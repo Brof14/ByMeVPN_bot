@@ -319,13 +319,15 @@ class ExpiryDatabaseRegression(unittest.IsolatedAsyncioTestCase):
         self.assertIn("нескольк", _get_payment_methods_text(title, sub=sub, expiry_str=expiry).lower())
 
     async def test_unambiguous_legacy_autorenew_remains_eligible(self):
+        from notifications import _get_active_autorenew
         now = int(time.time())
-        await self.db.add_key(9801, "https://sub.test/one", "one", "uuid-one", 30, 2, expiry=now - 60)
+        key_id = await self.db.add_key(9801, "https://sub.test/one", "one", "uuid-one", 30, 2, expiry=now - 60)
         sub_id = await self.db.save_auto_renew_subscription(
             user_id=9801, key_id=None, payment_method_id="legacy-active", payment_method_title="Card",
             payment_method_type="bank_card", months=1, days=30, devices=2, amount_rub=89,
         )
         self.assertEqual([item["sub_id"] for item in await self.db.get_expiring_auto_renew_subscriptions(now=now)], [sub_id])
+        self.assertIsNone((await _get_active_autorenew(9801, key_id))["key_id"])
 
 
 class PromoAccountingAlerts(unittest.IsolatedAsyncioTestCase):
