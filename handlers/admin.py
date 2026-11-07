@@ -1322,10 +1322,10 @@ async def cb_del_user_prompt(callback: CallbackQuery):
         await callback.message.edit_text("Удаление учётной записи администратора через бота запрещено.", reply_markup=_back_kb())
         return
     await callback.message.edit_text(
-        f"<b>Удалить пользователя {uid}?</b>\\n\\n"
+        f"<b>Удалить пользователя {uid}?</b>\n\n"
         "Все сохранённые способы автосписания будут отключены. Затем бот "
         "попытается удалить VPN-клиента со всех серверов. Только после "
-        "подтверждения удаления в 3x-ui будут удалены локальные ключи.\\n\\n"
+        "подтверждения удаления в 3x-ui будут удалены локальные ключи.\n\n"
         "Уже оплаченный доступ может быть потерян. Финансовые записи сохраняются для сверки.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
