@@ -1546,8 +1546,9 @@ async def set_referrer(user_id: int, referrer_id: int) -> None:
         "INSERT OR IGNORE INTO users(user_id) VALUES(?)", (user_id,)
     )
     await db.execute(
-        "UPDATE users SET referrer_id=? WHERE user_id=? AND referrer_id IS NULL",
-        (referrer_id, user_id),
+        "UPDATE users SET referrer_id=? WHERE user_id=? AND referrer_id IS NULL "
+        "AND NOT EXISTS (SELECT 1 FROM account_tombstones WHERE user_id=?)",
+        (referrer_id, user_id, user_id),
     )
     # Record only the inviter actually attached to the user. A repeated or
     # concurrent request for a different inviter must not create a phantom row.
@@ -4736,6 +4737,11 @@ async def delete_user_and_keys(user_id: int, *, source: str = "admin") -> list[s
                 (user_id,),
             )
             await db.commit()
+            try:
+                invalidate_user_cache(user_id)
+                invalidate_subscription_cache(user_id)
+            except Exception:
+                logger.warning("Could not invalidate caches after account erasure for %d", user_id)
             return uuids
         except Exception:
             await db.rollback()
