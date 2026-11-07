@@ -18,6 +18,19 @@ import subscription
 
 
 class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        # Provisioning tests exercise panel/DB state transitions; cross-process
+        # lease semantics are covered separately against a real SQLite file.
+        for name in (
+            "try_acquire_delivery_lease",
+            "renew_delivery_lease",
+            "release_delivery_lease",
+        ):
+            mock = AsyncMock(return_value=True if name != "release_delivery_lease" else None)
+            patcher = patch(f"subscription.database.{name}", new=mock)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     async def test_retried_paid_orders_and_rewards_never_shorten_newer_access(self):
         expiry = int(time.time()) + 90 * 86400
         for method in ("ad_bonus", "giveaway_prize", "yookassa", "cryptobot", "stars"):
