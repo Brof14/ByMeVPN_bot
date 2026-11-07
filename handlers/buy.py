@@ -25,12 +25,12 @@ from constants import (
 from config import PRICE_1_MONTH, DAYS_1M
 from states import BuyFlow
 from keyboards import tariff_selection_kb, payment_kb, support_url
-from payments import create_yookassa_payment, create_crypto_payment, claim_yookassa_checkout, release_yookassa_checkout, crypto_invoice_payload
+from payments import create_yookassa_payment, create_crypto_payment, claim_yookassa_checkout, release_yookassa_checkout, crypto_invoice_payload, record_fulfilled_promo
 from subscription import deliver_key
 from database import (
     ensure_user,
     record_payment_idempotent, update_payment_status,
-    use_promo_code, validate_promo_code, has_user_used_promo,
+    validate_promo_code, has_user_used_promo,
 )
 from utils import send_with_photo, send_or_edit, safe_answer
 from bot_assets import PLANS, RENEWAL, PAYMENT, PROMO_CODE
@@ -746,7 +746,7 @@ async def _process_successful_stars_payment(
     if success:
         await update_payment_status(pay_db_id, "success")
         if promo_code:
-            await use_promo_code(promo_code, user_id)
+            await record_fulfilled_promo(bot, promo_code, user_id, "stars", charge_id)
         await state.clear()
 
         # Referral reward: single canonical path (idempotent, one per pair).

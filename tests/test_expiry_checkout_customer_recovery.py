@@ -291,6 +291,7 @@ class PromoAccountingAlerts(unittest.IsolatedAsyncioTestCase):
         from payments import record_fulfilled_promo
         bot = SimpleNamespace(send_message=AsyncMock())
         with (
+            patch("config.ADMIN_IDS", [100]),
             patch("database.use_promo_code", new=AsyncMock(return_value=False)),
             patch("database.has_user_used_promo", new=AsyncMock(return_value=False)),
         ):
@@ -307,6 +308,15 @@ class PromoAccountingAlerts(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertTrue(await record_fulfilled_promo(bot, "SALE", 42, "stars", "charge-1"))
         bot.send_message.assert_not_awaited()
+
+    async def test_alert_failure_does_not_raise_after_delivery(self):
+        from payments import record_fulfilled_promo
+        bot = SimpleNamespace(send_message=AsyncMock(side_effect=RuntimeError("telegram unavailable")))
+        with (
+            patch("config.ADMIN_IDS", [100]),
+            patch("database.use_promo_code", new=AsyncMock(side_effect=RuntimeError("database unavailable"))),
+        ):
+            self.assertFalse(await record_fulfilled_promo(bot, "SALE", 42, "yookassa", "payment-1"))
 
 
 class PlatformGuideRegression(unittest.IsolatedAsyncioTestCase):

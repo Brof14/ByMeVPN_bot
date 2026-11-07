@@ -520,7 +520,7 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
 
         from database import (
             record_payment_idempotent, update_payment_status,
-            use_promo_code, delete_yookassa_pending,
+            delete_yookassa_pending,
         )
 
         # Idempotent DB record
@@ -619,7 +619,8 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                 pass
             promo_code = metadata.get("promo_code")
             if promo_code and not is_trial:
-                await use_promo_code(promo_code, user_id)
+                from payments import record_fulfilled_promo
+                await record_fulfilled_promo(bot, promo_code, user_id, "yookassa", payment_id)
             logger.info("YooKassa payment %s successfully fulfilled for user %d", payment_id, user_id)
 
             # Auto-renew handling
@@ -903,7 +904,7 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
 
         from database import (
             record_payment_idempotent, update_payment_status,
-            use_promo_code, delete_crypto_pending,
+            delete_crypto_pending,
         )
 
         tariff_name = f"Подписка {days} дней ({devices} устр.)"
@@ -977,13 +978,8 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
             await update_payment_status(pay_db_id, "success")
             promo_code = _crypto_pending_promo(pending)
             if promo_code:
-                try:
-                    from database import has_user_used_promo
-                    recorded = await use_promo_code(promo_code, user_id)
-                    if not recorded and not await has_user_used_promo(promo_code, user_id):
-                        logger.error("Crypto promo usage needs reconciliation for invoice %s", invoice_id)
-                except Exception:
-                    logger.exception("Crypto promo usage needs reconciliation for invoice %s", invoice_id)
+                from payments import record_fulfilled_promo
+                await record_fulfilled_promo(bot, promo_code, user_id, "cryptobot", str(invoice_id))
             await mark_crypto_processed(invoice_id)
             try:
                 await delete_crypto_pending(invoice_id)
