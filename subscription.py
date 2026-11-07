@@ -264,6 +264,9 @@ async def deliver_key(
                 target_expiry = await database.get_or_create_provisioning_intent(
                     method, payload, user_id, target_expiry
                 )
+            if method == "ref_bonus" and target_expiry < int(xui_client.get("expiry_time") or 0) // 1000:
+                logger.error("Referral bonus %s requires panel reconciliation for user %d", payload, user_id)
+                return False
             xui_res = await update_xui_user(
                 user_id, new_expiry_ms=target_expiry * 1000, limit_ip=0, limit_hwid=limit_ip
             )
