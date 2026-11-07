@@ -1,48 +1,68 @@
-"""ByMeVPN Telegram button design system.
+"""A restrained, semantic Telegram button design for ByMeVPN.
 
-All buttons are created with this wrapper, so legacy callback IDs and backend
-behavior remain unchanged. Icon IDs are taken from Zulut30/premium-telegram-emoji,
-commit 294d22c (mostly the monochrome TgAndroidIcons pack).
+Primary source: Zulut30/premium-telegram-emoji @ 294d22c, sfsymbols.
+Purpose-specific exceptions: OS brand marks, Telegram Stars and gift variants.
+The same action reuses its *own* icon everywhere, while different semantic
+actions use different catalog IDs. Prices, callback contracts and user data
+are not affected.
 
-Set BOT_PREMIUM_BUTTON_ICONS=1 only when the bot owner has Telegram Premium or
-the bot has an eligible Fragment username. Telegram rejects custom emoji icons
-without that entitlement. The default leaves icons off, never buttons broken.
+Telegram requires bot eligibility for custom emoji icons. Keep
+BOT_PREMIUM_BUTTON_ICONS=0 until entitlement is confirmed; fallback buttons
+retain readable text and the same actions.
 """
 import os
 
 from aiogram.types import InlineKeyboardButton as TelegramInlineKeyboardButton, InlineKeyboardMarkup
 
-# Stable catalog IDs. One semantic action always has the same icon.
+# Confirmed catalog IDs; each role has a distinct icon. Reuse roles, not IDs.
+# sfsymbols is primary; exceptions add platform identity and restrained gifting.
 ICON_IDS: dict[str, str] = {
-    "subscription": "6005570495603282482",  # key_bw
-    "plans": "5927169041595634481",         # card
-    "free": "5406756500108501710",          # free
-    "gift": "5301299389245985629",         # outlined present
-    "feedback": "5879841310902324730",     # pencil
-    "crypto": "5769403330761593044",       # wallet
-    "referrals": "5942877472163892475",     # people
-    "ads": "5771695636411847302",           # announce_bw
-    "about": "5879785854284599288",         # info_bw
-    "support": "5884510167986343350",       # support
-    "connect": "5879585266426973039",       # internet_bw
-    "devices": "5987917196469213507",       # qr
-    "settings": "5877260593903177342",      # settings_bw
-    "copy": "5877301185639091664",          # copy
-    "renew": "5877410604225924969",         # updates
-    "refresh": "5845943483382110702",       # obnovit
-    "history": "5967456680940671207",       # archive
-    "back": "5875082500023258804",         # back
-    "delete": "5879896690210639947",       # trash
-    "check": "5805532930662996322",        # verified
-    "list": "5877597667231534929",         # list
-    "share": "5877468380125990242",        # forward
-    "card": "5927169041595634481",         # card
-    "stars": "5958376256788502078",        # stars_bw
-    "wallet": "5769403330761593044",       # wallet
-    "coupon": "5985433648810171091",       # tag
-    "download": "5899757765743615694",     # install
-    "profile": "5879770735999717115",      # profile
-    "search": "5874960879434338403",       # search
+    "subscription": "6019290828759898301",  # sfsymbols key
+    "plans": "6030573613357209704",         # shopping bag
+    "free": "5406756500108501710",          # FREE
+    "gift": "6023826881160157558",          # sfsymbols outlined present
+    "feedback": "6025951481222403788",      # editing circle
+    "crypto": "6030443364178992166",        # sfsymbols wallet
+    "referrals": "6021791869820738130",     # two people
+    "ads": "6021726637857446455",           # megaphone
+    "about": "6019094432790354513",         # informational message
+    "support": "6019130940012370273",       # chat with question
+    "connect": "6019076101869934284",       # key with radio signal
+    "devices": "6021859429656304791",       # tablet and phone
+    "device_tier": "6023933602507528561",   # user and devices
+    "settings": "5877260593903177342",      # TgAndroidIcons gear
+    "copy": "5807640904906840469",          # overlapping rectangles
+    "renew": "5807492110059838726",         # circular arrows
+    "refresh": "6021772508108167860",       # document with refresh
+    "history": "6035297458907519073",       # history/time
+    "back": "5805509901048356965",          # left arrow
+    "delete": "6021413766669801212",        # trash basket
+    "check": "6019175208240289774",         # verified mark
+    "list": "6026228223145154159",          # checklist
+    "share": "5807462045288766810",         # curved share arrow
+    "card": "6030410254276106984",          # microchip card
+    "stars": "5172484558305625218",         # Telegram Stars
+    "wallet": "5944922791424825958",        # cards in wallet
+    "coupon": "5985433648810171091",        # label/tag
+    "download": "6021856393114426113",      # download into tray
+    "profile": "6021659919835469581",       # user in circle
+    "search": "5874960879434338403",        # magnifier
+    "ios": "6021554972309592266",           # iPhone with Dynamic Island
+    "ipad": "6019245310696495518",          # iPad and iPhone
+    "android": "5226673499254332561",       # Android brand symbol
+    "windows": "5366318141771096216",      # Windows 11
+    "linux": "5424696849086820459",         # Tux
+    "macos": "5323440478232783499",         # MacBook
+    "android_tv": "5355012477883004708",    # TV
+    "more": "6030863729808120196",          # message with ellipsis
+    "legal": "6021741567163767583",         # document
+    "notifications_on": "6021536113108196448",  # bell
+    "notifications_off": "6021440013214948027", # muted bell
+    "tariff_1": "6023880246128810031",      # calendar
+    "tariff_3": "5301299389245985629",      # slim outlined gift
+    "tariff_6": "5301163762768707871",      # gift tile
+    "tariff_12": "5301192569114366400",     # gift with star
+    "warning": "6019102674832595118",       # warning triangle
 }
 
 _DESTRUCTIVE_PREFIXES = (
@@ -78,10 +98,15 @@ _ACTION_ICONS = {
     "key_history": "history",
     "admin_stats": "list",
     "admin_search": "search",
+    "legal": "legal",
+    "marketing_optin": "notifications_on",
+    "marketing_optout": "notifications_off",
+    "guide_more": "more",
+    "manage_payment_methods": "card",
 }
 
 _PREFIX_ICONS = (
-    ("devtier_", "devices"),
+    ("devtier_", "device_tier"),
     ("tariff_", "plans"),
     ("period_", "plans"),
     ("key_devices:", "devices"),
@@ -92,7 +117,7 @@ _PREFIX_ICONS = (
     ("key_settings:", "settings"),
     ("manage_payment_methods", "card"),
     ("autorenew_", "settings"),
-    ("guide_", "connect"),
+    ("guide_", "more"),
     ("support_topic:", "support"),
     ("ad_get_post:", "share"),
     ("ad_submit_post:", "share"),
@@ -146,6 +171,33 @@ def _is_navigation(text: str, callback: str) -> bool:
     )
 
 
+# Precisely scoped callbacks; avoid generic guide_* mapping hiding the OS.
+_PLATFORM_ICONS = {
+    "ios": "ios", "ios_mac": "ipad", "android": "android",
+    "windows": "windows", "linux": "linux", "macos": "macos",
+    "android_tv": "android_tv",
+}
+_PRIMARY_CALLBACKS = frozenset({
+    "my_keys", "buy_vpn", "partner", "ad_check_channel",
+    "connection_guide", "trial_free",
+})
+_PRIMARY_PREFIXES = ("key_instructions:", "key_renew:", "ad_get_post:")
+_SECONDARY_PREFIXES = (
+    "devtier_", "guide_", "support_topic:", "key_devices:",
+    "key_device:", "key_settings:", "manage_payment_methods",
+    "autorenew_", "ad_my_", "admin_", "pay_", "tariff_",
+)
+
+
+def _platform_for_callback(callback: str) -> str | None:
+    if not callback.startswith("guide_"):
+        return None
+    action = callback.split(":", 1)[0].removeprefix("guide_")
+    if action.startswith("linux_"):
+        return "linux"
+    return _PLATFORM_ICONS.get(action)
+
+
 def _icon_for(text: str, callback: str, *, copy: bool, destructive: bool, back: bool) -> str | None:
     if destructive:
         return ICON_IDS["delete"]
@@ -153,8 +205,16 @@ def _icon_for(text: str, callback: str, *, copy: bool, destructive: bool, back: 
         return ICON_IDS["back"]
     if copy:
         return ICON_IDS["copy"]
-    if callback.startswith(("tariff_3_", "tariff_6_", "tariff_12_")):
-        return ICON_IDS["gift"]
+    platform = _platform_for_callback(callback)
+    if platform:
+        return ICON_IDS[platform]
+    for month in (1, 3, 6, 12):
+        if callback.startswith(f"tariff_{month}_"):
+            return ICON_IDS[f"tariff_{month}"]
+    if callback.startswith("autorenew_enable:"):
+        return ICON_IDS["notifications_on"]
+    if callback.startswith(("autorenew_unbind", "autorenew_cancel")):
+        return ICON_IDS["notifications_off"]
     semantic = _ACTION_ICONS.get(callback)
     if semantic:
         return ICON_IDS[semantic]
@@ -165,6 +225,26 @@ def _icon_for(text: str, callback: str, *, copy: bool, destructive: bool, back: 
     for prefix, semantic in _LABEL_ICONS:
         if label.startswith(prefix):
             return ICON_IDS[semantic]
+    return None
+
+
+def _button_style(label: str, callback: str, *, destructive: bool, navigation: bool) -> str | None:
+    """Reserve blue for primary customer actions, not every available option."""
+    if destructive:
+        return "danger"
+    if callback == "trial_free":
+        return "success"
+    if navigation or callback in _SECONDARY_CALLBACKS:
+        return None
+    if callback.startswith("tariff_"):
+        # Only the balanced 6+2 offer is accented; every period is selectable.
+        return "primary" if callback.startswith("tariff_6_") else None
+    if callback in _PRIMARY_CALLBACKS or callback.startswith(_PRIMARY_PREFIXES):
+        return "primary"
+    if callback.startswith(_SECONDARY_PREFIXES):
+        return None
+    if label.strip().lower().startswith(("скачать", "установить", "открыть приложение", "поделиться")):
+        return "primary"
     return None
 
 
@@ -180,14 +260,9 @@ def themed_button(*args, **kwargs) -> TelegramInlineKeyboardButton:
     navigation = _is_navigation(label, callback)
 
     if "style" not in kwargs:
-        if destructive:
-            kwargs["style"] = "danger"
-        elif callback == "trial_free":
-            kwargs["style"] = "success"
-        elif navigation or callback in _SECONDARY_CALLBACKS:
-            pass
-        else:
-            kwargs["style"] = "primary"
+        style = _button_style(label, callback, destructive=destructive, navigation=navigation)
+        if style:
+            kwargs["style"] = style
 
     if (
         "icon_custom_emoji_id" not in kwargs
