@@ -216,6 +216,9 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([call.kwargs["user_id"] for call in delivery.await_args_list], [2401, 2501])
         self.assertFalse(await database.has_referral_event(2401, 2402, "registration_bonus"))
         self.assertTrue(await database.has_referral_event(2501, 2502, "registration_bonus"))
+        db = await database.get_db()
+        cur = await db.execute("SELECT signup_bonus_retry FROM referrals WHERE referred_id=?", (2502,))
+        self.assertEqual((await cur.fetchone())[0], 0)
 
     async def test_legacy_referrals_are_not_enqueued_automatically(self):
         from referral_system_new import process_pending_referral_signup_rewards
