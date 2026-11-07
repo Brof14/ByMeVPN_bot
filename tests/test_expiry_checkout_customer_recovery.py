@@ -8,6 +8,35 @@ from unittest.mock import AsyncMock, patch
 
 
 class ExpiryReminderRegression(unittest.IsolatedAsyncioTestCase):
+    async def test_tariff_bound_promo_cannot_be_used_on_another_period(self):
+        from handlers.buy import cb_select_tariff
+        callback = SimpleNamespace(data="tariff_1_2", from_user=SimpleNamespace(id=123))
+        promo = {"code": "BOUND", "promo_type": "percent", "discount_value": 30, "tariff_binding": 3}
+        state = SimpleNamespace(get_data=AsyncMock(return_value={"promo_info": promo, "promo_code": "BOUND", "promo_discount": 30}), update_data=AsyncMock())
+        with (
+            patch("handlers.buy.safe_answer", new=AsyncMock()),
+            patch("handlers.buy.send_with_photo", new=AsyncMock()) as send,
+            patch("handlers.buy.validate_promo_code", new=AsyncMock()) as validate,
+        ):
+            await cb_select_tariff(callback, object(), state)
+        state.update_data.assert_not_awaited()
+        validate.assert_not_awaited()
+        self.assertIn("промокод", send.await_args.args[2].lower())
+        self.assertNotIn("Ваш заказ", send.await_args.args[2])
+
+    async def test_expired_promo_does_not_create_discounted_order(self):
+        from handlers.buy import cb_select_tariff
+        callback = SimpleNamespace(data="tariff_1_2", from_user=SimpleNamespace(id=123))
+        promo = {"code": "EXPIRED", "promo_type": "percent", "discount_value": 30, "tariff_binding": None}
+        state = SimpleNamespace(get_data=AsyncMock(return_value={"promo_info": promo, "promo_code": "EXPIRED", "promo_discount": 30}), update_data=AsyncMock())
+        with (
+            patch("handlers.buy.safe_answer", new=AsyncMock()),
+            patch("handlers.buy.send_with_photo", new=AsyncMock()) as send,
+            patch("handlers.buy.validate_promo_code", new=AsyncMock(return_value=None)),
+        ):
+            await cb_select_tariff(callback, object(), state)
+        self.assertNotIn("Ваш заказ", send.await_args.args[2])
+        self.assertEqual(state.update_data.await_args.kwargs["promo_code"], "")
     async def test_other_key_autorenew_does_not_hide_manual_renewal(self):
         from notifications import _send_urgent_notification
         bot = SimpleNamespace(send_message=AsyncMock())

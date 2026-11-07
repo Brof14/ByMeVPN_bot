@@ -12,6 +12,15 @@ def buttons(keyboard):
 
 
 class TariffDesignTests(unittest.TestCase):
+    def test_bound_discount_is_shown_only_on_eligible_tariff(self):
+        labels = {b.callback_data: b.text for b in buttons(
+            tariff_selection_kb(devices=2, discount_percent=30, promo_tariff_months=3)
+        )}
+        self.assertIn("89 ₽", labels["tariff_1_2"])
+        self.assertIn("221 ₽", labels["tariff_3_2"])
+        self.assertNotIn("−30%", labels["tariff_1_2"])
+        self.assertIn("−30%", labels["tariff_3_2"])
+
     def test_tariffs_show_actual_days_without_implying_free_months(self):
         keyboard = tariff_selection_kb(devices=2)
         labels = {b.callback_data: b.text for b in buttons(keyboard)}
