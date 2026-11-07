@@ -16,6 +16,7 @@ This work addresses observed gaps: the former admin removal deleted the local us
 - **Revoke VPN:** `delete_xui_user` must confirm absence across configured 3x-ui inbounds before deleting SQLite keys. A partial/unknown result leaves local keys in place and requires manual reconciliation. Billing remains disabled.
 - **Local erasure:** an isolated `BEGIN IMMEDIATE` transaction inserts a minimal account tombstone, deletes credentials, saved VPN links, device registrations and personal marketing/analytics records, and anonymizes the retained `users` row. Financial records and payment-recovery evidence are retained for legitimate accounting or disputes.
 - **Session invalidation:** access and refresh JWT verification reject tombstoned accounts. The Telegram profile auto-sync cannot recreate a deleted identity. Legacy authorization adapters create the additive tombstone table if absent.
+- **Telegram billing gate:** normal messages and callback flows cannot create new checkouts for tombstoned users. Telegram Stars pre-checkout denies deleted/unverifiable accounts before charging. A late successful Stars update is the only exception to the Telegram gate: it is recorded as requiring manual refund reconciliation and never restores VPN access.
 - **Idempotency / retries:** database errors or lease loss never produce a false deletion success; the operator must reconcile panel and database before attempting dependent operations.
 
 ## Recurring charge / customer card controls
@@ -24,7 +25,7 @@ This work addresses observed gaps: the former admin removal deleted the local us
 - It re-reads current due subscriptions after acquiring the lease, verifying subscription ID, key association, expiry, saved method, amount, term, device limit and attempt counter before contacting YooKassa.
 - It saves a succeeded/pending provider invoice in `yookassa_pending` **before releasing** the lease, allowing the account deletion guard to observe it.
 - An unconfirmed response or failed pending-ledger insert is not treated as fulfilled. The same deterministic YooKassa idempotency key is retained for later reconciliation.
-- Customer-initiated payment-method unlink and resume operations also acquire this shared lease. An unavailable lock fails closed with a retry explanation.
+- Customer-initiated payment-method unlink and resume operations also acquire this shared lease. Destructive key removal uses it too; an unavailable lock fails closed with a retry explanation.
 - Expired leases and cross-process contention do not prove exactly-once **remote** side effects in arbitrary network partitions: a lease can expire after a successful remote change but before local confirmation. Immutable provisioning intents, ledger reconciliation and a staged 3x-ui test remain necessary.
 
 ## Backward compatibility / migration
