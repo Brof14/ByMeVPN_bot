@@ -157,8 +157,9 @@ async def process_auto_renewals(bot: Bot) -> None:
             # Leave to webhook or payment_monitor to finalize
 
         else:
-            c_details = payment_res.get("cancellation_details", {})
-            c_reason = c_details.get("reason", "unknown")
+            c_details = payment_res.get("cancellation_details")
+            c_details = c_details if isinstance(c_details, dict) else {}
+            c_reason = str(c_details.get("reason") or "unknown")
             logger.warning(
                 "Auto-renew payment %s canceled for user %d: %s",
                 payment_id, user_id, c_reason,
