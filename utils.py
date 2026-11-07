@@ -108,6 +108,25 @@ async def send_photo_message(
 # Message sending helpers
 # ---------------------------------------------------------------------------
 
+async def _replace_text_screen(
+    bot: Bot, current: Message, text: str,
+    reply_markup: InlineKeyboardMarkup | None,
+) -> Message:
+    """Publish replacement first so an outbound failure never erases a screen."""
+    sent = await bot.send_message(
+        chat_id=current.chat.id,
+        text=text,
+        parse_mode="HTML",
+        reply_markup=reply_markup,
+    )
+    try:
+        await bot.delete_message(current.chat.id, current.message_id)
+    except Exception:
+        # Telegram may prohibit deleting older messages; the new one exists.
+        pass
+    return sent
+
+
 @monitor_performance("send_or_edit")
 async def send_or_edit(
     bot: Bot,
@@ -157,18 +176,8 @@ async def send_or_edit(
         return sent
 
     if getattr(msg, "photo", None):
-        # Old screens used remote banners. Skip a guaranteed edit-text failure
-        # and replace that message in two Telegram calls on the first tap.
-        try:
-            await bot.delete_message(msg.chat.id, msg.message_id)
-        except Exception:
-            pass
-        return await bot.send_message(
-            chat_id=msg.chat.id,
-            text=text,
-            parse_mode="HTML",
-            reply_markup=reply_markup,
-        )
+        # A photo cannot be edited into text. Send first; delete old afterward.
+        return await _replace_text_screen(bot, msg, text, reply_markup)
 
     try:
         return await bot.edit_message_text(
@@ -185,17 +194,7 @@ async def send_or_edit(
     except Exception:
         pass
 
-    try:
-        await bot.delete_message(msg.chat.id, msg.message_id)
-    except Exception:
-        pass
-
-    return await bot.send_message(
-        chat_id=msg.chat.id,
-        text=text,
-        parse_mode="HTML",
-        reply_markup=reply_markup,
-    )
+    return await _replace_text_screen(bot, msg, text, reply_markup)
 
 
 @monitor_performance("send_with_photo")
