@@ -3192,7 +3192,8 @@ async def unlink_auto_renew_payment_method(user_id: int, key_id: Optional[int] =
         cur = await db.execute(
             "SELECT id, payment_method_title FROM auto_renew_subscriptions "
             "WHERE user_id=? AND (key_id=? OR key_id IS NULL) "
-            "ORDER BY (key_id IS NULL), id DESC LIMIT 1",
+            "ORDER BY (status='active' AND TRIM(COALESCE(payment_method_id, '')) != '') DESC, "
+            "(key_id IS NULL), id DESC LIMIT 1",
             (user_id, key_id),
         )
     else:

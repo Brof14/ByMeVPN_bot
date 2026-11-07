@@ -414,7 +414,7 @@ async def _load_autorenew_context(user_id: int, key_id: int) -> tuple[dict | Non
     """Load (sub, card_title, expiry_str) for payment-method screens."""
     from database import get_auto_renew_subscription, get_user_keys
 
-    sub = await get_auto_renew_subscription(user_id, key_id if key_id > 0 else None)
+    sub = await get_auto_renew_subscription(user_id, key_id if key_id > 0 else None, include_legacy=True)
     card_title = ""
     if sub and sub.get("payment_method_id"):
         card_title = (sub.get("payment_method_title") or "").strip()
@@ -472,7 +472,7 @@ async def cb_autorenew_unbind_prompt(callback: CallbackQuery, bot: Bot):
         await send_or_edit(bot, callback, text, kb, photo=AUTO_RENEWAL)
         return
 
-    warning = "Будущие списания прекратятся."
+    warning = "Списания по выбранному автопродлению прекратятся."
     if expiry_str:
         warning += f" Доступ сохранится до <b>{expiry_str}</b>."
 
@@ -509,11 +509,11 @@ async def cb_autorenew_unbind_confirm(callback: CallbackQuery, bot: Bot):
     )
 
     if not res.get("unlinked"):
-        text = "Сохранённый способ оплаты не найден. Новых списаний не будет."
+        text = "Для этой подписки сохранённый способ оплаты не найден. Проверьте настройки других подписок."
     else:
         text = (
             "<b>Автопродление отключено</b>\n\n"
-            "Новых списаний не будет.\n"
+            "По отключённому автопродлению новых списаний не будет. Проверьте настройки других подписок.\n"
             f"{keep_line}\n\n"
             "Автопродление можно подключить снова при следующей оплате через ЮKassa."
         )
