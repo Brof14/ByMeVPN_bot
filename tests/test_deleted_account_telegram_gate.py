@@ -26,6 +26,21 @@ class DeletedAccountTelegramGateTests(unittest.IsolatedAsyncioTestCase):
         sync.assert_not_awaited()
         self.assertIn("удалён", event.answer.await_args.args[0])
 
+    async def test_late_stars_payment_is_dispatched_for_reconciliation(self):
+        event = self.event()
+        event.successful_payment = SimpleNamespace(
+            telegram_payment_charge_id="late-charge",
+        )
+        handler = AsyncMock(return_value="accounted")
+        with (
+            patch("database.is_account_tombstoned", new=AsyncMock(return_value=True)),
+            patch("database.ensure_user", new=AsyncMock()) as sync,
+        ):
+            result = await UserProfileMiddleware()(handler, event, {})
+        self.assertEqual(result, "accounted")
+        handler.assert_awaited_once()
+        sync.assert_not_awaited()
+
     async def test_live_user_still_reaches_handlers(self):
         event = self.event()
         handler = AsyncMock(return_value="dispatched")
