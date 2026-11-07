@@ -18,9 +18,9 @@ import subscription
 
 
 class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
-    async def test_retried_ad_and_giveaway_rewards_never_shorten_newer_access(self):
+    async def test_retried_paid_orders_and_rewards_never_shorten_newer_access(self):
         expiry = int(time.time()) + 90 * 86400
-        for method in ("ad_bonus", "giveaway_prize"):
+        for method in ("ad_bonus", "giveaway_prize", "yookassa", "cryptobot", "stars"):
             for panel_only in (False, True):
                 with self.subTest(method=method, panel_only=panel_only):
                     key = {"id": 7, "key": "https://example.test/sub", "expiry": expiry, "limit_ip": 2}
