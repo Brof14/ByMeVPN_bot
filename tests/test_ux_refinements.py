@@ -96,6 +96,24 @@ class AdForwardingTests(unittest.IsolatedAsyncioTestCase):
         bot.get_chat_member_count.assert_not_awaited()
         self.assertIn("канал", message.answer.await_args.args[0].lower())
 
+    async def test_invalid_channel_member_count_requires_manual_review(self):
+        from handlers.ad_program import msg_ad_channel_input
+        for count in (0, -1, "unknown"):
+            with self.subTest(count=count):
+                message = SimpleNamespace(from_user=SimpleNamespace(id=123), text="@channelname")
+                state = SimpleNamespace(update_data=AsyncMock())
+                bot = SimpleNamespace(
+                    get_chat=AsyncMock(return_value=SimpleNamespace(id=9, title="Channel", type="channel")),
+                    get_chat_member_count=AsyncMock(return_value=count),
+                )
+                with (
+                    patch("handlers.ad_program._ask_subscriber_count", new=AsyncMock()) as ask,
+                    patch("handlers.ad_program._create_application_and_reply", new=AsyncMock()) as create,
+                ):
+                    await msg_ad_channel_input(message, bot, state)
+                ask.assert_awaited_once()
+                create.assert_not_awaited()
+
     async def test_private_invite_is_not_written_to_audit_or_analytics(self):
         from handlers.ad_program import _create_application_and_reply
         message = SimpleNamespace(answer=AsyncMock())
