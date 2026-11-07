@@ -6,8 +6,11 @@ and automatic promo code generation for renewals.
 Also handles daily database backup at 03:00.
 """
 import asyncio
+import io
 import logging
 import secrets
+import sqlite3
+import tempfile
 import string
 import time
 import zipfile
@@ -302,57 +305,62 @@ async def _send_expiry_notifications(bot: Bot) -> None:
     await asyncio.gather(*(deliver(uid, candidate) for uid, candidate in candidates.items()))
 
 
+def _verified_sqlite_backup_zip(source: Path) -> bytes:
+    """Snapshot a live WAL database before compressing it.
+
+    Directly zipping the .db file can omit transactions still in its -wal file.
+    SQLite's online backup API includes committed WAL data and yields a
+    consistent snapshot without suspending the bot.
+    """
+    if not source.is_file():
+        raise FileNotFoundError(source)
+    with tempfile.TemporaryDirectory(prefix="bymevpn-sqlite-backup-") as tmp:
+        snapshot = Path(tmp) / source.name
+        with sqlite3.connect(
+            f"file:{source.resolve()}?mode=ro", uri=True, timeout=30
+        ) as original:
+            with sqlite3.connect(snapshot, timeout=30) as target:
+                original.backup(target, pages=256, sleep=0.1)
+                check = target.execute("PRAGMA integrity_check").fetchone()
+                if check != ("ok",):
+                    raise RuntimeError("SQLite backup integrity check failed")
+
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.write(snapshot, arcname=source.name)
+        return out.getvalue()
+
+
 async def _backup_database(bot: Bot) -> None:
-    """Create a backup of the database and send it to admin."""
+    """Send a verified online SQLite snapshot, never a live database file."""
     try:
         db_path = Path(DB_FILE)
-        if not db_path.exists():
+        if not db_path.is_file():
             logger.warning("Database file not found: %s", DB_FILE)
             return
-
-        # Create backup filename with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_filename = f"vpnbot_backup_{timestamp}.zip"
-        backup_path = Path(backup_filename)
-
-        # Create zip archive
-        with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            zipf.write(db_path, db_path.name)
-
-        logger.info("Database backup created: %s", backup_filename)
-
-        # Send backup to admin
-        with open(backup_path, 'rb') as backup_file:
-            backup_data = backup_file.read()
-
-        backup_file_obj = BufferedInputFile(
-            backup_data,
-            filename=backup_filename
-        )
-
+        # SQLite backup is synchronous. Keep database snapshot and ZIP work
+        # outside the bot's event loop so Telegram callbacks remain responsive.
+        archive_bytes = await asyncio.to_thread(_verified_sqlite_backup_zip, db_path)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         await bot.send_document(
             ADMIN_ID,
-            backup_file_obj,
-            caption=f"📦 <b>Database Backup</b>\n\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            parse_mode="HTML"
+            BufferedInputFile(archive_bytes, filename=f"vpnbot_backup_{stamp}.zip"),
+            caption=f"📦 <b>Database Backup</b>\\n\\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            parse_mode="HTML",
         )
-
-        logger.info("Database backup sent to admin")
-
-        # Clean up backup file
-        backup_path.unlink()
-        logger.info("Backup file deleted: %s", backup_filename)
-
-    except Exception as e:
-        logger.error("Database backup failed: %s", e)
+        logger.info("Verified SQLite backup sent to admin")
+    except Exception as exc:
+        logger.error("Database backup failed (%s)", type(exc).__name__)
         try:
             await bot.send_message(
                 ADMIN_ID,
-                f"⚠️ <b>Database Backup Failed</b>\n\nError: {str(e)}",
-                parse_mode="HTML"
+                "⚠️ <b>Database Backup Failed</b>\\n\\n"
+                "Не удалось создать или отправить проверенную резервную копию. "
+                "Проверьте журналы сервера.",
+                parse_mode="HTML",
             )
         except Exception as notify_error:
-            logger.error("Failed to notify admin about backup failure: %s", notify_error)
+            logger.error("Could not report database backup failure (%s)", type(notify_error).__name__)
 
 
 async def _wait_until_03_00() -> None:
