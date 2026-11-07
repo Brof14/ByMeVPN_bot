@@ -264,6 +264,12 @@ async def _get_checkout_params(state: FSMContext, user_id: int) -> dict | None:
     data = await state.get_data()
     if data.get("price_rub") is None or data.get("days") is None:
         return None
+    try:
+        price_rub, days = int(data["price_rub"]), int(data["days"])
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if price_rub <= 0 or days <= 0:
+        return None
     promo_code = data.get("promo_code", "")
     if promo_code:
         snapshot = data.get("promo_info") or {}
@@ -278,8 +284,8 @@ async def _get_checkout_params(state: FSMContext, user_id: int) -> dict | None:
             await state.update_data(promo_info={}, promo_code="", promo_discount=0, price_rub=None, days=None)
             return None
     return {
-        "price_rub": int(data["price_rub"]),
-        "days": int(data["days"]),
+        "price_rub": price_rub,
+        "days": days,
         "months": int(data.get("months", 1)),
         "devices": validate_device_limit(data.get("devices", DEFAULT_DEVICE_LIMIT)),
         "promo_code": data.get("promo_code", ""),

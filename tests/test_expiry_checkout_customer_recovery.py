@@ -74,6 +74,11 @@ class ExpiryReminderRegression(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(action and action.startswith("pay_") for action in actions))
         self.assertIsNone(state.update_data.await_args.kwargs["price_rub"])
 
+    async def test_stale_zero_price_order_cannot_create_invoice(self):
+        from handlers.buy import _get_checkout_params
+        state = SimpleNamespace(get_data=AsyncMock(return_value={"price_rub": 0, "days": 30, "months": 1, "devices": 2}))
+        self.assertIsNone(await _get_checkout_params(state, 123))
+
     async def test_valid_promo_allows_confirmed_checkout(self):
         from handlers.buy import _get_checkout_params
         promo = {"code": "BOUND", "promo_type": "percent", "discount_value": 30, "tariff_binding": 3}
