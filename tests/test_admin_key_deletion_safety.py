@@ -17,7 +17,9 @@ class AdminKeyDeletionTests(unittest.IsolatedAsyncioTestCase):
     async def call(self, *, keys=None, key=None, invoice=False, lease_failure=False, panel=True):
         cb = self.callback()
         events = []
-        record = key if key is not None else {"id": 17, "user_id": 123, "uuid": ""}
+        record = key if key is not None else {
+            "id": 17, "user_id": 123, "uuid": "", "expiry": 1890000000,
+        }
         user_keys = keys if keys is not None else [record]
 
         async def under_lease(user_id, operation):
@@ -42,6 +44,11 @@ class AdminKeyDeletionTests(unittest.IsolatedAsyncioTestCase):
             events.append("db")
             return True
 
+        async def get_keys(_user_id):
+            # Emulate the database before and after successful removal.
+            return ([item for item in user_keys if item["id"] != 17]
+                    if "db" in events else user_keys)
+
         with (
             patch("handlers.admin._is_admin", return_value=True),
             patch("handlers.admin.safe_answer", new=AsyncMock()),
@@ -50,7 +57,7 @@ class AdminKeyDeletionTests(unittest.IsolatedAsyncioTestCase):
             patch("database.get_key_by_id", new=AsyncMock(return_value=record)),
             patch("database.has_recent_unsettled_checkout", new=AsyncMock(side_effect=pending)),
             patch("database.suspend_key_autorenew", new=AsyncMock(side_effect=suspend)),
-            patch("handlers.admin.get_user_keys", new=AsyncMock(return_value=user_keys)),
+            patch("handlers.admin.get_user_keys", new=AsyncMock(side_effect=get_keys)),
             patch("handlers.admin.delete_xui_user", new=AsyncMock(side_effect=delete_panel)),
             patch("database.delete_key_by_id", new=AsyncMock(side_effect=delete_db)),
         ):
