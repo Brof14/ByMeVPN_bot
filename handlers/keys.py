@@ -790,6 +790,14 @@ async def cb_key_delete_confirm(callback: CallbackQuery, bot: Bot):
             await callback.message.answer("Ключ уже удалён или недоступен.")
             return
 
+        from database import has_recent_unsettled_checkout
+        if await has_recent_unsettled_checkout(user_id):
+            await callback.message.answer(
+                "Удаление подписки пока недоступно: недавний платёж "
+                "ещё может завершиться. Проверьте его статус и повторите позже."
+            )
+            return
+
         # The bot currently uses one 3x-ui client per Telegram user. Removing
         # one saved key must not delete that shared server client while other key
         # records remain.
