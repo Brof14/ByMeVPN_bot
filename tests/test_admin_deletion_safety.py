@@ -141,6 +141,72 @@ class CancelAllMethodsTests(unittest.IsolatedAsyncioTestCase):
             "SELECT amount FROM payments WHERE payload='receipt-1'"
         )).fetchone())[0], 89)
 
+    async def test_pending_mobile_or_trial_checkout_blocks_erasure(self):
+        import time
+        db = await database.get_db()
+        now = int(time.time())
+        self.assertFalse(await database.has_recent_unsettled_checkout(123))
+        await db.execute(
+            "INSERT INTO mobile_payment_requests("
+            "user_id,request_id,plan_code,provider,created_at,creation_state) "
+            "VALUES(123,'req-one','1m_d2','yookassa',?,'creating')",
+            (now,),
+        )
+        await db.commit()
+        self.assertTrue(await database.has_recent_unsettled_checkout(123))
+        await db.execute(
+            "UPDATE mobile_payment_requests SET creation_state='ready' "
+            "WHERE request_id='req-one'",
+        )
+        await db.commit()
+        self.assertFalse(await database.has_recent_unsettled_checkout(123))
+        await db.execute(
+            "INSERT INTO yookassa_trial_pending(user_id,payment_id,confirmation_url,created) "
+            "VALUES(123,'trial-one','https://example.invalid',?)",
+            (now,),
+        )
+        await db.commit()
+        self.assertTrue(await database.has_recent_unsettled_checkout(123))
+        await db.execute("DELETE FROM yookassa_trial_pending WHERE user_id=123")
+        await db.execute(
+            "UPDATE mobile_payment_requests SET payment_id='invoice-one' "
+            "WHERE request_id='req-one'",
+        )
+        await db.commit()
+        self.assertTrue(await database.has_recent_unsettled_checkout(123))
+        await db.execute(
+            "INSERT INTO payments(user_id,amount,currency,method,days,created,payload,"
+            "provider,provider_payment_id,status) "
+            "VALUES(123,89,'RUB','yookassa',30,?,'invoice-one',"
+            "'yookassa','invoice-one','success')",
+            (now,),
+        )
+        await db.commit()
+        self.assertFalse(await database.has_recent_unsettled_checkout(123))
+
+    async def test_old_pending_checkout_does_not_block_erasure_forever(self):
+        import time
+        db = await database.get_db()
+        await db.execute(
+            "INSERT INTO yookassa_pending(payment_id,user_id,days,devices,amount_rub,created) "
+            "VALUES('stale',123,30,2,89,?)",
+            (int(time.time()) - 86400,),
+        )
+        await db.commit()
+        self.assertFalse(await database.has_recent_unsettled_checkout(123))
+
+    async def test_deleted_account_referrals_cannot_reattach(self):
+        await database.ensure_user(999)
+        await database.delete_user_and_keys(123)
+        await database.set_referrer(123, 999)
+        user = await database.find_user_by_id(123)
+        self.assertIsNone(user.get("referrer_id"))
+        db = await database.get_db()
+        count = (await (await db.execute(
+            "SELECT COUNT(*) FROM referrals WHERE referred_id=123"
+        )).fetchone())[0]
+        self.assertEqual(count, 0)
+
     async def test_all_saved_methods_are_removed_without_touching_paid_access(self):
         first = await database.add_key(123, "https://sub.test/one", "one", "uuid-1", 30, 2)
         second = await database.add_key(123, "https://sub.test/two", "two", "uuid-2", 30, 5)
