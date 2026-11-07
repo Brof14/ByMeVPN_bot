@@ -17,6 +17,21 @@ import subscription
 
 
 class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
+    async def test_retried_signup_reward_does_not_shorten_newer_subscription(self):
+        expiry = int(time.time()) + 90 * 86400
+        key = {"id": 7, "key": "https://example.test/sub", "expiry": expiry, "limit_ip": 2}
+        with (
+            patch("subscription.get_user_keys", new=AsyncMock(return_value=[key])),
+            patch("subscription.database.get_or_create_provisioning_intent", new=AsyncMock(return_value=expiry - 30 * 86400)),
+            patch("subscription.set_key_expiry", new=AsyncMock()) as set_expiry,
+        ):
+            result = await subscription.deliver_key(
+                bot=MagicMock(), user_id=123, chat_id=123, config_name="ByMeVPN_123",
+                days=15, is_paid=True, amount=0, method="ref_signup_bonus", payload="ref_signup_123_456",
+            )
+        self.assertFalse(result)
+        set_expiry.assert_not_awaited()
+
     async def test_retried_referral_reward_does_not_shorten_panel_only_subscription(self):
         expiry = int(time.time()) + 90 * 86400
         panel_client = {"expiry_time": expiry * 1000, "subscription_url": "https://example.test/sub", "uuid": "uuid"}

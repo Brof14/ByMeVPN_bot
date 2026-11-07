@@ -118,7 +118,7 @@ async def deliver_key(
                 new_expiry = await database.get_or_create_provisioning_intent(
                     method, payload, user_id, new_expiry
                 )
-            if method == "ref_bonus" and old_expiry and new_expiry < old_expiry:
+            if method in ("ref_bonus", "ref_signup_bonus") and old_expiry and new_expiry < old_expiry:
                 # Another operation has moved the subscription past this old
                 # reward intent. Applying it would shorten paid access; leave
                 # the reward pending for reconciliation instead.
@@ -264,7 +264,7 @@ async def deliver_key(
                 target_expiry = await database.get_or_create_provisioning_intent(
                     method, payload, user_id, target_expiry
                 )
-            if method == "ref_bonus" and target_expiry < int(xui_client.get("expiry_time") or 0) // 1000:
+            if method in ("ref_bonus", "ref_signup_bonus") and target_expiry < int(xui_client.get("expiry_time") or 0) // 1000:
                 logger.error("Referral bonus %s requires panel reconciliation for user %d", payload, user_id)
                 return False
             xui_res = await update_xui_user(

@@ -210,6 +210,19 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(await database.channel_already_used(None, "+AbCdEf012345"))
 
+    async def test_13_concurrent_signup_reward_conflict_is_reported_as_success(self):
+        from unittest.mock import AsyncMock, patch
+        from referral_system_new import award_referral_signup_bonus
+        event = {"referred_id": 1402, "event_type": "registration_bonus", "days_awarded": 15}
+        with (
+            patch("database.get_referrer", new=AsyncMock(return_value=1401)),
+            patch("database.get_referral_events", new=AsyncMock(side_effect=[[], [event]])),
+            patch("database.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("database.add_referral_event", new=AsyncMock(return_value=0)),
+            patch("subscription.deliver_key", new=AsyncMock(return_value=True)),
+        ):
+            self.assertTrue(await award_referral_signup_bonus(None, 1401, 1402))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

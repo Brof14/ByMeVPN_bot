@@ -57,11 +57,16 @@ async def award_referral_signup_bonus(bot, referrer_id: int, referred_id: int) -
     )
     if not delivered:
         return False
-    return bool(await add_referral_event(
+    inserted = await add_referral_event(
         referrer_id=referrer_id, referred_id=referred_id,
         event_type="registration_bonus", days_awarded=REFERRAL_SIGNUP_BONUS_DAYS,
         description="New user registered via referral link",
-    )) or any(e["referred_id"] == referred_id and e["event_type"] == "registration_bonus" for e in events)
+    )
+    if inserted:
+        return True
+    # Another worker may have recorded the same reward while delivery ran.
+    events = await get_referral_events(referrer_id)
+    return any(e["referred_id"] == referred_id and e["event_type"] == "registration_bonus" for e in events)
 
 
 async def retry_pending_signup_bonuses(bot, referrer_id: int) -> int:
