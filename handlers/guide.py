@@ -10,7 +10,7 @@ from aiogram.types import (
 
 from keyboards import connection_guide_kb, additional_platforms_kb, support_url, feedback_url
 from utils import send_with_photo, send_or_edit, safe_answer
-from bot_assets import SUPPORT, CONNECTION, ANDROID, IPHONE, WINDOWS, LINUX
+from bot_assets import SUPPORT, CONNECTION
 from bot_style import themed_button as InlineKeyboardButton
 
 logger = logging.getLogger(__name__)
@@ -291,16 +291,9 @@ async def _send_platform_guide(callback: CallbackQuery, bot: Bot, platform: str,
         *guide_rows,
         [InlineKeyboardButton(text="← Назад", callback_data=choose_callback)],
     ])
-    platform_art = {
-        "ios": IPHONE,
-        "android": ANDROID,
-        "android_tv": ANDROID,
-        "ios_mac": IPHONE,
-        "windows": WINDOWS,
-        "macos": CONNECTION,
-        "linux": LINUX,
-    }.get(platform, CONNECTION)
-    await send_or_edit(bot, callback, text, kb, photo=platform_art)
+    # Platform selection is branded; individual installation steps are
+    # intentionally text-only for speed and easy scanning.
+    await send_or_edit(bot, callback, text, kb)
 
 
 async def _track_guide_event(user_id: int, event_type: str, platform: str | None = None) -> None:

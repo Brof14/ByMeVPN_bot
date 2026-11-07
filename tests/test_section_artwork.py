@@ -64,26 +64,19 @@ class TestSectionArtwork(unittest.IsolatedAsyncioTestCase):
             await cb_buy_vpn(callback, object(), state)
         self.assertEqual(send.call_args.kwargs["photo"], bot_assets.PLANS)
 
-    async def test_platform_guides_use_matching_artwork(self):
+    async def test_platform_guides_are_text_first(self):
         from handlers.guide import _send_platform_guide
 
         callback = SimpleNamespace(from_user=SimpleNamespace(id=5))
-        expected = {
-            "ios": bot_assets.IPHONE,
-            "android": bot_assets.ANDROID,
-            "windows": bot_assets.WINDOWS,
-            "linux": bot_assets.LINUX,
-            "macos": bot_assets.CONNECTION,
-        }
+        platforms = ("ios", "android", "windows", "linux", "macos")
         with (
             patch("handlers.guide.safe_answer", new=AsyncMock()),
             patch("handlers.guide._track_guide_event", new=AsyncMock()),
             patch("handlers.guide.send_or_edit", new=AsyncMock()) as send,
         ):
-            for platform, artwork in expected.items():
+            for platform in platforms:
                 await _send_platform_guide(callback, object(), platform)
-                self.assertEqual(send.call_args.kwargs["photo"], artwork, platform)
-                self.assertIsNone(bot_assets.display_artwork(artwork), platform)
+                self.assertIsNone(send.call_args.kwargs.get("photo"), platform)
 
     async def test_ad_program_applies_its_artwork_to_all_screens(self):
         from handlers.ad_program import send_with_photo
