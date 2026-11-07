@@ -9,6 +9,7 @@ from html import escape
 import io
 import logging
 import math
+import time
 from datetime import datetime
 from urllib.parse import urlsplit
 
