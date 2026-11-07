@@ -1,5 +1,6 @@
 """Temporary diagnostic for hung CI Python process after suite prints OK."""
 import gc
+import os
 import sys
 import threading
 import unittest
@@ -11,4 +12,5 @@ class ThreadDiagnostic(unittest.TestCase):
         lines = [f"[CI-THREADS] {t.name} alive={t.is_alive()} daemon={t.daemon}" for t in threading.enumerate()]
         lines += [f"[CI-DB] id={id(x)} alive={x.is_alive()} repr={repr(x)}" for x in conn]
         sys.stderr.write("\n"+"\n".join(lines)+"\n")
-        self.assertTrue(True)
+        sys.stderr.flush()
+        os._exit(1)  # Diagnostic only: publish live threads immediately
