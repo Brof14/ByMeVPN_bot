@@ -493,6 +493,27 @@ async def cb_autorenew_unbind_prompt(callback: CallbackQuery, bot: Bot):
     await send_or_edit(bot, callback, text, autorenew_cancel_confirm_kb(key_id), photo=AUTO_RENEWAL)
 
 
+async def _run_billing_change_under_lease(user_id: int, operation):
+    """Serialize card cancellation/resumption with recurring invoice creation."""
+    import asyncio
+    import secrets
+    from database import try_acquire_delivery_lease, release_delivery_lease
+
+    token = secrets.token_urlsafe(24)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 15
+    while True:
+        if await try_acquire_delivery_lease(user_id, token):
+            break
+        if loop.time() >= deadline:
+            raise TimeoutError("another account operation is in progress")
+        await asyncio.sleep(0.25)
+    try:
+        return await operation()
+    finally:
+        await release_delivery_lease(user_id, token)
+
+
 @router.callback_query(F.data.startswith("autorenew_unbind_confirm:"))
 async def cb_autorenew_unbind_confirm(callback: CallbackQuery, bot: Bot):
     """Disable auto-renew. Paid access is preserved until the period ends."""
@@ -504,7 +525,19 @@ async def cb_autorenew_unbind_confirm(callback: CallbackQuery, bot: Bot):
     from database import unlink_auto_renew_payment_method
     from aiogram.types import InlineKeyboardMarkup
 
-    res = await unlink_auto_renew_payment_method(user_id, key_id if key_id > 0 else None)
+    try:
+        res = await _run_billing_change_under_lease(
+            user_id,
+            lambda: unlink_auto_renew_payment_method(user_id, key_id if key_id > 0 else None),
+        )
+    except Exception:
+        logger.exception("Cannot safely unlink recurring payment method for user %d", user_id)
+        await safe_answer(
+            callback,
+            "Не удалось подтвердить отключение. Проверьте состояние подписки и повторите попытку.",
+            alert=True,
+        )
+        return
 
     expiry_str = ""
     if res.get("expires_at"):
@@ -542,7 +575,15 @@ async def cb_autorenew_enable(callback: CallbackQuery, bot: Bot):
     from database import resume_auto_renew
     from aiogram.types import InlineKeyboardMarkup
 
-    reenabled = await resume_auto_renew(user_id, key_id if key_id > 0 else None)
+    try:
+        reenabled = await _run_billing_change_under_lease(
+            user_id,
+            lambda: resume_auto_renew(user_id, key_id if key_id > 0 else None),
+        )
+    except Exception:
+        logger.exception("Cannot safely resume recurring payment method for user %d", user_id)
+        await safe_answer(callback, "Подписка занята другой операцией. Повторите позже.", alert=True)
+        return
     if reenabled:
         text = (
             "🔔 <b>Автопродление включено</b>\n\n"
