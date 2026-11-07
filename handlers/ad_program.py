@@ -927,6 +927,46 @@ async def send_or_edit_safe(bot: Bot, callback: CallbackQuery, text: str, kb) ->
     await send_with_photo(bot, callback, text, kb)
 
 
+async def _deliver_verified_ad_reward(bot: Bot, app: dict) -> bool:
+    """Deliver only a reward already approved for provisioning."""
+    app_id, user_id = app["id"], app["user_id"]
+    try:
+        from subscription import deliver_key
+        keys = await get_user_keys(user_id)
+        existing = max(keys, key=lambda key: key.get("expiry", 0)) if keys else None
+        return await deliver_key(
+            bot=bot, user_id=user_id, chat_id=user_id,
+            config_name=f"ByMeVPN_{user_id}", days=int(app["bonus_months"]) * 30,
+            limit_ip=existing.get("limit_ip", 2) if existing else 2,
+            is_paid=True, amount=0, method="ad_bonus", payload=f"ad_bonus_{app_id}",
+            extend_existing=True,
+        )
+    except Exception:
+        logger.exception("Failed to grant ad bonus for app %d", app_id)
+        return False
+
+
+async def process_pending_ad_rewards(bot: Bot, limit: int = 10) -> int:
+    """Retry rewards for manually verified posts, with fair bounded batches."""
+    from database import get_pending_ad_reward_retries, mark_ad_reward_attempt
+
+    completed = 0
+    for app in await get_pending_ad_reward_retries(limit):
+        try:
+            await mark_ad_reward_attempt(app["id"])
+            if not await _deliver_verified_ad_reward(bot, app):
+                continue
+            if await update_ad_application(app["id"], status="approved", expected_statuses=["grant_pending"]):
+                completed += 1
+                await log_ad_audit(None, "ad_approved_retry", f"app={app['id']} user={app['user_id']}")
+                await log_ad_analytics_event(app["user_id"], "ad_approved", {
+                    "app_id": app["id"], "days": int(app["bonus_months"]) * 30,
+                })
+        except Exception:
+            logger.exception("Ad bonus retry failed for app %d", app["id"])
+    return completed
+
+
 @router.callback_query(F.data.startswith("ad_admin_approve:"))
 async def cb_ad_admin_approve(callback: CallbackQuery, bot: Bot):
     if not _is_admin(callback.from_user.id):
@@ -953,22 +993,7 @@ async def cb_ad_admin_approve(callback: CallbackQuery, bot: Bot):
         if not marked:
             await safe_answer(callback, "Заявка уже обрабатывается.", alert=True)
             return
-    try:
-        from subscription import deliver_key
-        keys = await get_user_keys(user_id)
-        existing_key = max(keys, key=lambda k: k.get("expiry", 0)) if keys else None
-        devices = existing_key.get("limit_ip", 2) if existing_key else 2
-        success = await deliver_key(
-            bot=bot, user_id=user_id, chat_id=user_id,
-            config_name=f"ByMeVPN_{user_id}", days=days, limit_ip=devices,
-            # A deterministic provisioning intent makes retries safe without
-            # creating a payment record or changing the subscription price.
-            is_paid=True, amount=0, method="ad_bonus", payload=f"ad_bonus_{app_id}",
-            extend_existing=True,
-        )
-    except Exception as e:
-        logger.error("Failed to grant ad bonus for app %d: %s", app_id, e)
-        success = False
+    success = await _deliver_verified_ad_reward(bot, app)
 
     if not success:
         await log_ad_audit(callback.from_user.id, "ad_bonus_pending", f"app={app_id} user={user_id}")

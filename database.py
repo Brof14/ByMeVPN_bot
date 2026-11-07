@@ -996,12 +996,16 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
                 approved_at INTEGER,
                 rejected_at INTEGER,
                 rejection_reason TEXT,
+                grant_attempt_ms INTEGER,
                 UNIQUE(user_id, channel_id)
             )
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_ad_applications_user ON ad_applications(user_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_ad_applications_status ON ad_applications(status)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_ad_applications_channel ON ad_applications(channel_id)")
+        ad_columns = {row[1] for row in await (await db.execute("PRAGMA table_info(ad_applications)")).fetchall()}
+        if "grant_attempt_ms" not in ad_columns:
+            await db.execute("ALTER TABLE ad_applications ADD COLUMN grant_attempt_ms INTEGER")
         logger.info("Migration: created ad_applications table")
     except Exception as e:
         logger.warning("Migration: ad_applications notice: %s", e)
@@ -5914,6 +5918,25 @@ async def get_ad_applications_by_statuses(statuses: list[str], limit: int = 20) 
         }
         for r in rows
     ]
+
+
+async def get_pending_ad_reward_retries(limit: int = 10) -> list[dict]:
+    db = await get_db()
+    cur = await db.execute(
+        """SELECT id, user_id, bonus_months FROM ad_applications WHERE status='grant_pending'
+           ORDER BY grant_attempt_ms IS NOT NULL, grant_attempt_ms, created_at, id LIMIT ?""",
+        (int(limit),),
+    )
+    return [{"id": row[0], "user_id": row[1], "bonus_months": row[2]} for row in await cur.fetchall()]
+
+
+async def mark_ad_reward_attempt(app_id: int) -> None:
+    db = await get_db()
+    await db.execute(
+        "UPDATE ad_applications SET grant_attempt_ms=? WHERE id=? AND status='grant_pending'",
+        (time.time_ns() // 1_000_000, app_id),
+    )
+    await db.commit()
 
 
 async def get_ad_applications_due_for_retention(now: int | None = None, limit: int = 100) -> list[dict]:

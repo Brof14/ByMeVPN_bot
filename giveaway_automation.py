@@ -233,8 +233,10 @@ async def process_due_giveaways(bot: Bot) -> None:
 async def run_giveaway_automation(bot: Bot) -> None:
     """One idempotent scheduler pass; safe to retry after process restarts."""
     from referral_system_new import process_pending_referral_payment_rewards, process_pending_referral_signup_rewards
+    from handlers.ad_program import process_pending_ad_rewards
     await process_pending_referral_signup_rewards(bot)
     await process_pending_referral_payment_rewards(bot)
+    await process_pending_ad_rewards(bot)
     await process_due_giveaways(bot)
     giveaway = await ensure_monthly_giveaway(bot)
     # Snapshot is INSERT OR IGNORE, so restarting won't duplicate messages.

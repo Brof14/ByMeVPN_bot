@@ -84,6 +84,18 @@ class TestGiveawayAutomation(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await process_pending_ad_rewards(bot, limit=1), 1)
         self.assertEqual([call.kwargs["user_id"] for call in delivery.await_args_list], [811, 812])
 
+    async def test_pending_ad_reward_migration_preserves_application(self):
+        await database.ensure_user(821)
+        app_id = await database.create_ad_application(
+            user_id=821, channel_id=-100821, channel_username="channel821",
+            subscriber_count=20, bonus_months=2, channel_ref="channel821", status="grant_pending",
+        )
+        db = await database.get_db()
+        await db.execute("ALTER TABLE ad_applications DROP COLUMN grant_attempt_ms")
+        await db.commit()
+        await database.init_db()
+        self.assertEqual([app["id"] for app in await database.get_pending_ad_reward_retries()], [app_id])
+
     async def test_monthly_campaign_is_created_once_and_respects_opt_out(self):
         from giveaway_automation import run_giveaway_automation
 
