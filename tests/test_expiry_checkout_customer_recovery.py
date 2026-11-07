@@ -379,6 +379,41 @@ class ExpiryDatabaseRegression(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(legacy["status"], "cancelled")
         self.assertEqual(legacy["payment_method_id"], "legacy-active")
 
+    async def test_expiry_cleanup_cannot_enable_legacy_renewal(self):
+        now = int(time.time())
+        await self.db.add_key(
+            9801, "https://sub.test/expired", "expired", "uuid-expired", 30, 2,
+            expiry=now - 60,
+        )
+        await self.db.add_key(
+            9801, "https://sub.test/current", "current", "uuid-current", 30, 2,
+            expiry=now + 86400,
+        )
+        await self.db.save_auto_renew_subscription(
+            9801, None, "legacy-token", payment_method_title="Saved",
+        )
+        self.assertEqual(await self.db.cleanup_expired_keys(), 1)
+        legacy = await self.db.get_auto_renew_subscription(9801)
+        self.assertEqual(legacy["status"], "cancelled")
+
+    async def test_deletion_by_uuid_cannot_enable_legacy_renewal(self):
+        now = int(time.time())
+        await self.db.add_key(
+            9801, "https://sub.test/removed", "removed", "uuid-removed", 30, 2,
+            expiry=now + 86400,
+        )
+        await self.db.add_key(
+            9801, "https://sub.test/current", "current", "uuid-current", 30, 2,
+            expiry=now - 60,
+        )
+        await self.db.save_auto_renew_subscription(
+            9801, None, "legacy-token", payment_method_title="Saved",
+        )
+        self.assertTrue(await self.db.delete_key_by_uuid("uuid-removed"))
+        legacy = await self.db.get_auto_renew_subscription(9801)
+        self.assertEqual(legacy["status"], "cancelled")
+        self.assertEqual(await self.db.get_expiring_auto_renew_subscriptions(now=now), [])
+
     async def test_ambiguous_legacy_autorenew_never_charges_and_is_explained(self):
         from handlers.keys import _load_autorenew_context, _get_payment_methods_text
         now = int(time.time())
