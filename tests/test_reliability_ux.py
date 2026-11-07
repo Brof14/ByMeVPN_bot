@@ -99,7 +99,9 @@ class VPNDeletionSafetyTests(unittest.IsolatedAsyncioTestCase):
             patch("database.cancel_auto_renew", new=AsyncMock(return_value={"cancelled": True})),
             patch("database.resume_auto_renew", new=AsyncMock()) as resume,
             patch.object(keys, "delete_xui_user", new=AsyncMock(return_value=remote)),
-            patch.object(keys, "delete_key_by_id", new=AsyncMock(return_value=db_deleted)) as delete_db,
+            patch.object(keys, "delete_key_by_id", new=AsyncMock(
+                return_value=db_deleted, side_effect=db_deleted if isinstance(db_deleted, Exception) else None
+            )) as delete_db,
             patch("database.log_key_error", new=AsyncMock()),
         ):
             await keys.cb_key_delete_confirm(callback, object())
@@ -110,6 +112,14 @@ class VPNDeletionSafetyTests(unittest.IsolatedAsyncioTestCase):
         resume.assert_not_awaited()
         delete_db.assert_not_awaited()
         self.assertTrue(answer.await_args)
+
+    async def test_db_exception_after_panel_delete_is_reported_without_rebilling(self):
+        answer, resume, delete_db = await self._handler_delete(
+            remote=True, db_deleted=OSError("database temporarily unavailable")
+        )
+        resume.assert_not_awaited()
+        delete_db.assert_awaited_once_with(7)
+        self.assertIn("автопродление", answer.await_args.args[0].lower())
 
     async def test_db_failure_after_panel_delete_never_reenables_autopay(self):
         answer, resume, delete_db = await self._handler_delete(remote=True, db_deleted=False)

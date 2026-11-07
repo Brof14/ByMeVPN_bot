@@ -747,7 +747,13 @@ async def cb_key_delete_confirm(callback: CallbackQuery, bot: Bot):
             )
             return
 
-    deleted = await delete_key_by_id(key_id)
+    try:
+        deleted = await delete_key_by_id(key_id)
+    except Exception:
+        # The remote user may already be gone. Never reactivate billing or
+        # let a database outage hide this partially completed deletion.
+        logger.exception("Key %d removal failed after remote reconciliation", key_id)
+        deleted = False
     if not deleted:
         if other_keys and renew_was_active:
             # No remote client was touched; restoring billing is safe only here.
