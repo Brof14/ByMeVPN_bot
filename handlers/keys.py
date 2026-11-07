@@ -671,9 +671,14 @@ async def cb_key_delete(callback: CallbackQuery, bot: Bot):
         return
 
     remark = escape(k.get("remark") or f"Ключ #{key_id}")
+    active = int(k.get("expiry") or 0) > int(time.time())
+    until = f" до <b>{fmt_date(k['expiry'])}</b>" if active else ""
     text = (
-        f"Удалить ключ <b>«{remark}»</b>?\n\n"
-        "После удаления подключение по этой ссылке перестанет работать."
+        f"<b>Удалить доступ «{remark}»?</b>\n\n"
+        + (f"Подписка ещё активна{until}. " if active else "")
+        + "Удаление сразу отключит VPN по этому ключу и не сохранит оставшийся срок.\n\n"
+        "Если хотите только отменить будущие списания, отключите автопродление. "
+        "Существующий доступ при этом сохранится."
     )
     await send_or_edit(bot, callback, text, confirm_delete_kb(key_id), photo=KEY)
 
