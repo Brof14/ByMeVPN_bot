@@ -6063,7 +6063,9 @@ async def get_giveaway_entry_status(giveaway_id: int, user_id: int) -> dict | No
     cur = await db.execute(
         """SELECT g.is_active, g.end_date, COALESCE(g.period_start,g.created_at),
         EXISTS(SELECT 1 FROM giveaway_participants p WHERE p.giveaway_id=g.id AND p.user_id=?),
-        (SELECT COUNT(*) FROM referrals r WHERE r.referrer_id=?
+        (SELECT COUNT(*) FROM referrals r
+          JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id
+          WHERE r.referrer_id=?
           AND r.created>=COALESCE(g.period_start,g.created_at) AND r.created<g.end_date)
         FROM giveaways g WHERE g.id=?""",
         (user_id, user_id, giveaway_id),
@@ -6326,7 +6328,9 @@ async def pick_giveaway_winners(giveaway_id: int) -> list[int]:
             ranked = []
             for uid in participant_ids:
                 count_cur = await db.execute(
-                    "SELECT COUNT(*) FROM referrals WHERE referrer_id=? AND created>=? AND created<?",
+                    "SELECT COUNT(*) FROM referrals r "
+                    "JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id "
+                    "WHERE r.referrer_id=? AND r.created>=? AND r.created<?",
                     (uid, int(g_row[5]), int(g_row[2])),
                 )
                 count = int((await count_cur.fetchone())[0] or 0)

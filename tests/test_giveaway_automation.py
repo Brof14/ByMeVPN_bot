@@ -145,6 +145,13 @@ class TestGiveawayAutomation(unittest.IsolatedAsyncioTestCase):
                 await db.execute("UPDATE referrals SET created=? WHERE referred_id=?", (now - 10, referred_id))
                 await db.commit()
 
+        # Historical inconsistent rows must not qualify a different inviter.
+        db = await database.get_db()
+        await db.execute(
+            "INSERT INTO referrals(referrer_id, referred_id, created) VALUES(?,?,?)",
+            (805, 9000 + 801 * 10, now - 10),
+        )
+        await db.commit()
         for user_id, count in referral_counts.items():
             status = await database.get_giveaway_entry_status(giveaway_id, user_id)
             self.assertEqual(status["qualified"], count > 0)
