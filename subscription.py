@@ -118,6 +118,12 @@ async def deliver_key(
                 new_expiry = await database.get_or_create_provisioning_intent(
                     method, payload, user_id, new_expiry
                 )
+            if method == "ref_bonus" and old_expiry and new_expiry < old_expiry:
+                # Another operation has moved the subscription past this old
+                # reward intent. Applying it would shorten paid access; leave
+                # the reward pending for reconciliation instead.
+                logger.error("Referral bonus %s requires reconciliation for user %d", payload, user_id)
+                return False
 
             # Set the immutable target, rather than applying relative days.
             success = await set_key_expiry(key_id, new_expiry, limit_ip=limit_ip)

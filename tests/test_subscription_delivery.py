@@ -25,6 +25,8 @@ class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
             patch("subscription.database.get_or_create_provisioning_intent", new=AsyncMock(return_value=existing_expiry - 30 * 86400)),
             patch("subscription.set_key_expiry", new=AsyncMock()) as set_expiry,
             patch("xui_client.update_xui_user", new=AsyncMock()) as update_panel,
+            patch("xui_client.get_user_subscription_links", new=AsyncMock(return_value=[])),
+            patch("subscription._send_delivery_message", new=AsyncMock(return_value=True)),
         ):
             result = await subscription.deliver_key(
                 bot=MagicMock(), user_id=123, chat_id=123, config_name="ByMeVPN_123",
