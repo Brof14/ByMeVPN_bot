@@ -3402,6 +3402,7 @@ async def get_expiring_auto_renew_subscriptions(now: Optional[int] = None) -> li
            FROM auto_renew_subscriptions s
            JOIN keys k ON (s.key_id = k.id OR (s.key_id IS NULL AND k.user_id = s.user_id))
            WHERE s.status = 'active'
+             AND TRIM(COALESCE(s.payment_method_id, '')) != ''
              AND (s.key_id IS NOT NULL OR (SELECT COUNT(*) FROM keys all_keys WHERE all_keys.user_id=s.user_id)=1)
              AND k.expiry <= ?
              AND k.expiry > (? - 7 * 86400)
