@@ -103,6 +103,8 @@ class VPNDeletionSafetyTests(unittest.IsolatedAsyncioTestCase):
                 return_value=db_deleted, side_effect=db_deleted if isinstance(db_deleted, Exception) else None
             )) as delete_db,
             patch("database.log_key_error", new=AsyncMock()),
+            patch("database.try_acquire_delivery_lease", new=AsyncMock(return_value=True)),
+            patch("database.release_delivery_lease", new=AsyncMock()),
         ):
             await keys.cb_key_delete_confirm(callback, object())
         return callback.message.answer, resume, delete_db
