@@ -286,6 +286,29 @@ class ExpiryDatabaseRegression(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone((await _get_active_autorenew(9801, key1))["key_id"])
 
 
+class PromoAccountingAlerts(unittest.IsolatedAsyncioTestCase):
+    async def test_missing_usage_notifies_without_failing_fulfilled_order(self):
+        from payments import record_fulfilled_promo
+        bot = SimpleNamespace(send_message=AsyncMock())
+        with (
+            patch("database.use_promo_code", new=AsyncMock(return_value=False)),
+            patch("database.has_user_used_promo", new=AsyncMock(return_value=False)),
+        ):
+            self.assertFalse(await record_fulfilled_promo(bot, "SALE", 42, "stars", "charge-1"))
+        self.assertEqual(bot.send_message.await_count, 1)
+        self.assertIn("charge-1", bot.send_message.await_args.args[1])
+
+    async def test_already_recorded_usage_is_not_an_error(self):
+        from payments import record_fulfilled_promo
+        bot = SimpleNamespace(send_message=AsyncMock())
+        with (
+            patch("database.use_promo_code", new=AsyncMock(return_value=False)),
+            patch("database.has_user_used_promo", new=AsyncMock(return_value=True)),
+        ):
+            self.assertTrue(await record_fulfilled_promo(bot, "SALE", 42, "stars", "charge-1"))
+        bot.send_message.assert_not_awaited()
+
+
 class PlatformGuideRegression(unittest.IsolatedAsyncioTestCase):
     async def test_one_active_key_is_selected_from_general_guide(self):
         from handlers.guide import cb_guide_menu
