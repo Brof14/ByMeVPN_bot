@@ -445,7 +445,8 @@ async def msg_ad_channel_input(message: Message, bot: Bot, state: FSMContext):
     except Exception:
         pass  # bot is not a member — that's fine, user will provide the count
 
-    if subscriber_count is None:
+    if (not isinstance(subscriber_count, int) or isinstance(subscriber_count, bool)
+            or not 1 <= subscriber_count <= 2**63 - 1):
         await state.update_data(
             ad_channel_ref=public_username.lower(),
             ad_channel_username=public_username,
@@ -456,7 +457,7 @@ async def msg_ad_channel_input(message: Message, bot: Bot, state: FSMContext):
             bot, message, state,
             prompt=(
                 f"<b>Канал найден: {escape(chat.title or '@' + public_username)}</b>\n\n"
-                "Telegram не даёт боту увидеть число подписчиков (бот не участник канала).\n\n"
+                "Не удалось получить корректное число подписчиков от Telegram.\n\n"
                 "Отправьте <b>текущее число подписчиков</b> одним числом, "
                 "например: <code>1284</code>\n"
                 "Данные проверит администратор при одобрении."
