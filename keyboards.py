@@ -142,7 +142,7 @@ def tariff_selection_kb(devices: int = DEFAULT_DEVICE_LIMIT, discount_percent: i
         text = f"{included_days} дней · {total_price} ₽ · {monthly_display} ₽/30 дней"
         if discount_percent > 0:
             text += f" · −{discount_percent}%"
-        if months == 12 and discount_percent < 100:
+        if months == 12 and discount_percent == 0:
             text += " · Выгоднее за 30 дней"
         kb.row(InlineKeyboardButton(text=text, callback_data=f"tariff_{months}_{devices}"))
 

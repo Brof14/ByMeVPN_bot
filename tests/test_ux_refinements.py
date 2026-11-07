@@ -19,6 +19,8 @@ class TariffDesignTests(unittest.TestCase):
         self.assertIn("240 дней", labels["tariff_6_2"])
         self.assertIn("450 дней", labels["tariff_12_2"])
         self.assertIn("Выгоднее за 30 дней", labels["tariff_12_2"])
+        discounted = {b.callback_data: b.text for b in buttons(tariff_selection_kb(devices=2, discount_percent=100))}
+        self.assertNotIn("Выгоднее", discounted["tariff_12_2"])
         self.assertTrue(all("🎁" not in text for text in labels.values()))
         with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "1"}):
             premium = tariff_selection_kb(devices=2)
