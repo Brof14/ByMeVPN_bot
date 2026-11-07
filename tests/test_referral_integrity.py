@@ -193,6 +193,18 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([call.kwargs["user_id"] for call in delivery.await_args_list], [2101, 2201])
         self.assertEqual(len(await database.get_pending_referral_payment_rewards()), 1)
 
+    async def test_pending_payment_reward_requires_actual_referrer(self):
+        from unittest.mock import AsyncMock, patch
+        await self._seed_pair(2151, 2153)
+        await database.ensure_user(2152)
+        await database.record_referral_payment_reward(2152, 2153, "wrong-inviter")
+        await database.record_referral_payment_reward(2151, 2153, "actual-inviter")
+        bot = type("BotStub", (), {"send_message": AsyncMock()})()
+        with patch("subscription.deliver_key", new=AsyncMock(return_value=True)) as delivery:
+            self.assertEqual(await process_pending_referral_payment_rewards(bot), 1)
+        self.assertEqual(delivery.await_args.kwargs["user_id"], 2151)
+        self.assertTrue(await database.has_referral_payment_reward(2152, 2153))
+
     async def test_retry_order_migration_preserves_existing_rewards(self):
         await self._seed_pair(2301, 2302)
         await database.record_referral_payment_reward(2301, 2302, "legacy-payment")
