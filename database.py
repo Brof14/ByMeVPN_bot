@@ -4665,7 +4665,7 @@ async def find_user_by_id(user_id: int) -> Optional[dict]:
     }
 
 
-async def delete_user_and_keys(user_id: int) -> list[str]:
+async def delete_user_and_keys(user_id: int, *, source: str = "admin") -> list[str]:
     """Erase account-owned access and identity, keeping financial evidence.
 
     Call ONLY after every configured 3x-ui inbound confirms remote deletion.
@@ -4683,7 +4683,7 @@ async def delete_user_and_keys(user_id: int) -> list[str]:
             uuids = [row[0] for row in await cursor.fetchall() if row[0]]
             await db.execute(
                 "INSERT OR IGNORE INTO account_tombstones(user_id,deleted_at,source) VALUES(?,?,?)",
-                (user_id, int(time.time()), "admin"),
+                (user_id, int(time.time()), source if source in ("admin", "self_service") else "admin"),
             )
             await db.execute(
                 """UPDATE auto_renew_subscriptions
