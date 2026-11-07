@@ -139,7 +139,8 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
     original_price = price_rub
 
     binding = promo_info.get("tariff_binding")
-    if binding is not None and binding != months:
+    promo_mismatch = binding is not None and binding != months
+    if promo_mismatch:
         # The selected button already displayed the full price. Keep the code
         # unused so the customer may activate it again for an eligible tariff.
         promo_info = {}
@@ -210,6 +211,9 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
         f"Срок: <b>{days} дней</b>\n"
         f"Итого: <b>{price_rub} ₽</b>{promo_text}\n"
     )
+
+    if promo_mismatch:
+        text += "Промокод действует на другой срок и не применён. Его можно активировать снова.\n"
 
     if promo_info and promo_info.get("promo_type") in ["percent", "fixed_rub"]:
         text += f"<s>Без скидки: {original_price} ₽</s>\n"

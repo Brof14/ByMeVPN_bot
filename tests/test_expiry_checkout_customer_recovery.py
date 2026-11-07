@@ -23,6 +23,7 @@ class ExpiryReminderRegression(unittest.IsolatedAsyncioTestCase):
             await cb_select_tariff(callback, object(), state)
         validate.assert_not_awaited()
         self.assertIn("Итого: <b>89 ₽</b>", send.await_args.args[2])
+        self.assertIn("Промокод действует на другой срок", send.await_args.args[2])
         self.assertEqual(state.update_data.await_args.kwargs["promo_code"], "")
 
     async def test_expired_promo_does_not_create_discounted_order(self):
