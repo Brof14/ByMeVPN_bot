@@ -16,13 +16,16 @@ async def referral_growth_snapshot(*, days: int = 30, now: int | None = None) ->
     cutoff = snapshot_time - days * 86400
     db = await get_db()
     cur = await db.execute(
-        "SELECT COUNT(*), COUNT(DISTINCT referrer_id) FROM referrals WHERE created >= ? AND created <= ?",
+        "SELECT COUNT(*), COUNT(DISTINCT r.referrer_id) FROM referrals r "
+        "JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id "
+        "WHERE r.created >= ? AND r.created <= ?",
         (cutoff, snapshot_time),
     )
     invited, advocates = await cur.fetchone()
     cur = await db.execute(
         """SELECT COUNT(DISTINCT r.referred_id)
         FROM referrals r
+        JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id
         WHERE r.created >= ? AND r.created <= ? AND EXISTS (
             SELECT 1 FROM referral_events e
             WHERE e.referrer_id=r.referrer_id
@@ -36,6 +39,7 @@ async def referral_growth_snapshot(*, days: int = 30, now: int | None = None) ->
         """SELECT COALESCE(SUM(e.days_awarded), 0)
         FROM referral_events e
         JOIN referrals r ON r.referrer_id=e.referrer_id AND r.referred_id=e.referred_id
+        JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id
         WHERE r.created >= ? AND r.created <= ? AND e.created <= ?
           AND e.event_type IN ('registration_bonus', 'payment_bonus')""",
         (cutoff, snapshot_time, snapshot_time),

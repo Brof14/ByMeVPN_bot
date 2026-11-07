@@ -29,8 +29,10 @@ class ReferralSnapshotTest(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(db.close)
         db.executescript("""
             CREATE TABLE referrals(referrer_id INTEGER, referred_id INTEGER, created INTEGER);
+            CREATE TABLE users(user_id INTEGER PRIMARY KEY, referrer_id INTEGER);
             CREATE TABLE referral_events(referrer_id INTEGER, referred_id INTEGER,
                 event_type TEXT, days_awarded INTEGER, created INTEGER);
+            INSERT INTO users VALUES (2, 1), (3, 1);
             INSERT INTO referrals VALUES (1, 2, 900), (1, 3, 1001);
             INSERT INTO referral_events VALUES (1, 2, 'registration_bonus', 15, 900),
                 (1, 2, 'payment_bonus', 30, 1001);

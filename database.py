@@ -2522,7 +2522,9 @@ async def get_user_payments(user_id: int) -> list[dict]:
 async def get_referrals(referrer_id: int) -> list[dict]:
     db = await get_db()
     cur = await db.execute(
-        "SELECT referred_id, created FROM referrals WHERE referrer_id=? ORDER BY created DESC",
+        "SELECT r.referred_id, r.created FROM referrals r "
+        "JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id "
+        "WHERE r.referrer_id=? ORDER BY r.created DESC",
         (referrer_id,),
     )
     rows = await cur.fetchall()
@@ -2535,7 +2537,9 @@ async def get_referrals(referrer_id: int) -> list[dict]:
 async def count_referrals(referrer_id: int) -> int:
     db = await get_db()
     cur = await db.execute(
-        "SELECT COUNT(*) FROM referrals WHERE referrer_id=?",
+        "SELECT COUNT(*) FROM referrals r "
+        "JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id "
+        "WHERE r.referrer_id=?",
         (referrer_id,),
     )
     row = await cur.fetchone()
@@ -3998,7 +4002,9 @@ async def get_referral_stats(user_id: int) -> dict:
     
     # Количество приглашённых
     cur = await db.execute(
-        "SELECT COUNT(*) FROM referrals WHERE referrer_id=?",
+        "SELECT COUNT(*) FROM referrals r "
+        "JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id "
+        "WHERE r.referrer_id=?",
         (user_id,)
     )
     total_referrals = (await cur.fetchone())[0]
@@ -4060,7 +4066,9 @@ async def get_referral_stats_enhanced(referrer_id: int) -> dict:
     
     # Total registrations (users who registered via referral)
     cur = await db.execute(
-        "SELECT COUNT(*) FROM referrals WHERE referrer_id=?",
+        "SELECT COUNT(*) FROM referrals r "
+        "JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id "
+        "WHERE r.referrer_id=?",
         (referrer_id,)
     )
     total_registrations = (await cur.fetchone())[0]
@@ -4070,6 +4078,7 @@ async def get_referral_stats_enhanced(referrer_id: int) -> dict:
         """
         SELECT COUNT(DISTINCT r.referred_id)
         FROM referrals r
+        INNER JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id
         INNER JOIN keys k ON r.referred_id = k.user_id
         WHERE r.referrer_id=? AND k.expiry > ?
         """,
@@ -4083,6 +4092,7 @@ async def get_referral_stats_enhanced(referrer_id: int) -> dict:
         """
         SELECT COUNT(DISTINCT r.referred_id)
         FROM referrals r
+        INNER JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id
         INNER JOIN referral_events e ON e.referrer_id=r.referrer_id
             AND e.referred_id=r.referred_id AND e.event_type='payment_bonus'
         WHERE r.referrer_id=?
@@ -4129,6 +4139,7 @@ async def get_referred_users_list(referrer_id: int) -> list[dict]:
                (SELECT COALESCE(SUM(days_awarded), 0) FROM referral_events 
                 WHERE referrer_id=? AND referred_id=r.referred_id) as bonus_days
         FROM referrals r
+        JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id
         WHERE r.referrer_id=?
         ORDER BY r.created DESC
         """,
