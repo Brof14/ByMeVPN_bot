@@ -3232,8 +3232,13 @@ async def resume_auto_renew(user_id: int, key_id: Optional[int] = None) -> bool:
     if key_id:
         cur = await db.execute(
             "UPDATE auto_renew_subscriptions SET status = 'active', fail_count = 0, next_retry_at = NULL, "
-            "updated_at = strftime('%s','now') WHERE user_id = ? AND key_id = ? AND payment_method_id != ''",
-            (user_id, key_id),
+            "updated_at = strftime('%s','now') WHERE user_id = ? AND id = ("
+            "SELECT id FROM auto_renew_subscriptions "
+            "WHERE user_id = ? AND TRIM(COALESCE(payment_method_id, '')) != '' "
+            "AND (key_id = ? OR (key_id IS NULL AND "
+            "(SELECT COUNT(*) FROM keys WHERE user_id = ?) = 1)) "
+            "ORDER BY (key_id IS NULL), id DESC LIMIT 1)",
+            (user_id, user_id, key_id, user_id),
         )
     else:
         cur = await db.execute(
