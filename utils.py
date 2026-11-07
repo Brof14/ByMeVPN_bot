@@ -176,7 +176,22 @@ async def send_or_edit(
         return sent
 
     if getattr(msg, "photo", None):
-        # A photo cannot be edited into text. Send first; delete old afterward.
+        # Reuse the existing media message when switching to a text-first screen.
+        # Telegram accepts a new caption without deleting the old message;
+        # if the caption limit is exceeded, fall back to a replacement.
+        try:
+            return await bot.edit_message_caption(
+                chat_id=msg.chat.id,
+                message_id=msg.message_id,
+                caption=text,
+                parse_mode="HTML",
+                reply_markup=reply_markup,
+            )
+        except TelegramBadRequest as e:
+            if "message is not modified" in str(e):
+                return msg
+        except Exception:
+            pass
         return await _replace_text_screen(bot, msg, text, reply_markup)
 
     try:

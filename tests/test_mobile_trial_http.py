@@ -232,7 +232,7 @@ class MobileTrialHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["status"], "trial")
         self.assertEqual(response.json()["max_devices"], 2)
-        self.assertEqual(response.json()["seconds_remaining"], 3 * 86400)
+        # The response is computed after provisioning; a second may elapse.\n        self.assertGreaterEqual(response.json()["seconds_remaining"], 3 * 86400 - 2)\n        self.assertLessEqual(response.json()["seconds_remaining"], 3 * 86400)
         reserve.assert_awaited_once_with(987654)
         complete.assert_awaited_once_with(987654, "claim-test")
         create_client.assert_awaited_once_with(

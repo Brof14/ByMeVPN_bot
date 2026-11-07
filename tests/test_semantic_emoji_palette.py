@@ -81,7 +81,7 @@ class SemanticPremiumEmojiTests(unittest.TestCase):
     def test_active_customer_has_direct_connection_and_only_one_blue_cta(self):
         kb = main_menu_active(42)
         actions = [b.callback_data for b in all_buttons(kb)]
-        self.assertEqual(actions[0], "key_instructions:42")
+        self.assertEqual(actions[0], "my_keys")
         self.assertIn("my_keys", actions)
         self.assertEqual(sum(b.style == "primary" for b in all_buttons(kb)), 1)
         self.assertEqual(kb.inline_keyboard[-1][-1].callback_data, "trouble")

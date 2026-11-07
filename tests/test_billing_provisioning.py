@@ -551,23 +551,26 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
             callback = MagicMock(spec=CallbackQuery)
             callback.message = msg
 
-            # A text-only destination replaces the old photo with a text message.
+            # Text-first destinations edit the existing photo caption in place.
             await send_or_edit(bot, callback, "Updated caption 1")
-            bot.delete_message.assert_awaited_once_with(12345, 999)
-            bot.send_message.assert_awaited_once_with(
+            bot.edit_message_caption.assert_awaited_once_with(
                 chat_id=12345,
-                text="Updated caption 1",
+                message_id=999,
+                caption="Updated caption 1",
                 parse_mode="HTML",
                 reply_markup=None,
             )
+            bot.delete_message.assert_not_awaited()
+            bot.send_message.assert_not_awaited()
 
             # Unapproved artwork does not cause a photo upload.
             bot.delete_message.reset_mock()
             bot.send_message.reset_mock()
             await send_with_photo(bot, callback, "Updated caption 2", photo="https://example.test/banner.png")
             bot.edit_message_media.assert_not_awaited()
-            bot.delete_message.assert_awaited_once_with(12345, 999)
-            bot.send_message.assert_awaited_once()
+            bot.edit_message_caption.assert_awaited()
+            bot.delete_message.assert_not_awaited()
+            bot.send_message.assert_not_awaited()
             bot.send_photo.assert_not_awaited()
 
             # An approved landmark banner still edits the existing image.

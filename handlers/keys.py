@@ -790,6 +790,15 @@ async def cb_key_delete_confirm(callback: CallbackQuery, bot: Bot):
             await callback.message.answer("Ключ уже удалён или недоступен.")
             return
 
+        # A partially completed three-day trial may have a persisted key while
+        # trial_used is not yet committed. Never let deleting that key restore
+        # eligibility for another free trial. This also covers old callback
+        # buttons that remain in existing Telegram messages.
+        if int(current.get("days") or 0) == 3:
+            from database import has_trial_used, set_trial_used
+            if not await has_trial_used(user_id):
+                await set_trial_used(user_id)
+
         from database import has_recent_unsettled_checkout
         if await has_recent_unsettled_checkout(user_id):
             await callback.message.answer(
