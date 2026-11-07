@@ -446,7 +446,7 @@ async def msg_ad_channel_input(message: Message, bot: Bot, state: FSMContext):
         await _ask_subscriber_count(
             bot, message, state,
             prompt=(
-                f"<b>Канал найден: {chat.title or '@' + public_username}</b>\n\n"
+                f"<b>Канал найден: {escape(chat.title or '@' + public_username)}</b>\n\n"
                 "Telegram не даёт боту увидеть число подписчиков (бот не участник канала).\n\n"
                 "Отправьте <b>текущее число подписчиков</b> одним числом, "
                 "например: <code>1284</code>\n"
