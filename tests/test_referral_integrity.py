@@ -158,6 +158,11 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
         bot = type("BotStub", (), {"send_message": AsyncMock()})()
         with patch("subscription.deliver_key", new=delivery):
             self.assertEqual(await process_pending_referral_payment_rewards(bot), 0)
+            self.assertEqual(await process_pending_referral_payment_rewards(bot), 0)
+            self.assertEqual(delivery.await_count, 1)
+            db = await database.get_db()
+            await db.execute("UPDATE referral_payment_rewards SET last_attempt_ms=0 WHERE referred_id=?", (922,))
+            await db.commit()
             self.assertEqual(await process_pending_referral_payment_rewards(bot), 1)
             self.assertEqual(await process_pending_referral_payment_rewards(bot), 0)
 
