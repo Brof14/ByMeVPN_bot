@@ -5832,10 +5832,17 @@ async def create_ad_application(
     cur = await db.execute(
         """INSERT INTO ad_applications
         (user_id, channel_id, channel_username, subscriber_count, bonus_months, campaign_id, channel_ref, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (user_id, channel_id, channel_username, subscriber_count, bonus_months, campaign_id, channel_ref, status)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (
+            SELECT 1 FROM ad_applications
+            WHERE (? IS NOT NULL AND channel_id=?)
+               OR (? IS NOT NULL AND (channel_ref=? OR channel_ref=?))
+        )""",
+        (user_id, channel_id, channel_username, subscriber_count, bonus_months, campaign_id, channel_ref, status,
+         channel_id, channel_id, channel_ref, channel_ref, channel_ref.lower() if channel_ref else channel_ref),
     )
     await db.commit()
+    if cur.rowcount != 1:
+        raise ValueError("unique channel application already exists")
     return cur.lastrowid
 
 

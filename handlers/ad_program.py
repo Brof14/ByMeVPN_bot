@@ -430,6 +430,15 @@ async def msg_ad_channel_input(message: Message, bot: Bot, state: FSMContext):
         )
         return
 
+    if chat.type != "channel":
+        await message.answer(
+            "Эта ссылка ведёт не на канал. Отправьте ссылку на Telegram-канал.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Отмена", callback_data="ad_program")]
+            ]),
+        )
+        return
+
     subscriber_count = None
     try:
         subscriber_count = await bot.get_chat_member_count(chat.id)

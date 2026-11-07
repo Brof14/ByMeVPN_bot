@@ -266,13 +266,17 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
 
     async def test_same_channel_cannot_be_submitted_concurrently_under_different_names(self):
         import asyncio
-        results = await asyncio.gather(*(
-            database.create_ad_application(
-                user_id=user_id, channel_id=-100123, channel_username=alias,
-                subscriber_count=20, bonus_months=2, channel_ref=alias,
-            )
-            for user_id, alias in ((1302, "firstalias"), (1303, "secondalias"))
-        ), return_exceptions=True)
+        from unittest.mock import AsyncMock, patch
+        import aiosqlite
+        async with aiosqlite.connect(TEST_DB_PATH, timeout=5) as first, aiosqlite.connect(TEST_DB_PATH, timeout=5) as second:
+            with patch("database.get_db", new=AsyncMock(side_effect=[first, second])):
+                results = await asyncio.gather(*(
+                    database.create_ad_application(
+                        user_id=user_id, channel_id=-100123, channel_username=alias,
+                        subscriber_count=20, bonus_months=2, channel_ref=alias,
+                    )
+                    for user_id, alias in ((1302, "firstalias"), (1303, "secondalias"))
+                ), return_exceptions=True)
         self.assertEqual(sum(isinstance(result, int) for result in results), 1)
         self.assertEqual(sum(isinstance(result, Exception) for result in results), 1)
 
