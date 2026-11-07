@@ -293,10 +293,22 @@ async def _send_platform_guide(callback: CallbackQuery, bot: Bot, platform: str,
             await safe_answer(callback, "Ключ не найден.", alert=True)
             return
         if key.get("key"):
-            # Install/open the client first. Manual import is a fallback,
-            # not the primary action for a customer unfamiliar with VPN.
+            # Offer one-tap handover to our Android app first. The redirect
+            # helper rejects insecure/untrusted public origins for credentials.
+            if platform == "android":
+                from app_links import build_app_redirect_url
+                try:
+                    app_url = build_app_redirect_url(key["key"], "ByMeVPN")
+                except ValueError:
+                    logger.warning("Secure app handover URL is not configured")
+                else:
+                    guide_rows.insert(0, [InlineKeyboardButton(
+                        text="Открыть ByMeVPN",
+                        url=app_url,
+                    )])
+            # Keep manual import as a fallback for Happ and other clients.
             guide_rows.append([InlineKeyboardButton(
-                text="Скопировать ссылку",
+                text="Скопировать ссылку для импорта",
                 copy_text={"text": key["key"]},
             )])
     kb = InlineKeyboardMarkup(inline_keyboard=[
