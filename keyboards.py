@@ -91,8 +91,6 @@ def tariff_selection_kb(devices: int = DEFAULT_DEVICE_LIMIT, discount_percent: i
         ))
     kb.row(*dev_btns)
 
-    # Keep the familiar monthly price on the duration chooser. The final
-    # checkout screen shows the full amount before the user selects payment.
     # No invisible totals or misleading free months: the existing billing
     # calculation charges for all 1/4/8/15 included months. Show the actual
     # payable amount and effective monthly rate without changing a kopeck.
@@ -108,7 +106,7 @@ def tariff_selection_kb(devices: int = DEFAULT_DEVICE_LIMIT, discount_percent: i
         if discount_percent > 0:
             total_price = round(total_price * (100 - discount_percent) / 100)
             months_included = included_days // 30
-            monthly_display = f"≈{total_price / months_included:g}"
+            monthly_display = f"≈{total_price / months_included:.2f}".rstrip("0").rstrip(".")
         else:
             monthly_display = str(get_monthly_display(months, devices))
         text = f"{period_label} · {total_price} ₽ · {monthly_display} ₽/мес."
