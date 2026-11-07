@@ -4691,78 +4691,82 @@ async def delete_user_and_keys(user_id: int, *, source: str = "admin") -> list[s
     Amounts, provider transaction IDs and refunds are retained for accounting
     and dispute reconciliation; this is *not* an unqualified GDPR certification.
     """
-    db = await get_db()
+    # Use an independent writer connection. Other legacy helpers do not all
+    # share _db_semaphore; their statements must never accidentally enter this
+    # irreversible multi-table deletion transaction.
     async with _db_semaphore:
-        await db.execute("BEGIN IMMEDIATE")
-        try:
-            cursor = await db.execute(
-                "SELECT uuid FROM keys WHERE user_id=?", (user_id,),
-            )
-            uuids = [row[0] for row in await cursor.fetchall() if row[0]]
-            await db.execute(
-                "INSERT OR IGNORE INTO account_tombstones(user_id,deleted_at,source) VALUES(?,?,?)",
-                (user_id, int(time.time()), source if source in ("admin", "self_service") else "admin"),
-            )
-            await db.execute(
-                """UPDATE auto_renew_subscriptions
-                   SET status='cancelled', payment_method_id='',
-                       payment_method_title='', payment_method_type='',
-                       next_retry_at=NULL, updated_at=strftime('%s','now')
-                   WHERE user_id=?""",
-                (user_id,),
-            )
-            # Explicit allowlist of identity/marketing records. Never delete
-            # financial transactions or payment-recovery rows in this routine.
-            known_tables = {
-                row[0] for row in await (await db.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                )).fetchall()
-            }
-            personal_tables = (
-                ("keys", "user_id"), ("app_users", "user_id"),
-                ("google_accounts", "user_id"), ("email_auth", "user_id"),
-                ("checkout_drafts", "user_id"), ("known_hwid_devices", "user_id"),
-                ("mobile_trial_bootstrap", "user_id"),
-                ("mobile_device_bootstraps", "user_id"),
-                ("trial_claim_reservations", "user_id"),
-                ("mobile_auth_sessions", "user_id"),
-                ("marketing_preferences", "user_id"),
-                ("analytics_events", "user_id"),
-                ("key_errors", "user_id"),
-                ("ad_applications", "user_id"), ("ad_notifications", "user_id"),
-                ("ad_audit_log", "user_id"),
-                ("giveaway_participants", "user_id"),
-                ("giveaway_notifications", "user_id"),
-                ("broadcast_recipients", "user_id"),
-                ("referral_clicks", "referrer_id"),
-                ("referrals", "referrer_id"), ("referrals", "referred_id"),
-                ("referral_events", "referrer_id"), ("referral_events", "referred_id"),
-                ("ref_bonus_claims", "referrer_id"), ("ref_bonus_claims", "referred_id"),
-                ("referral_payment_rewards", "referrer_id"),
-                ("referral_payment_rewards", "referred_id"),
-            )
-            for table, column in personal_tables:
-                if table in known_tables:
-                    await db.execute(
-                        f"DELETE FROM {table} WHERE {column}=?", (user_id,),
-                    )
-            await db.execute(
-                """UPDATE users
-                   SET username=NULL, email=NULL, referrer_id=NULL,
-                       trial_used=1, is_banned=1, ban_reason='account_deleted'
-                   WHERE user_id=?""",
-                (user_id,),
-            )
-            await db.commit()
+        async with aiosqlite.connect(DB_FILE) as db:
+            await db.execute("PRAGMA busy_timeout=30000")
+            await db.execute("BEGIN IMMEDIATE")
             try:
-                invalidate_user_cache(user_id)
-                invalidate_subscription_cache(user_id)
+                cursor = await db.execute(
+                    "SELECT uuid FROM keys WHERE user_id=?", (user_id,),
+                )
+                uuids = [row[0] for row in await cursor.fetchall() if row[0]]
+                await db.execute(
+                    "INSERT OR IGNORE INTO account_tombstones(user_id,deleted_at,source) VALUES(?,?,?)",
+                    (user_id, int(time.time()), source if source in ("admin", "self_service") else "admin"),
+                )
+                await db.execute(
+                    """UPDATE auto_renew_subscriptions
+                       SET status='cancelled', payment_method_id='',
+                           payment_method_title='', payment_method_type='',
+                           next_retry_at=NULL, updated_at=strftime('%s','now')
+                       WHERE user_id=?""",
+                    (user_id,),
+                )
+                # Explicit allowlist of identity/marketing records. Never delete
+                # financial transactions or payment-recovery rows in this routine.
+                known_tables = {
+                    row[0] for row in await (await db.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )).fetchall()
+                }
+                personal_tables = (
+                    ("keys", "user_id"), ("app_users", "user_id"),
+                    ("google_accounts", "user_id"), ("email_auth", "user_id"),
+                    ("checkout_drafts", "user_id"), ("known_hwid_devices", "user_id"),
+                    ("mobile_trial_bootstrap", "user_id"),
+                    ("mobile_device_bootstraps", "user_id"),
+                    ("trial_claim_reservations", "user_id"),
+                    ("mobile_auth_sessions", "user_id"),
+                    ("marketing_preferences", "user_id"),
+                    ("analytics_events", "user_id"),
+                    ("key_errors", "user_id"),
+                    ("ad_applications", "user_id"), ("ad_notifications", "user_id"),
+                    ("ad_audit_log", "user_id"),
+                    ("giveaway_participants", "user_id"),
+                    ("giveaway_notifications", "user_id"),
+                    ("broadcast_recipients", "user_id"),
+                    ("referral_clicks", "referrer_id"),
+                    ("referrals", "referrer_id"), ("referrals", "referred_id"),
+                    ("referral_events", "referrer_id"), ("referral_events", "referred_id"),
+                    ("ref_bonus_claims", "referrer_id"), ("ref_bonus_claims", "referred_id"),
+                    ("referral_payment_rewards", "referrer_id"),
+                    ("referral_payment_rewards", "referred_id"),
+                )
+                for table, column in personal_tables:
+                    if table in known_tables:
+                        await db.execute(
+                            f"DELETE FROM {table} WHERE {column}=?", (user_id,),
+                        )
+                await db.execute(
+                    """UPDATE users
+                       SET username=NULL, email=NULL, referrer_id=NULL,
+                           trial_used=1, is_banned=1, ban_reason='account_deleted'
+                       WHERE user_id=?""",
+                    (user_id,),
+                )
+                await db.commit()
+                try:
+                    invalidate_user_cache(user_id)
+                    invalidate_subscription_cache(user_id)
+                except Exception:
+                    logger.warning("Could not invalidate caches after account erasure for %d", user_id)
+                return uuids
             except Exception:
-                logger.warning("Could not invalidate caches after account erasure for %d", user_id)
-            return uuids
-        except Exception:
-            await db.rollback()
-            raise
+                await db.rollback()
+                raise
 
 
 async def set_key_days(key_id: int, days: int) -> bool:
