@@ -67,10 +67,33 @@ class UserProfileMiddleware(BaseMiddleware):
         user = getattr(event, "from_user", None)
         if user is not None:
             try:
-                from database import ensure_user
+                from database import ensure_user, is_account_tombstoned
+                # A removed user must not enter purchase/trial/referral flows:
+                # the deleted identity and VPN access cannot be re-created by
+                # a late Telegram callback or a new invoice.
+                if await is_account_tombstoned(user.id):
+                    from aiogram.types import CallbackQuery
+                    if isinstance(event, CallbackQuery):
+                        await event.answer(
+                            "Аккаунт удалён. Новые оплаты недоступны. Обратитесь в поддержку.",
+                            show_alert=True,
+                        )
+                    else:
+                        await event.answer(
+                            "Аккаунт удалён. Повторная активация через бота недоступна. "
+                            "Если нужна помощь, обратитесь в @ByMeVPNSupportBot."
+                        )
+                    return None
                 await ensure_user(user.id, user.username)
             except Exception:
-                logger.exception("Could not sync Telegram profile for user %s", user.id)
+                logger.exception("Could not check Telegram account state for user %s", user.id)
+                # If account state cannot be verified, do not risk creating
+                # a paid checkout against an already deleted identity.
+                try:
+                    await event.answer("Сервис временно недоступен. Повторите попытку позже.")
+                except Exception:
+                    pass
+                return None
         try:
             return await handler(event, data)
         except Exception:
