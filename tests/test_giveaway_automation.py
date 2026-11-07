@@ -69,6 +69,24 @@ class TestGiveawayAutomation(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await database.get_ad_application_by_id(app_id))["status"], "approved")
         self.assertEqual([call.kwargs["payload"] for call in delivery.await_args_list], [f"ad_bonus_{app_id}"] * 2)
 
+    async def test_scheduler_recovers_verified_ad_reward(self):
+        from giveaway_automation import run_giveaway_automation
+        await database.ensure_user(805)
+        app_id = await database.create_ad_application(
+            user_id=805, channel_id=-100805, channel_username="channel805",
+            subscriber_count=20, bonus_months=2, channel_ref="channel805", status="grant_pending",
+        )
+        bot = SimpleNamespace(
+            send_message=AsyncMock(),
+            get_me=AsyncMock(return_value=SimpleNamespace(username="ByMeVPNbot")),
+        )
+        with (
+            patch("subscription.deliver_key", new=AsyncMock(return_value=True)),
+            patch("giveaway_automation._notify_admins", new=AsyncMock()),
+        ):
+            await run_giveaway_automation(bot)
+        self.assertEqual((await database.get_ad_application_by_id(app_id))["status"], "approved")
+
     async def test_failed_verified_ad_reward_does_not_block_other_partners(self):
         from handlers.ad_program import process_pending_ad_rewards
         for user_id in (811, 812):
