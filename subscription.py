@@ -4,6 +4,7 @@ Core subscription logic: ask config name → create VPN key → deliver.
 import asyncio
 import logging
 import time
+import weakref
 from datetime import datetime
 
 from aiogram import Bot, Router
@@ -27,6 +28,10 @@ logger = logging.getLogger(__name__)
 
 # Create router for subscription handlers
 router = Router()
+
+# Serialise deliveries for the same account within this process. Other bot
+# processes and direct panel writers still require independent coordination.
+_delivery_locks = weakref.WeakValueDictionary()
 
 
 async def _send_delivery_message(
@@ -75,6 +80,34 @@ async def _log_notification_failure(user_id: int, context: dict) -> None:
         logger.error("Failed to log notification failure for %s: %s", user_id, e)
 
 async def deliver_key(
+    bot: Bot,
+    user_id: int,
+    chat_id: int,
+    config_name: str,
+    days: int,
+    limit_ip: int = 2,
+    is_paid: bool = False,
+    amount: int = 0,
+    currency: str = "RUB",
+    method: str = "trial",
+    payload: str = "",
+    extend_existing: bool = True,
+    skip_referral_bonus: bool = False,
+    delivery_target=None,
+) -> bool:
+    lock = _delivery_locks.get(user_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _delivery_locks[user_id] = lock
+    async with lock:
+        return await _deliver_key_unlocked(
+            bot, user_id, chat_id, config_name, days, limit_ip, is_paid,
+            amount, currency, method, payload, extend_existing,
+            skip_referral_bonus, delivery_target,
+        )
+
+
+async def _deliver_key_unlocked(
     bot: Bot,
     user_id: int,
     chat_id: int,

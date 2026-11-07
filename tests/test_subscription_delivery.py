@@ -18,6 +18,24 @@ import subscription
 
 
 class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
+    async def test_different_users_can_be_provisioned_concurrently(self):
+        entered = []
+        both_entered = asyncio.Event()
+
+        async def delivery(*args, **kwargs):
+            entered.append(args[1])
+            if len(entered) == 2:
+                both_entered.set()
+            await asyncio.wait_for(both_entered.wait(), timeout=1)
+            return True
+
+        with patch("subscription._deliver_key_unlocked", new=AsyncMock(side_effect=delivery)):
+            results = await asyncio.gather(*(
+                subscription.deliver_key(MagicMock(), user_id, user_id, "key", 30)
+                for user_id in (123, 456)
+            ))
+        self.assertEqual(results, [True, True])
+
     async def test_concurrent_rewards_preserve_both_extensions(self):
         initial = int(time.time()) + 90 * 86400
         state = {"expiry": initial}
