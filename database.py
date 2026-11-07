@@ -2349,10 +2349,27 @@ async def get_key_by_uuid(uuid: str) -> Optional[dict]:
 
 
 async def delete_key(key_id: int) -> bool:
+    """Delete a key without allowing an ambiguous legacy renewal to reactivate."""
     db = await get_db()
-    cur = await db.execute("DELETE FROM keys WHERE id=?", (key_id,))
-    await db.commit()
-    return cur.rowcount > 0
+    async with _db_semaphore:
+        row = await (await db.execute("SELECT user_id FROM keys WHERE id=?", (key_id,))).fetchone()
+        if not row:
+            return False
+        try:
+            # Removing one of several keys may turn an unbound legacy payment
+            # into a chargeable one. Require an explicit re-enable instead.
+            await db.execute(
+                "UPDATE auto_renew_subscriptions "
+                "SET status='cancelled', next_retry_at=NULL, updated_at=strftime('%s','now') "
+                "WHERE user_id=? AND key_id IS NULL AND status='active'",
+                (row[0],),
+            )
+            cur = await db.execute("DELETE FROM keys WHERE id=?", (key_id,))
+            await db.commit()
+            return cur.rowcount > 0
+        except Exception:
+            await db.rollback()
+            raise
 
 
 async def delete_key_by_uuid(uuid: str) -> bool:
