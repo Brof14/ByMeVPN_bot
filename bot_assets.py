@@ -30,10 +30,11 @@ PROMO_CODE = _asset("promo_code")
 LEGAL = _asset("legal")
 AUTO_RENEWAL = _asset("auto_renewal")
 
+# Hero artwork is deliberately limited to landmark screens. Frequent
+# settings/checkout/OS steps stay light, fast, and easy to scan on mobile.
+# Retain all original assets in Git for reversible design decisions.
 _SECTION_ARTWORK = frozenset({
-    MENU, SUPPORT, ABOUT, FREE_VPN, REFERRALS, MY_INVITATIONS, AD_PROGRAM,
-    PLANS, KEY, DEVICES, CONNECTION, ANDROID, IPHONE, WINDOWS, LINUX,
-    RENEWAL, PAYMENT, PROMO_CODE, LEGAL, AUTO_RENEWAL,
+    MENU, ABOUT, REFERRALS, AD_PROGRAM, PLANS, KEY, CONNECTION,
 })
 
 

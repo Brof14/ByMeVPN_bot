@@ -15,9 +15,14 @@ class TestSectionArtwork(unittest.IsolatedAsyncioTestCase):
             "IPHONE", "WINDOWS", "LINUX", "RENEWAL", "PAYMENT", "PROMO_CODE",
             "LEGAL", "AUTO_RENEWAL",
         )
+        landmarks = {"MENU", "ABOUT", "REFERRALS", "AD_PROGRAM", "PLANS", "KEY", "CONNECTION"}
         for name in names:
             photo = getattr(bot_assets, name)
-            self.assertEqual(bot_assets.display_artwork(photo), photo, name)
+            self.assertEqual(
+                bot_assets.display_artwork(photo),
+                photo if name in landmarks else None,
+                name,
+            )
         self.assertIsNone(bot_assets.display_artwork("/tmp/not-a-section-image.png"))
 
 
@@ -43,7 +48,7 @@ class TestSectionArtwork(unittest.IsolatedAsyncioTestCase):
             patch("handlers.start.send_with_photo", new=AsyncMock()) as send,
         ):
             await cb_free_vpn(callback, object())
-        self.assertEqual(send.call_args.kwargs["photo"], bot_assets.FREE_VPN)
+        self.assertIsNone(bot_assets.display_artwork(send.call_args.kwargs["photo"]))
 
     async def test_tariff_screen_uses_plans_banner(self):
         from handlers.buy import cb_buy_vpn
@@ -59,25 +64,19 @@ class TestSectionArtwork(unittest.IsolatedAsyncioTestCase):
             await cb_buy_vpn(callback, object(), state)
         self.assertEqual(send.call_args.kwargs["photo"], bot_assets.PLANS)
 
-    async def test_platform_guides_use_matching_artwork(self):
+    async def test_platform_guides_are_text_first(self):
         from handlers.guide import _send_platform_guide
 
         callback = SimpleNamespace(from_user=SimpleNamespace(id=5))
-        expected = {
-            "ios": bot_assets.IPHONE,
-            "android": bot_assets.ANDROID,
-            "windows": bot_assets.WINDOWS,
-            "linux": bot_assets.LINUX,
-            "macos": bot_assets.CONNECTION,
-        }
+        platforms = ("ios", "android", "windows", "linux", "macos")
         with (
             patch("handlers.guide.safe_answer", new=AsyncMock()),
             patch("handlers.guide._track_guide_event", new=AsyncMock()),
             patch("handlers.guide.send_or_edit", new=AsyncMock()) as send,
         ):
-            for platform, artwork in expected.items():
+            for platform in platforms:
                 await _send_platform_guide(callback, object(), platform)
-                self.assertEqual(send.call_args.kwargs["photo"], artwork, platform)
+                self.assertIsNone(send.call_args.kwargs.get("photo"), platform)
 
     async def test_ad_program_applies_its_artwork_to_all_screens(self):
         from handlers.ad_program import send_with_photo

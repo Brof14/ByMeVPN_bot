@@ -129,8 +129,8 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             by_action = {button.callback_data: button for button in buttons}
             self.assertIsNone(by_action["about"].style)
             self.assertIsNone(by_action["trouble"].style)
-            self.assertEqual(by_action["buy_vpn"].style, "primary")
-            self.assertEqual(by_action["free_vpn"].style, "primary")
+            self.assertEqual(by_action["buy_vpn"].style, None if "my_keys" in by_action else "primary")
+            self.assertIsNone(by_action["free_vpn"].style)
         menu = main_menu_with_keys()
         self.assertEqual([len(row) for row in menu.inline_keyboard], [1, 1, 1, 2])
         self.assertEqual(menu.inline_keyboard[0][0].style, "primary")
@@ -282,8 +282,11 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         ]
         three_months = next(button for button in tariff_buttons if button.callback_data == "tariff_3_2")
         self.assertIn("4 мес. (3+1) · 316 ₽ · 79 ₽/мес.", three_months.text)
-        self.assertEqual(three_months.style, "primary")
-        self.assertTrue(all(button.style == "primary" for button in tariff_buttons))
+        self.assertIsNone(three_months.style)
+        self.assertEqual(
+            [button.style for button in tariff_buttons],
+            [None, None, "primary", None],
+        )
 
     async def test_saved_sbp_method_without_title_is_still_manageable(self):
         sub = {

@@ -11,8 +11,8 @@ class ConversionUXTests(unittest.TestCase):
     def test_first_delivery_promotes_connection_then_voluntary_referral(self):
         menu = after_key_kb("https://example.test/sub/1")
         rows = menu.inline_keyboard
-        self.assertEqual(rows[0][0].text, "Скопировать ссылку")
-        self.assertEqual(rows[1][0].callback_data, "connection_guide")
+        self.assertEqual(rows[0][0].callback_data, "connection_guide")
+        self.assertEqual(rows[1][0].text, "Скопировать ссылку")
         self.assertEqual([b.callback_data for b in rows[2]], ["my_keys", "partner"])
         self.assertEqual(rows[-1][0].callback_data, "back_to_menu")
 

@@ -23,7 +23,10 @@ class TariffDesignTests(unittest.TestCase):
         with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "1"}):
             premium = tariff_selection_kb(devices=2)
         bonus_buttons = [b for b in buttons(premium) if b.callback_data and b.callback_data.startswith("tariff_") and not b.callback_data.startswith("tariff_1_")]
-        self.assertEqual({b.icon_custom_emoji_id for b in bonus_buttons}, {"5301299389245985629"})
+        self.assertEqual(
+            [b.icon_custom_emoji_id for b in bonus_buttons],
+            ["5301299389245985629", "5301163762768707871", "5301192569114366400"],
+        )
 
     def test_crypto_has_no_bitcoin_character(self):
         keyboard = payment_kb(316, 120, devices=2)
