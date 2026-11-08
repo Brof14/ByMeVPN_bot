@@ -296,7 +296,7 @@ main{width:min(100%,var(--measure));min-width:0}.shell{position:relative;overflo
 <script>
 (function(){const sub=__SUB__;const apps=JSON.parse(__APPS__);const platforms={android:"Android",ios:"iPhone / iPad",windows:"Windows",macos:"macOS",linux:"Linux"};
 const platformIcons={android:"android.png",ios:"apple.png",windows:"windows.png",macos:"apple.png",linux:"linux.png"};
-const appIcons={bymevpn:"/app/logo",happ:"/app/assets/happ.png",incy:"/app/assets/incy.png"};
+const appIcons={bymevpn:"/app/logo",happ:"/app/assets/happ.png",incy:"/app/assets/incy.png",v2rayn:"/app/assets/v2rayn.png",koala:"/app/assets/koala.png"};
 const marks={v2rayn:'<svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="m5 9 11 16L27 9M9 9l7 10 7-10" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',koala:'<svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><circle cx="9" cy="11" r="4" stroke="currentColor" stroke-width="2"/><circle cx="23" cy="11" r="4" stroke="currentColor" stroke-width="2"/><path d="M7 19c0-5 4-8 9-8s9 3 9 8-4 9-9 9-9-4-9-9Z" stroke="currentColor" stroke-width="2"/><path d="M13 19h.1m6 0h.1m-4 3 1 .5 1-.5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>'};
 const ua=navigator.userAgent;let current=/Android/i.test(ua)?"android":/iPhone|iPad/i.test(ua)?"ios":/Windows/i.test(ua)?"windows":/Macintosh/i.test(ua)?"macos":"linux";const os=document.getElementById("platforms"),root=document.getElementById("apps"),status=document.getElementById("status");
 async function copy(){try{await navigator.clipboard.writeText(sub);return true}catch(_){window.prompt("Скопируйте ссылку",sub);return false}}

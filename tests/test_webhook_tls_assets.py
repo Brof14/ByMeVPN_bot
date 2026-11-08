@@ -36,7 +36,10 @@ class ConnectionTlsAssetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(logo.headers["content-type"], "image/png")
         self.assertEqual(logo.headers["x-content-type-options"], "nosniff")
 
-        for name in ("android.png", "apple.png", "happ.png", "incy.png", "linux.png", "windows.png"):
+        for name in (
+            "android.png", "apple.png", "happ.png", "incy.png", "koala.png", "linux.png",
+            "v2rayn.png", "windows.png",
+        ):
             with self.subTest(name=name):
                 response = client.get(f"/app/assets/{name}")
                 self.assertEqual(response.status_code, 200)
