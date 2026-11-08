@@ -15,6 +15,8 @@ from fastapi.responses import FileResponse, HTMLResponse
 router = APIRouter()
 ROOT = Path(os.getenv("BYMEVPN_UPDATE_ROOT", Path(__file__).parent / "static" / "app")).resolve()
 PAGE = Path(__file__).parent / "static" / "app" / "index.html"
+ASSETS = Path(__file__).parent / "static" / "app" / "assets"
+ICON_ASSETS = frozenset({"android.png", "apple.png", "happ.png", "incy.png", "linux.png", "windows.png"})
 ORIGIN = "https://bymevpn.duckdns.org"
 APK_NAME = re.compile(r"^ByMeVPN-v(\d+\.\d+\.\d+)\.apk$")
 _verified_digest_cache: dict[tuple[str, int, int], str] = {}
@@ -97,6 +99,24 @@ async def app_download_page_head():
                              "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY",
                              "Content-Security-Policy": "default-src 'self'; img-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'",
                              "Content-Length": str(PAGE.stat().st_size)})
+
+
+@router.get("/app/assets/{asset_name}", include_in_schema=False)
+async def app_brand_asset(asset_name: str):
+    """Serve only the fixed, public image assets used by the connection page."""
+    if asset_name not in ICON_ASSETS:
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    path = (ASSETS / asset_name).resolve()
+    if path.parent != ASSETS.resolve() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    return FileResponse(
+        path,
+        media_type="image/png",
+        headers={
+            "Cache-Control": "public, max-age=86400",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.get("/app/update.json", include_in_schema=False)
