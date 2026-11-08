@@ -176,7 +176,12 @@ async def _user_state(user_id: int) -> str:
     if ever_had or trial_used:
         return "expired"
     if panel_client:
-        return "existing"
+        # A pre-created, already-expired bootstrap client is not proof that
+        # this account has consumed its one shared trial. Offer the trial only
+        # when the panel confirms the client has no unexpired access.
+        if _panel_client_is_expired(panel_client):
+            return "new"
+        return "unknown"
     return "new"
 
 
@@ -192,6 +197,19 @@ def _panel_client_is_active(panel_client: dict | None) -> bool:
     except (TypeError, ValueError):
         return False
     return expiry_ms > int(time.time() * 1000)
+
+
+def _panel_client_is_expired(panel_client: dict | None) -> bool:
+    """Return true only when the panel confirms there is no unexpired client."""
+    if panel_client is None:
+        return True
+    if not isinstance(panel_client, dict):
+        return False
+    try:
+        expiry_ms = int(panel_client.get("expiry_time") or 0)
+    except (TypeError, ValueError):
+        return False
+    return 0 < expiry_ms <= int(time.time() * 1000)
 
 
 @monitor_performance("clean_chat")
@@ -609,7 +627,7 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext) -> None:
 
 
 async def _start_free_trial(bot: Bot, callback: CallbackQuery, ref_id: int | None = None) -> None:
-    """Grant the one-time free trial to a new account without an existing panel client."""
+    """Grant one shared trial to a new account with no prior key or unexpired access."""
     user_id = callback.from_user.id
 
     await safe_answer(callback)
@@ -618,10 +636,15 @@ async def _start_free_trial(bot: Bot, callback: CallbackQuery, ref_id: int | Non
             "Пробный период уже использован. Выберите тариф, чтобы продолжить пользоваться ByMeVPN."
         )
         return
-    if await get_user_keys(user_id):
+    if await has_ever_had_key(user_id) or await get_user_keys(user_id):
         await callback.message.answer(
-            "Для аккаунта уже создан ключ, поэтому пробный период повторно недоступен. "
+            "Пробный период доступен только новым аккаунтам без ранее оформленной подписки. "
             "Выберите тариф для продления."
+        )
+        return
+    if await has_active_subscription(user_id):
+        await callback.message.answer(
+            "У вас уже есть активная подписка. Откройте раздел «Подписка», чтобы посмотреть доступ."
         )
         return
 
@@ -634,10 +657,9 @@ async def _start_free_trial(bot: Bot, callback: CallbackQuery, ref_id: int | Non
             "Не удалось проверить доступность пробного периода. Попробуйте позже или напишите в поддержку."
         )
         return
-    if panel_client:
+    if panel_client and not _panel_client_is_expired(panel_client):
         await callback.message.answer(
-            "Для аккаунта уже создан клиент ByMeVPN. Пробный период доступен только аккаунтам без клиента. "
-            "Выберите тариф, чтобы продолжить."
+            "Не удалось подтвердить отсутствие действующего доступа. Пробный период не списан; попробуйте позже."
         )
         return
 

@@ -37,16 +37,60 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             "Выберите подходящий срок:",
         )
 
-    async def test_existing_panel_client_is_not_classified_as_new_trial_account(self):
+    async def test_expired_precreated_panel_client_is_eligible_when_trial_is_unused(self):
+        from handlers.start import _user_state
+        now = 1_800_000_000
+        with (
+            patch("handlers.start.has_active_subscription", new=AsyncMock(return_value=False)),
+            patch("handlers.start.has_ever_had_key", new=AsyncMock(return_value=False)),
+            patch("handlers.start.has_trial_used", new=AsyncMock(return_value=False)),
+            patch("handlers.start.time.time", return_value=now),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value={
+                "enable": True, "expiry_time": (now - 60) * 1000,
+            })) as panel,
+        ):
+            self.assertEqual(await _user_state(123), "new")
+        panel.assert_awaited_once_with(123, strict=True)
+
+    async def test_panel_client_without_expiry_fails_closed_for_trial_eligibility(self):
         from handlers.start import _user_state
         with (
             patch("handlers.start.has_active_subscription", new=AsyncMock(return_value=False)),
             patch("handlers.start.has_ever_had_key", new=AsyncMock(return_value=False)),
             patch("handlers.start.has_trial_used", new=AsyncMock(return_value=False)),
-            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value={"enable": True})) as panel,
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value={"enable": True})),
         ):
-            self.assertEqual(await _user_state(123), "existing")
+            self.assertEqual(await _user_state(123), "unknown")
+
+    async def test_trial_used_is_not_eligible_even_without_a_panel_client(self):
+        from handlers.start import _user_state
+        with (
+            patch("handlers.start.has_active_subscription", new=AsyncMock(return_value=False)),
+            patch("handlers.start.has_ever_had_key", new=AsyncMock(return_value=False)),
+            patch("handlers.start.has_trial_used", new=AsyncMock(return_value=True)),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value=None)) as panel,
+        ):
+            self.assertEqual(await _user_state(123), "expired")
         panel.assert_awaited_once_with(123, strict=True)
+
+    async def test_new_account_menu_keeps_trial_button_available(self):
+        from handlers.start import _send_main_menu
+        with (
+            patch("handlers.start._user_state", new=AsyncMock(return_value="new")),
+            patch("handlers.start.send_with_photo", new=AsyncMock()) as send,
+        ):
+            await _send_main_menu(object(), SimpleNamespace(), 123, "User")
+        self.assertIn("trial_free", callbacks(send.await_args.args[3]))
+
+    async def test_used_trial_menu_does_not_show_trial_button(self):
+        from handlers.start import _send_main_menu
+        with (
+            patch("handlers.start._user_state", new=AsyncMock(return_value="expired")),
+            patch("handlers.start.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("handlers.start.send_with_photo", new=AsyncMock()) as send,
+        ):
+            await _send_main_menu(object(), SimpleNamespace(), 123, "User")
+        self.assertNotIn("trial_free", callbacks(send.await_args.args[3]))
 
     async def test_panel_unavailable_fails_closed_instead_of_offering_trial(self):
         from handlers.start import _user_state
@@ -75,7 +119,30 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertEqual(await _user_state(123), "active")
 
-    async def test_stale_trial_button_with_existing_panel_client_does_not_reserve_claim(self):
+    async def test_stale_trial_button_with_unexpired_panel_client_does_not_reserve_claim(self):
+        from handlers.start import _start_free_trial
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=123),
+            message=SimpleNamespace(answer=AsyncMock()),
+        )
+        now = 1_800_000_000
+        with (
+            patch("handlers.start.safe_answer", new=AsyncMock()),
+            patch("handlers.start.has_trial_used", new=AsyncMock(return_value=False)),
+            patch("handlers.start.has_ever_had_key", new=AsyncMock(return_value=False)),
+            patch("handlers.start.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("handlers.start.has_active_subscription", new=AsyncMock(return_value=False)),
+            patch("handlers.start.time.time", return_value=now),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value={
+                "enable": True, "expiry_time": (now + 86400) * 1000,
+            })),
+            patch("handlers.start.reserve_trial_claim", new=AsyncMock()) as reserve,
+        ):
+            await _start_free_trial(object(), callback)
+        reserve.assert_not_awaited()
+        self.assertIn("действующего доступа", callback.message.answer.await_args.args[0])
+
+    async def test_repeated_trial_request_is_rejected_by_shared_usage_flag(self):
         from handlers.start import _start_free_trial
         callback = SimpleNamespace(
             from_user=SimpleNamespace(id=123),
@@ -83,14 +150,41 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         )
         with (
             patch("handlers.start.safe_answer", new=AsyncMock()),
-            patch("handlers.start.has_trial_used", new=AsyncMock(return_value=False)),
-            patch("handlers.start.get_user_keys", new=AsyncMock(return_value=[])),
-            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value={"enable": True})),
+            patch("handlers.start.has_trial_used", new=AsyncMock(return_value=True)),
+            patch("xui_client.get_xui_client_details", new=AsyncMock()) as panel,
             patch("handlers.start.reserve_trial_claim", new=AsyncMock()) as reserve,
         ):
             await _start_free_trial(object(), callback)
+        panel.assert_not_awaited()
         reserve.assert_not_awaited()
-        self.assertIn("уже создан клиент", callback.message.answer.await_args.args[0])
+        self.assertIn("уже использован", callback.message.answer.await_args.args[0])
+
+    async def test_trial_unused_account_can_reuse_expired_precreated_panel_client(self):
+        from handlers.start import _start_free_trial
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=123),
+            message=SimpleNamespace(answer=AsyncMock()),
+        )
+        now = 1_800_000_000
+        with (
+            patch("handlers.start.safe_answer", new=AsyncMock()),
+            patch("handlers.start.has_trial_used", new=AsyncMock(return_value=False)),
+            patch("handlers.start.has_ever_had_key", new=AsyncMock(return_value=False)),
+            patch("handlers.start.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("handlers.start.has_active_subscription", new=AsyncMock(return_value=False)),
+            patch("handlers.start.time.time", return_value=now),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value={
+                "enable": False, "expiry_time": (now - 60) * 1000,
+            })),
+            patch("handlers.start.get_trial_claim_reservation", new=AsyncMock(return_value=None)),
+            patch("handlers.start.reserve_trial_claim", new=AsyncMock(return_value="claim-1")) as reserve,
+            patch("subscription.deliver_key", new=AsyncMock(return_value=False)) as deliver,
+        ):
+            await _start_free_trial(object(), callback)
+        reserve.assert_awaited_once_with(123)
+        self.assertEqual(deliver.await_args.kwargs["days"], 3)
+        self.assertEqual(deliver.await_args.kwargs["limit_ip"], 2)
+        self.assertFalse(deliver.await_args.kwargs["extend_existing"])
 
     async def test_existing_panel_account_menu_hides_trial_button(self):
         from handlers.start import _send_main_menu
@@ -186,7 +280,9 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         with (
             patch("handlers.start.safe_answer", new=AsyncMock()),
             patch("handlers.start.has_trial_used", new=AsyncMock(return_value=False)),
+            patch("handlers.start.has_ever_had_key", new=AsyncMock(return_value=False)),
             patch("handlers.start.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("handlers.start.has_active_subscription", new=AsyncMock(return_value=False)),
             patch("xui_client.get_xui_client_details", new=AsyncMock(side_effect=[None, {
                 "enable": True, "expiry_time": (base_time + 3 * 86400) * 1000,
             }])),
