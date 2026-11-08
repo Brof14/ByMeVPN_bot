@@ -1,10 +1,9 @@
 """A restrained, semantic Telegram button design for ByMeVPN.
 
-Primary source: Zulut30/premium-telegram-emoji @ 294d22c, sfsymbols.
-Purpose-specific exceptions: OS brand marks, Telegram Stars and gift variants.
-The same action reuses its *own* icon everywhere, while different semantic
-actions use different catalog IDs. Prices, callback contracts and user data
-are not affected.
+Primary source: Zulut30/premium-telegram-emoji @ 294d22c,
+"Minimalist B&W Icons" (TgAndroidIcons). Limited exceptions are platform
+marks, calendar, Telegram Stars and one consistent gift icon for bonus terms.
+Prices, callback contracts and user data are not affected.
 
 Telegram requires bot eligibility for custom emoji icons. Keep
 BOT_PREMIUM_BUTTON_ICONS=0 until entitlement is confirmed; fallback buttons
@@ -14,38 +13,38 @@ import os
 
 from aiogram.types import InlineKeyboardButton as TelegramInlineKeyboardButton, InlineKeyboardMarkup
 
-# Confirmed catalog IDs; each role has a distinct icon. Reuse roles, not IDs.
-# sfsymbols is primary; exceptions add platform identity and restrained gifting.
+# Use Minimalist B&W IDs for common actions; keep limited platform and gift
+# exceptions where the pack has no matching glyph.
 ICON_IDS: dict[str, str] = {
-    "subscription": "6021868492037298942",  # shield with check
-    "plans": "6030664675253820292",         # shopping cart
-    "free": "5406756500108501710",          # FREE
-    "gift": "6023826881160157558",          # sfsymbols outlined present
-    "feedback": "6025951481222403788",      # editing circle
-    "crypto": "6030443364178992166",        # sfsymbols wallet
-    "referrals": "6021791869820738130",     # two people
-    "ads": "6021726637857446455",           # megaphone
-    "about": "6021620268697393273",         # information document
-    "support": "6019130940012370273",       # chat with question
-    "connect": "6019076101869934284",       # key with radio signal
-    "devices": "6021859429656304791",       # tablet and phone
-    "device_tier": "6023933602507528561",   # user and devices
+    "subscription": "6005570495603282482",  # key
+    "plans": "5983399041197675256",         # shop
+    "free": "5825794181183836432",          # check
+    "gift": "6023826881160157558",          # one present icon reused for all bonus terms
+    "feedback": "5879841310902324730",      # pencil
+    "crypto": "5769403330761593044",        # wallet
+    "referrals": "5942877472163892475",     # people
+    "ads": "5771695636411847302",           # announcement
+    "about": "5879785854284599288",         # information
+    "support": "5884510167986343350",       # support chat
+    "connect": "5877465816030515018",       # link
+    "devices": "5967591100532134862",       # phone
+    "device_tier": "5877485980901971030",   # data
     "settings": "5877260593903177342",      # TgAndroidIcons gear
-    "copy": "5807640904906840469",          # overlapping rectangles
-    "renew": "5807492110059838726",         # circular arrows
-    "refresh": "6021772508108167860",       # document with refresh
-    "history": "6035297458907519073",       # history/time
-    "back": "5805509901048356965",          # left arrow
-    "delete": "6021413766669801212",        # trash basket
-    "check": "6019175208240289774",         # verified mark
-    "list": "6026228223145154159",          # checklist
-    "share": "5807462045288766810",         # curved share arrow
-    "card": "6030410254276106984",          # microchip card
-    "stars": "5172484558305625218",         # Telegram Stars
+    "copy": "5877301185639091664",          # copy
+    "renew": "5877410604225924969",         # updates
+    "refresh": "5845943483382110702",       # refresh
+    "history": "5967456680940671207",       # archive
+    "back": "5875082500023258804",          # back
+    "delete": "5879896690210639947",        # trash
+    "check": "5805532930662996322",         # verified
+    "list": "5877597667231534929",          # list
+    "share": "5877468380125990242",         # forward/share
+    "card": "5927169041595634481",          # card
+    "stars": "5958376256788502078",         # Stars
     "wallet": "5944922791424825958",        # cards in wallet
-    "coupon": "5985433648810171091",        # label/tag
-    "download": "6021856393114426113",      # download into tray
-    "profile": "6021659919835469581",       # user in circle
+    "coupon": "5985433648810171091",        # tag
+    "download": "5899757765743615694",      # install/download
+    "profile": "5879770735999717115",       # profile
     "search": "5874960879434338403",        # magnifier
     "ios": "6021554972309592266",           # iPhone with Dynamic Island
     "ipad": "6019245310696495518",          # iPad and iPhone
@@ -54,16 +53,27 @@ ICON_IDS: dict[str, str] = {
     "linux": "5424696849086820459",         # Tux
     "macos": "5323440478232783499",         # MacBook
     "android_tv": "5355012477883004708",    # TV
-    "more": "6030863729808120196",          # message with ellipsis
+    "more": "5875019892284985369",          # dots
     "legal": "6021741567163767583",         # document
-    "notifications_on": "6021536113108196448",  # bell
-    "notifications_off": "6021440013214948027", # muted bell
+    "notifications_on": "5909201569898827582",  # notification
+    "notifications_off": "5872829476143894491", # ban/mute
     "tariff_1": "6023880246128810031",      # calendar
-    "tariff_3": "5301299389245985629",      # slim outlined gift
-    "tariff_6": "5301163762768707871",      # gift tile
-    "tariff_12": "5301192569114366400",     # gift with star
-    "warning": "6019102674832595118",       # warning triangle
+    "warning": "5879813604068298387",       # exclamation
 }
+
+MINIMALIST_BW_ICON_IDS = frozenset({
+    "6005570495603282482", "5983399041197675256", "5825794181183836432",
+    "5879841310902324730", "5769403330761593044", "5942877472163892475",
+    "5771695636411847302", "5879785854284599288", "5884510167986343350",
+    "5877465816030515018", "5967591100532134862", "5877485980901971030",
+    "5877260593903177342", "5877301185639091664", "5877410604225924969",
+    "5845943483382110702", "5967456680940671207", "5875082500023258804",
+    "5879896690210639947", "5805532930662996322", "5877597667231534929",
+    "5877468380125990242", "5927169041595634481", "5958376256788502078",
+    "5985433648810171091", "5899757765743615694", "5879770735999717115",
+    "5874960879434338403", "5875019892284985369", "5909201569898827582",
+    "5872829476143894491", "5879813604068298387",
+})
 
 _DESTRUCTIVE_PREFIXES = (
     "key_delete:", "key_delete_confirm:", "key_device_delete:",
@@ -208,9 +218,10 @@ def _icon_for(text: str, callback: str, *, copy: bool, destructive: bool, back: 
     platform = _platform_for_callback(callback)
     if platform:
         return ICON_IDS[platform]
-    for month in (1, 3, 6, 12):
-        if callback.startswith(f"tariff_{month}_"):
-            return ICON_IDS[f"tariff_{month}"]
+    if callback.startswith("tariff_1_"):
+        return ICON_IDS["tariff_1"]
+    if callback.startswith(("tariff_3_", "tariff_6_", "tariff_12_")):
+        return ICON_IDS["gift"]
     if callback.startswith("autorenew_enable:"):
         return ICON_IDS["notifications_on"]
     if callback.startswith(("autorenew_unbind", "autorenew_cancel")):

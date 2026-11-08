@@ -1,5 +1,6 @@
 """Regression tests for simplified customer menus and card-management controls."""
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from keyboards import (
@@ -13,6 +14,7 @@ from keyboards import (
     tariff_selection_kb,
 )
 from handlers.keys import _get_payment_methods_text, _load_autorenew_context
+from handlers.buy import _tariff_intro
 
 
 def callbacks(markup):
@@ -25,6 +27,67 @@ def callbacks(markup):
 
 
 class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
+    def test_two_device_tariff_intro_matches_requested_copy(self):
+        self.assertEqual(
+            _tariff_intro(2),
+            "<b>Тарифы</b>\n"
+            "Выбрано: <b>2 устройства</b>\n"
+            "Чем дольше подписка, тем выгоднее условия. При выборе тарифа на 3, 6 или 12 месяцев "
+            "вы получаете <b>дополнительные месяцы в подарок</b>.\n"
+            "Выберите подходящий срок:",
+        )
+
+    async def test_existing_panel_client_is_not_classified_as_new_trial_account(self):
+        from handlers.start import _user_state
+        with (
+            patch("handlers.start.has_active_subscription", new=AsyncMock(return_value=False)),
+            patch("handlers.start.has_ever_had_key", new=AsyncMock(return_value=False)),
+            patch("handlers.start.has_trial_used", new=AsyncMock(return_value=False)),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value={"enable": True})) as panel,
+        ):
+            self.assertEqual(await _user_state(123), "existing")
+        panel.assert_awaited_once_with(123, strict=True)
+
+    async def test_panel_unavailable_fails_closed_instead_of_offering_trial(self):
+        from handlers.start import _user_state
+        with (
+            patch("handlers.start.has_active_subscription", new=AsyncMock(return_value=False)),
+            patch("handlers.start.has_ever_had_key", new=AsyncMock(return_value=False)),
+            patch("handlers.start.has_trial_used", new=AsyncMock(return_value=False)),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(side_effect=TimeoutError)),
+        ):
+            self.assertEqual(await _user_state(123), "unknown")
+
+    async def test_stale_trial_button_with_existing_panel_client_does_not_reserve_claim(self):
+        from handlers.start import _start_free_trial
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=123),
+            message=SimpleNamespace(answer=AsyncMock()),
+        )
+        with (
+            patch("handlers.start.safe_answer", new=AsyncMock()),
+            patch("handlers.start.has_trial_used", new=AsyncMock(return_value=False)),
+            patch("handlers.start.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value={"enable": True})),
+            patch("handlers.start.reserve_trial_claim", new=AsyncMock()) as reserve,
+        ):
+            await _start_free_trial(object(), callback)
+        reserve.assert_not_awaited()
+        self.assertIn("уже создан клиент", callback.message.answer.await_args.args[0])
+
+    async def test_existing_panel_account_menu_hides_trial_button(self):
+        from handlers.start import _send_main_menu
+        target = SimpleNamespace()
+        with (
+            patch("handlers.start._user_state", new=AsyncMock(return_value="existing")),
+            patch("handlers.start.main_menu_existing", wraps=__import__("keyboards").main_menu_existing) as menu,
+            patch("handlers.start.send_with_photo", new=AsyncMock()) as send,
+        ):
+            await _send_main_menu(object(), target, 123, "User")
+        actions = callbacks(send.await_args.args[3])
+        self.assertNotIn("trial_free", actions)
+        menu.assert_called_once_with(trial_used=True)
+
     async def test_trial_delivery_edits_the_originating_screen(self):
         from subscription import _send_delivery_message
         from bot_assets import KEY
