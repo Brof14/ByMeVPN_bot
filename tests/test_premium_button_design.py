@@ -22,8 +22,8 @@ class PremiumButtonDesignTests(unittest.TestCase):
         by_callback = {button.callback_data: button for button in buttons(menu)}
         self.assertEqual(by_callback["my_keys"].style, "primary")
         self.assertEqual(by_callback["buy_vpn"].style, "primary")
-        self.assertEqual(by_callback["my_keys"].icon_custom_emoji_id, "6019290828759898301")
-        self.assertEqual(by_callback["buy_vpn"].icon_custom_emoji_id, "6030573613357209704")
+        self.assertEqual(by_callback["my_keys"].icon_custom_emoji_id, "6021868492037298942")
+        self.assertEqual(by_callback["buy_vpn"].icon_custom_emoji_id, "6030664675253820292")
         self.assertEqual(by_callback["free_vpn"].icon_custom_emoji_id, "6023826881160157558")
 
     def test_support_and_about_are_available_and_colored(self):
