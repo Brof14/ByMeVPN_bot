@@ -29,15 +29,23 @@ def callbacks(markup):
 
 
 class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
-    def test_two_device_tariff_intro_matches_requested_copy(self):
-        self.assertEqual(
-            _tariff_intro(2),
-            "<b>Тарифы</b>\n\n"
-            "Выбрано: <b>2 устройства</b>\n\n"
-            "Чем дольше подписка, тем выгоднее условия. При выборе тарифа на 3, 6 или 12 месяцев "
-            "вы получаете <b>дополнительные месяцы в подарок</b>.\n\n"
-            "Выберите подходящий срок:",
-        )
+    def test_all_five_tariff_screen_copies(self):
+        expected = {
+            (2, False): "<b>Тарифы</b>\n\n2 устройства — одна подписка для ваших устройств.\n\nВыберите срок: чем дольше подписка, тем ниже цена. При покупке на 3, 6 или 12 месяцев — дополнительные месяцы в подарок.",
+            (5, False): "<b>Тарифы</b>\n\n5 устройств — одна подписка для всей семьи.\n\nВыберите срок: чем дольше подписка, тем ниже цена. При покупке на 3, 6 или 12 месяцев — дополнительные месяцы в подарок.",
+            (2, True): "<b>Продление подписки</b>\n\n<b>2 устройства</b>\n\nВыберите срок продления. Чем дольше подписка, тем ниже цена.\n\nБонусные месяцы уже включены в предложения.",
+            (5, True): "<b>Продление подписки</b>\n\n<b>5 устройств</b> — для семьи и личных устройств.\n\nВыберите срок продления. Чем дольше подписка, тем ниже цена.\n\nБонусные месяцы уже включены в предложения.",
+            (10, True): "<b>Продление подписки</b>\n\n<b>10 устройств</b> — для всей семьи и личных устройств.\n\nВыберите срок продления. Чем дольше подписка, тем ниже цена.\n\nБонусные месяцы уже включены в предложения.",
+        }
+        for (devices, renewal), text in expected.items():
+            with self.subTest(devices=devices, renewal=renewal):
+                self.assertEqual(_tariff_intro(devices, renewal=renewal), text)
+
+    def test_tariff_copy_preserves_promo_duration_suffix(self):
+        self.assertIn("Промокод действует на срок", _tariff_intro(2, promo_binding=3))
+
+    def test_unrequested_purchase_screen_keeps_existing_copy(self):
+        self.assertEqual(_tariff_intro(10), "<b>Тарифы</b>\n\nВыбрано: <b>10 устройств</b>\n\nЧем дольше подписка, тем выгоднее условия. При выборе тарифа на 3, 6 или 12 месяцев вы получаете <b>дополнительные месяцы в подарок</b>.\n\nВыберите подходящий срок:")
 
     async def test_bot_identity_helper_uses_aiogram_cache_when_available(self):
         from utils import get_cached_bot_info
@@ -59,14 +67,6 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(share_text, "Привет! Попробуй ByMeVPN — тебе 3 дня бесплатно, а мне бонус за приглашение.")
         self.assertNotIn("5352436388", share_text)
 
-    def test_two_device_renewal_copy(self):
-        self.assertEqual(
-            _tariff_intro(2, renewal=True),
-            "<b>Продление</b>\n"
-            "<b>2 устройства</b> — для смартфона и компьютера или двух личных устройств.\n"
-            "Выберите срок подписки. Чем дольше период, тем выгоднее условия.\n"
-            "Бонусные месяцы уже включены. Полную сумму покажем до оплаты.",
-        )
 
     async def test_expired_precreated_panel_client_is_eligible_when_trial_is_unused(self):
         from handlers.start import _user_state
