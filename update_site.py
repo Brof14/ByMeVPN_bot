@@ -17,7 +17,7 @@ ROOT = Path(os.getenv("BYMEVPN_UPDATE_ROOT", Path(__file__).parent / "static" / 
 PAGE = Path(__file__).parent / "static" / "app" / "index.html"
 ASSETS = Path(__file__).parent / "static" / "app" / "assets"
 ICON_ASSETS = frozenset({
-    "android.png", "apple.png", "happ.png", "incy.png", "koala.png", "linux.png",
+    "android.png", "apple.png", "bymevpn-logo.png", "happ.png", "incy.png", "koala.png", "linux.png",
     "v2rayn.png", "windows.png",
 })
 ORIGIN = "https://bymevpn.duckdns.org"

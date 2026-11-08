@@ -1162,7 +1162,7 @@ async def start_connection_tls_server() -> None:
     logo_path = Path(__file__).resolve().parent / "static" / "bymevpn-mark.png"
     asset_root = Path(__file__).resolve().parent / "static" / "app" / "assets"
     icon_assets = frozenset({
-        "android.png", "apple.png", "happ.png", "incy.png", "koala.png", "linux.png",
+        "android.png", "apple.png", "bymevpn-logo.png", "happ.png", "incy.png", "koala.png", "linux.png",
         "v2rayn.png", "windows.png",
     })
 

@@ -37,7 +37,7 @@ class ConnectionTlsAssetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(logo.headers["x-content-type-options"], "nosniff")
 
         for name in (
-            "android.png", "apple.png", "happ.png", "incy.png", "koala.png", "linux.png",
+            "android.png", "apple.png", "bymevpn-logo.png", "happ.png", "incy.png", "koala.png", "linux.png",
             "v2rayn.png", "windows.png",
         ):
             with self.subTest(name=name):
