@@ -14,6 +14,8 @@ from app_links import (
     build_app_login_url,
     build_app_redirect_url,
     build_connect_ticket,
+    read_connect_ticket,
+    CONNECT_TICKET_TTL_SECONDS,
     render_app_open_page,
     render_connection_choice_page,
 )
@@ -106,10 +108,10 @@ class TestAppOpenPage(unittest.TestCase):
         encoded = re.search(r'const apps=JSON.parse\(("(?:\\.|[^"\\])*")\)', page)
         self.assertIsNotNone(encoded)
         apps = json.loads(json.loads(encoded.group(1)))
-        self.assertEqual([a["name"] for a in apps["android"]], ["ByMeVPN", "Happ", "INCY"])
+        self.assertEqual([a["name"] for a in apps["android"]], ["ByMeVPN", "Happ", "INCY", "v2rayTun", "v2rayNG", "Hiddify", "sing-box"])
         self.assertEqual(apps["android"][0]["download"],
                          "https://github.com/Brof14/ByMeVPN-app/releases/download/v1.0.13/ByMeVPN-v1.0.13.apk")
-        self.assertEqual([a["name"] for a in apps["ios"]], ["Happ", "INCY"])
+        self.assertEqual([a["name"] for a in apps["ios"]], ["Happ", "INCY", "v2rayTun", "Hiddify", "sing-box"])
         for platform in ("windows", "macos", "linux"):
             self.assertIn("v2rayN", [a["name"] for a in apps[platform]])
             self.assertIn("Koala Clash", [a["name"] for a in apps[platform]])
@@ -130,7 +132,7 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertIn("Выберите приложение и подключитесь", page)
         self.assertIn("github.com/Brof14/ByMeVPN-app/releases/download/v1.0.13/ByMeVPN-v1.0.13.apk", page)
         self.assertIn("Рекомендуем", page)
-        self.assertIn('<details id="alternatives">', page)
+        self.assertIn('<details id="alternatives" open>', page)
         self.assertIn('id="copy-subscription"', page)
         self.assertEqual(page.count("Скопировать ссылку"), 1)
         self.assertNotIn("Если не открылось — скопировать ссылку", page)
@@ -149,6 +151,32 @@ class TestAppOpenPage(unittest.TestCase):
 
 
 class TestConnectionPageHttp(unittest.TestCase):
+    def test_extended_lifetime_and_legacy_ticket(self):
+        import base64
+        from app_links import _connect_aead
+        with patch.dict(os.environ, {"APP_HANDOFF_SECRET": "isolated-test-secret"}):
+            ticket = build_connect_ticket("https://sub.example/demo", now=1_000_000)
+            self.assertEqual(read_connect_ticket(ticket, now=1_000_000 + 86400)["subscription_url"], "https://sub.example/demo")
+            with self.assertRaises(ValueError):
+                read_connect_ticket(ticket, now=1_000_001 + CONNECT_TICKET_TTL_SECONDS)
+            payload = json.dumps({"sub": "https://sub.example/demo", "exp": 1_000_000 + 900}).encode()
+            nonce = os.urandom(12)
+            legacy = base64.urlsafe_b64encode(nonce + _connect_aead().encrypt(nonce, payload, b"bymevpn-connect-ticket-v1")).decode().rstrip("=")
+            self.assertEqual(read_connect_ticket(legacy, now=1_000_000 + 86400)["subscription_url"], "https://sub.example/demo")
+            with self.assertRaises(ValueError):
+                read_connect_ticket(legacy, now=1_000_001 + CONNECT_TICKET_TTL_SECONDS)
+
+    def test_verified_import_links_escape_query_and_warning(self):
+        page = render_connection_choice_page("https://sub.example/abc?x=1&y=2")
+        encoded = re.search(r'const apps=JSON.parse\(("(?:\\.|[^"\\])*")\)', page)
+        apps = json.loads(json.loads(encoded.group(1)))
+        android = {a["name"]: a for a in apps["android"]}
+        self.assertEqual(parse_qs(urlsplit(android["v2rayNG"]["deep"]).query)["url"], ["https://sub.example/abc?x=1&y=2"])
+        self.assertEqual(parse_qs(urlsplit(android["Hiddify"]["deep"]).query)["url"], ["https://sub.example/abc?x=1&y=2"])
+        self.assertIn("v2raytun://import/https://sub.example/abc?x=1&y=2", android["v2rayTun"]["deep"])
+        self.assertTrue(android["sing-box"]["manual"])
+        self.assertIn("JSON", android["sing-box"]["note"])
+
     def test_valid_and_expired_tickets_keep_existing_security_contract(self):
         from fastapi.testclient import TestClient
         from webhook import app
@@ -161,7 +189,7 @@ class TestConnectionPageHttp(unittest.TestCase):
             self.assertIn("Подключение VPN", response.text)
             self.assertIn("no-store", response.headers["cache-control"])
             self.assertIn("default-src 'none'", response.headers["content-security-policy"])
-            expired = build_connect_ticket("https://sub.example/preview", now=int(time.time()) - 1000)
+            expired = build_connect_ticket("https://sub.example/preview", now=int(time.time()) - CONNECT_TICKET_TTL_SECONDS - 1)
             self.assertEqual(client.get("/connect", params={"ticket": expired}).status_code, 400)
             self.assertEqual(client.get("/connect", params={"ticket": "invalid"}).status_code, 400)
 

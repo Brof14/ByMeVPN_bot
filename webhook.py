@@ -164,13 +164,14 @@ async def connection_choice_page(ticket: str = ""):
         page = render_connection_choice_page(payload["subscription_url"], payload["user_name"])
     except (ValueError, RuntimeError):
         return HTMLResponse(
-            "Ссылка подключения истекла. Вернитесь в бот и нажмите «Подключить» ещё раз.",
+            """<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Ссылка недоступна — ByMeVPN</title><style>body{margin:0;background:#07111d;color:#f3f7fb;font:16px/1.5 system-ui,sans-serif}main{max-width:480px;margin:12vh auto;padding:24px}h1{font-size:24px}p{color:#a9b9c8}a{color:#80dfff}</style><main><img src="/app/assets/bymevpn-logo.png" width="44" height="44" alt="ByMeVPN"><h1>Ссылка недоступна</h1><p>Возможно, она устарела или повреждена. Откройте бота и снова нажмите «Подключить» в разделе подписки.</p></main></html>""",
             status_code=400,
             headers={
                 "Cache-Control": "no-store, max-age=0",
                 "Referrer-Policy": "no-referrer",
                 "X-Content-Type-Options": "nosniff",
                 "X-Robots-Tag": "noindex, nofollow",
+                "Content-Security-Policy": APP_LOGIN_CONTENT_SECURITY_POLICY,
             },
         )
     return HTMLResponse(
@@ -1163,6 +1164,7 @@ async def start_connection_tls_server() -> None:
     asset_root = Path(__file__).resolve().parent / "static" / "app" / "assets"
     icon_assets = frozenset({
         "android.png", "apple.png", "bymevpn-logo.png", "happ.png", "incy.png", "koala.png", "linux.png",
+        "v2raytun.png", "v2rayng.png", "hiddify.png", "singbox.png",
         "v2rayn.png", "windows.png",
     })
 

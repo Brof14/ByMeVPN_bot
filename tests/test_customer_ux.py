@@ -56,11 +56,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         query = parse_qs(urlsplit(button.url).query)
         self.assertEqual(query["url"], [link])
         share_text = query["text"][0]
-        self.assertIn("🎁 Забирай 3 дня VPN бесплатно!", share_text)
-        self.assertIn("✓ Без привязки карты", share_text)
-        self.assertIn("✓ Подключение за минуту", share_text)
-        self.assertIn("✓ Несколько устройств на одной подписке", share_text)
-        self.assertIn("👇 Нажми «Старт» и получи свои 3 дня:", share_text)
+        self.assertEqual(share_text, "Привет! Попробуй ByMeVPN — тебе 3 дня бесплатно, а мне бонус за приглашение.")
         self.assertNotIn("5352436388", share_text)
 
     def test_two_device_renewal_copy(self):
