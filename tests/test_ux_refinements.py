@@ -164,8 +164,8 @@ class AdForwardingTests(unittest.IsolatedAsyncioTestCase):
         ):
             await cb_ad_program(callback, object(), state)
         text = send.await_args.args[2]
-        self.assertIn("после проверки", text)
-        self.assertIn("официальный пост", text)
+        self.assertIn("После проверки выполнения условий", text)
+        self.assertIn("наш рекламный пост", text)
         actions = [b.callback_data for b in buttons(send.await_args.args[3])]
         self.assertIn("ad_check_channel", actions)
         self.assertNotIn("partner", actions)

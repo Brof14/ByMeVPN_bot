@@ -22,7 +22,7 @@ class ExpiryReminderRegression(unittest.IsolatedAsyncioTestCase):
         ):
             await cb_select_tariff(callback, object(), state)
         validate.assert_not_awaited()
-        self.assertIn("Итого: <b>89 ₽</b>", send.await_args.args[2])
+        self.assertIn("К оплате: 89 ₽", send.await_args.args[2])
         self.assertIn("Промокод действует на другой срок", send.await_args.args[2])
         self.assertEqual(state.update_data.await_args.kwargs["promo_code"], "")
 
@@ -54,7 +54,7 @@ class ExpiryReminderRegression(unittest.IsolatedAsyncioTestCase):
             patch("database.log_analytics_event", new=AsyncMock()),
         ):
             await cb_select_tariff(callback, object(), state)
-        self.assertIn("Итого: <b>221 ₽</b>", send.await_args.args[2])
+        self.assertIn("К оплате: 221 ₽", send.await_args.args[2])
         self.assertEqual(state.update_data.await_args.kwargs["promo_code"], "BOUND")
 
     async def test_zero_price_promo_does_not_offer_an_unpayable_invoice(self):
@@ -201,7 +201,7 @@ class ExpiryDatabaseRegression(unittest.IsolatedAsyncioTestCase):
     async def test_legacy_fixed_and_free_day_promotions_apply_to_order(self):
         from handlers.buy import cb_select_tariff
         for code, legacy_type, canonical_type, expected in (
-            ("FIXED10", "fixed", "fixed_rub", "Итого: <b>79 ₽</b>"),
+            ("FIXED10", "fixed", "fixed_rub", "К оплате: 79 ₽"),
             ("DAYS5", "days", "free_days", "Срок: <b>1 мес. · 35 дней</b>"),
         ):
             await self.db.create_promo_code(code, promo_type=legacy_type, discount_value=10 if legacy_type == "fixed" else 5)
