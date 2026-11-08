@@ -107,11 +107,16 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertIn("Выберите устройство и приложение", page)
         self.assertIn("github.com/Brof14/ByMeVPN-app/releases/download/v1.0.12/ByMeVPN-v1.0.12.apk", page)
         self.assertIn("https://play.google.com/store/apps/details?id=llc.itdev.incy", page)
-        for asset in ("android.png", "apple.png", "happ.png", "incy.png", "linux.png", "windows.png"):
+        for asset in (
+            "android.png", "apple.png", "happ.png", "incy.png", "koala.png", "linux.png",
+            "v2rayn.png", "windows.png",
+        ):
             self.assertIn(asset, page)
         self.assertIn('"/app/assets/"+platformIcons[k]', page)
         self.assertIn('"/app/assets/happ.png"', page)
         self.assertIn('"/app/assets/incy.png"', page)
+        self.assertIn('v2rayn:"/app/assets/v2rayn.png"', page)
+        self.assertIn('koala:"/app/assets/koala.png"', page)
 
 
 class TestAppOpenKeyboard(unittest.TestCase):
