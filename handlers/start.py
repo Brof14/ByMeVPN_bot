@@ -536,7 +536,7 @@ async def _start_free_trial(bot: Bot, callback: CallbackQuery, ref_id: int | Non
     await safe_answer(callback)
     if await has_trial_used(user_id) or await get_user_keys(user_id):
         await callback.message.answer(
-            "Бесплатный пробный период доступен один раз для новых пользователей. "
+            "Пробный период уже использован или для аккаунта уже создан ключ. "
             "Выберите тариф, чтобы продолжить пользоваться ByMeVPN."
         )
         return
@@ -581,8 +581,8 @@ async def _start_free_trial(bot: Bot, callback: CallbackQuery, ref_id: int | Non
 
     if panel_client:
         await callback.message.answer(
-            "Бесплатный пробный период доступен один раз для новых пользователей. "
-            "Если подписка уже закончилась, выберите тариф для продления."
+            "Для аккаунта уже создан клиент ByMeVPN. "
+            "Если срок доступа закончился, выберите тариф для продления."
         )
         return
 
@@ -712,9 +712,14 @@ async def cb_back_to_menu(callback: CallbackQuery, bot: Bot, state: FSMContext):
 async def cb_about(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
-        "<b>Ваш интернет — в привычном ритме</b>\n\n"
-        "ByMeVPN помогает сохранить доступ к нужным сайтам и приложениям дома и в поездках.\n\n"
-        "Одна подписка — до 2, 5 или 10 устройств. Новые пользователи могут начать с 3 дней бесплатно."
+        "<b>ByMeVPN — VPN, который просто работает.</b>\n\n"
+        "<i>Скорость. Свобода. Простота.</i>\n\n"
+        "Привычные сайты и приложения — без лишних сложностей.\n\n"
+        "— Удобное подключение.\n"
+        "— Подписки на 2, 5 или 10 устройств.\n"
+        "— 3 дня бесплатно для новых пользователей.\n"
+        "— Поддержка, когда она необходима.\n\n"
+        "<b>Всё необходимое для комфортного использования VPN.</b>"
     )
     # Keep this screen informative and minimal; primary actions live in the menu.
     from aiogram.types import InlineKeyboardMarkup
@@ -729,9 +734,10 @@ async def cb_about(callback: CallbackQuery, bot: Bot):
 async def cb_free_vpn(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
-        "<b>Бесплатные дни</b>\n\n"
-        "Получайте дополнительные дни двумя простыми способами: "
-        "пригласите друга или разместите официальный пост ByMeVPN в своём канале."
+        "<b>Больше доступа — без оплаты.</b>\n\n"
+        "Получайте дополнительные дни ByMeVPN за приглашения друзей или размещение "
+        "рекламы в своём Telegram-канале.\n\n"
+        "Выберите удобный способ:"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Пригласить друзей", callback_data="partner")],

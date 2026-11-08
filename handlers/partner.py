@@ -47,11 +47,14 @@ async def cb_partner(callback: CallbackQuery, bot: Bot):
         if pending_rewards else ""
     )
     text = (
-        "<b>Поделитесь доступом</b>\n\n"
-        "Друг сможет проверить ByMeVPN бесплатно в течение 3 дней. "
-        "За регистрацию начислим вам <b>15 дней</b>, а после первой оплаты друга — ещё <b>30 дней</b>.\n\n"
-        f"Приглашено: <b>{registrations}</b> · оплатили: <b>{paid_referrals}</b>\n"
-        f"Ваш бонус: <b>{bonus_days} дней</b>"
+        "<b>Приглашайте друзей. Получайте больше.</b>\n\n"
+        "<b>+15 дней</b> — когда друг зарегистрируется.\n"
+        "<b>+30 дней</b> — после его первой подходящей оплаты.\n\n"
+        "<b>Ваши результаты</b>\n"
+        f"Приглашено: <b>{registrations}</b>\n"
+        f"Оплатили: <b>{paid_referrals}</b>\n"
+        f"Получено: <b>{bonus_days} дней</b>\n\n"
+        "Поделитесь ссылкой — бонусы начисляются автоматически после выполнения условий."
         f"{pending_note}"
     )
     await send_with_photo(bot, callback, text, partner_main_kb(link), photo=REFERRALS)
