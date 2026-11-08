@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from bot_style import ICON_IDS
 from keyboards import tariff_selection_kb, payment_kb
 
 
@@ -36,7 +37,7 @@ class TariffDesignTests(unittest.TestCase):
         bonus_buttons = [b for b in buttons(premium) if b.callback_data and b.callback_data.startswith("tariff_") and not b.callback_data.startswith("tariff_1_")]
         self.assertEqual(
             [b.icon_custom_emoji_id for b in bonus_buttons],
-            ["5301299389245985629", "5301163762768707871", "5301192569114366400"],
+            [ICON_IDS["gift"]] * 3,
         )
 
     def test_five_device_selector_is_short_and_three_plus_one_has_no_extra_claim(self):
