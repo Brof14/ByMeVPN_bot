@@ -3,74 +3,195 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#07131d">
+  <meta name="theme-color" content="#061020">
   <meta name="description" content="Официальное приложение ByMeVPN для Android">
-  <title>ByMeVPN для Android</title>
+  <title>ByMeVPN — приложение для Android</title>
   <style>
-    :root { color-scheme: dark; font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif; background:#07131d; color:#f5f8fa; }
-    * { box-sizing:border-box; }
-    body { margin:0; min-height:100vh; background:radial-gradient(ellipse at 50% 0,#103c45 0,#07131d 55%); }
-    main { width:min(100% - 32px,680px); margin:0 auto; padding:54px 0 40px; }
-    header, section { border:1px solid #183542; background:rgba(11,25,36,.92); border-radius:24px; padding:26px; margin-bottom:18px; }
-    header { text-align:center; padding:34px 26px; }
-    img { width:92px;height:92px;object-fit:contain; }
-    h1 { margin:12px 0 8px;font-size:clamp(28px,7vw,42px); }
-    h2 { margin:0 0 14px;font-size:20px; }
-    p, li { color:#c2d0d8;line-height:1.65; }
-    .button { display:block; margin:22px auto 0; max-width:460px; padding:16px 22px; border-radius:16px; text-align:center; font-weight:700; text-decoration:none; color:#041916; background:linear-gradient(100deg,#00e899,#00d6bd); }
-    .button[hidden] { display:none; }
-    .status { margin:14px auto 0; color:#a9bbc5; min-height:24px; }
-    .meta { font-size:14px; color:#9fb2bd; }
-    a { color:#5ce4c0; }
-    .steps { padding-left:22px; }
-    footer { text-align:center;color:#8da2ad;font-size:13px;padding:8px; }
+    /* Hallmark · v2.0.0 · custom brand direction: quiet navy, electric blue and green */
+    /* Critique: keep the first screen direct; platform choice stays on the connection page. */
+    :root {
+      color-scheme: dark;
+      --font-ui: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+      --color-bg: #061020;
+      --color-bg-soft: #0b1b2f;
+      --color-surface: #0d1b2c;
+      --color-surface-raised: #12243a;
+      --color-line: #20364d;
+      --color-ink: #f3f8ff;
+      --color-muted: #b3c2d2;
+      --color-quiet: #8195aa;
+      --color-blue: #21a5ff;
+      --color-cyan: #27d5e8;
+      --color-green: #43e58b;
+      --color-focus: #a6ffcb;
+      --color-shadow: rgb(0 0 0 / 34%);
+      --gradient-brand: linear-gradient(112deg, var(--color-blue), var(--color-cyan) 54%, var(--color-green));
+      --radius-card: 28px;
+      --radius-control: 16px;
+      --measure: 1080px;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { overflow-x: clip; }
+    html { scroll-behavior: smooth; }
+    body {
+      min-height: 100svh;
+      margin: 0;
+      background: var(--color-bg);
+      color: var(--color-ink);
+      font-family: var(--font-ui);
+      font-size: 16px;
+      line-height: 1.55;
+    }
+    a { color: var(--color-cyan); }
+    a:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 4px; }
+    main { width: min(100% - 32px, var(--measure)); margin: 0 auto; padding: 24px 0 36px; }
+    .hero {
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(180px, .8fr);
+      align-items: center;
+      gap: clamp(24px, 5vw, 72px);
+      min-height: 430px;
+      padding: clamp(28px, 6vw, 72px);
+      overflow: clip;
+      border: 1px solid var(--color-line);
+      border-radius: var(--radius-card);
+      background: var(--color-surface);
+      box-shadow: 0 24px 80px var(--color-shadow);
+    }
+    .hero::before {
+      position: absolute;
+      inset: 0 0 auto;
+      height: 3px;
+      background: var(--gradient-brand);
+      content: "";
+    }
+    .hero-copy, .brand-stage { min-width: 0; }
+    .brand-stage { display: grid; place-items: center; }
+    .brand-logo {
+      display: block;
+      width: min(100%, 250px);
+      height: auto;
+      aspect-ratio: 1;
+      object-fit: contain;
+      border: 1px solid var(--color-line);
+      border-radius: 30px;
+      box-shadow: 0 16px 54px var(--color-shadow);
+    }
+    h1, h2, p { margin-top: 0; }
+    h1 {
+      max-width: 12ch;
+      margin-bottom: 16px;
+      overflow-wrap: break-word;
+      min-width: 0;
+      font-size: clamp(2.3rem, 7vw, 5rem);
+      line-height: 1.02;
+      letter-spacing: -.045em;
+    }
+    .lead { max-width: 48ch; margin-bottom: 26px; color: var(--color-muted); font-size: clamp(1.05rem, 2vw, 1.2rem); }
+    .download {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 56px;
+      padding: 14px 22px;
+      border: 1px solid var(--color-green);
+      border-radius: var(--radius-control);
+      background: var(--color-green);
+      color: var(--color-bg);
+      font-weight: 750;
+      text-align: center;
+      text-decoration: none;
+    }
+    .download:hover { background: var(--color-focus); border-color: var(--color-focus); }
+    .download:focus-visible, button:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 4px; }
+    .release { margin: 12px 0 0; color: var(--color-quiet); font-size: .9rem; }
+    .details {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 18px;
+    }
+    .detail {
+      padding: 22px;
+      border: 1px solid var(--color-line);
+      border-radius: 20px;
+      background: var(--color-bg-soft);
+    }
+    h2 { margin-bottom: 8px; font-size: 1.05rem; line-height: 1.3; }
+    .detail p { margin-bottom: 0; color: var(--color-muted); }
+    .detail a { text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    footer { padding: 24px 8px 0; color: var(--color-quiet); font-size: .875rem; text-align: center; }
+    footer a { margin: 0 8px; }
+    @media (max-width: 680px) {
+      main { width: min(100% - 20px, var(--measure)); padding-top: 10px; }
+      .hero { grid-template-columns: minmax(0, 1fr); gap: 20px; min-height: 0; padding: 28px 22px 24px; }
+      .hero-copy { order: 2; }
+      .brand-stage { order: 1; }
+      .brand-logo { width: 112px; border-radius: 22px; }
+      h1 { max-width: 14ch; margin-bottom: 12px; font-size: clamp(2.2rem, 12vw, 3.4rem); }
+      .lead { margin-bottom: 20px; }
+      .download { display: flex; width: 100%; }
+      .details { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+      .detail { padding: 18px; }
+      footer { padding-top: 18px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+    }
   </style>
 </head>
 <body>
 <main>
-  <header>
-    <img src="/app/logo" alt="Логотип ByMeVPN">
-    <h1>ByMeVPN для Android</h1>
-    <p>Быстрое и простое подключение к VPN. Это официальный сайт загрузки приложения.</p>
-    <a id="download" class="button" href="#" hidden>Скачать приложение</a>
-    <div id="release" class="status" role="status">Проверяем актуальную версию…</div>
-    <p id="notes" class="meta"></p>
+  <header class="hero">
+    <div class="hero-copy">
+      <h1>ByMeVPN для Android</h1>
+      <p class="lead">Подключайтесь к привычным приложениям и сайтам — в пару простых шагов.</p>
+      <a class="download" href="https://github.com/Brof14/ByMeVPN-app/releases/download/v1.0.12/ByMeVPN-v1.0.12.apk" rel="noopener noreferrer">Скачать ByMeVPN для Android</a>
+      <p class="release" id="release" role="status" aria-live="polite">Версия 1.0.12 · APK из официального релиза ByMeVPN</p>
+    </div>
+    <div class="brand-stage">
+      <img class="brand-logo" src="/app/logo" alt="Логотип ByMeVPN" width="1254" height="1254" fetchpriority="high">
+    </div>
   </header>
-  <section>
-    <h2>Первая установка</h2>
-    <ol class="steps">
-      <li>Скачайте APK по кнопке выше, когда появится опубликованная версия.</li>
-      <li>Откройте файл и разрешите установку приложений для браузера, если Android попросит об этом.</li>
-      <li>После установки откройте ByMeVPN и войдите по электронной почте.</li>
-    </ol>
-    <p class="meta">Требуется Android 7.0 или новее. Для установки обновлений Android может снова запросить подтверждение.</p>
+  <section class="details" aria-label="Информация о приложении">
+    <article class="detail">
+      <h2>Первая установка</h2>
+      <p>Скачайте APK, откройте файл и разрешите установку приложений для браузера, если Android попросит об этом. Требуется Android 7.0 или новее.</p>
+    </article>
+    <article class="detail">
+      <h2>Подключение</h2>
+      <p>Откройте бота и нажмите «Подключить», чтобы выбрать устройство и подходящее приложение.</p>
+    </article>
+    <article class="detail">
+      <h2>Другие платформы</h2>
+      <p>На странице подключения выберите Android, iPhone, Windows, macOS или Linux — список приложений подстроится под устройство.</p>
+    </article>
+    <article class="detail">
+      <h2>Нужна помощь?</h2>
+      <p>Напишите в <a href="https://t.me/ByMeVPNSupportBot" rel="noopener noreferrer">поддержку ByMeVPN</a>, если установка не получается.</p>
+    </article>
   </section>
-  <section>
-    <h2>Поддержка и документы</h2>
-    <p>Для помощи с установкой напишите в <a href="https://t.me/ByMeVPNSupportBot">поддержку ByMeVPN</a>.</p>
-    <p><a href="https://telegra.ph/Politika-v-otnoshenii-obrabotki-personalnyh-dannyh-ByMeVPN-10-25" rel="noopener noreferrer">Политика конфиденциальности</a> ·
-       <a href="https://telegra.ph/Publichnaya-oferta-na-okazanie-uslug-ByMeVPN-10-25" rel="noopener noreferrer">Публичная оферта</a></p>
-  </section>
-  <footer>ByMeVPN · Официальная загрузка по HTTPS</footer>
+  <footer>
+    <a href="https://telegra.ph/Politika-v-otnoshenii-obrabotki-personalnyh-dannyh-ByMeVPN-10-25" rel="noopener noreferrer">Политика конфиденциальности</a>
+    <a href="https://telegra.ph/Publichnaya-oferta-na-okazanie-uslug-ByMeVPN-10-25" rel="noopener noreferrer">Публичная оферта</a>
+    <p>ByMeVPN · Официальная загрузка по HTTPS</p>
+  </footer>
 </main>
 <script>
   (async () => {
     const status = document.getElementById('release');
     try {
       const response = await fetch('/app/update.json', {cache:'no-store', credentials:'omit'});
-      if (!response.ok) throw new Error('not-ready');
+      if (!response.ok) return;
       const data = await response.json();
       const url = new URL(data.download_url);
       if (url.protocol !== 'https:' || url.hostname !== 'bymevpn.duckdns.org' ||
           !/^\/app\/downloads\/ByMeVPN-v\d+\.\d+\.\d+\.apk$/.test(url.pathname) ||
-          !/^[a-f\d]{64}$/i.test(data.sha256)) throw new Error('invalid');
-      const button = document.getElementById('download');
-      button.href = url.href;
-      button.hidden = false;
-      status.textContent = `Версия ${String(data.version_name)} · сборка ${Number(data.version_code)}`;
-      document.getElementById('notes').textContent = String(data.release_notes || '');
+          !/^[a-f\d]{64}$/i.test(data.sha256)) return;
+      status.textContent = `В ленте опубликована версия ${String(data.version_name)}. Кнопка скачивания ведёт на релиз 1.0.12.`;
     } catch (_) {
-      status.textContent = 'Подписанная сборка пока готовится. Напишите в поддержку, если хотите узнать о публикации.';
+      // The direct official release link remains available when the feed is offline.
     }
   })();
 </script>

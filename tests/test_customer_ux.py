@@ -37,6 +37,15 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             "Выберите подходящий срок:",
         )
 
+    def test_two_device_renewal_copy(self):
+        self.assertEqual(
+            _tariff_intro(2, renewal=True),
+            "<b>Продление</b>\n"
+            "<b>2 устройства</b> — для смартфона и компьютера или двух личных устройств.\n"
+            "Выберите срок подписки. Чем дольше период, тем выгоднее условия.\n"
+            "Бонусные месяцы уже включены. Полную сумму покажем до оплаты.",
+        )
+
     async def test_expired_precreated_panel_client_is_eligible_when_trial_is_unused(self):
         from handlers.start import _user_state
         now = 1_800_000_000

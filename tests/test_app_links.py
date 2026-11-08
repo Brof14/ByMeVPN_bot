@@ -94,13 +94,19 @@ class TestAppOpenPage(unittest.TestCase):
     def test_connection_page_has_os_marks_and_manual_copy_fallback(self):
         page = render_connection_choice_page("https://sub.example/abc")
 
-        for label in ("🤖 Android", "🍎 iPhone / iPad", "🪟 Windows", "🍏 macOS", "🐧 Linux"):
+        for label in ("Android", "iPhone / iPad", "Windows", "macOS", "Linux"):
             self.assertIn(label, page)
+        self.assertNotIn("🤖", page)
+        self.assertIn("Hallmark · v2.0.0", page)
+        self.assertIn("@media(max-width:680px)", page)
+        self.assertIn("overflow-x:clip", page)
+        self.assertIn("prefers-reduced-motion", page)
         self.assertIn("Скопировать ссылку", page)
-        self.assertIn("Ссылка скопирована", page)
-        self.assertIn("Если не открылось — скопировать ссылку", page)
+        self.assertIn("Если не открылось — скопировать", page)
         self.assertIn('src="/app/logo"', page)
-        self.assertIn("Выберите устройство, затем приложение", page)
+        self.assertIn("Выберите устройство и приложение", page)
+        self.assertIn("github.com/Brof14/ByMeVPN-app/releases/download/v1.0.12/ByMeVPN-v1.0.12.apk", page)
+        self.assertIn("https://play.google.com/store/apps/details?id=llc.itdev.incy", page)
 
 
 class TestAppOpenKeyboard(unittest.TestCase):
