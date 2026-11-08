@@ -64,12 +64,12 @@ class AdProgramFlow(StatesGroup):
 
 # Bonus tiers (must match database.calculate_bonus_months)
 BONUS_TIERS = (
-    "1–49 подписчиков → 2 месяца\n"
-    "50–99 → 4 месяца\n"
-    "100–149 → 6 месяцев\n"
-    "150–249 → 8 месяцев\n"
-    "250–349 → 1 год\n"
-    "350+ → 2 года + индивидуальные условия"
+    "1–49 — 2 месяца\n"
+    "50–99 — 4 месяца\n"
+    "100–149 — 6 месяцев\n"
+    "150–249 — 8 месяцев\n"
+    "250–349 — 12 месяцев\n"
+    "350+ — 24 месяца и индивидуальные условия"
 )
 
 # Statuses that mean "user is working on the application" (only one allowed)
@@ -156,13 +156,14 @@ async def cb_ad_program(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await log_ad_analytics_event(user_id, "ad_offer_view")
 
     text = (
-        "<b>VPN за рекламу</b>\n\n"
-        "Разместите официальный пост ByMeVPN в своём Telegram-канале и получите бонусные дни.\n\n"
-        "Как это работает:\n"
+        "<b>Ваш канал — ваши бонусы.</b>\n\n"
+        "Разместите ByMeVPN в своём Telegram-канале и получите <b>бесплатные месяцы VPN</b>.\n\n"
+        "<b>Как это работает:</b>\n"
         "1. Отправьте ссылку на канал.\n"
-        "2. Перешлите наш пост без изменений.\n"
-        "3. Оставьте его на 30 дней — после проверки начислим бонус.\n\n"
-        "Публикация должна оставаться доступной всё это время."
+        "2. Разместите наш рекламный пост.\n"
+        "3. Сохраните публикацию на 30 дней.\n\n"
+        "После проверки выполнения условий начислим бонус.\n\n"
+        "Чем больше аудитория, тем больше месяцев доступа."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Начать · указать канал", callback_data="ad_check_channel")],
@@ -178,9 +179,10 @@ async def cb_ad_bonus_tiers(callback: CallbackQuery, bot: Bot):
     """Show campaign rewards only on request, not on the first screen."""
     await safe_answer(callback)
     text = (
-        "<b>Бонусы за рекламу</b>\n\n"
+        "<b>Сколько VPN можно получить?</b>\n\n"
+        "Бонус зависит от количества подписчиков вашего канала.\n\n"
         f"{BONUS_TIERS}\n\n"
-        "Публикацию нужно сохранить на 30 дней. Каждый канал участвует один раз."
+        "<b>Условия:</b> публикация на 30 дней, один бонус на канал после проверки."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Проверить канал", callback_data="ad_check_channel")],
@@ -214,10 +216,12 @@ async def cb_ad_check_channel(callback: CallbackQuery, bot: Bot, state: FSMConte
         return
 
     text = (
-        "<b>Проверка канала</b>\n\n"
-        "Пришлите публичный адрес канала, например <code>@mychannel</code>. "
-        "Для закрытого канала отправьте ссылку-приглашение — затем бот попросит указать число подписчиков.\n\n"
-        "Права администратора не нужны. После проверки бот подскажет следующий шаг."
+        "<b>Проверим ваш канал</b>\n\n"
+        "Отправьте ссылку на Telegram-канал — публичный или приватный.\n\n"
+        "Например: <code>@mychannel</code> или <code>https://t.me/+…</code>\n\n"
+        "Если канал приватный, мы попросим указать количество подписчиков.\n\n"
+        "<b>Добавлять бота в администраторы не нужно.</b>\n\n"
+        "После проверки покажем доступный бонус и следующий шаг."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Отмена", callback_data="ad_program")],

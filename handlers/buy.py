@@ -231,10 +231,10 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
     term_label = f"{months}+{bonus_months} мес." if bonus_months else f"{months} мес."
 
     text = (
-        f"<b>Ваш заказ</b>\n\n"
+        f"<b>Подтверждение заказа</b>\n\n"
         f"Устройства: <b>{dev_name}</b>\n"
-        f"Срок: <b>{term_label} · {days} дней</b>\n"
-        f"Итого: <b>{price_rub} ₽</b>{promo_text}\n"
+        f"Доступ: <b>{days} дней</b>\n"
+        f"<b>К оплате: {price_rub} ₽</b>{promo_text}\n"
     )
 
     if promo_mismatch:
@@ -244,14 +244,15 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
         text += f"<s>Без скидки: {original_price} ₽</s>\n"
 
     text += (
-        "\nПродолжая, вы принимаете условия <a href='https://telegra.ph/Publichnaya-oferta-na-okazanie-uslug-ByMeVPN-10-25'>оферты</a> и "
+        "\nДоступ активируется после подтверждения оплаты.\n\n"
+        "<b>Автопродление</b>\n"
+        "При сохранении способа оплаты в ЮKassa подписка может автоматически "
+        f"продлеваться на {days} дней за {price_rub} ₽. Условия и возможность отключения "
+        "доступны в разделе «Оплата и автопродление».\n\n"
+        "Telegram Stars и CryptoBot — разовые платежи.\n\n"
+        "Продолжая, вы принимаете условия <a href='https://telegra.ph/Publichnaya-oferta-na-okazanie-uslug-ByMeVPN-10-25'>оферты</a> и "
         "<a href='https://telegra.ph/Politika-v-otnoshenii-obrabotki-personalnyh-dannyh-ByMeVPN-10-25'>политики конфиденциальности</a>.\n\n"
-        "<b>Перед оплатой</b>\n"
-        "ЮKassa может сохранить способ оплаты для автоматического продления. "
-        "Его можно отключить в настройках подписки. Следующее списание: "
-        f"{price_rub} ₽ за {days} дней. Управление: «Подписка» → «Оплата и автопродление».\n"
-        "Stars и CryptoBot — разовые платежи.\n\n"
-        "<b>Способ оплаты</b>"
+        "<b>Выберите способ оплаты:</b>"
     )
 
     await send_with_photo(

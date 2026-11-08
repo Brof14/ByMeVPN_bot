@@ -137,7 +137,8 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(menu.inline_keyboard[0][0].callback_data, "my_keys")
         self.assertEqual(menu.inline_keyboard[0][0].style, "primary")
         used_trial = main_menu_existing(trial_used=True)
-        self.assertNotIn("trial_1r", callbacks(used_trial))
+        self.assertNotIn("trial_free", callbacks(used_trial))
+        self.assertIn("trial_free", callbacks(main_menu_new_user()))
 
     def test_expired_or_active_key_menu_keeps_guide_inside_key_flow(self):
         actions = callbacks(main_menu_with_keys(trial_used=True))
@@ -277,11 +278,11 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             await cb_partner(callback, bot)
 
         text = send.call_args.args[2]
-        self.assertIn("<b>Поделитесь доступом</b>", text)
+        self.assertIn("<b>Приглашайте друзей. Получайте больше.</b>", text)
         self.assertIn("15 дней", text)
-        self.assertIn("ещё <b>30 дней</b>", text)
-        self.assertIn("Ваш бонус: <b>15 дней</b>", text)
-        self.assertIn("Приглашено: <b>1</b> · оплатили: <b>1</b>", text)
+        self.assertIn("+30 дней", text)
+        self.assertIn("Получено: <b>15 дней</b>", text)
+        self.assertIn("Приглашено: <b>1</b>\nОплатили: <b>1</b>", text)
         buttons = [b for row in send.call_args.args[3].inline_keyboard for b in row]
         copied = next(b for b in buttons if b.text == "Скопировать ссылку")
         self.assertEqual(copied.copy_text.text, "https://t.me/ByMeVPNbot?start=123")

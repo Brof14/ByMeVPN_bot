@@ -819,9 +819,27 @@ async def cb_key_renew(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await state.update_data(renew_key_id=key_id, devices=key_devices)
     await state.set_state(BuyFlow.choosing_type)
 
+    if key_devices == 5:
+        renewal_text = (
+            "<b>Продление подписки</b>\n\n"
+            "<b>5 устройств</b> — для семьи и нескольких личных устройств.\n\n"
+            "Выберите срок подписки. Чем дольше период, тем выгоднее стоимость.\n\n"
+            "<b>Бонусные месяцы уже включены.</b> Полную сумму покажем до оплаты."
+        )
+    elif key_devices == 2:
+        renewal_text = (
+            "<b>Продление подписки</b>\n\n"
+            "Выбрано: <b>2 устройства</b>\n\n"
+            "Выберите подходящий срок. При покупке на 3, 6 или 12 месяцев "
+            "вы получаете <b>дополнительные месяцы доступа</b>.\n\n"
+            "Итоговую стоимость покажем до оплаты."
+        )
+    else:
+        renewal_text = "<b>Продление подписки</b>\n\nВыберите срок и количество устройств."
+
     await send_with_photo(
         bot, callback,
-        "<b>Продление подписки</b>\n\nВыберите срок и количество устройств.",
+        renewal_text,
         tariff_selection_kb(devices=key_devices),
         photo=RENEWAL,
     )
