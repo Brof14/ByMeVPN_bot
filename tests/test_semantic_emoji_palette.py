@@ -104,6 +104,13 @@ class SemanticPremiumEmojiTests(unittest.TestCase):
         self.assertTrue(any(b.copy_text for b in all_buttons(guide)))
         self.assertEqual(normalize_navigation(guide).inline_keyboard[-1][0].callback_data, "back_to_menu")
 
+    def test_copy_button_has_only_telegram_copy_glyph_without_duplicate_custom_icon(self):
+        with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "1"}):
+            guide = connection_guide_kb(subscription_url="https://example.test/sub")
+        copy_button = next(button for button in all_buttons(guide) if button.copy_text)
+        self.assertEqual(copy_button.text, "Скопировать ссылку")
+        self.assertIsNone(copy_button.icon_custom_emoji_id)
+
     def test_banners_only_for_key_landmarks(self):
         active = {MENU, PLANS, KEY, CONNECTION, ABOUT, REFERRALS, AD_PROGRAM}
         self.assertTrue(all(display_artwork(path) == path for path in active))

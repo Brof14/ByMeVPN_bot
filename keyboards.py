@@ -440,6 +440,9 @@ def connection_guide_kb(
         kb.row(InlineKeyboardButton(
             text="Скопировать ссылку",
             copy_text={"text": subscription_url},
+            # Telegram's CopyTextButton already renders its own copy glyph.
+            # Avoid adding a second custom icon to the same button.
+            icon_custom_emoji_id=None,
         ))
     back_callback = f"key_info:{key_id}" if key_id else "back_to_menu"
     back_text = "← Назад" if key_id else "← Назад в меню"

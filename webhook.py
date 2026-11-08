@@ -68,7 +68,9 @@ def _is_allowed_yookassa_source(source_ip: str | None) -> bool:
         address = address.ipv4_mapped
     return any(address in network for network in YOOKASSA_ALLOWED_NETWORKS)
 
-app = FastAPI(docs_url=None, redoc_url=None)  # disable docs in production
+# Disable the schema endpoint as well as the interactive documentation pages.
+# Setting only docs_url/redoc_url to None still leaves /openapi.json public.
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
 try:
     from api_router import api_router

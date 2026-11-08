@@ -12,7 +12,7 @@ from aiogram import Bot, Router
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 
 from config import ADMIN_ID
-from constants import REFERRAL_FIRST_PAYMENT_BONUS_DAYS
+from constants import REFERRAL_FIRST_PAYMENT_BONUS_DAYS, format_timestamp
 from utils import send_or_edit, send_photo_message, send_with_photo, safe_answer
 from bot_assets import KEY
 import database
@@ -33,6 +33,20 @@ router = Router()
 # Serialise deliveries for the same account within this process. Other bot
 # processes and direct panel writers still require independent coordination.
 _delivery_locks = weakref.WeakValueDictionary()
+
+
+def _activation_message(title: str, bonus_note: str, days: int, limit_ip: int, expiry: int | None = None) -> str:
+    """Use the current website-based setup flow in every activation message."""
+    expiry_line = f"Действует до: <b>{format_timestamp(expiry)[:10]}</b>\n" if expiry else ""
+    return (
+        f"{title}\n\n{bonus_note}"
+        f"Доступ: <b>{days} дней</b>\n"
+        f"Устройства: <b>{limit_ip}</b>\n"
+        f"{expiry_line}\n"
+        "Ваш ByMeVPN готов к использованию.\n\n"
+        "Нажмите «Подключить VPN» ниже — откроется страница, которая подберёт приложение "
+        "для вашего устройства и поможет добавить подписку."
+    )
 
 
 async def _send_delivery_message(
@@ -431,16 +445,7 @@ async def _deliver_key_unlocked(
                 f"Вам автоматически начислен приз <b>+{days} дней</b>.\n\n"
                 if method == "giveaway_prize" else ""
             )
-            text = (
-                f"{title}\n\n"
-                f"{bonus_note}"
-                f"Доступ: <b>{days} дней</b>\n"
-                f"Устройства: <b>{limit_ip}</b>\n"
-                f"Действует до: <b>{format_timestamp(new_expiry)[:10]}</b>\n\n"
-                f"<b>Ссылка для подключения</b>\n"
-                f"<code>{sub_url}</code>\n\n"
-                f"Ваш ByMeVPN готов к использованию."
-            )
+            text = _activation_message(title, bonus_note, days, limit_ip, new_expiry)
             delivered = await _send_delivery_message(
                 bot, chat_id, text, sub_url, edit_target=delivery_target,
             )
@@ -530,19 +535,7 @@ async def _deliver_key_unlocked(
             f"Вам автоматически начислен приз <b>+{days} дней</b>.\n\n"
             if method == "giveaway_prize" else ""
         )
-        text = (
-            f"{title}\n\n"
-            f"{bonus_note}"
-            f"Ваш ByMeVPN готов к использованию.\n\n"
-            f"Доступ: <b>{days} дней</b>\n"
-            f"Устройства: <b>{limit_ip}</b>\n"
-            f"Ссылка для подключения:\n<code>{subscription_url}</code>\n\n"
-            f"<b>Как подключиться</b>\n"
-            f"1. Нажмите «Подключить VPN» ниже\n"
-            f"2. Выберите устройство\n"
-            f"3. Установите Happ и добавьте подписку\n"
-            f"4. Включите VPN."
-        )
+        text = _activation_message(title, bonus_note, days, limit_ip)
         
         delivered = await _send_delivery_message(
             bot, chat_id, text, subscription_url, edit_target=delivery_target,
