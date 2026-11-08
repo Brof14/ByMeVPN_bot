@@ -55,13 +55,14 @@ def _promo_purchase_keyboard() -> InlineKeyboardMarkup:
 def _tariff_intro(devices: int, *, renewal: bool = False, promo_binding: int | None = None) -> str:
     """Explain the device tier and included bonus months before checkout."""
     if renewal:
-        device_line = (
-            "<b>5 устройств</b> — для семьи и нескольких личных устройств."
-            if devices == 5 else f"Выбрано: <b>{devices} устройств</b>"
-        )
+        device_line = {
+            2: "<b>2 устройства</b> — для смартфона и компьютера или двух личных устройств.",
+            5: "<b>5 устройств</b> — для семьи и нескольких личных устройств.",
+            10: "<b>10 устройств</b> — для всех ваших устройств и близких.",
+        }.get(devices, f"<b>{devices} устройств</b>")
         text = (
-            f"<b>Продление</b>\n\n{device_line}\n\n"
-            "Выберите срок подписки. Чем дольше период, тем выгоднее условия.\n\n"
+            f"<b>Продление</b>\n{device_line}\n"
+            "Выберите срок подписки. Чем дольше период, тем выгоднее условия.\n"
             "Бонусные месяцы уже включены. Полную сумму покажем до оплаты."
         )
     else:
