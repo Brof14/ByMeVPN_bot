@@ -68,10 +68,10 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             patch("handlers.start.has_active_subscription", new=AsyncMock(return_value=False)),
             patch("handlers.start.has_ever_had_key", new=AsyncMock(return_value=False)),
             patch("handlers.start.has_trial_used", new=AsyncMock(return_value=True)),
-            patch("xui_client.get_xui_client_details", new=AsyncMock()) as panel,
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value=None)) as panel,
         ):
             self.assertEqual(await _user_state(123), "expired")
-        panel.assert_not_awaited()
+        panel.assert_awaited_once_with(123, strict=True)
 
     async def test_new_account_menu_keeps_trial_button_available(self):
         from handlers.start import _send_main_menu
@@ -280,7 +280,9 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         with (
             patch("handlers.start.safe_answer", new=AsyncMock()),
             patch("handlers.start.has_trial_used", new=AsyncMock(return_value=False)),
+            patch("handlers.start.has_ever_had_key", new=AsyncMock(return_value=False)),
             patch("handlers.start.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("handlers.start.has_active_subscription", new=AsyncMock(return_value=False)),
             patch("xui_client.get_xui_client_details", new=AsyncMock(side_effect=[None, {
                 "enable": True, "expiry_time": (base_time + 3 * 86400) * 1000,
             }])),
