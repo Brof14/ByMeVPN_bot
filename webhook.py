@@ -1150,12 +1150,44 @@ async def start_connection_tls_server() -> None:
     if not APP_CONNECT_TLS_CERT_FILE or not APP_CONNECT_TLS_KEY_FILE:
         raise RuntimeError("connection page TLS certificate is not configured")
 
-    from fastapi.responses import JSONResponse
-    from fastapi import FastAPI
+    from pathlib import Path
+
+    from fastapi import FastAPI, HTTPException
+    from fastapi.responses import FileResponse, JSONResponse
 
     secure_app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     secure_app.add_api_route("/connect", connection_choice_page, methods=["GET"])
     secure_app.add_api_route("/app/login", app_login_redirect, methods=["GET"])
+
+    logo_path = Path(__file__).resolve().parent / "static" / "bymevpn-mark.png"
+    asset_root = Path(__file__).resolve().parent / "static" / "app" / "assets"
+    icon_assets = frozenset({
+        "android.png", "apple.png", "happ.png", "incy.png", "linux.png", "windows.png",
+    })
+
+    @secure_app.get("/app/logo", include_in_schema=False)
+    async def secure_app_logo():
+        if not logo_path.is_file():
+            raise HTTPException(status_code=404, detail="Файл не найден")
+        return FileResponse(
+            logo_path,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff"},
+        )
+
+    @secure_app.get("/app/assets/{asset_name}", include_in_schema=False)
+    async def secure_app_brand_asset(asset_name: str):
+        if asset_name not in icon_assets:
+            raise HTTPException(status_code=404, detail="Файл не найден")
+        root = asset_root.resolve()
+        path = (root / asset_name).resolve()
+        if path.parent != root or not path.is_file():
+            raise HTTPException(status_code=404, detail="Файл не найден")
+        return FileResponse(
+            path,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff"},
+        )
 
     @secure_app.get("/healthz")
     async def secure_health():
