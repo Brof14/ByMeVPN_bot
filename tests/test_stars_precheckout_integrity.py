@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from constants import get_price_for_months
+from constants import get_monthly_display, get_price_for_months
 from handlers.buy import pre_checkout
 
 
@@ -60,6 +60,21 @@ class StarsPreCheckoutTests(unittest.IsolatedAsyncioTestCase):
         pre = self.invoice()
         await pre_checkout(pre)
         pre.answer.assert_awaited_once_with(ok=True)
+
+    async def test_recent_invoice_at_previous_total_remains_payable_during_transition(self):
+        legacy_amount = get_monthly_display(3, 2) * 3
+        pre = self.invoice(amount=legacy_amount)
+        await pre_checkout(pre)
+        pre.answer.assert_awaited_once_with(ok=True)
+
+    async def test_expired_invoice_is_rejected_even_if_it_has_legacy_amount(self):
+        legacy_amount = get_monthly_display(3, 2) * 3
+        old_time = int(time.time()) - 49 * 60 * 60
+        pre = self.invoice(amount=legacy_amount)
+        parts = pre.invoice_payload.rsplit("_", 1)
+        pre.invoice_payload = f"{parts[0]}_{old_time}"
+        await pre_checkout(pre)
+        self.assertFalse(pre.answer.await_args.kwargs["ok"])
 
     async def test_deleted_account_invoice_is_rejected(self):
         pre = self.invoice()

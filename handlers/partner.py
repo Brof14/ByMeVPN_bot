@@ -17,20 +17,14 @@ router = Router()
 
 
 def partner_main_kb(link: str) -> InlineKeyboardMarkup:
-    post_text = (
-        "ByMeVPN — VPN без сложных настроек.\n"
-        "Для новых пользователей — 3 дня бесплатно, без карты.\n\n"
-        f"Попробовать: {link}"
-    )
     share_text = quote_plus(
-        "Попробуй ByMeVPN — VPN без сложных настроек.\n"
-        "3 дня бесплатно, без карты."
+        "Хочешь, чтобы интернет был под рукой в поездках и общественных сетях? "
+        "Попробуй ByMeVPN: новым пользователям доступны 3 дня бесплатно. "
+        "Вот ссылка для старта:"
     )
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Поделиться", url=f"https://t.me/share/url?url={quote_plus(link)}&text={share_text}", )],
+        [InlineKeyboardButton(text="Пригласить друга", url=f"https://t.me/share/url?url={quote_plus(link)}&text={share_text}")],
         [InlineKeyboardButton(text="Скопировать ссылку", copy_text={"text": link})],
-        [InlineKeyboardButton(text="Скопировать текст для канала", copy_text={"text": post_text})],
-        [InlineKeyboardButton(text="Мои приглашения", callback_data="partner_referrals_list")],
         [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu")],
     ])
 
@@ -48,16 +42,16 @@ async def cb_partner(callback: CallbackQuery, bot: Bot):
     paid_referrals = int(stats.get("paid_clients", 0))
     bonus_days = int(stats.get("total_bonus_days", 0))
     pending_note = (
-        f"\n\n⚠️ Не удалось начислить бонус за регистрацию {pending_rewards} приглашённого. "
-        "Начисление сохранено — откройте этот раздел позже, чтобы повторить попытку."
+        f"\n\nБонус за {pending_rewards} приглашённого пока не начислен. "
+        "Начисление сохранено — откройте этот раздел позже, и мы повторим попытку."
         if pending_rewards else ""
     )
     text = (
-        "<b>Приглашение друзей</b>\n\n"
-        "+15 дней за регистрацию друга.\n"
-        "+30 дней за его первую подходящую оплату.\n\n"
+        "<b>Поделитесь доступом</b>\n\n"
+        "Друг сможет проверить ByMeVPN бесплатно в течение 3 дней. "
+        "За регистрацию начислим вам <b>15 дней</b>, а после первой оплаты друга — ещё <b>30 дней</b>.\n\n"
         f"Приглашено: <b>{registrations}</b> · оплатили: <b>{paid_referrals}</b>\n"
-        f"Начислено или ожидает начисления: <b>{bonus_days} дней</b>"
+        f"Ваш бонус: <b>{bonus_days} дней</b>"
         f"{pending_note}"
     )
     await send_with_photo(bot, callback, text, partner_main_kb(link), photo=REFERRALS)

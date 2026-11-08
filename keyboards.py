@@ -6,16 +6,12 @@ from bot_style import themed_button as InlineKeyboardButton
 
 from constants import (
     VALID_DEVICE_LIMITS, DEFAULT_DEVICE_LIMIT,
-    get_monthly_display, get_price_for_months, validate_device_limit,
+    TARIFF_BONUS_MONTHS, get_monthly_display, get_price_for_months, validate_device_limit,
 )
 
 _SUPPORT_URL = (
     "https://t.me/ByMeVPNSupportBot?text="
     + quote_plus("Привет, у меня вопрос по ByMeVPN.")
-)
-_REISSUE_SUPPORT_URL = (
-    "https://t.me/ByMeVPNSupportBot?text="
-    + quote_plus("Здравствуйте! Хочу перевыпустить VPN-ключ. Подскажите безопасный порядок.")
 )
 
 
@@ -28,7 +24,10 @@ def _customer_menu(*, has_subscription: bool, trial_used: bool) -> InlineKeyboar
         kb.row(InlineKeyboardButton(text="3 дня бесплатно", callback_data="trial_free"))
     kb.row(InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn", style=None if has_subscription else "primary"))
     kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
-    kb.row(InlineKeyboardButton(text="Поддержка", callback_data="trouble"))
+    kb.row(
+        InlineKeyboardButton(text="О сервисе", callback_data="about"),
+        InlineKeyboardButton(text="Поддержка", url=support_url()),
+    )
     return kb.as_markup()
 
 
@@ -50,7 +49,10 @@ def main_menu_active(key_id: int) -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="Подписка", callback_data="my_keys"))
     kb.row(InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn", style=None))
     kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
-    kb.row(InlineKeyboardButton(text="Поддержка", callback_data="trouble"))
+    kb.row(
+        InlineKeyboardButton(text="О сервисе", callback_data="about"),
+        InlineKeyboardButton(text="Поддержка", url=support_url()),
+    )
     return kb.as_markup()
 
 
@@ -70,7 +72,10 @@ def main_menu_expired(*, key_ids: list[int]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="Продлить VPN", callback_data=renew_action))
     kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
-    kb.row(InlineKeyboardButton(text="Поддержка", callback_data="trouble"))
+    kb.row(
+        InlineKeyboardButton(text="О сервисе", callback_data="about"),
+        InlineKeyboardButton(text="Поддержка", url=support_url()),
+    )
     return kb.as_markup()
 
 
@@ -98,7 +103,10 @@ def authorized_user_menu() -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="Подписка", callback_data="my_keys"))
     kb.row(InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn"))
     kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
-    kb.row(InlineKeyboardButton(text="Поддержка", callback_data="trouble"))
+    kb.row(
+        InlineKeyboardButton(text="О сервисе", callback_data="about"),
+        InlineKeyboardButton(text="Поддержка", url=support_url()),
+    )
     return kb.as_markup()
 
 
@@ -113,31 +121,27 @@ def tariff_selection_kb(
     # Device selector row: 2, 5, 10 devices
     dev_btns = []
     for d in VALID_DEVICE_LIMITS:
-        label = f"{d} устр."
+        label = f"{d} устройств"
         if d == devices:
-            label = f"✓ {d} устр."
+            label = f"✓ {label}"
         dev_btns.append(InlineKeyboardButton(
             text=label, callback_data=f"devtier_{d}",
         ))
     kb.row(*dev_btns)
 
-    # No invisible totals or misleading free months: the existing billing
-    # calculation charges for all 1/4/8/15 included months. Show the actual
-    # payable amount and effective monthly rate without changing a kopeck.
+    # Monthly price applies to every included month, including the bonus period.
     for months in (1, 3, 6, 12):
         total_price, included_days = get_price_for_months(months, devices)
         applies = discount_percent > 0 and (promo_tariff_months is None or promo_tariff_months == months)
         if applies:
             total_price = round(total_price * (100 - discount_percent) / 100)
-            months_included = included_days // 30
-            monthly_display = f"≈{total_price / months_included:.2f}".rstrip("0").rstrip(".")
+            monthly_display = str(round(total_price / (months + TARIFF_BONUS_MONTHS[months])))
         else:
             monthly_display = str(get_monthly_display(months, devices))
-        text = f"{included_days} дней · {total_price} ₽ · {monthly_display} ₽/30 дней"
+        period = {1: "1 мес.", 3: "3 мес. + 1 мес. 🎁", 6: "6 мес. + 2 мес. 🎁", 12: "12 мес. + 3 мес. 🎁"}[months]
+        text = f"{period} — {monthly_display} ₽ / мес."
         if applies:
             text += f" · −{discount_percent}%"
-        if months == 12 and discount_percent == 0:
-            text += " · Выгоднее за 30 дней"
         kb.row(InlineKeyboardButton(text=text, callback_data=f"tariff_{months}_{devices}"))
 
     kb.row(InlineKeyboardButton(text="← Назад", callback_data="back_to_menu"))
@@ -234,10 +238,19 @@ def key_detail_kb(
     has_history: bool = False,
 ) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(
-        InlineKeyboardButton(text="Подключить", callback_data=f"key_instructions:{key_id}"),
-        InlineKeyboardButton(text="Продлить", callback_data=f"key_renew:{key_id}"),
+    connect_url = None
+    if subscription_url:
+        try:
+            from app_links import build_connect_page_url
+            connect_url = build_connect_page_url(subscription_url)
+        except (RuntimeError, ValueError):
+            connect_url = None
+    connect_button = (
+        InlineKeyboardButton(text="Подключить", url=connect_url)
+        if connect_url else
+        InlineKeyboardButton(text="Подключить", callback_data=f"key_instructions:{key_id}")
     )
+    kb.row(connect_button, InlineKeyboardButton(text="Продлить", callback_data=f"key_renew:{key_id}"))
     # Manual import remains available within the connection instructions.
     if has_history:
         kb.row(InlineKeyboardButton(text="История подписок", callback_data="key_history"))
@@ -295,12 +308,23 @@ def confirm_delete_device_kb(key_id: int, device_id: int) -> InlineKeyboardMarku
 def key_settings_kb(key_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(
-        text="Запросить перевыпуск",
-        url=_REISSUE_SUPPORT_URL,
+        text="Перевыпустить подписку",
+        callback_data=f"key_reissue_confirm:{key_id}",
     ))
     kb.row(InlineKeyboardButton(text="Оплата и автопродление", callback_data=f"manage_payment_methods:{key_id}"))
     # Deliberately do not expose destructive subscription deletion in the customer UI.
     kb.row(InlineKeyboardButton(text="← К подписке", callback_data=f"key_info:{key_id}"))
+    return kb.as_markup()
+
+
+def confirm_reissue_kb(key_id: int, challenge: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(
+        text="Да, перевыпустить",
+        callback_data=f"key_reissue:{key_id}:{challenge}",
+        style="danger",
+    ))
+    kb.row(InlineKeyboardButton(text="Отмена", callback_data=f"key_settings:{key_id}"))
     return kb.as_markup()
 
 
@@ -393,20 +417,25 @@ def app_open_kb(redirect_url: str, deep_link: str = "") -> InlineKeyboardMarkup:
 # Partner / referral
 # ---------------------------------------------------------------------------
 
-def connection_guide_kb(key_id: int | None = None, subscription_url: str = "") -> InlineKeyboardMarkup:
+def connection_guide_kb(
+    key_id: int | None = None, subscription_url: str = "", connect_url: str = "",
+) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     def platform_callback(name: str) -> str:
         return f"guide_{name}:{key_id}" if key_id else f"guide_{name}"
 
-    kb.row(
-        InlineKeyboardButton(text="iPhone / iPad", callback_data=platform_callback("ios")),
-        InlineKeyboardButton(text="Android", callback_data=platform_callback("android")),
-    )
-    kb.row(
-        InlineKeyboardButton(text="Windows", callback_data=platform_callback("windows")),
-        InlineKeyboardButton(text="Linux", callback_data=platform_callback("linux")),
-    )
-    kb.row(InlineKeyboardButton(text="Другие устройства", callback_data=f"guide_more:{key_id}" if key_id else "guide_more"))
+    if connect_url:
+        kb.row(InlineKeyboardButton(text="Выбрать устройство и приложение", url=connect_url))
+    else:
+        kb.row(
+            InlineKeyboardButton(text="iPhone / iPad", callback_data=platform_callback("ios")),
+            InlineKeyboardButton(text="Android", callback_data=platform_callback("android")),
+        )
+        kb.row(
+            InlineKeyboardButton(text="Windows", callback_data=platform_callback("windows")),
+            InlineKeyboardButton(text="Linux", callback_data=platform_callback("linux")),
+        )
+        kb.row(InlineKeyboardButton(text="Другие устройства", callback_data=f"guide_more:{key_id}" if key_id else "guide_more"))
     if subscription_url:
         kb.row(InlineKeyboardButton(
             text="Скопировать ссылку",
@@ -444,7 +473,7 @@ def linux_guide_back_kb() -> InlineKeyboardMarkup:
     """Back button from specific Linux distro guide to Linux distro selection."""
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="◀️ К выбору Linux", callback_data="guide_linux"))
-    kb.row(InlineKeyboardButton(text="Поддержка", callback_data="trouble"))
+    kb.row(InlineKeyboardButton(text="Поддержка", url=support_url()))
     kb.row(InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu"))
     return kb.as_markup()
 
@@ -452,7 +481,7 @@ def linux_guide_back_kb() -> InlineKeyboardMarkup:
 def guide_back_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="◀️ Назад к платформам", callback_data="connection_guide"))
-    kb.row(InlineKeyboardButton(text="Поддержка", callback_data="trouble"))
+    kb.row(InlineKeyboardButton(text="Поддержка", url=support_url()))
     kb.row(InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu"))
     return kb.as_markup()
 

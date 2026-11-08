@@ -21,9 +21,12 @@ class ConversionUXTests(unittest.TestCase):
             actions = {b.callback_data: b.text for row in kb.inline_keyboard for b in row if b.callback_data}
             for months, rubles in zip((1, 3, 6, 12), totals):
                 text = actions[f"tariff_{months}_{limit}"]
-                self.assertIn(f"{rubles} ₽", text)
-                self.assertIn("₽/30 дней", text)
-                self.assertNotIn("в подарок", text)  # Charged for all included months.
+                self.assertIn(f"{rubles // (months + {1: 0, 3: 1, 6: 2, 12: 3}[months])} ₽ / мес.", text)
+                self.assertIn("/ мес.", text)
+                if months > 1:
+                    self.assertIn("🎁", text)
+                else:
+                    self.assertNotIn("🎁", text)
 
 
 class OrganicGrowthMetricsTests(unittest.IsolatedAsyncioTestCase):

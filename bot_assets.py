@@ -30,14 +30,15 @@ PROMO_CODE = _asset("promo_code")
 LEGAL = _asset("legal")
 AUTO_RENEWAL = _asset("auto_renewal")
 
-# Hero artwork is deliberately limited to landmark screens. Frequent
-# settings/checkout/OS steps stay light, fast, and easy to scan on mobile.
-# Retain all original assets in Git for reversible design decisions.
+# Keep the matching illustration on every customer-facing section. Repeated
+# navigation reuses Telegram's cached photo ID instead of uploading each time.
 _SECTION_ARTWORK = frozenset({
-    MENU, ABOUT, REFERRALS, AD_PROGRAM, PLANS, KEY, CONNECTION,
+    MENU, SUPPORT, ABOUT, FREE_VPN, REFERRALS, MY_INVITATIONS, AD_PROGRAM,
+    PLANS, KEY, DEVICES, CONNECTION, ANDROID, IPHONE, WINDOWS, LINUX,
+    RENEWAL, PAYMENT, PROMO_CODE, LEGAL, AUTO_RENEWAL,
 })
 
 
 def display_artwork(photo: str | None) -> str | None:
-    """Return a bundled section image when a screen explicitly requests one."""
+    """Return only a bundled ByMeVPN section image; reject arbitrary paths."""
     return photo if photo in _SECTION_ARTWORK else None

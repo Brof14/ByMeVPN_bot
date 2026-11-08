@@ -9,6 +9,7 @@ import weakref
 from urllib.parse import quote_plus
 
 from aiogram import Bot, F, Router
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
@@ -21,10 +22,10 @@ from aiogram.types import (
 from constants import (
     PRICE_CONFIG, PERIOD_LABELS, TRIAL_DAYS,
     VALID_DEVICE_LIMITS, DEFAULT_DEVICE_LIMIT, DEVICE_CONFIG,
-    get_price_for_months, get_monthly_display, validate_device_limit,
+    TARIFF_BONUS_MONTHS, get_price_for_months, get_monthly_display, validate_device_limit,
 )
 from config import PRICE_1_MONTH, DAYS_1M
-from states import BuyFlow
+from states import BuyFlow, PromoFlow
 from keyboards import tariff_selection_kb, payment_kb, support_url
 from payments import create_yookassa_payment, create_crypto_payment, claim_yookassa_checkout, release_yookassa_checkout, crypto_invoice_payload, record_fulfilled_promo
 from subscription import deliver_key
@@ -52,12 +53,18 @@ def _promo_purchase_keyboard() -> InlineKeyboardMarkup:
 
 
 def _tariff_intro(devices: int, *, renewal: bool = False, promo_binding: int | None = None) -> str:
-    """Shared copy for tariff choice, preserving all prices and durations."""
+    """Explain total price plainly, including every bonus month."""
     title = "Продление" if renewal else "Тарифы"
+    device_line = (
+        "Подключите до <b>5 устройств</b> — например, телефон, ноутбук и устройства семьи."
+        if devices == 5 else f"Для <b>{devices} устройств</b>."
+    )
     return (
         f"<b>{title}</b>\n\n"
-        f"Устройства: <b>{devices}</b>\n"
-        "Выберите срок. На кнопках — полная сумма и цена за 30 дней."
+        f"{device_line}\n\n"
+        "Цена указана за каждый месяц, включая месяцы в подарок. "
+        "Например: 3+1 месяца × 79 ₽ = <b>316 ₽</b>. "
+        "Перед оплатой покажем полный итог."
         + (f"\nПромокод действует на срок {get_price_for_months(promo_binding, devices)[1]} дней."
            if promo_binding in (1, 3, 6, 12) else "")
     )
@@ -220,11 +227,13 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
     )
 
     dev_name = DEVICE_CONFIG.get(devices, {}).get("name", f"{devices} устройств")
+    bonus_months = TARIFF_BONUS_MONTHS[months]
+    term_label = f"{months}+{bonus_months} мес." if bonus_months else f"{months} мес."
 
     text = (
         f"<b>Ваш заказ</b>\n\n"
         f"Устройства: <b>{dev_name}</b>\n"
-        f"Срок: <b>{days} дней</b>\n"
+        f"Срок: <b>{term_label} · {days} дней</b>\n"
         f"Итого: <b>{price_rub} ₽</b>{promo_text}\n"
     )
 
@@ -238,7 +247,8 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
         "\nПродолжая, вы принимаете условия <a href='https://telegra.ph/Publichnaya-oferta-na-okazanie-uslug-ByMeVPN-10-25'>оферты</a> и "
         "<a href='https://telegra.ph/Politika-v-otnoshenii-obrabotki-personalnyh-dannyh-ByMeVPN-10-25'>политики конфиденциальности</a>.\n\n"
         "<b>Перед оплатой</b>\n"
-        "При сохранении способа оплаты в ЮKassa возможно автоматическое продление: "
+        "ЮKassa может сохранить способ оплаты для автоматического продления. "
+        "Его можно отключить в настройках подписки. Следующее списание: "
         f"{price_rub} ₽ за {days} дней. Управление: «Подписка» → «Оплата и автопродление».\n"
         "Stars и CryptoBot — разовые платежи.\n\n"
         "<b>Способ оплаты</b>"
@@ -583,10 +593,15 @@ def _stars_invoice_error(pre: PreCheckoutQuery) -> str | None:
             return invalid
         if months not in (1, 3, 6, 12) or not parts[-1].isdigit():
             return invalid
+        issued_at = int(parts[-1])
+        now = int(time.time())
+        if issued_at > now + 60 or now - issued_at > 48 * 60 * 60:
+            return invalid
         from constants import MAX_GRANT_DAYS
         if not 0 < days <= MAX_GRANT_DAYS:
             return invalid
         expected_amount, expected_days = get_price_for_months(months, devices)
+        legacy_amount = get_monthly_display(months, devices) * months
         has_promo = bool("_".join(parts[5:-1]))
         amount = int(pre.total_amount)
         if has_promo:
@@ -594,7 +609,7 @@ def _stars_invoice_error(pre: PreCheckoutQuery) -> str | None:
             # invoice creation. Never permit a larger or shorter package.
             if amount > expected_amount or days < expected_days:
                 return invalid
-        elif amount != expected_amount or days != expected_days:
+        elif amount not in {expected_amount, legacy_amount} or days != expected_days:
             return invalid
     except (ValueError, TypeError, AttributeError, IndexError):
         return invalid
@@ -822,146 +837,99 @@ async def _process_successful_stars_payment(
 # Promo Code Callback Handler (for button activation)
 # ---------------------------------------------------------------------------
 
+async def _activate_promo_code(bot: Bot, target, state: FSMContext, code: str) -> bool:
+    """Validate and attach a promo to the next checkout without consuming it."""
+    code = code.strip().upper()
+    user_id = target.from_user.id
+    promo = await validate_promo_code(code)
+    if not promo:
+        await send_with_photo(
+            bot, target,
+            "<b>Не удалось применить промокод</b>\n\n"
+            "Проверьте код: возможно, он истёк или закончились активации.",
+            photo=PROMO_CODE,
+        )
+        return False
+    if await has_user_used_promo(code, user_id):
+        await send_with_photo(
+            bot, target,
+            "<b>Промокод уже использован</b>\n\nКаждый код можно применить один раз.",
+            photo=PROMO_CODE,
+        )
+        return False
+
+    promo_type = promo["promo_type"]
+    discount_value = promo["discount_value"]
+    if promo_type == "percent":
+        discount_text, promo_discount = f"{discount_value}%", discount_value
+    elif promo_type == "fixed_rub":
+        discount_text, promo_discount = f"{discount_value} ₽", 0
+    elif promo_type == "free_days":
+        discount_text, promo_discount = f"+{discount_value} дней", 0
+    else:
+        discount_text, promo_discount = str(discount_value), 0
+
+    await state.update_data(promo_info=promo, promo_code=code, promo_discount=promo_discount)
+    await state.set_state(None)
+    logger.info("Promo activated for user %s (type=%s)", user_id, promo_type)
+    await send_with_photo(
+        bot, target,
+        f"<b>Промокод применён</b>\n\n"
+        f"Бонус: <b>{discount_text}</b>\n"
+        "Он учтётся при следующей покупке. Выберите тариф.",
+        _promo_purchase_keyboard(),
+        photo=PROMO_CODE,
+    )
+    return True
+
+
 @router.callback_query(F.data.startswith("activate_promo:"))
 async def cb_activate_promo(callback: CallbackQuery, state: FSMContext):
     """Activate promo code via button click."""
     await safe_answer(callback)
-    
-    # Extract promo code from callback data
-    code = callback.data.split(":", 1)[1].strip().upper()
-    user_id = callback.from_user.id
-
-    # Validate promo code
-    promo = await validate_promo_code(code)
-    if not promo:
-        await send_with_photo(callback.bot, callback,
-            "<b>Промокод недействителен</b>\n\n"
-            "Возможные причины:\n"
-            "• Код истёк\n"
-            "• Достигнут лимит использований\n"
-            "• Код не существует\n"
-            "• Код не начался ещё",
-            photo=PROMO_CODE,
-        )
-        return
-
-    # Check if user already used this promo code
-    if await has_user_used_promo(code, user_id):
-        await send_with_photo(callback.bot, callback,
-            "<b>Промокод уже использован</b>\n\n"
-            "Каждый промокод можно использовать только один раз.",
-            photo=PROMO_CODE,
-        )
-        return
-
-    # Save promo info to state for next purchase (without burning yet!)
-    promo_type = promo["promo_type"]
-    discount_value = promo["discount_value"]
-
-    if promo_type == "percent":
-        discount_text = f"{discount_value}%"
-        promo_discount = discount_value
-    elif promo_type == "fixed_rub":
-        discount_text = f"{discount_value} ₽"
-        promo_discount = 0
-    elif promo_type == "free_days":
-        discount_text = f"+{discount_value} дней"
-        promo_discount = 0
-    else:
-        discount_text = f"{discount_value}"
-        promo_discount = 0
-
-    await state.update_data(promo_info=promo, promo_code=code, promo_discount=promo_discount)
-
-    logger.info(f"Promo code {code} activated via button for user {user_id} with type {promo_type} value {discount_value}")
-
-    await send_with_photo(callback.bot, callback,
-        f"<b>Промокод активирован</b>\n\n"
-        f"🎁 Код: <code>{code}</code>\n"
-        f"💰 Бонус: <b>{discount_text}</b>\n\n"
-        f"Бонус автоматически применится при следующей покупке.\n\n"
-        f"Выберите тариф — скидка применится автоматически.",
-        reply_markup=_promo_purchase_keyboard(),
-        photo=PROMO_CODE,
-    )
+    await _activate_promo_code(callback.bot, callback, state, callback.data.split(":", 1)[1])
 
 
 # ---------------------------------------------------------------------------
 # Promo Code Command
 # ---------------------------------------------------------------------------
 
-@router.message(F.text.startswith("/promo"))
+@router.message(Command("promo"))
 async def cmd_promo(message: Message, state: FSMContext):
-    """Activate promo code."""
+    """Start promo entry; users can type the code in their next message."""
     try:
-        parts = message.text.split(maxsplit=1)
-        if len(parts) < 2:
-            await send_with_photo(message.bot, message,
-                "<b>Применить промокод</b>\n\n"
-                "Введите: <code>/promo КОД</code>\n\n"
-                "Например: <code>/promo SALE20</code>\n\n"
-                "Промокод даст скидку при следующей покупке VPN.",
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) < 2 or not parts[1].strip():
+            await state.set_state(PromoFlow.waiting_code)
+            await send_with_photo(
+                message.bot, message,
+                "<b>Промокод</b>\n\nОтправьте код следующим сообщением.",
                 photo=PROMO_CODE,
             )
             return
+        await _activate_promo_code(message.bot, message, state, parts[1])
+    except Exception:
+        logger.exception("Promo activation failed")
+        await message.answer("Не удалось применить код. Попробуйте ещё раз позже.")
 
-        code = parts[1].strip().upper()
-        user_id = message.from_user.id
 
-        # Validate promo code
-        promo = await validate_promo_code(code)
-        if not promo:
-            await send_with_photo(message.bot, message,
-                "<b>Промокод недействителен</b>\n\n"
-                "Возможные причины:\n"
-                "• Код истёк\n"
-                "• Достигнут лимит использований\n"
-                "• Код не существует\n"
-                "• Код не начался ещё",
-                photo=PROMO_CODE,
-            )
-            return
-
-        # Check if user already used this promo code
-        if await has_user_used_promo(code, user_id):
-            await send_with_photo(message.bot, message,
-                "<b>Промокод уже использован</b>\n\n"
-                "Каждый промокод можно использовать только один раз.",
-                photo=PROMO_CODE,
-            )
-            return
-
-        # Save promo info to state for next purchase (without burning yet!)
-        promo_type = promo["promo_type"]
-        discount_value = promo["discount_value"]
-
-        if promo_type == "percent":
-            discount_text = f"{discount_value}%"
-            promo_discount = discount_value
-        elif promo_type == "fixed_rub":
-            discount_text = f"{discount_value} ₽"
-            promo_discount = 0
-        elif promo_type == "free_days":
-            discount_text = f"+{discount_value} дней"
-            promo_discount = 0
-        else:
-            discount_text = f"{discount_value}"
-            promo_discount = 0
-
-        await state.update_data(promo_info=promo, promo_code=code, promo_discount=promo_discount)
-
-        logger.info(f"Promo code {code} activated for user {user_id} with type {promo_type} value {discount_value}")
-
-        await send_with_photo(message.bot, message,
-            f"<b>Промокод активирован</b>\n\n"
-            f"🎁 Код: <code>{code}</code>\n"
-            f"💰 Бонус: <b>{discount_text}</b>\n\n"
-            f"Бонус автоматически применится при следующей покупке.\n\n"
-            f"Выберите тариф — скидка применится автоматически.",
-            _promo_purchase_keyboard(),
-            photo=PROMO_CODE,
-        )
-
-    except Exception as e:
-        logger.error("Promo code error: %s", e)
-        await message.answer("❌ Произошла ошибка. Попробуйте позже.")
+@router.message(PromoFlow.waiting_code, F.text)
+async def receive_promo_code(message: Message, state: FSMContext):
+    """Accept a plain promo code after /promo; no command prefix is needed."""
+    code = (message.text or "").strip()
+    if code.lower() in {"/cancel", "отмена"}:
+        await state.set_state(None)
+        await message.answer("Ввод промокода отменён.")
+        return
+    if code.startswith("/"):
+        await state.set_state(None)
+        await message.answer("Ввод промокода закрыт. Откройте нужный раздел меню и попробуйте снова.")
+        return
+    if not code or len(code) > 64 or any(ch.isspace() for ch in code):
+        await message.answer("Отправьте только код одним сообщением или /cancel для отмены.")
+        return
+    try:
+        await _activate_promo_code(message.bot, message, state, code)
+    except Exception:
+        logger.exception("Promo activation failed")
+        await message.answer("Не удалось проверить код. Попробуйте ещё раз позже.")

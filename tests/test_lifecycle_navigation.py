@@ -16,7 +16,7 @@ class CustomerNavigationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(actions(markup)[0], "key_renew:7")
         self.assertNotIn("trial_free", actions(markup))
         self.assertIn("free_vpn", actions(markup))
-        self.assertIn("trouble", actions(markup))
+        self.assertTrue(markup.inline_keyboard[-1][-1].url.startswith("https://t.me/ByMeVPNSupportBot"))
 
     def test_expired_multiple_keys_choose_subscription_first(self):
         self.assertEqual(actions(main_menu_expired(key_ids=[7, 8]))[0], "my_keys")
@@ -59,7 +59,7 @@ class CustomerNavigationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(desired, actions(keyboard), topic)
             if topic == "import":
                 self.assertIn("my_keys", actions(keyboard))
-            self.assertEqual(actions(keyboard)[-1], "trouble")
+            self.assertTrue(keyboard.inline_keyboard[-2][0].url.startswith("https://t.me/ByMeVPNSupportBot"))
 
 
 class PromotionalControlTests(unittest.IsolatedAsyncioTestCase):

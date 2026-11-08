@@ -76,6 +76,10 @@ TARIFF_DAYS = {
     12: 450,  # 12 мес. + 3 мес. 🎁
 }
 
+# The advertised monthly rate applies to every included month, including the
+# bonus period.  For example, 3 + 1 months at 79 ₽/month cost 4 × 79 ₽.
+TARIFF_BONUS_MONTHS = {1: 0, 3: 1, 6: 2, 12: 3}
+
 # ============================================================================
 # Intro Trial (paid): 1 ₽ → 3 days of access → 89 ₽/мес recurring
 # ============================================================================
@@ -124,10 +128,11 @@ def get_monthly_display(months: int, devices: int = DEFAULT_DEVICE_LIMIT) -> int
 def get_total_price(months: int, devices: int = DEFAULT_DEVICE_LIMIT) -> int:
     """
     Actual purchase price to be charged at payment.
-    Formula: get_monthly_price(months, devices) * included subscription months
+    The monthly rate is charged for every included month, including bonus months.
+    Formula: get_monthly_price(months, devices) * (paid months + bonus months)
     """
     m = months if months in BASE_MONTHLY_PRICES else 1
-    return get_monthly_price(m, devices) * (TARIFF_DAYS[m] // 30)
+    return get_monthly_price(m, devices) * (m + TARIFF_BONUS_MONTHS[m])
 
 
 def get_tariff_days(months: int) -> int:

@@ -335,7 +335,7 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
         # 5 devices     109      99      89       79
         # 10 devices    129     119     109       99
         #
-        # total_prices:
+        # total_prices (including bonus months):
         #             1 мес   3 мес   6 мес   12 мес
         # 2 devices      89     316     552      885
         # 5 devices     109     396     712     1185

@@ -164,6 +164,15 @@ APP_PUBLIC_URL = (
     or f"{_webhook_origin.scheme}://{_webhook_origin.netloc}"
 ).rstrip("/")
 
+# The connection chooser has its own explicit public origin. Do not infer it
+# from WEBHOOK_URL: deployments may use an internal or placeholder webhook
+# address that is not a browser-accessible HTTPS origin.
+APP_CONNECT_PAGE_URL = (os.getenv("APP_CONNECT_PAGE_URL") or "").strip().rstrip("/")
+APP_CONNECT_TLS_HOST = os.getenv("APP_CONNECT_TLS_HOST") or "0.0.0.0"
+APP_CONNECT_TLS_PORT = int(os.getenv("APP_CONNECT_TLS_PORT") or "8443")
+APP_CONNECT_TLS_CERT_FILE = os.getenv("APP_CONNECT_TLS_CERT_FILE") or ""
+APP_CONNECT_TLS_KEY_FILE = os.getenv("APP_CONNECT_TLS_KEY_FILE") or ""
+
 # ============================================================================
 # Trial and Referral Configuration
 # ============================================================================
@@ -174,9 +183,9 @@ TRIAL_PRICE = 0
 # Pricing Configuration
 # Aligned with constants.py single source of truth:
 #   1  мес.            → 89 ₽ (89 ₽/мес)
-#   3  мес. + 1 мес 🎁 → 316 ₽ (79 ₽/мес)
-#   6  мес. + 2 мес 🎁 → 552 ₽ (69 ₽/мес)
-#   12 мес. + 3 мес 🎁 → 885 ₽ (59 ₽/мес)
+#   3  мес. + 1 мес 🎁 → 316 ₽ (79 ₽ × 4 месяца)
+#   6  мес. + 2 мес 🎁 → 552 ₽ (69 ₽ × 8 месяцев)
+#   12 мес. + 3 мес 🎁 → 885 ₽ (59 ₽ × 15 месяцев)
 # ============================================================================
 from constants import get_total_price, TARIFF_DAYS
 

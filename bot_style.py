@@ -17,15 +17,15 @@ from aiogram.types import InlineKeyboardButton as TelegramInlineKeyboardButton, 
 # Confirmed catalog IDs; each role has a distinct icon. Reuse roles, not IDs.
 # sfsymbols is primary; exceptions add platform identity and restrained gifting.
 ICON_IDS: dict[str, str] = {
-    "subscription": "6019290828759898301",  # sfsymbols key
-    "plans": "6030573613357209704",         # shopping bag
+    "subscription": "6021868492037298942",  # shield with check
+    "plans": "6030664675253820292",         # shopping cart
     "free": "5406756500108501710",          # FREE
     "gift": "6023826881160157558",          # sfsymbols outlined present
     "feedback": "6025951481222403788",      # editing circle
     "crypto": "6030443364178992166",        # sfsymbols wallet
     "referrals": "6021791869820738130",     # two people
     "ads": "6021726637857446455",           # megaphone
-    "about": "6019094432790354513",         # informational message
+    "about": "6021620268697393273",         # information document
     "support": "6019130940012370273",       # chat with question
     "connect": "6019076101869934284",       # key with radio signal
     "devices": "6021859429656304791",       # tablet and phone
@@ -210,7 +210,7 @@ def _icon_for(text: str, callback: str, *, copy: bool, destructive: bool, back: 
         return ICON_IDS[platform]
     for month in (1, 3, 6, 12):
         if callback.startswith(f"tariff_{month}_"):
-            return ICON_IDS["tariff_1"]
+            return ICON_IDS[f"tariff_{month}"]
     if callback.startswith("autorenew_enable:"):
         return ICON_IDS["notifications_on"]
     if callback.startswith(("autorenew_unbind", "autorenew_cancel")):
@@ -229,23 +229,14 @@ def _icon_for(text: str, callback: str, *, copy: bool, destructive: bool, back: 
 
 
 def _button_style(label: str, callback: str, *, destructive: bool, navigation: bool) -> str | None:
-    """Reserve blue for primary customer actions, not every available option."""
-    if destructive:
+    """Use blue for actions, green for a free claim, and red for back/delete."""
+    if destructive or navigation:
         return "danger"
     if callback == "trial_free":
         return "success"
-    if navigation or callback in _SECONDARY_CALLBACKS:
-        return None
-    if callback.startswith("tariff_"):
-        # Only the balanced 6+2 offer is accented; every period is selectable.
-        return "primary" if callback.startswith("tariff_6_") else None
-    if callback in _PRIMARY_CALLBACKS or callback.startswith(_PRIMARY_PREFIXES):
-        return "primary"
-    if callback.startswith(_SECONDARY_PREFIXES):
-        return None
-    if label.strip().lower().startswith(("скачать", "установить", "открыть приложение", "поделиться")):
-        return "primary"
-    return None
+    if callback.startswith("tariff_3_"):
+        return "success"
+    return "primary"
 
 
 def themed_button(*args, **kwargs) -> TelegramInlineKeyboardButton:
@@ -259,10 +250,9 @@ def themed_button(*args, **kwargs) -> TelegramInlineKeyboardButton:
     destructive = callback.startswith(_DESTRUCTIVE_PREFIXES)
     navigation = _is_navigation(label, callback)
 
-    if "style" not in kwargs:
+    if kwargs.get("style") not in {"primary", "success", "danger"}:
         style = _button_style(label, callback, destructive=destructive, navigation=navigation)
-        if style:
-            kwargs["style"] = style
+        kwargs["style"] = style or "primary"
 
     if (
         "icon_custom_emoji_id" not in kwargs

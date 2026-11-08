@@ -40,7 +40,7 @@ from handlers import (
     guide_router, legal_router, admin_router, auth_router, fallback_router, ad_program_router
 )
 from subscription import router as subscription_router
-from webhook import start_webhook_server
+from webhook import start_webhook_server, start_connection_tls_server
 from payment_monitor import start_payment_monitor
 from handlers.marketing import router as marketing_router
 
@@ -262,6 +262,9 @@ async def main() -> None:
         spawn_supervised("notification_scheduler", lambda: start_notification_scheduler(bot), bot)
         spawn_supervised("device_monitor", lambda: start_device_monitor(bot), bot)
         spawn_supervised("webhook_server", lambda: start_webhook_server(bot, dp), bot)
+        from config import APP_CONNECT_TLS_CERT_FILE, APP_CONNECT_TLS_KEY_FILE
+        if APP_CONNECT_TLS_CERT_FILE and APP_CONNECT_TLS_KEY_FILE:
+            spawn_supervised("connection_tls_server", start_connection_tls_server, bot)
         await start_payment_monitor(bot)
 
         from autorenew import start_autorenew_worker
