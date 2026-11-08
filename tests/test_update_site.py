@@ -17,15 +17,34 @@ class UpdateSiteTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name) / "app"
         (self.root / "downloads").mkdir(parents=True)
+        self.assets = self.root / "assets"
+        self.assets.mkdir()
+        for icon in update_site.ICON_ASSETS:
+            (self.assets / icon).write_bytes(b"\x89PNG\r\n\x1a\n" + icon.encode())
         app = FastAPI()
         app.include_router(update_site.router)
         self.client = TestClient(app)
         self.root_patch = patch.object(update_site, "ROOT", self.root)
         self.root_patch.start()
+        self.assets_patch = patch.object(update_site, "ASSETS", self.assets)
+        self.assets_patch.start()
 
     def tearDown(self):
         self.root_patch.stop()
+        self.assets_patch.stop()
         self.temp.cleanup()
+
+    def test_connection_logos_are_served_from_fixed_asset_allowlist(self):
+        for icon in update_site.ICON_ASSETS:
+            with self.subTest(icon=icon):
+                response = self.client.get(f"/app/assets/{icon}")
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.content, b"\x89PNG\r\n\x1a\n" + icon.encode())
+                self.assertEqual(response.headers["content-type"], "image/png")
+                self.assertEqual(response.headers["cache-control"], "public, max-age=86400")
+                self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+        self.assertEqual(self.client.get("/app/assets/unknown.png").status_code, 404)
+        self.assertEqual(self.client.get("/app/assets/../update.json").status_code, 404)
 
     def publish_test_artifact(self):
         apk = b"isolated-test-apk-content"
