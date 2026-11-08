@@ -53,21 +53,29 @@ def _promo_purchase_keyboard() -> InlineKeyboardMarkup:
 
 
 def _tariff_intro(devices: int, *, renewal: bool = False, promo_binding: int | None = None) -> str:
-    """Explain total price plainly, including every bonus month."""
-    title = "Продление" if renewal else "Тарифы"
-    device_line = (
-        "Подключите до <b>5 устройств</b> — например, телефон, ноутбук и устройства семьи."
-        if devices == 5 else f"Для <b>{devices} устройств</b>."
-    )
-    return (
-        f"<b>{title}</b>\n\n"
-        f"{device_line}\n\n"
-        "Цена указана за каждый месяц, включая месяцы в подарок. "
-        "Например: 3+1 месяца × 79 ₽ = <b>316 ₽</b>. "
-        "Перед оплатой покажем полный итог."
-        + (f"\nПромокод действует на срок {get_price_for_months(promo_binding, devices)[1]} дней."
-           if promo_binding in (1, 3, 6, 12) else "")
-    )
+    """Explain the device tier and included bonus months before checkout."""
+    if renewal:
+        device_line = (
+            "<b>5 устройств</b> — для семьи и нескольких личных устройств."
+            if devices == 5 else f"Выбрано: <b>{devices} устройств</b>"
+        )
+        text = (
+            f"<b>Продление</b>\n\n{device_line}\n\n"
+            "Выберите срок подписки. Чем дольше период, тем выгоднее условия.\n\n"
+            "Бонусные месяцы уже включены. Полную сумму покажем до оплаты."
+        )
+    else:
+        device_label = {2: "2 устройства", 5: "5 устройств", 10: "10 устройств"}[devices]
+        text = (
+            "<b>Тарифы</b>\n"
+            f"Выбрано: <b>{device_label}</b>\n"
+            "Чем дольше подписка, тем выгоднее условия. При выборе тарифа на 3, 6 или 12 месяцев "
+            "вы получаете <b>дополнительные месяцы в подарок</b>.\n"
+            "Выберите подходящий срок:"
+        )
+    if promo_binding in (1, 3, 6, 12):
+        text += f"\n\nПромокод действует на срок {get_price_for_months(promo_binding, devices)[1]} дней."
+    return text
 
 
 # ---------------------------------------------------------------------------

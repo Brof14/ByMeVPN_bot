@@ -38,7 +38,6 @@ from keyboards import (
 )
 from utils import send_with_photo, safe_answer
 from async_utils import monitor_performance
-from cache import cache_subscription_data
 from bot_style import themed_button as InlineKeyboardButton
 from bot_assets import MENU, ABOUT, FREE_VPN
 
@@ -52,6 +51,14 @@ async def _handle_app_login(message: Message, user_id: int, user_name: str) -> N
     if state == "unknown":
         await message.answer(
             "Не удалось проверить статус подписки. Попробуйте ещё раз немного позже."
+        )
+        return
+
+    if state == "existing":
+        await message.answer(
+            "Для аккаунта уже создан клиент ByMeVPN. Пробный период доступен только аккаунтам без клиента. "
+            "Выберите тариф, чтобы продолжить.",
+            reply_markup=main_menu_existing(trial_used=True),
         )
         return
 
@@ -138,9 +145,8 @@ async def _handle_app_login(message: Message, user_id: int, user_name: str) -> N
 # ---------------------------------------------------------------------------
 
 @monitor_performance("user_state_check")
-@cache_subscription_data
 async def _user_state(user_id: int) -> str:
-    """Определить состояние пользователя с использованием кэша."""
+    """Determine account state without offering trial to a pre-existing panel client."""
     # Выполняем все проверки параллельно для максимальной скорости
     tasks = [
         has_active_subscription(user_id),
@@ -159,6 +165,14 @@ async def _user_state(user_id: int) -> str:
         return "active"
     if ever_had or trial_used:
         return "expired"
+    try:
+        from xui_client import get_xui_client_details
+        panel_client = await get_xui_client_details(user_id, strict=True)
+    except Exception as exc:
+        logger.warning("Panel-backed account state check failed (%s)", type(exc).__name__)
+        return "unknown"
+    if panel_client:
+        return "existing"
     return "new"
 
 
@@ -229,6 +243,13 @@ async def _send_main_menu(
                 "Попробуйте 3 дня бесплатно или сразу выберите подходящий тариф."
             )
         kb = main_menu_new_user()
+    elif state == "existing":
+        text = (
+            "<b>Аккаунт уже подключался к ByMeVPN</b>\n\n"
+            "Пробный период доступен только аккаунтам без ранее созданного клиента. "
+            "Выберите тариф, чтобы продолжить."
+        )
+        kb = main_menu_existing(trial_used=True)
     elif state == "expired":
         text = (
             "<b>Доступ завершён</b>\n\n"
@@ -534,22 +555,34 @@ async def _start_free_trial(bot: Bot, callback: CallbackQuery, ref_id: int | Non
     user_id = callback.from_user.id
 
     await safe_answer(callback)
-    if await has_trial_used(user_id) or await get_user_keys(user_id):
+    if await has_trial_used(user_id):
         await callback.message.answer(
-            "Пробный период уже использован или для аккаунта уже создан ключ. "
-            "Выберите тариф, чтобы продолжить пользоваться ByMeVPN."
+            "Пробный период уже использован. Выберите тариф, чтобы продолжить пользоваться ByMeVPN."
+        )
+        return
+    if await get_user_keys(user_id):
+        await callback.message.answer(
+            "Для аккаунта уже создан ключ, поэтому пробный период повторно недоступен. "
+            "Выберите тариф для продления."
         )
         return
 
     try:
         from xui_client import get_xui_client_details
-        panel_client = await get_xui_client_details(user_id)
+        panel_client = await get_xui_client_details(user_id, strict=True)
     except Exception as exc:
         logger.warning("Free trial eligibility check failed (%s)", type(exc).__name__)
         await callback.message.answer(
             "Не удалось проверить доступность пробного периода. Попробуйте позже или напишите в поддержку."
         )
         return
+    if panel_client:
+        await callback.message.answer(
+            "Для аккаунта уже создан клиент ByMeVPN. Пробный период доступен только аккаунтам без клиента. "
+            "Выберите тариф, чтобы продолжить."
+        )
+        return
+
     pending = await get_trial_claim_reservation(user_id)
     if pending:
         if int(time.time()) - int(pending.get("created_at") or 0) < 120:
@@ -578,13 +611,6 @@ async def _start_free_trial(bot: Bot, callback: CallbackQuery, ref_id: int | Non
                 "Не удалось проверить предыдущую попытку. Попробуйте позже или напишите в поддержку."
             )
             return
-
-    if panel_client:
-        await callback.message.answer(
-            "Для аккаунта уже создан клиент ByMeVPN. "
-            "Если срок доступа закончился, выберите тариф для продления."
-        )
-        return
 
     claim_id = await reserve_trial_claim(user_id)
     if not claim_id:

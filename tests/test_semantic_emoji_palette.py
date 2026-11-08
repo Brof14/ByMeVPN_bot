@@ -3,7 +3,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from bot_style import ICON_IDS, themed_button, normalize_navigation
+from bot_style import ICON_IDS, MINIMALIST_BW_ICON_IDS, themed_button, normalize_navigation
 from bot_assets import display_artwork, MENU, PLANS, KEY, CONNECTION, ABOUT, REFERRALS, AD_PROGRAM
 from keyboards import (
     main_menu_active, connection_guide_kb, additional_platforms_kb,
@@ -24,11 +24,15 @@ class SemanticPremiumEmojiTests(unittest.TestCase):
         self.assertGreaterEqual(len(ICON_IDS), 40)
         self.assertEqual(len(ICON_IDS), len(set(ICON_IDS.values())))
         self.assertTrue(all(id.isdecimal() and len(id) >= 16 for id in ICON_IDS.values()))
+        self.assertGreater(
+            sum(icon_id in MINIMALIST_BW_ICON_IDS for icon_id in ICON_IDS.values()) / len(ICON_IDS),
+            0.70,
+        )
 
     def test_subscription_about_and_tariff_buttons_use_the_new_catalog_icons(self):
-        self.assertEqual(ICON_IDS["subscription"], "6021868492037298942")
-        self.assertEqual(ICON_IDS["about"], "6021620268697393273")
-        self.assertEqual(ICON_IDS["plans"], "6030664675253820292")
+        self.assertEqual(ICON_IDS["subscription"], "6005570495603282482")
+        self.assertEqual(ICON_IDS["about"], "5879785854284599288")
+        self.assertEqual(ICON_IDS["plans"], "5983399041197675256")
 
     def test_exact_platform_icons_beat_generic_guide_fallback(self):
         roles = {
@@ -62,14 +66,13 @@ class SemanticPremiumEmojiTests(unittest.TestCase):
         with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "1"}):
             for devices in (2, 5, 10):
                 marked = by_callback(tariff_selection_kb(devices=devices))
-                roles = {1: "tariff_1", 3: "tariff_3", 6: "tariff_6", 12: "tariff_12"}
                 icons = []
-                for months, role in roles.items():
+                for months in (1, 3, 6, 12):
                     action = f"tariff_{months}_{devices}"
                     self.assertIn(action, marked)
                     icons.append(marked[action].icon_custom_emoji_id)
-                    self.assertEqual(marked[action].icon_custom_emoji_id, ICON_IDS[role])
-                self.assertEqual(len(set(icons)), 4)
+                self.assertEqual(icons[0], ICON_IDS["tariff_1"])
+                self.assertEqual(icons[1:], [ICON_IDS["gift"]] * 3)
                 self.assertEqual(
                     [marked[f"tariff_{m}_{devices}"].style for m in (1, 3, 6, 12)],
                     ["primary", "success", "primary", "primary"],
