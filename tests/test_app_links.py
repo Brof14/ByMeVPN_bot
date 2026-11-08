@@ -88,14 +88,19 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertIn("Koala Clash", page)
         self.assertIn("v2rayN", page)
         self.assertIn("koala-clash/releases/latest", page)
+        self.assertIn("play.google.com/store/apps/details?id=llc.itdev.incy", page)
+        self.assertIn("github.com/Happ-proxy/happ-android/releases/latest", page)
 
     def test_connection_page_has_os_marks_and_manual_copy_fallback(self):
         page = render_connection_choice_page("https://sub.example/abc")
 
         for label in ("🤖 Android", "🍎 iPhone / iPad", "🪟 Windows", "🍏 macOS", "🐧 Linux"):
             self.assertIn(label, page)
-        self.assertIn("Скопировать ссылку для импорта", page)
+        self.assertIn("Скопировать ссылку", page)
         self.assertIn("Ссылка скопирована", page)
+        self.assertIn("Если не открылось — скопировать ссылку", page)
+        self.assertIn('src="/app/logo"', page)
+        self.assertIn("Выберите устройство, затем приложение", page)
 
 
 class TestAppOpenKeyboard(unittest.TestCase):

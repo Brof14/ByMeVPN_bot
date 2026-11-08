@@ -1,6 +1,8 @@
 """My VPN: subscription, device, renewal, and key management screens."""
+import asyncio
 import time
 import logging
+import secrets
 from html import escape
 
 from aiogram import Bot, F, Router
@@ -19,6 +21,7 @@ from keyboards import (
     payment_kb, back_to_menu, connection_guide_kb, tariff_selection_kb,
     autorenew_cancel_confirm_kb, manage_payment_methods_kb, key_settings_kb,
     key_devices_kb, key_device_detail_kb, confirm_delete_device_kb, key_history_kb,
+    confirm_reissue_kb,
 )
 from utils import send_with_photo, send_or_edit, safe_answer
 from constants import format_timestamp as fmt_date, format_days_left as fmt_days_left
@@ -28,6 +31,7 @@ from bot_style import themed_button as InlineKeyboardButton
 
 logger = logging.getLogger(__name__)
 router = Router()
+_reissue_callback_locks: dict[int, asyncio.Lock] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -348,10 +352,121 @@ async def cb_key_settings(callback: CallbackQuery, bot: Bot):
         return
 
     text = (
-        "<b>Управление</b>\n\n"
-        "Оплата, перевыпуск и удаление доступа."
+        "<b>Управление подпиской</b>\n\n"
+        "Обновите ссылку доступа или настройте оплату."
     )
     await send_or_edit(bot, callback, text, key_settings_kb(key_id), photo=AUTO_RENEWAL)
+
+
+@router.callback_query(F.data.startswith("key_reissue_confirm:"))
+async def cb_key_reissue_confirm(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    try:
+        key_id = int(callback.data.split(":", 1)[1])
+    except (IndexError, ValueError):
+        await safe_answer(callback, "Не удалось открыть перевыпуск.", alert=True)
+        return
+    key = await get_key_by_id(key_id)
+    if not key or key["user_id"] != callback.from_user.id:
+        await safe_answer(callback, "Подписка не найдена.", alert=True)
+        return
+    if int(key.get("expiry") or 0) <= int(time.time()):
+        await safe_answer(callback, "Срок подписки завершён. Выберите тариф для продления.", alert=True)
+        return
+    try:
+        from xui_client import get_xui_client_details
+        panel_client = await get_xui_client_details(callback.from_user.id, strict=True)
+        if (
+            not panel_client or not panel_client.get("enable")
+            or int(panel_client.get("expiry_time") or 0) <= int(time.time() * 1000)
+            or not panel_client.get("uuid")
+        ):
+            raise RuntimeError("active panel profile could not be confirmed")
+    except Exception as exc:
+        logger.warning("Cannot open subscription reissue confirmation (%s)", type(exc).__name__)
+        await safe_answer(callback, "Не удалось проверить активную подписку. Попробуйте позже.", alert=True)
+        return
+    await safe_answer(callback)
+    challenge = secrets.token_urlsafe(8)
+    await state.update_data(reissue_challenge={
+        "key_id": key_id,
+        "token": challenge,
+        "uuid": str(panel_client["uuid"]),
+        "expires_at": int(time.time()) + 300,
+    })
+    text = (
+        "<b>Перевыпустить подписку?</b>\n\n"
+        "Старая ссылка перестанет работать, вместо неё появится новая. "
+        "Срок подписки и лимит устройств сохранятся. После подтверждения "
+        "замените ссылку в VPN-приложении."
+    )
+    await send_or_edit(bot, callback, text, confirm_reissue_kb(key_id, challenge), photo=KEY)
+
+
+@router.callback_query(F.data.startswith("key_reissue:"))
+async def cb_key_reissue(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    try:
+        _, raw_key_id, challenge = callback.data.split(":", 2)
+        key_id = int(raw_key_id)
+    except (IndexError, ValueError):
+        await safe_answer(callback, "Не удалось выполнить перевыпуск.", alert=True)
+        return
+    key = await get_key_by_id(key_id)
+    if not key or key["user_id"] != callback.from_user.id:
+        await safe_answer(callback, "Подписка не найдена.", alert=True)
+        return
+    confirmation_lock = _reissue_callback_locks.setdefault(callback.from_user.id, asyncio.Lock())
+    async with confirmation_lock:
+        pending = (await state.get_data()).get("reissue_challenge") or {}
+        if (
+            pending.get("key_id") != key_id
+            or not secrets.compare_digest(str(pending.get("token") or ""), challenge)
+            or int(pending.get("expires_at") or 0) < int(time.time())
+        ):
+            await safe_answer(callback, "Подтверждение истекло. Откройте перевыпуск ещё раз.", alert=True)
+            return
+        # Consume before touching the panel so the same tap cannot be replayed.
+        await state.update_data(reissue_challenge=None)
+    if int(key.get("expiry") or 0) <= int(time.time()):
+        await safe_answer(callback, "Срок подписки завершён. Выберите тариф для продления.", alert=True)
+        return
+    await safe_answer(callback, "Проверяем подписку…")
+    try:
+        from subscription_reissue import reissue_user_subscription
+        result = await reissue_user_subscription(
+            callback.from_user.id,
+            expected_uuid=str(pending.get("uuid") or ""),
+        )
+    except Exception as exc:
+        logger.warning("Subscription reissue failed (%s)", type(exc).__name__)
+        result = None
+    if result and result.get("state_unknown"):
+        await send_or_edit(
+            bot, callback,
+            "<b>Результат перевыпуска пока не подтверждён</b>\n\n"
+            "Не нажимайте кнопку повторно и не удаляйте приложение. "
+            "Нужна ручная сверка состояния, чтобы сохранить доступ.",
+            key_settings_kb(key_id), photo=KEY,
+        )
+        return
+    if not result or not result.get("updated"):
+        await send_or_edit(
+            bot, callback,
+            "<b>Не удалось подтвердить перевыпуск</b>\n\n"
+            "Старая ссылка сохранена, если панель не подтвердила замену. "
+            "Обновите экран подписки и попробуйте позже.",
+            key_settings_kb(key_id), photo=KEY,
+        )
+        return
+    updated = await get_key_by_id(key_id)
+    if not updated or updated["user_id"] != callback.from_user.id:
+        await send_or_edit(bot, callback, "Подписка обновлена. Откройте раздел «Подписка», чтобы получить новую ссылку.", key_settings_kb(key_id), photo=KEY)
+        return
+    text, keyboard = await _key_info_content(callback.from_user.id, updated)
+    await send_or_edit(
+        bot, callback,
+        "<b>Подписка перевыпущена</b>\nСтарая ссылка отключена. Скопируйте новую кнопкой «Скопировать ссылку».\n\n" + text,
+        keyboard, photo=KEY,
+    )
 
 
 def _pm_tariff_line(sub: dict | None) -> str:

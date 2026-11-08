@@ -17,15 +17,15 @@ from aiogram.types import InlineKeyboardButton as TelegramInlineKeyboardButton, 
 # Confirmed catalog IDs; each role has a distinct icon. Reuse roles, not IDs.
 # sfsymbols is primary; exceptions add platform identity and restrained gifting.
 ICON_IDS: dict[str, str] = {
-    "subscription": "6019290828759898301",  # sfsymbols key
-    "plans": "6030573613357209704",         # shopping bag
+    "subscription": "6021868492037298942",  # shield with check
+    "plans": "6030664675253820292",         # shopping cart
     "free": "5406756500108501710",          # FREE
     "gift": "6023826881160157558",          # sfsymbols outlined present
     "feedback": "6025951481222403788",      # editing circle
     "crypto": "6030443364178992166",        # sfsymbols wallet
     "referrals": "6021791869820738130",     # two people
     "ads": "6021726637857446455",           # megaphone
-    "about": "6019094432790354513",         # informational message
+    "about": "6021620268697393273",         # information document
     "support": "6019130940012370273",       # chat with question
     "connect": "6019076101869934284",       # key with radio signal
     "devices": "6021859429656304791",       # tablet and phone

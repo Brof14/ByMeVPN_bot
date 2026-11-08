@@ -253,6 +253,10 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         actions = callbacks(markup)
         self.assertNotIn("rf_apps_guide:9", actions)
         self.assertNotIn("key_delete:9", actions)
+        self.assertIn("key_reissue_confirm:9", actions)
+        reissue = next(button for row in markup.inline_keyboard for button in row if button.callback_data == "key_reissue_confirm:9")
+        self.assertEqual(reissue.text, "Перевыпустить подписку")
+        self.assertIsNone(reissue.url)
         self.assertIn("manage_payment_methods:9", actions)
 
     async def test_referral_offer_separates_rewards_link_and_statistics(self):

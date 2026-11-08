@@ -13,10 +13,6 @@ _SUPPORT_URL = (
     "https://t.me/ByMeVPNSupportBot?text="
     + quote_plus("Привет, у меня вопрос по ByMeVPN.")
 )
-_REISSUE_SUPPORT_URL = (
-    "https://t.me/ByMeVPNSupportBot?text="
-    + quote_plus("Здравствуйте! Хочу перевыпустить VPN-ключ. Подскажите безопасный порядок.")
-)
 
 
 def _customer_menu(*, has_subscription: bool, trial_used: bool) -> InlineKeyboardMarkup:
@@ -312,12 +308,23 @@ def confirm_delete_device_kb(key_id: int, device_id: int) -> InlineKeyboardMarku
 def key_settings_kb(key_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(
-        text="Запросить перевыпуск",
-        url=_REISSUE_SUPPORT_URL,
+        text="Перевыпустить подписку",
+        callback_data=f"key_reissue_confirm:{key_id}",
     ))
     kb.row(InlineKeyboardButton(text="Оплата и автопродление", callback_data=f"manage_payment_methods:{key_id}"))
     # Deliberately do not expose destructive subscription deletion in the customer UI.
     kb.row(InlineKeyboardButton(text="← К подписке", callback_data=f"key_info:{key_id}"))
+    return kb.as_markup()
+
+
+def confirm_reissue_kb(key_id: int, challenge: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(
+        text="Да, перевыпустить",
+        callback_data=f"key_reissue:{key_id}:{challenge}",
+        style="danger",
+    ))
+    kb.row(InlineKeyboardButton(text="Отмена", callback_data=f"key_settings:{key_id}"))
     return kb.as_markup()
 
 

@@ -25,6 +25,11 @@ class SemanticPremiumEmojiTests(unittest.TestCase):
         self.assertEqual(len(ICON_IDS), len(set(ICON_IDS.values())))
         self.assertTrue(all(id.isdecimal() and len(id) >= 16 for id in ICON_IDS.values()))
 
+    def test_subscription_about_and_tariff_buttons_use_the_new_catalog_icons(self):
+        self.assertEqual(ICON_IDS["subscription"], "6021868492037298942")
+        self.assertEqual(ICON_IDS["about"], "6021620268697393273")
+        self.assertEqual(ICON_IDS["plans"], "6030664675253820292")
+
     def test_exact_platform_icons_beat_generic_guide_fallback(self):
         roles = {
             "guide_ios": "ios",
