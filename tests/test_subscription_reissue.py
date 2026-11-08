@@ -39,6 +39,7 @@ class _Panel:
             "down": 73,
         }
         self.updates = 0
+        self.update_payloads = []
 
     def _url(self, path):
         return path
@@ -48,6 +49,7 @@ class _Panel:
 
     async def _post(self, path, headers, payload):
         self.updates += 1
+        self.update_payloads.append(dict(payload))
         self.payload = dict(payload)
         if self.failed_updates:
             self.failed_updates -= 1
@@ -77,6 +79,7 @@ class SubscriptionReissueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(panel.payload["limitIp"], 0)
         self.assertEqual(panel.payload["limitHwid"], 2)
         self.assertEqual(panel.payload["allowedIPs"], ["10.0.0.2/32", "2001:db8::2/128"])
+        self.assertEqual(panel.update_payloads[0]["id"], panel.payload["uuid"])
         self.assertTrue(panel.payload["enable"])
         self.assertGreater(panel.payload["expiryTime"], int(time.time() * 1000))
         save.assert_awaited_once()
@@ -97,6 +100,8 @@ class SubscriptionReissueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(panel.payload["uuid"], OLD_UUID)
         self.assertEqual(panel.payload["subId"], "oldsubscriptionid")
         self.assertEqual(panel.updates, 2)
+        self.assertEqual(panel.update_payloads[-1]["id"], OLD_UUID)
+        self.assertEqual(panel.update_payloads[-1]["allowedIPs"], ["10.0.0.2/32", "2001:db8::2/128"])
 
     async def test_unexpected_panel_rejection_is_compensated_and_not_saved(self):
         panel = _Panel(failed_updates=3)

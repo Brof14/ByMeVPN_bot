@@ -46,6 +46,21 @@ async def _set_panel_client(client_api, email: str, payload: dict) -> None:
         raise RuntimeError("panel did not confirm client update")
 
 
+def _update_payload(panel_client: dict, protocol_uuid: str, sub_id: str) -> dict:
+    """Convert the GET response to the same Client shape used by xui_client."""
+    payload = dict(panel_client)
+    payload.update({"id": protocol_uuid, "uuid": protocol_uuid, "subId": sub_id})
+    allowed_ips = payload.get("allowedIPs")
+    if isinstance(allowed_ips, str):
+        payload["allowedIPs"] = [part.strip() for part in allowed_ips.split(",") if part.strip()]
+    elif allowed_ips is not None and (
+        not isinstance(allowed_ips, list)
+        or not all(isinstance(item, str) for item in allowed_ips)
+    ):
+        raise RuntimeError("panel client allowed IPs have an unsupported format")
+    return payload
+
+
 def _same_profile(actual: dict, expected: dict, uuid_value: str, sub_id: str) -> bool:
     """Compare identity and access controls, ignoring counters changed by traffic."""
     return (
@@ -62,7 +77,8 @@ def _same_profile(actual: dict, expected: dict, uuid_value: str, sub_id: str) ->
 
 async def _restore_panel(client_api, email: str, old_payload: dict, old_uuid: str, old_sub_id: str) -> bool:
     try:
-        await _set_panel_client(client_api, email, old_payload)
+        restore_payload = _update_payload(old_payload, old_uuid, old_sub_id)
+        await _set_panel_client(client_api, email, restore_payload)
         actual = await _get_panel_client(client_api, email)
         return _same_profile(actual, old_payload, old_uuid, old_sub_id)
     except Exception as exc:
@@ -92,19 +108,7 @@ async def _reissue_locked(user_id: int, expected_uuid: str) -> dict | None:
 
     new_uuid = str(uuid.uuid4())
     new_sub_id = new_uuid.replace("-", "")[:16]
-    new_payload = dict(old_payload)
-    # Match xui_client.update_xui_client_settings(): 3x-ui's update endpoint
-    # expects the protocol UUID (not the numeric DB row id) in `id`, and its
-    # Client model expects allowedIPs as a list even though GET returns text.
-    new_payload.update({"id": new_uuid, "uuid": new_uuid, "subId": new_sub_id})
-    allowed_ips = new_payload.get("allowedIPs")
-    if isinstance(allowed_ips, str):
-        new_payload["allowedIPs"] = [part.strip() for part in allowed_ips.split(",") if part.strip()]
-    elif allowed_ips is not None and (
-        not isinstance(allowed_ips, list)
-        or not all(isinstance(item, str) for item in allowed_ips)
-    ):
-        raise RuntimeError("panel client allowed IPs have an unsupported format")
+    new_payload = _update_payload(old_payload, new_uuid, new_sub_id)
 
     try:
         await _api_call_with_retry(_set_panel_client, client_api, email, new_payload)
