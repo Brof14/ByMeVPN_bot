@@ -273,13 +273,13 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             await cb_partner(callback, bot)
 
         text = send.call_args.args[2]
-        self.assertIn("<b>Поделитесь ByMeVPN с другом</b>", text)
+        self.assertIn("<b>Поделитесь доступом</b>", text)
         self.assertIn("15 дней", text)
         self.assertIn("ещё <b>30 дней</b>", text)
-        self.assertIn("Бонусных дней начислено: <b>15</b>", text)
-        self.assertIn("Ваши приглашения: <b>1</b> · с оплатой: <b>1</b>", text)
+        self.assertIn("Ваш бонус: <b>15 дней</b>", text)
+        self.assertIn("Приглашено: <b>1</b> · оплатили: <b>1</b>", text)
         buttons = [b for row in send.call_args.args[3].inline_keyboard for b in row]
-        copied = next(b for b in buttons if b.text == "🔗 Скопировать ссылку")
+        copied = next(b for b in buttons if b.text == "Скопировать ссылку")
         self.assertEqual(copied.copy_text.text, "https://t.me/ByMeVPNbot?start=123")
         self.assertFalse(any(b.text == "Скопировать текст для канала" for b in buttons))
 

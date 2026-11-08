@@ -37,9 +37,9 @@ class TestMobileApiV2(unittest.TestCase):
 
     def test_catalog_uses_tier_bound_plan_codes_and_android_response_fields(self):
         expected_prices = {
-            2: (89, 237, 414, 708),
-            5: (109, 297, 534, 948),
-            10: (129, 357, 654, 1188),
+            2: (89, 316, 552, 885),
+            5: (109, 396, 712, 1185),
+            10: (129, 476, 872, 1485),
         }
         expected_days = (30, 120, 240, 450)
         for devices in (2, 5, 10):
@@ -231,7 +231,7 @@ class TestMobileApiV2(unittest.TestCase):
         args = create_payment.await_args.kwargs
         self.assertEqual(
             (args["amount_rub"], args["days"], args["devices"]),
-            (654, 240, 10),
+            (872, 240, 10),
         )
         self.assertEqual(response.json()["invoice_id"], "crypto-test-invoice")
 

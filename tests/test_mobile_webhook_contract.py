@@ -164,10 +164,10 @@ class TestMobileWebhookContract(unittest.IsolatedAsyncioTestCase):
     async def test_crypto_requires_matching_invoice_owner_and_catalog_terms(self):
         order = {
             "user_id": 987654321, "request_id": "request-test", "plan_code": "6m",
-            "provider": "crypto", "devices": 10, "amount_rub": 654,
+            "provider": "crypto", "devices": 10, "amount_rub": 872,
             "payment_id": "crypto-invoice-test",
         }
-        pending = {"user_id": 987654321, "days": 240, "devices": 10, "amount_rub": 654}
+        pending = {"user_id": 987654321, "days": 240, "devices": 10, "amount_rub": 872}
         with patch(
             "database.get_mobile_payment_request_by_invoice", new=AsyncMock(return_value=order),
         ):

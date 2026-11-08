@@ -183,16 +183,16 @@ TRIAL_PRICE = 0
 # Pricing Configuration
 # Aligned with constants.py single source of truth:
 #   1  мес.            → 89 ₽ (89 ₽/мес)
-#   3  мес. + 1 мес 🎁 → 237 ₽ (79 ₽/мес)
-#   6  мес. + 2 мес 🎁 → 414 ₽ (69 ₽/мес)
-#   12 мес. + 3 мес 🎁 → 708 ₽ (59 ₽/мес)
+#   3  мес. + 1 мес 🎁 → 316 ₽ (79 ₽ × 4 месяца)
+#   6  мес. + 2 мес 🎁 → 552 ₽ (69 ₽ × 8 месяцев)
+#   12 мес. + 3 мес 🎁 → 885 ₽ (59 ₽ × 15 месяцев)
 # ============================================================================
 from constants import get_total_price, TARIFF_DAYS
 
 PRICE_1_MONTH = get_total_price(1, 2)    # 89 ₽
-PRICE_3_MONTHS = get_total_price(3, 2)   # 237 ₽ (79 * 3)
-PRICE_6_MONTHS = get_total_price(6, 2)   # 414 ₽ (69 * 6)
-PRICE_12_MONTHS = get_total_price(12, 2) # 708 ₽ (59 * 12)
+PRICE_3_MONTHS = get_total_price(3, 2)   # 316 ₽ (79 * 4)
+PRICE_6_MONTHS = get_total_price(6, 2)   # 552 ₽ (69 * 8)
+PRICE_12_MONTHS = get_total_price(12, 2) # 885 ₽ (59 * 15)
 
 DAYS_1M  = TARIFF_DAYS[1]   # 30
 DAYS_3M  = TARIFF_DAYS[3]   # 120

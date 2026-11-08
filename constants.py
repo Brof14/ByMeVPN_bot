@@ -76,6 +76,10 @@ TARIFF_DAYS = {
     12: 450,  # 12 мес. + 3 мес. 🎁
 }
 
+# The advertised monthly rate applies to every included month, including the
+# bonus period.  For example, 3 + 1 months at 79 ₽/month cost 4 × 79 ₽.
+TARIFF_BONUS_MONTHS = {1: 0, 3: 1, 6: 2, 12: 3}
+
 # ============================================================================
 # Intro Trial (paid): 1 ₽ → 3 days of access → 89 ₽/мес recurring
 # ============================================================================
@@ -124,11 +128,11 @@ def get_monthly_display(months: int, devices: int = DEFAULT_DEVICE_LIMIT) -> int
 def get_total_price(months: int, devices: int = DEFAULT_DEVICE_LIMIT) -> int:
     """
     Actual purchase price to be charged at payment.
-    Bonus months extend access without increasing the advertised term price.
-    Formula: get_monthly_price(months, devices) * paid months
+    The monthly rate is charged for every included month, including bonus months.
+    Formula: get_monthly_price(months, devices) * (paid months + bonus months)
     """
     m = months if months in BASE_MONTHLY_PRICES else 1
-    return get_monthly_price(m, devices) * m
+    return get_monthly_price(m, devices) * (m + TARIFF_BONUS_MONTHS[m])
 
 
 def get_tariff_days(months: int) -> int:
@@ -159,9 +163,9 @@ DEVICE_CONFIG = {
         "description": "Смартфон + Ноутбук",
         "prices": {
             1: (get_total_price(1, 2), TARIFF_DAYS[1]),    # (89, 30)
-            3: (get_total_price(3, 2), TARIFF_DAYS[3]),    # (237, 120)
-            6: (get_total_price(6, 2), TARIFF_DAYS[6]),    # (414, 240)
-            12: (get_total_price(12, 2), TARIFF_DAYS[12]), # (708, 450)
+            3: (get_total_price(3, 2), TARIFF_DAYS[3]),    # (316, 120)
+            6: (get_total_price(6, 2), TARIFF_DAYS[6]),    # (552, 240)
+            12: (get_total_price(12, 2), TARIFF_DAYS[12]), # (885, 450)
         },
         "monthly_display": {
             1: get_monthly_price(1, 2),   # 89
@@ -176,9 +180,9 @@ DEVICE_CONFIG = {
         "description": "Для всей семьи или нескольких гаджетов",
         "prices": {
             1: (get_total_price(1, 5), TARIFF_DAYS[1]),    # (109, 30)
-            3: (get_total_price(3, 5), TARIFF_DAYS[3]),    # (297, 120)
-            6: (get_total_price(6, 5), TARIFF_DAYS[6]),    # (534, 240)
-            12: (get_total_price(12, 5), TARIFF_DAYS[12]), # (948, 450)
+            3: (get_total_price(3, 5), TARIFF_DAYS[3]),    # (396, 120)
+            6: (get_total_price(6, 5), TARIFF_DAYS[6]),    # (712, 240)
+            12: (get_total_price(12, 5), TARIFF_DAYS[12]), # (1185, 450)
         },
         "monthly_display": {
             1: get_monthly_price(1, 5),   # 109
@@ -193,9 +197,9 @@ DEVICE_CONFIG = {
         "description": "Максимальный доступ для всех устройств и друзей",
         "prices": {
             1: (get_total_price(1, 10), TARIFF_DAYS[1]),    # (129, 30)
-            3: (get_total_price(3, 10), TARIFF_DAYS[3]),    # (357, 120)
-            6: (get_total_price(6, 10), TARIFF_DAYS[6]),    # (654, 240)
-            12: (get_total_price(12, 10), TARIFF_DAYS[12]), # (1188, 450)
+            3: (get_total_price(3, 10), TARIFF_DAYS[3]),    # (476, 120)
+            6: (get_total_price(6, 10), TARIFF_DAYS[6]),    # (872, 240)
+            12: (get_total_price(12, 10), TARIFF_DAYS[12]), # (1485, 450)
         },
         "monthly_display": {
             1: get_monthly_price(1, 10),   # 129

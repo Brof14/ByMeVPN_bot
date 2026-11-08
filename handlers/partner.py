@@ -18,13 +18,13 @@ router = Router()
 
 def partner_main_kb(link: str) -> InlineKeyboardMarkup:
     share_text = quote_plus(
-        "Попробуй ByMeVPN: подключение занимает всего пару минут, а новым пользователям "
-        "доступны 3 дня бесплатно. Проверь на своём устройстве и реши, подходит ли тебе. "
-        "Начать можно здесь:"
+        "Хочешь, чтобы интернет был под рукой в поездках и общественных сетях? "
+        "Попробуй ByMeVPN: новым пользователям доступны 3 дня бесплатно. "
+        "Вот ссылка для старта:"
     )
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Пригласить друга", url=f"https://t.me/share/url?url={quote_plus(link)}&text={share_text}")],
-        [InlineKeyboardButton(text="🔗 Скопировать ссылку", copy_text={"text": link})],
+        [InlineKeyboardButton(text="Скопировать ссылку", copy_text={"text": link})],
         [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu")],
     ])
 
@@ -47,11 +47,11 @@ async def cb_partner(callback: CallbackQuery, bot: Bot):
         if pending_rewards else ""
     )
     text = (
-        "<b>Поделитесь ByMeVPN с другом</b>\n\n"
-        "Друг попробует сервис 3 дня бесплатно. После его регистрации вам начислятся <b>15 дней</b>, "
-        "а после первой подходящей оплаты — ещё <b>30 дней</b>.\n\n"
-        f"Ваши приглашения: <b>{registrations}</b> · с оплатой: <b>{paid_referrals}</b>\n"
-        f"Бонусных дней начислено: <b>{bonus_days}</b>"
+        "<b>Поделитесь доступом</b>\n\n"
+        "Друг сможет проверить ByMeVPN бесплатно в течение 3 дней. "
+        "За регистрацию начислим вам <b>15 дней</b>, а после первой оплаты друга — ещё <b>30 дней</b>.\n\n"
+        f"Приглашено: <b>{registrations}</b> · оплатили: <b>{paid_referrals}</b>\n"
+        f"Ваш бонус: <b>{bonus_days} дней</b>"
         f"{pending_note}"
     )
     await send_with_photo(bot, callback, text, partner_main_kb(link), photo=REFERRALS)

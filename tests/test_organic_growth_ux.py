@@ -16,12 +16,12 @@ class ConversionUXTests(unittest.TestCase):
         self.assertEqual(rows[-1][0].callback_data, "back_to_menu")
 
     def test_tariffs_show_real_payable_total_and_monthly_rate(self):
-        for limit, totals in [(2, (89, 237, 414, 708)), (5, (109, 297, 534, 948)), (10, (129, 357, 654, 1188))]:
+        for limit, totals in [(2, (89, 316, 552, 885)), (5, (109, 396, 712, 1185)), (10, (129, 476, 872, 1485))]:
             kb = tariff_selection_kb(devices=limit)
             actions = {b.callback_data: b.text for row in kb.inline_keyboard for b in row if b.callback_data}
             for months, rubles in zip((1, 3, 6, 12), totals):
                 text = actions[f"tariff_{months}_{limit}"]
-                self.assertIn(f"{rubles // months} ₽ / мес.", text)
+                self.assertIn(f"{rubles // (months + {1: 0, 3: 1, 6: 2, 12: 3}[months])} ₽ / мес.", text)
                 self.assertIn("/ мес.", text)
                 if months > 1:
                     self.assertIn("🎁", text)

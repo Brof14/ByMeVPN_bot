@@ -7,6 +7,10 @@ class BuyFlow(StatesGroup):
     waiting_name = State()
 
 
+class PromoFlow(StatesGroup):
+    waiting_code = State()
+
+
 class AdminFlow(StatesGroup):
     broadcast_content = State()
     broadcast_buttons = State()

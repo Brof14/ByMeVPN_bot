@@ -706,8 +706,7 @@ async def cb_key_renew(callback: CallbackQuery, bot: Bot, state: FSMContext):
 
     await send_with_photo(
         bot, callback,
-        f"<b>Продление подписки «{escape(k.get('remark') or str(k['id']))}»</b>\n\n"
-        "Выберите тариф:",
+        "<b>Продление подписки</b>\n\nВыберите срок и количество устройств.",
         tariff_selection_kb(devices=key_devices),
         photo=RENEWAL,
     )

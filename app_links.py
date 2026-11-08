@@ -220,41 +220,58 @@ def build_connect_page_url(subscription_url: str, user_name: str = "") -> str:
 
 
 def render_connection_choice_page(subscription_url: str, user_name: str = "") -> str:
-    """A small, self-hosted OS/app chooser with automatic OS detection and fallback downloads."""
+    'Responsive OS/app chooser with verified imports and an honest fallback.'
     sub = _js_string(subscription_url)
     byme_link = build_app_login_url(subscription_url, user_name)
     apps = {
         "android": [
-            {"name": "ByMeVPN", "deep": byme_link, "download": "https://bymevpn.duckdns.org/app/"},
-            {"name": "Happ", "deep": "happ://add/" + quote(subscription_url, safe=""), "download": "https://play.google.com/store/apps/details?id=com.happproxy"},
+            {"name": "ByMeVPN", "icon": "🔷", "deep": byme_link, "download": "https://bymevpn.duckdns.org/app/", "hint": "Импорт в ByMeVPN"},
+            {"name": "Happ", "icon": "🟢", "deep": "happ://add/" + subscription_url, "download": "https://play.google.com/store/apps/details?id=com.happproxy", "hint": "Откроется подтверждение добавления подписки"},
+            {"name": "INCY", "icon": "🟣", "deep": "incy://import/" + subscription_url, "download": "https://docs.incy.cc/", "hint": "Откроется импорт подписки"},
         ],
-        "ios": [{"name": "Happ", "deep": "happ://add/" + quote(subscription_url, safe=""), "download": "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215"}],
-        "windows": [{"name": "Happ", "deep": "happ://add/" + quote(subscription_url, safe=""), "download": "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe"}],
-        "macos": [{"name": "Happ", "deep": "happ://add/" + quote(subscription_url, safe=""), "download": "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/Happ.macOS.universal.dmg"}],
-        "linux": [{"name": "Happ", "deep": "happ://add/" + quote(subscription_url, safe=""), "download": "https://github.com/Happ-proxy/happ-desktop/releases/latest"}],
+        "ios": [
+            {"name": "Happ", "icon": "🟢", "deep": "happ://add/" + subscription_url, "download": "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215", "hint": "Откроется подтверждение добавления подписки"},
+            {"name": "INCY", "icon": "🟣", "deep": "incy://import/" + subscription_url, "download": "https://apps.apple.com/us/app/incy/id6756943388", "hint": "Откроется импорт подписки"},
+        ],
+        "windows": [
+            {"name": "Happ", "icon": "🟢", "deep": "happ://add/" + subscription_url, "download": "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe", "hint": "Откроется подтверждение добавления подписки"},
+            {"name": "v2rayN", "icon": "🛡️", "manual": True, "download": "https://github.com/2dust/v2rayN/releases/latest", "hint": "Добавьте ссылку в подписки, затем при необходимости включите TUN в настройках v2rayN"},
+            {"name": "Koala Clash", "icon": "🐨", "manual": True, "download": "https://github.com/coolcoala/koala-clash/releases/latest", "hint": "Нужен Clash-совместимый профиль; ссылка ByMeVPN может импортироваться не полностью"},
+        ],
+        "macos": [
+            {"name": "Happ", "icon": "🟢", "deep": "happ://add/" + subscription_url, "download": "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/Happ.macOS.universal.dmg", "hint": "Откроется подтверждение добавления подписки"},
+            {"name": "INCY", "icon": "🟣", "deep": "incy://import/" + subscription_url, "download": "https://docs.incy.cc/", "hint": "Откроется импорт подписки"},
+            {"name": "v2rayN", "icon": "🛡️", "manual": True, "download": "https://github.com/2dust/v2rayN/releases/latest", "hint": "Добавьте ссылку в подписки, затем при необходимости включите TUN в настройках v2rayN"},
+            {"name": "Koala Clash", "icon": "🐨", "manual": True, "download": "https://github.com/coolcoala/koala-clash/releases/latest", "hint": "Нужен Clash-совместимый профиль; ссылка ByMeVPN может импортироваться не полностью"},
+        ],
+        "linux": [
+            {"name": "Happ", "icon": "🟢", "deep": "happ://add/" + subscription_url, "download": "https://github.com/Happ-proxy/happ-desktop/releases/latest", "hint": "Откроется подтверждение добавления подписки"},
+            {"name": "v2rayN", "icon": "🛡️", "manual": True, "download": "https://github.com/2dust/v2rayN/releases/latest", "hint": "Добавьте ссылку в подписки, затем при необходимости включите TUN в настройках v2rayN"},
+            {"name": "Koala Clash", "icon": "🐨", "manual": True, "download": "https://github.com/coolcoala/koala-clash/releases/latest", "hint": "Нужен Clash-совместимый профиль; ссылка ByMeVPN может импортироваться не полностью"},
+        ],
     }
     apps_json = _js_string(json.dumps(apps, ensure_ascii=False))
-    return f"""<!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    template = '''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow"><title>Подключение ByMeVPN</title>
 <style>
-:root{{color-scheme:dark;--bg:#0b1220;--card:#111c2d;--blue:#2878f0;--muted:#9eb0c7;--green:#26c281}}
-*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;background:linear-gradient(160deg,#0c1424,#08101b);color:#eef5ff;font:16px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;padding:24px;display:grid;place-items:center}}
-main{{width:100%;max-width:480px}}h1{{font-size:24px;margin:0 0 8px}}p{{color:var(--muted);margin:0 0 20px}}.card{{background:var(--card);border:1px solid #23344c;border-radius:20px;padding:22px;box-shadow:0 18px 60px #0005}}
-.os{{display:flex;gap:8px;flex-wrap:wrap;margin:18px 0}}button,a.btn{{font:inherit;color:#fff;border:0;border-radius:12px;padding:12px 15px;text-decoration:none;cursor:pointer}}
-.os button{{background:#1b2b43}}.os button.active{{background:var(--blue)}}.app{{padding:15px 0;border-top:1px solid #26364b}}.app:first-child{{border:0}}.app h2{{font-size:17px;margin:0 0 10px}}
-.btn{{display:block;text-align:center;background:var(--blue);font-weight:700;margin:8px 0}}.btn.alt{{background:#20324b}}.note{{font-size:13px;margin-top:16px}}.copy{{color:#b9d7ff;text-decoration:underline;background:none;border:0;padding:5px;font:inherit;cursor:pointer}}
+:root{color-scheme:dark;--card:#101b2b;--line:#263750;--blue:#367cf5;--muted:#a6b5c9}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(ellipse at top,#13243c 0,#09111f 60%);color:#eef5ff;font:16px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;padding:20px;display:grid;place-items:center}
+main{width:min(100%,520px)}h1{font-size:24px;line-height:1.25;margin:0 0 8px}p{color:var(--muted);margin:0 0 18px}.card{background:linear-gradient(145deg,#121f31,#0f1928);border:1px solid var(--line);border-radius:22px;padding:22px;box-shadow:0 20px 70px #0006}
+.os{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:20px 0 14px}button,a.btn{font:inherit;color:#fff;border:0;border-radius:12px;padding:12px 14px;text-decoration:none;cursor:pointer;min-height:46px}
+.os button{background:#1b2b43;border:1px solid #2a3c56}.os button.active{background:var(--blue);border-color:var(--blue)}.app{padding:16px 0;border-top:1px solid var(--line)}.app:first-child{border:0}.app-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}.app-icon{width:38px;height:38px;border-radius:12px;background:#1d2b40;display:grid;place-items:center;font-size:21px}.app h2{font-size:16px;margin:0}.app .hint{font-size:13px;color:var(--muted);margin:0 0 10px}
+.btn{display:block;width:100%;text-align:center;background:var(--blue);font-weight:700;margin:8px 0}.btn.alt{background:#20324b;border:1px solid #30435f}.note{font-size:13px;margin:16px 0 0}.status{min-height:20px;font-size:13px;color:#9ec4ff;margin:8px 0}
 </style></head><body><main><section class="card"><h1>Подключить ByMeVPN</h1>
-<p>Выберите устройство и приложение. Мы уже определили вашу систему — при необходимости переключите её вручную.</p>
-<div class="os" id="os"></div><div id="apps"></div>
-<button class="copy" id="copy">Скопировать ссылку для ручного добавления</button>
-<p class="note">Если приложение не установлено, скачайте его и вернитесь сюда. Страница подключения действует 15 минут — затем откройте её заново из бота.</p>
+<p>Выберите устройство и приложение. Совместимый клиент добавит подписку автоматически; для остальных покажем короткий ручной шаг.</p>
+<div class="os" id="os"></div><div id="apps"></div><p class="status" id="status" role="status" aria-live="polite"></p>
+<p class="note">Если приложения ещё нет, установите его и вернитесь сюда. Ссылка подключения действует 15 минут — если срок истёк, откройте страницу заново из бота.</p>
 </section></main>
 <script>
-(function(){{const sub={sub};const apps=JSON.parse({apps_json});const labels={{android:"Android",ios:"iPhone / iPad",windows:"Windows",macos:"Mac",linux:"Linux"}};
+(function(){const sub=__SUB__;const apps=JSON.parse(__APPS__);const labels={android:"🤖 Android",ios:"🍎 iPhone / iPad",windows:"🪟 Windows",macos:"🍏 macOS",linux:"🐧 Linux"};
 const ua=navigator.userAgent;let current=/Android/i.test(ua)?"android":/iPhone|iPad/i.test(ua)?"ios":/Windows/i.test(ua)?"windows":/Macintosh/i.test(ua)?"macos":"linux";
-const os=document.getElementById("os"),root=document.getElementById("apps");function render(){{os.innerHTML="";Object.keys(labels).forEach(k=>{{const b=document.createElement("button");b.textContent=labels[k];b.className=k===current?"active":"";b.onclick=()=>{{current=k;render()}};os.appendChild(b)}});
-root.innerHTML="";apps[current].forEach(a=>{{const d=document.createElement("div");d.className="app";const h=document.createElement("h2");h.textContent=a.name;const open=document.createElement("a");open.className="btn";open.href=a.deep;open.textContent="Открыть и добавить подписку";const download=document.createElement("a");download.className="btn alt";download.href=a.download;download.target="_blank";download.rel="noopener";download.textContent="Скачать приложение";d.append(h,open,download);root.appendChild(d)}})}}
-render();document.getElementById("copy").onclick=async()=>{{try{{await navigator.clipboard.writeText(sub);document.getElementById("copy").textContent="Ссылка скопирована"}}catch(_){{prompt("Скопируйте ссылку",sub)}}}};
-}})();
-</script></body></html>"""
+const os=document.getElementById("os"),root=document.getElementById("apps"),status=document.getElementById("status");async function copy(){try{await navigator.clipboard.writeText(sub);return true}catch(_){window.prompt("Скопируйте ссылку",sub);return false}}
+function render(){os.replaceChildren();Object.keys(labels).forEach(k=>{const b=document.createElement("button");b.textContent=labels[k];b.className=k===current?"active":"";b.onclick=()=>{current=k;render()};os.appendChild(b)});
+root.replaceChildren();apps[current].forEach(a=>{const d=document.createElement("div");d.className="app";const head=document.createElement("div");head.className="app-head";const icon=document.createElement("span");icon.className="app-icon";icon.textContent=a.icon;const h=document.createElement("h2");h.textContent=a.name;head.append(icon,h);const hint=document.createElement("p");hint.className="hint";hint.textContent=a.hint;const action=document.createElement("button");action.className="btn";action.textContent=a.manual?"Скопировать ссылку для импорта":"Открыть и добавить подписку";action.onclick=async()=>{if(a.manual){await copy();status.textContent="Ссылка скопирована. Откройте приложение и добавьте её в разделе подписок."}else{window.location.href=a.deep}};const download=document.createElement("a");download.className="btn alt";download.href=a.download;download.target="_blank";download.rel="noopener noreferrer";download.textContent="Установить приложение";d.append(head,hint,action,download);root.appendChild(d)})}
+render();
+})();
+</script></body></html>'''
+    return template.replace("__SUB__", sub).replace("__APPS__", apps_json)

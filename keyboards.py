@@ -6,7 +6,7 @@ from bot_style import themed_button as InlineKeyboardButton
 
 from constants import (
     VALID_DEVICE_LIMITS, DEFAULT_DEVICE_LIMIT,
-    get_monthly_display, get_price_for_months, validate_device_limit,
+    TARIFF_BONUS_MONTHS, get_monthly_display, get_price_for_months, validate_device_limit,
 )
 
 _SUPPORT_URL = (
@@ -133,14 +133,13 @@ def tariff_selection_kb(
         ))
     kb.row(*dev_btns)
 
-    # Show the clear monthly offer. Bonus months are not charged; the total is
-    # shown again before checkout.
+    # Monthly price applies to every included month, including the bonus period.
     for months in (1, 3, 6, 12):
         total_price, included_days = get_price_for_months(months, devices)
         applies = discount_percent > 0 and (promo_tariff_months is None or promo_tariff_months == months)
         if applies:
             total_price = round(total_price * (100 - discount_percent) / 100)
-            monthly_display = str(round(total_price / months))
+            monthly_display = str(round(total_price / (months + TARIFF_BONUS_MONTHS[months])))
         else:
             monthly_display = str(get_monthly_display(months, devices))
         period = {1: "1 мес.", 3: "3 мес. + 1 мес. 🎁", 6: "6 мес. + 2 мес. 🎁", 12: "12 мес. + 3 мес. 🎁"}[months]

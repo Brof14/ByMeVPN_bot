@@ -712,11 +712,9 @@ async def cb_back_to_menu(callback: CallbackQuery, bot: Bot, state: FSMContext):
 async def cb_about(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
-        "<b>Интернет без лишних ограничений</b>\n\n"
-        "ByMeVPN помогает безопаснее пользоваться привычными приложениями и сайтами дома, "
-        "в дороге и в общественных сетях.\n\n"
-        "Одна подписка работает на 2, 5 или 10 устройствах. Новым пользователям доступны "
-        "3 дня, чтобы спокойно проверить сервис на своих устройствах."
+        "<b>Ваш интернет — в привычном ритме</b>\n\n"
+        "ByMeVPN помогает сохранить доступ к нужным сайтам и приложениям дома и в поездках.\n\n"
+        "Одна подписка — до 2, 5 или 10 устройств. Новые пользователи могут начать с 3 дней бесплатно."
     )
     # Keep this screen informative and minimal; primary actions live in the menu.
     from aiogram.types import InlineKeyboardMarkup
