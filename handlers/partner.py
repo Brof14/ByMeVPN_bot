@@ -8,7 +8,7 @@ from aiogram.types import (
 )
 
 from database import get_referral_stats_enhanced, get_referred_users_list
-from utils import send_with_photo, safe_answer
+from utils import send_with_photo, safe_answer, get_cached_bot_info
 from bot_assets import REFERRALS, MY_INVITATIONS
 from constants import format_timestamp, INTRO_TRIAL_DAYS, INTRO_TRIAL_PRICE_RUB, RECURRING_MONTHLY_PRICE, RECURRING_DAYS
 from bot_style import themed_button as InlineKeyboardButton
@@ -18,9 +18,13 @@ router = Router()
 
 def partner_main_kb(link: str) -> InlineKeyboardMarkup:
     share_text = quote_plus(
-        "Хочешь, чтобы интернет был под рукой в поездках и общественных сетях? "
-        "Попробуй ByMeVPN: новым пользователям доступны 3 дня бесплатно. "
-        "Вот ссылка для старта:"
+        "🎁 Забирай 3 дня VPN бесплатно!\n\n"
+        "ByMeVPN — быстрый и удобный доступ к Telegram, YouTube, Instagram и любимым сайтам.\n\n"
+        "✓ Без привязки карты\n"
+        "✓ Подключение за минуту\n"
+        "✓ Несколько устройств на одной подписке\n\n"
+        "Никаких обязательств — просто попробуй бесплатно.\n\n"
+        "👇 Нажми «Старт» и получи свои 3 дня:"
     )
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Пригласить друга", url=f"https://t.me/share/url?url={quote_plus(link)}&text={share_text}")],
@@ -33,7 +37,7 @@ def partner_main_kb(link: str) -> InlineKeyboardMarkup:
 async def cb_partner(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     user_id = callback.from_user.id
-    bot_info = await bot.get_me()
+    bot_info = await get_cached_bot_info(bot)
     link = f"https://t.me/{bot_info.username}?start={user_id}"
     from referral_system_new import retry_pending_signup_bonuses
     pending_rewards = await retry_pending_signup_bonuses(bot, user_id)

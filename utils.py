@@ -25,6 +25,14 @@ _photo_cache_lock = asyncio.Lock()
 _PHOTO_CAPTION_LIMIT = 1024
 
 
+async def get_cached_bot_info(bot: Bot):
+    """Use aiogram's per-bot getMe cache, with a fallback for lightweight adapters."""
+    cached_getter = getattr(bot, "me", None)
+    if callable(cached_getter):
+        return await cached_getter()
+    return await bot.get_me()
+
+
 def _bot_media_namespace(bot: Bot | None) -> str:
     """Stable, non-secret cache namespace for a Telegram bot account."""
     token = str(getattr(bot, "token", ""))

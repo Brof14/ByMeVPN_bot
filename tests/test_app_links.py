@@ -102,10 +102,15 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertIn("overflow-x:clip", page)
         self.assertIn("prefers-reduced-motion", page)
         self.assertIn("Скопировать ссылку", page)
-        self.assertIn("Если не открылось — скопировать", page)
+        self.assertNotIn("Если не открылось — скопировать", page)
         self.assertIn('src="/app/logo"', page)
         self.assertIn("Выберите устройство и приложение", page)
         self.assertIn("github.com/Brof14/ByMeVPN-app/releases/download/v1.0.12/ByMeVPN-v1.0.12.apk", page)
+        self.assertIn('badge.textContent="Наше приложение"', page)
+        self.assertIn('className=a.featured?"app featured":"app"', page)
+        self.assertIn('id="copy-subscription"', page)
+        self.assertEqual(page.count("Скопировать ссылку"), 1)
+        self.assertNotIn("Если не открылось — скопировать ссылку", page)
         self.assertIn("https://play.google.com/store/apps/details?id=llc.itdev.incy", page)
         for asset in (
             "android.png", "apple.png", "happ.png", "incy.png", "koala.png", "linux.png",
@@ -117,6 +122,8 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertIn('"/app/assets/incy.png"', page)
         self.assertIn('v2rayn:"/app/assets/v2rayn.png"', page)
         self.assertIn('koala:"/app/assets/koala.png"', page)
+        self.assertIn("@media(max-width:680px)", page)
+        self.assertIn(".site-copy{grid-template-columns:minmax(0,1fr)", page)
 
 
 class TestAppOpenKeyboard(unittest.TestCase):

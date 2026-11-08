@@ -34,6 +34,7 @@ from database import (
     update_automated_monthly_giveaway,
 )
 from bot_style import themed_button as InlineKeyboardButton
+from utils import get_cached_bot_info
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +145,7 @@ async def _send_campaign_announcements(bot: Bot, giveaway: dict) -> None:
     users = await get_pending_giveaway_notifications(giveaway["id"], limit=ANNOUNCEMENT_BATCH)
     if not users:
         return
-    info = await bot.get_me()
+    info = await get_cached_bot_info(bot)
     link = f"https://t.me/{info.username}?start=gw_{giveaway['id']}"
     text = "🏆 <b>Ежемесячный конкурс ByMeVPN</b>\n\n" + format_giveaway_terms(giveaway)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
