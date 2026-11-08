@@ -15,6 +15,8 @@ from keyboards import (
 )
 from handlers.keys import _get_payment_methods_text, _load_autorenew_context
 from handlers.buy import _tariff_intro
+from handlers.partner import partner_main_kb
+from urllib.parse import parse_qs, urlsplit
 
 
 def callbacks(markup):
@@ -30,12 +32,36 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
     def test_two_device_tariff_intro_matches_requested_copy(self):
         self.assertEqual(
             _tariff_intro(2),
-            "<b>Тарифы</b>\n"
-            "Выбрано: <b>2 устройства</b>\n"
+            "<b>Тарифы</b>\n\n"
+            "Выбрано: <b>2 устройства</b>\n\n"
             "Чем дольше подписка, тем выгоднее условия. При выборе тарифа на 3, 6 или 12 месяцев "
-            "вы получаете <b>дополнительные месяцы в подарок</b>.\n"
+            "вы получаете <b>дополнительные месяцы в подарок</b>.\n\n"
             "Выберите подходящий срок:",
         )
+
+    async def test_bot_identity_helper_uses_aiogram_cache_when_available(self):
+        from utils import get_cached_bot_info
+        cached_info = SimpleNamespace(username="ByMeVPNbot")
+        bot = SimpleNamespace(
+            me=AsyncMock(return_value=cached_info),
+            get_me=AsyncMock(side_effect=AssertionError("uncached API call")),
+        )
+        self.assertIs(await get_cached_bot_info(bot), cached_info)
+        bot.me.assert_awaited_once_with()
+        bot.get_me.assert_not_awaited()
+
+    def test_referral_share_copy_uses_dynamic_link_and_requested_message(self):
+        link = "https://t.me/ByMeVPNbot?start=987654321"
+        button = partner_main_kb(link).inline_keyboard[0][0]
+        query = parse_qs(urlsplit(button.url).query)
+        self.assertEqual(query["url"], [link])
+        share_text = query["text"][0]
+        self.assertIn("🎁 Забирай 3 дня VPN бесплатно!", share_text)
+        self.assertIn("✓ Без привязки карты", share_text)
+        self.assertIn("✓ Подключение за минуту", share_text)
+        self.assertIn("✓ Несколько устройств на одной подписке", share_text)
+        self.assertIn("👇 Нажми «Старт» и получи свои 3 дня:", share_text)
+        self.assertNotIn("5352436388", share_text)
 
     def test_two_device_renewal_copy(self):
         self.assertEqual(

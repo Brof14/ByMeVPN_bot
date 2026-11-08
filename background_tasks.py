@@ -10,6 +10,22 @@ from config import ADMIN_ID
 logger = logging.getLogger(__name__)
 _tasks: dict[str, asyncio.Task] = {}
 _last_alert: dict[str, float] = {}
+_failure_count: dict[str, int] = {}
+_ALERT_COOLDOWN_SECONDS = 30 * 60
+
+
+def _should_alert(name: str, now: float) -> bool:
+    """Rate-limit admin alerts while keeping failures visible in server logs."""
+    if now - _last_alert.get(name, float("-inf")) < _ALERT_COOLDOWN_SECONDS:
+        return False
+    _last_alert[name] = now
+    return True
+
+
+def _safe_error_type(error: Exception) -> str:
+    """Expose only a simple exception class name, never its possibly sensitive message."""
+    name = type(error).__name__
+    return name if name.isascii() and name.replace("_", "").isalnum() else "Exception"
 
 
 async def _supervise(name: str, factory: Callable[[], Coroutine[Any, Any, Any]], bot=None) -> None:
@@ -20,15 +36,21 @@ async def _supervise(name: str, factory: Callable[[], Coroutine[Any, Any, Any]],
             raise RuntimeError("worker exited unexpectedly")
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.exception("Background worker %s stopped; restarting in %.1fs", name, delay)
+        except Exception as exc:
+            failures = _failure_count.get(name, 0) + 1
+            _failure_count[name] = failures
+            logger.exception(
+                "Background worker %s stopped; restarting in %.1fs (failure %d, %s)",
+                name, delay, failures, _safe_error_type(exc),
+            )
             now = time.monotonic()
-            if bot is not None and ADMIN_ID and now - _last_alert.get(name, 0) >= 300:
-                _last_alert[name] = now
+            if bot is not None and ADMIN_ID and _should_alert(name, now):
                 try:
                     await bot.send_message(
                         ADMIN_ID,
-                        f"⚠️ Фоновая задача <code>{name}</code> завершилась с ошибкой. Перезапуск через {int(delay)} с; подробности — в логах.",
+                        f"⚠️ Фоновая задача <code>{name}</code> завершилась с ошибкой "
+                        f"<code>{_safe_error_type(exc)}</code> (сбой №{failures}). "
+                        f"Перезапуск через {int(delay)} с; подробности — в логах.",
                         parse_mode="HTML",
                     )
                 except Exception:

@@ -36,7 +36,7 @@ from keyboards import (
     main_menu_new_user, main_menu_existing, main_menu_with_keys, main_menu_active, main_menu_expired,
     back_to_menu, cancel_kb, support_url, app_open_kb,
 )
-from utils import send_with_photo, safe_answer
+from utils import send_with_photo, safe_answer, get_cached_bot_info
 from async_utils import monitor_performance
 from bot_style import themed_button as InlineKeyboardButton
 from bot_assets import MENU, ABOUT, FREE_VPN
@@ -529,7 +529,7 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext) -> None:
                     await message.answer("Приём участников завершён. Итоги конкурса бот подведёт автоматически.")
                     return
 
-                bot_info = await bot.get_me()
+                bot_info = await get_cached_bot_info(bot)
                 referral_link = f"https://t.me/{bot_info.username}?start={user_id}"
                 share_url = "https://t.me/share/url?" + urlencode({
                     "url": referral_link,
