@@ -58,6 +58,23 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertEqual(await _user_state(123), "unknown")
 
+    async def test_active_panel_subscription_wins_over_missing_or_old_local_key_state(self):
+        from handlers.start import _user_state
+        now = 1_800_000_000
+        with (
+            patch("handlers.start.has_active_subscription", new=AsyncMock(return_value=False)),
+            patch("handlers.start.has_ever_had_key", new=AsyncMock(return_value=True)),
+            patch("handlers.start.has_trial_used", new=AsyncMock(return_value=False)),
+            patch("handlers.start.time.time", return_value=now),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value={
+                "enable": True,
+                "expiry_time": (now + 86400) * 1000,
+                "limit_hwid": 2,
+                "limit_ip": 0,
+            })),
+        ):
+            self.assertEqual(await _user_state(123), "active")
+
     async def test_stale_trial_button_with_existing_panel_client_does_not_reserve_claim(self):
         from handlers.start import _start_free_trial
         callback = SimpleNamespace(
@@ -87,6 +104,36 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         actions = callbacks(send.await_args.args[3])
         self.assertNotIn("trial_free", actions)
         menu.assert_called_once_with(trial_used=True)
+
+    async def test_active_panel_account_without_local_key_shows_expiry_limit_and_subscription_button(self):
+        from handlers.start import _send_main_menu
+        now = 1_800_000_000
+        target = SimpleNamespace()
+        panel_client = {
+            "enable": True,
+            "expiry_time": (now + 86400) * 1000,
+            "limit_hwid": 2,
+            "limit_ip": 0,
+        }
+        with (
+            patch("handlers.start._user_state", new=AsyncMock(return_value="active")),
+            patch("handlers.start.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("handlers.start.time.time", return_value=now),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value=panel_client)),
+            patch("constants.format_timestamp", return_value="09.03.2027"),
+            patch("handlers.start.send_with_photo", new=AsyncMock()) as send,
+        ):
+            await _send_main_menu(object(), target, 123, "User")
+
+        self.assertEqual(
+            send.await_args.args[2],
+            "<b>Подписка активна</b>\n\n"
+            "Действует до <b>09.03.2027</b>\n"
+            "Устройств в тарифе: <b>2 устройства</b>",
+        )
+        first_button = send.await_args.args[3].inline_keyboard[0][0]
+        self.assertEqual(first_button.text, "Подписка")
+        self.assertEqual(first_button.callback_data, "my_keys")
 
     async def test_trial_delivery_edits_the_originating_screen(self):
         from subscription import _send_delivery_message

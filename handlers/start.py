@@ -163,17 +163,35 @@ async def _user_state(user_id: int) -> str:
     
     if active:
         return "active"
-    if ever_had or trial_used:
-        return "expired"
     try:
         from xui_client import get_xui_client_details
         panel_client = await get_xui_client_details(user_id, strict=True)
     except Exception as exc:
+        if ever_had or trial_used:
+            return "expired"
         logger.warning("Panel-backed account state check failed (%s)", type(exc).__name__)
         return "unknown"
+    if _panel_client_is_active(panel_client):
+        return "active"
+    if ever_had or trial_used:
+        return "expired"
     if panel_client:
         return "existing"
     return "new"
+
+
+def _panel_client_is_active(panel_client: dict | None) -> bool:
+    """Treat an enabled, unexpired panel client as active when the local key row is absent."""
+    if not panel_client:
+        return False
+    enabled = panel_client.get("enable")
+    if not (enabled is True or str(enabled).strip().lower() in {"1", "true", "yes", "on"}):
+        return False
+    try:
+        expiry_ms = int(panel_client.get("expiry_time") or 0)
+    except (TypeError, ValueError):
+        return False
+    return expiry_ms > int(time.time() * 1000)
 
 
 @monitor_performance("clean_chat")
@@ -262,27 +280,67 @@ async def _send_main_menu(
     else:  # active
         # Check if user has keys to show appropriate menu (use direct DB check, not cache)
         user_keys = await get_user_keys(user_id)
-        has_keys = len(user_keys) > 0
         active_keys = [k for k in user_keys if k.get("expiry", 0) > int(time.time())]
         if active_keys:
             active_key = max(active_keys, key=lambda k: k.get("expiry", 0))
             from constants import format_timestamp
             expires = format_timestamp(active_key["expiry"])[:10]
-            device_count = active_key.get("limit_ip", 2)
+            device_count = int(active_key.get("limit_ip") or 0)
+            if device_count not in {2, 5, 10}:
+                device_count = 0
+            if not device_count:
+                try:
+                    from xui_client import get_xui_client_details
+                    panel_client = await get_xui_client_details(user_id, strict=True)
+                    if _panel_client_is_active(panel_client):
+                        device_count = int(panel_client.get("limit_hwid") or 0)
+                except Exception as exc:
+                    logger.warning("Could not read active panel subscription (%s)", type(exc).__name__)
             device_word = "устройство" if device_count == 1 else "устройства" if 2 <= device_count <= 4 else "устройств"
-            text = (
-                f"<b>Подписка активна</b>\n\n"
-                f"Действует до <b>{expires}</b>\n"
-                f"Устройств в тарифе: <b>{device_count} {device_word}</b>"
-            )
+            if device_count in {2, 5, 10}:
+                text = (
+                    f"<b>Подписка активна</b>\n\n"
+                    f"Действует до <b>{expires}</b>\n"
+                    f"Устройств в тарифе: <b>{device_count} {device_word}</b>"
+                )
+            else:
+                text = (
+                    f"<b>Подписка активна</b>\n\n"
+                    f"Действует до <b>{expires}</b>\n"
+                    "Лимит устройств уточняется в разделе «Подписка»."
+                )
         else:
-            text = "<b>Подписка активна</b>\n\nОткройте «Подписка», чтобы подключить устройство или посмотреть срок действия."
+            panel_client = None
+            try:
+                from xui_client import get_xui_client_details
+                panel_client = await get_xui_client_details(user_id, strict=True)
+            except Exception as exc:
+                logger.warning("Could not read active panel subscription (%s)", type(exc).__name__)
+            if _panel_client_is_active(panel_client):
+                from constants import format_timestamp
+                expires = format_timestamp(int(panel_client["expiry_time"]) // 1000)[:10]
+                device_count = int(panel_client.get("limit_hwid") or 0)
+                if device_count in {2, 5, 10}:
+                    device_word = "устройство" if device_count == 1 else "устройства" if device_count <= 4 else "устройств"
+                    text = (
+                        f"<b>Подписка активна</b>\n\n"
+                        f"Действует до <b>{expires}</b>\n"
+                        f"Устройств в тарифе: <b>{device_count} {device_word}</b>"
+                    )
+                else:
+                    text = (
+                        f"<b>Подписка активна</b>\n\n"
+                        f"Действует до <b>{expires}</b>\n"
+                        "Лимит устройств уточняется в разделе «Подписка»."
+                    )
+            else:
+                text = "<b>Подписка активна</b>\n\nОткройте «Подписка», чтобы подключить устройство или посмотреть срок действия."
         # Direct connection only when there is exactly one active key.
         # With multiple active subscriptions, let the customer choose.
         if len(active_keys) == 1:
             kb = main_menu_active(int(active_keys[0]["id"]))
         else:
-            kb = main_menu_with_keys(trial_used=True) if has_keys else main_menu_existing(trial_used=True)
+            kb = main_menu_with_keys(trial_used=True)
 
     await send_with_photo(bot, target, text, kb, photo=MENU)
 
