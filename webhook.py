@@ -20,6 +20,7 @@ Config:   WEBHOOK_HOST, WEBHOOK_PORT in .env
 """
 import asyncio
 import base64
+import contextlib
 import ipaddress
 import json
 import logging
@@ -46,6 +47,17 @@ from database import init_db, is_yookassa_processed, mark_yookassa_processed
 from subscription import deliver_key
 
 logger = logging.getLogger(__name__)
+
+
+class _BackgroundUvicornServer(uvicorn.Server):
+    """Leave process signals to aiogram's single polling lifecycle."""
+
+    @contextlib.contextmanager
+    def capture_signals(self):
+        # Multiple embedded Uvicorn servers each install process-wide signal
+        # handlers. In one event loop they overwrite and re-raise signals to
+        # each other, making a normal container stop look like worker failure.
+        yield
 
 MAX_YOOKASSA_WEBHOOK_BYTES = 64 * 1024
 YOOKASSA_PAYMENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -1143,7 +1155,7 @@ async def start_webhook_server(bot: Bot, dp: Dispatcher) -> None:
         log_level="warning",
         access_log=False,
     )
-    server = uvicorn.Server(config)
+    server = _BackgroundUvicornServer(config)
     logger.info("Webhook server starting on %s:%d", WEBHOOK_HOST, WEBHOOK_PORT)
     await server.serve()
 
@@ -1207,6 +1219,6 @@ async def start_connection_tls_server() -> None:
         log_level="warning",
         access_log=False,
     )
-    server = uvicorn.Server(config)
+    server = _BackgroundUvicornServer(config)
     logger.info("Connection page HTTPS server starting on %s:%d", APP_CONNECT_TLS_HOST, APP_CONNECT_TLS_PORT)
     await server.serve()
