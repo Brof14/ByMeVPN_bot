@@ -33,10 +33,8 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             _tariff_intro(2),
             "<b>Тарифы</b>\n\n"
-            "Выбрано: <b>2 устройства</b>\n\n"
-            "Чем дольше подписка, тем выгоднее условия. При выборе тарифа на 3, 6 или 12 месяцев "
-            "вы получаете <b>дополнительные месяцы в подарок</b>.\n\n"
-            "Выберите подходящий срок:",
+            "<b>2 устройства</b> — одна подписка для ваших устройств.\n\n"
+            "Выберите срок. В долгих планах дополнительные месяцы уже включены.",
         )
 
     async def test_bot_identity_helper_uses_aiogram_cache_when_available(self):
@@ -56,11 +54,11 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         query = parse_qs(urlsplit(button.url).query)
         self.assertEqual(query["url"], [link])
         share_text = query["text"][0]
-        self.assertIn("🎁 Забирай 3 дня VPN бесплатно!", share_text)
-        self.assertIn("✓ Без привязки карты", share_text)
-        self.assertIn("✓ Подключение за минуту", share_text)
-        self.assertIn("✓ Несколько устройств на одной подписке", share_text)
-        self.assertIn("👇 Нажми «Старт» и получи свои 3 дня:", share_text)
+        self.assertIn("Привет! Хочу поделиться ByMeVPN", share_text)
+        self.assertIn("3 дня бесплатно", share_text)
+        self.assertIn("+15 дней", share_text)
+        self.assertIn("ещё +30", share_text)
+        self.assertIn("Открой ссылку и нажми «Старт»", share_text)
         self.assertNotIn("5352436388", share_text)
 
     def test_two_device_renewal_copy(self):
@@ -519,7 +517,8 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             await cb_partner(callback, bot)
 
         text = send.call_args.args[2]
-        self.assertIn("<b>Приглашайте друзей. Получайте больше.</b>", text)
+        self.assertIn("<b>Поделитесь ByMeVPN с другом</b>", text)
+        self.assertIn("Другу доступны <b>3 дня на пробу</b>", text)
         self.assertIn("15 дней", text)
         self.assertIn("+30 дней", text)
         self.assertIn("Получено: <b>15 дней</b>", text)

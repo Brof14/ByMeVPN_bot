@@ -97,9 +97,9 @@ class TestAppOpenPage(unittest.TestCase):
         for label in ("Android", "iPhone / iPad", "Windows", "macOS", "Linux"):
             self.assertIn(label, page)
         self.assertNotIn("🤖", page)
-        self.assertIn("Hallmark · v2.0.0", page)
-        self.assertIn("@media(max-width:680px)", page)
-        self.assertIn("overflow-x:clip", page)
+        self.assertIn("ByMeVPN connect · compact brand system", page)
+        self.assertIn("@media (max-width: 680px)", page)
+        self.assertIn("overflow-x: clip", page)
         self.assertIn("prefers-reduced-motion", page)
         self.assertIn("Скопировать ссылку", page)
         self.assertNotIn("Если не открылось — скопировать", page)
@@ -122,8 +122,8 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertIn('"/app/assets/incy.png"', page)
         self.assertIn('v2rayn:"/app/assets/v2rayn.png"', page)
         self.assertIn('koala:"/app/assets/koala.png"', page)
-        self.assertIn("@media(max-width:680px)", page)
-        self.assertIn(".site-copy{grid-template-columns:minmax(0,1fr)", page)
+        self.assertIn("@media (max-width: 680px)", page)
+        self.assertIn(".site-copy { grid-template-columns: minmax(0, 1fr)", page)
 
 
 class TestAppOpenKeyboard(unittest.TestCase):
