@@ -27,8 +27,8 @@ from config import ADMIN_IDS, XUI_URL, XUI_USERNAME
 from database import (
     get_admin_stats, get_extended_stats,
     get_all_users, get_users_count, get_all_users_paginated,
-    find_user_by_id, delete_user_and_keys,
-    get_user_keys, set_key_days, update_key_remark,
+    find_user_by_id, find_user_by_username, delete_user_and_keys,
+    get_user_keys, set_key_days, update_key_remark, set_user_device_limit,
     set_trial_used, reset_trial_for_user, get_user_payments, get_payment_by_id,
     get_all_users_csv, extend_key,
     add_refund, get_user_refunds, get_all_refunds, get_refund_stats,
@@ -39,6 +39,7 @@ from database import (
     get_key_errors, get_key_errors_count, delete_key_error, get_user_key_errors,
     log_admin_action, get_admin_logs,
     ban_user, unban_user, add_manual_days,
+    get_all_user_ids,
     create_giveaway, get_active_giveaways, get_giveaway_by_id,
     set_giveaway_status,
     create_broadcast_campaign,
@@ -101,6 +102,7 @@ def _clients_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="Пользователи", callback_data="admin_users:0"),
          InlineKeyboardButton(text="Подписки", callback_data="admin_all_keys:0")],
         [InlineKeyboardButton(text="Найти пользователя", callback_data="admin_search")],
+        [InlineKeyboardButton(text="Сверить ключи с 3x-ui", callback_data="admin_sync_panel_keys")],
         [InlineKeyboardButton(text="Экспорт пользователей", callback_data="admin_export_users_csv")],
         [InlineKeyboardButton(text="← Главное меню", callback_data="admin_menu")],
     ])
@@ -419,6 +421,7 @@ def _key_detail_kb(key_id: int, user_id: int, is_active: bool) -> InlineKeyboard
             InlineKeyboardButton(text="✏️ Указать срок", callback_data=f"admin_edit_key:{key_id}"),
             InlineKeyboardButton(text="🏷 Переименовать", callback_data=f"admin_rename_key:{key_id}"),
         ],
+        [InlineKeyboardButton(text="📱 Изменить число устройств", callback_data=f"admin_set_device_limit:{key_id}:{user_id}")],
         [InlineKeyboardButton(text="🗑️ Удалить ключ", callback_data=f"admin_del_key_confirm:{key_id}:{user_id}")],
         # Navigation
         [
@@ -879,7 +882,7 @@ async def cb_user_list(callback: CallbackQuery):
         kb_rows = user_rows
         if nav_row:
             kb_rows = kb_rows + [nav_row]
-        kb_rows.append([InlineKeyboardButton(text="🔍 Найти по ID", callback_data="admin_search")])
+        kb_rows.append([InlineKeyboardButton(text="🔍 Найти по ID или username", callback_data="admin_search")])
         kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")])
 
         await callback.message.edit_text(
@@ -1049,8 +1052,63 @@ async def cb_search(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await state.set_state(AdminFlow.search_user)
     await callback.message.edit_text(
-        "🔍 Введите Telegram ID пользователя:",
+        "🔍 Введите Telegram ID или username пользователя (например, <code>@username</code>):",
+        parse_mode="HTML",
         reply_markup=_back_kb()
+    )
+
+
+@router.callback_query(F.data == "admin_sync_panel_keys")
+async def cb_sync_panel_keys(callback: CallbackQuery):
+    """Import missing local key rows for registered IDs that exist in 3x-ui."""
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback, "Начинаю сверку.")
+    await callback.message.edit_text(
+        "Сверяю зарегистрированные аккаунты с клиентами 3x-ui по точному Telegram ID.\n"
+        "Существующие записи не перезаписываются."
+    )
+
+    from panel_key_sync import sync_missing_local_key_from_panel
+
+    user_ids = await get_all_user_ids()
+    semaphore = asyncio.Semaphore(6)
+    imported = 0
+    existing = 0
+    not_found = 0
+    incompatible = 0
+    disabled = 0
+    errors = 0
+
+    async def reconcile(user_id: int) -> str:
+        try:
+            async with semaphore:
+                return await sync_missing_local_key_from_panel(user_id)
+        except Exception as exc:
+            logger.warning("Panel key reconciliation failed (%s)", type(exc).__name__)
+            return "error"
+
+    for start in range(0, len(user_ids), 100):
+        results = await asyncio.gather(*(reconcile(uid) for uid in user_ids[start:start + 100]))
+        imported += results.count("imported")
+        existing += results.count("already_present") + results.count("existing")
+        not_found += results.count("not_found")
+        incompatible += results.count("unsupported_device_limit") + results.count("invalid_panel_link")
+        disabled += results.count("panel_disabled")
+        errors += results.count("error")
+
+    await callback.message.edit_text(
+        "Сверка завершена.\n\n"
+        f"Отсутствовавших ключей добавлено: <b>{imported}</b>\n"
+        f"Ключи уже были в базе: <b>{existing}</b>\n"
+        f"Клиент в панели не найден: <b>{not_found}</b>\n"
+        f"Пропущено из-за несовместимых данных: <b>{incompatible}</b>\n"
+        f"Клиент панели отключён: <b>{disabled}</b>\n"
+        f"Ошибок проверки: <b>{errors}</b>\n\n"
+        "Ни один существующий ключ не изменён.",
+        parse_mode="HTML",
+        reply_markup=_clients_kb(),
     )
 
 
@@ -1060,11 +1118,21 @@ async def receive_search(message: Message, state: FSMContext):
         return
     flow_data = await state.get_data()
     await state.clear()
-    try:
-        uid = int(message.text.strip())
-    except (ValueError, AttributeError):
-        await message.answer("❌ Введите числовой ID.")
-        return
+    query = (message.text or "").strip()
+    if flow_data.get("refund_mode"):
+        try:
+            uid = int(query)
+        except (ValueError, TypeError):
+            await message.answer("Для возврата укажите числовой Telegram ID.")
+            return
+    elif query.isdecimal():
+        uid = int(query)
+    else:
+        user = await find_user_by_username(query)
+        if not user:
+            await message.answer("Пользователь с таким username не найден.", reply_markup=_back_kb())
+            return
+        uid = int(user["user_id"])
     if flow_data.get("refund_mode"):
         text, keyboard = await _build_refund_user_view(uid)
         await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
@@ -2810,6 +2878,81 @@ async def cb_key_detail(callback: CallbackQuery):
     )
 
 
+@router.callback_query(F.data.startswith("admin_set_device_limit:"))
+async def cb_set_device_limit_prompt(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    parts = callback.data.split(":")
+    if len(parts) != 3:
+        return
+    key_id, user_id = int(parts[1]), int(parts[2])
+    from database import get_key_by_id
+    key = await get_key_by_id(key_id)
+    if not key or int(key.get("user_id") or 0) != user_id:
+        await callback.message.edit_text("Ключ не найден.", reply_markup=_back_kb())
+        return
+    current = int(key.get("limit_ip") or 2)
+    rows = [[InlineKeyboardButton(
+        text=("✓ " if current == limit else "") + f"{limit} устройств",
+        callback_data=f"admin_set_device_limit_value:{key_id}:{user_id}:{limit}",
+    ) for limit in (2, 5, 10)]]
+    rows.append([InlineKeyboardButton(text="← К ключу", callback_data=f"admin_key_detail:{key_id}:{user_id}")])
+    await callback.message.edit_text(
+        "Выберите новый лимит. Изменение применится к подписке в 3x-ui.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@router.callback_query(F.data.startswith("admin_set_device_limit_value:"))
+async def cb_set_device_limit(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    parts = callback.data.split(":")
+    if len(parts) != 4:
+        await safe_answer(callback, "Некорректный запрос.", alert=True)
+        return
+    key_id, user_id, limit = map(int, parts[1:])
+    if limit not in (2, 5, 10):
+        await safe_answer(callback, "Выберите 2, 5 или 10 устройств.", alert=True)
+        return
+    await safe_answer(callback, "Обновляю лимит…")
+    from database import get_key_by_id
+    from xui_client import get_xui_devices, set_xui_client_limits
+    key = await get_key_by_id(key_id)
+    if not key or int(key.get("user_id") or 0) != user_id:
+        await callback.message.edit_text("Ключ не найден.", reply_markup=_back_kb())
+        return
+    try:
+        panel_state = await get_xui_devices(user_id)
+        old_limit = int(panel_state.get("limit_hwid") or 0)
+        if old_limit < 0:
+            raise RuntimeError("invalid current panel tier")
+        if not await set_xui_client_limits(user_id, limit_ip=0, limit_hwid=limit):
+            raise RuntimeError("panel rejected device limit update")
+        if not await set_user_device_limit(user_id, limit):
+            await set_xui_client_limits(user_id, limit_ip=0, limit_hwid=old_limit)
+            raise RuntimeError("local subscription update failed")
+    except Exception as exc:
+        logger.warning("Admin device limit update failed (%s)", type(exc).__name__)
+        await callback.message.edit_text(
+            "Не удалось подтвердить изменение лимита. Проверьте состояние подписки в панели перед повтором.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="← К ключу", callback_data=f"admin_key_detail:{key_id}:{user_id}")
+            ]]),
+        )
+        return
+    await callback.message.edit_text(
+        f"Лимит обновлён: <b>{limit} устройств</b>.\nИзменение подтверждено панелью и сохранено в боте.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="← К ключу", callback_data=f"admin_key_detail:{key_id}:{user_id}")
+        ]]),
+    )
+
+
 # ── Quick Add Days ────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("admin_key_add_days:"))
@@ -2947,7 +3090,7 @@ async def cb_grant_key(callback: CallbackQuery, state: FSMContext):
 
 @router.message(StateFilter(AdminFlow.grant_key_days))
 async def receive_grant_key_days(message: Message, bot: Bot, state: FSMContext):
-    """Receive days and create key for user."""
+    """Receive key duration, then let an admin select a supported device tier."""
     if not _is_admin(message.from_user.id):
         return
     
@@ -2959,47 +3102,56 @@ async def receive_grant_key_days(message: Message, bot: Bot, state: FSMContext):
         await message.answer(f"❌ Введите число дней от 1 до {MAX_GRANT_DAYS}."); return
 
     data = await state.get_data()
-    await state.clear()
     uid = data.get("grant_key_user_id")
     
     if not uid:
         await message.answer("❌ Ошибка сессии. Начните заново."); return
     
-    # Create key for user
-    from subscription import deliver_key
-    
-    config_name = f"🇺🇸 Admin-Key-{uid}"
-    success = await deliver_key(
-        bot=bot,
-        user_id=uid,
-        chat_id=uid,
-        config_name=config_name,
-        days=days,
-        limit_ip=2,
-        is_paid=False,
-        amount=0,
-        currency="RUB",
-        method="admin_grant",
-        payload=f"admin_grant_{uid}_{days}",
-        extend_existing=False,  # Always create new key for admin grants
+    await state.set_state(AdminFlow.grant_key_devices)
+    await state.update_data(grant_key_days=days)
+    await message.answer(
+        "Выберите лимит устройств для новой подписки:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=f"{limit} устройств", callback_data=f"admin_grant_device_limit:{uid}:{days}:{limit}")
+            for limit in (2, 5, 10)
+        ]]),
     )
-    
+
+
+@router.callback_query(F.data.startswith("admin_grant_device_limit:"))
+async def cb_grant_key_with_device_limit(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    parts = callback.data.split(":")
+    if len(parts) != 4:
+        await safe_answer(callback, "Некорректный запрос.", alert=True)
+        return
+    uid, days, limit = map(int, parts[1:])
+    if limit not in (2, 5, 10) or days < 1 or days > MAX_GRANT_DAYS:
+        await safe_answer(callback, "Выберите корректный срок и лимит.", alert=True)
+        return
+    data = await state.get_data()
+    if (await state.get_state() != AdminFlow.grant_key_devices.state
+            or int(data.get("grant_key_user_id") or 0) != uid
+            or int(data.get("grant_key_days") or 0) != days):
+        await safe_answer(callback, "Сессия выдачи устарела. Начните заново.", alert=True)
+        return
+    await safe_answer(callback, "Выдаю подписку…")
+    await state.clear()
+    from subscription import deliver_key
+    config_name = f"ByMeVPN_{uid}"
+    success = await deliver_key(
+        bot=bot, user_id=uid, chat_id=uid, config_name=config_name,
+        days=days, limit_ip=limit, is_paid=False, amount=0,
+        currency="RUB", method="admin_grant",
+        payload=f"admin_grant_{uid}_{days}_{limit}", extend_existing=False,
+    )
     if success:
-        await message.answer(
-            f"✅ <b>Ключ выдан!</b>\n\n"
-            f"👤 Пользователь: <code>{uid}</code>\n"
-            f"📅 Срок: {days} дней\n"
-            f"📱 Устройств: до 10\n"
-            f"🏷️ Название: <b>{config_name}</b>\n\n"
-            f"Ключ отправлен пользователю в личные сообщения!",
-            parse_mode="HTML", reply_markup=_back_kb()
-        )
+        text = f"Подписка выдана.\nСрок: <b>{days} дней</b>\nУстройств: <b>{limit}</b>."
     else:
-        await message.answer(
-            f"❌ Не удалось выдать ключ пользователю <code>{uid}</code>.\n"
-            "Проверьте подключение к 3x-ui в логах.",
-            parse_mode="HTML", reply_markup=_back_kb()
-        )
+        text = "Не удалось выдать подписку. Проверьте состояние панели и журнал ошибки выдачи."
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=_back_kb())
 
 
 # ── Export Keys CSV ─────────────────────────────────────────────────────────

@@ -43,6 +43,13 @@ async def cmd_keys(message: Message, bot: Bot):
     """Direct command to show user's keys."""
     user_id = message.from_user.id
     keys = await get_user_keys(user_id)
+    if not keys:
+        try:
+            from panel_key_sync import sync_missing_local_key_from_panel
+            if await sync_missing_local_key_from_panel(user_id) == "imported":
+                keys = await get_user_keys(user_id)
+        except Exception as exc:
+            logger.warning("Panel key lookup during /keys failed (%s)", type(exc).__name__)
 
     if not keys:
         await send_with_photo(bot, message,
@@ -87,6 +94,13 @@ async def cb_my_keys(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     user_id = callback.from_user.id
     keys = await get_user_keys(user_id)
+    if not keys:
+        try:
+            from panel_key_sync import sync_missing_local_key_from_panel
+            if await sync_missing_local_key_from_panel(user_id) == "imported":
+                keys = await get_user_keys(user_id)
+        except Exception as exc:
+            logger.warning("Panel key lookup in subscription screen failed (%s)", type(exc).__name__)
 
     if not keys:
         text = (

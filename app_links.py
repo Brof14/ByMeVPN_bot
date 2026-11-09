@@ -277,17 +277,95 @@ def render_connection_choice_page(subscription_url: str, user_name: str = "") ->
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow"><meta name="theme-color" content="#061020"><title>Подключение ByMeVPN</title>
 <style>
-/* Hallmark · v2.0.0 · custom brand direction: calm navy with electric blue and green */
-/* Critique: platform choice is the task; custom SVG marks replace emoji, no app claims are invented. */
-:root{color-scheme:dark;--font-ui:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;--bg:#061020;--surface:#0d1b2c;--surface-soft:#102238;--line:#20364d;--ink:#f3f8ff;--muted:#b3c2d2;--quiet:#8195aa;--blue:#21a5ff;--cyan:#27d5e8;--green:#43e58b;--focus:#a6ffcb;--shadow:rgb(0 0 0 / 34%);--brand:linear-gradient(112deg,var(--blue),var(--cyan) 54%,var(--green));--measure:980px;--radius:24px}
-*,*::before,*::after{box-sizing:border-box}html,body{overflow-x:clip}html{scroll-behavior:smooth}body{min-height:100svh;margin:0;padding:clamp(10px,3vw,32px);display:grid;place-items:center;background:radial-gradient(ellipse at 12% 0%,rgb(0 149 255 / 13%),transparent 45%),radial-gradient(ellipse at 92% 12%,rgb(67 229 139 / 8%),transparent 42%),var(--bg);color:var(--ink);font:16px/1.55 var(--font-ui)}
-main{width:min(100%,var(--measure));min-width:0}.shell{position:relative;overflow:clip;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);box-shadow:0 24px 80px var(--shadow)}.shell::before{position:absolute;inset:0 0 auto;height:3px;background:var(--brand);content:""}.head{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:24px;padding:clamp(22px,5vw,48px);border-bottom:1px solid var(--line)}
-.brand{display:flex;align-items:center;gap:16px;min-width:0}.logo{width:clamp(58px,10vw,92px);height:auto;aspect-ratio:1;object-fit:contain;border:1px solid var(--line);border-radius:20px}.display{min-width:0}h1,h2,p{margin-top:0}h1{margin-bottom:7px;overflow-wrap:break-word;min-width:0;font-size:clamp(1.55rem,4vw,2.25rem);line-height:1.12;letter-spacing:-.035em}.lead{max-width:55ch;margin:0;color:var(--muted)}.secure{padding:8px 12px;border:1px solid var(--line);border-radius:999px;color:var(--quiet);font-size:.84rem;white-space:nowrap}
-.content{padding:clamp(20px,4vw,40px)}.section-title{margin-bottom:12px;font-size:1rem;font-weight:650}.platforms{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}.platform{min-height:82px;display:grid;place-items:center;align-content:center;gap:7px;padding:10px 7px;border:1px solid var(--line);border-radius:16px;background:var(--surface-soft);color:var(--muted);font:inherit;cursor:pointer}.platform[aria-pressed="true"]{border-color:var(--blue);background:var(--surface);color:var(--ink);box-shadow:inset 0 0 0 1px var(--blue)}.mark{width:30px;height:30px;display:block;object-fit:contain}.platform-label{font-size:.88rem;text-align:center;overflow-wrap:break-word;min-width:0}
-.apps{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:26px}.app{min-width:0;padding:18px;border:1px solid var(--line);border-radius:18px;background:var(--surface-soft)}.app.featured{border:1px solid transparent;background:linear-gradient(var(--surface-soft),var(--surface-soft)) padding-box,var(--brand) border-box;box-shadow:0 14px 36px var(--shadow)}.app-head{display:flex;align-items:center;gap:12px;min-width:0;margin-bottom:10px}.featured-label{margin-left:auto;padding:5px 9px;border:1px solid var(--line);border-radius:999px;color:var(--green);font-size:.76rem;white-space:nowrap}.app-mark{width:42px;height:42px;flex:0 0 42px;display:grid;place-items:center;border:1px solid var(--line);border-radius:13px;background:var(--surface);color:var(--green)}.featured .app-mark{width:50px;height:50px;flex-basis:50px;border-color:var(--cyan);border-radius:15px}.app-logo{width:100%;height:100%;object-fit:contain;border-radius:8px}.app-logo-vector{display:grid;place-items:center}.app-logo-vector svg{width:27px;height:27px}.app h2{min-width:0;margin:0;overflow-wrap:break-word;font-size:1.05rem;line-height:1.25}.hint{min-height:3em;margin-bottom:14px;color:var(--muted);font-size:.9rem}.actions{display:grid;gap:8px}.button{min-height:46px;display:flex;align-items:center;justify-content:center;padding:10px 14px;border:1px solid var(--line);border-radius:12px;background:var(--blue);color:var(--bg);font:inherit;font-weight:700;text-align:center;text-decoration:none;cursor:pointer}.button.secondary{background:transparent;color:var(--ink)}.button.copy{border-color:var(--line);background:var(--surface);color:var(--muted);font-weight:550}.featured-action{border-color:transparent;background:var(--brand);color:var(--bg)}.site-copy{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:18px;margin-top:20px;padding:16px 18px;border:1px solid var(--line);border-radius:16px;background:var(--surface)}.site-copy p{margin:0;color:var(--quiet);font-size:.88rem}.button:hover{filter:brightness(1.08)}button:focus-visible,a:focus-visible{outline:3px solid var(--focus);outline-offset:3px}.status{min-height:1.5em;margin:16px 0 0;color:var(--green);font-size:.9rem}.note{margin:18px 0 0;padding-top:16px;border-top:1px solid var(--line);color:var(--quiet);font-size:.88rem}.noscript{margin:20px 0 0;padding:14px;border:1px solid var(--line);border-radius:12px;color:var(--muted)}
-@media(max-width:680px){body{padding:10px;place-items:start center}.head{grid-template-columns:minmax(0,1fr);gap:14px;padding:20px}.secure{justify-self:start}.content{padding:20px}.platforms{grid-template-columns:repeat(2,minmax(0,1fr))}.platform:last-child{grid-column:span 2}.apps{grid-template-columns:minmax(0,1fr);gap:10px;margin-top:20px}.app{padding:16px}.hint{min-height:0}.logo{border-radius:16px}.site-copy{grid-template-columns:minmax(0,1fr);gap:10px}.site-copy .button{width:100%}}
-@media(max-width:360px){.brand{align-items:flex-start;gap:10px}.logo{width:52px}.head,.content{padding:16px}.platform{min-height:74px}}
-@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+/* ByMeVPN connect · compact brand system · one clear action */
+:root {
+  color-scheme: dark;
+  --font-ui: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --bg: #071321;
+  --surface: #0c1a29;
+  --surface-soft: #102235;
+  --line: #1b3448;
+  --ink: #f3f8fa;
+  --muted: #b5c4ce;
+  --quiet: #7e94a6;
+  --blue: #168bf2;
+  --green: #3ddb88;
+  --focus: #93ffd0;
+  --brand: linear-gradient(105deg, var(--blue), #16c9db 58%, var(--green));
+  --measure: 920px;
+  --radius-shell: 18px;
+  --radius-control: 12px;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html, body { overflow-x: clip; }
+body { min-height: 100svh; margin: 0; padding: clamp(8px, 2.5vw, 28px); display: grid; place-items: center; background: var(--bg); color: var(--ink); font: 16px/1.5 var(--font-ui); }
+main { width: min(100%, var(--measure)); min-width: 0; }
+.shell { position: relative; overflow: clip; border: 1px solid var(--line); border-radius: var(--radius-shell); background: var(--surface); }
+.shell::before { position: absolute; inset: 0 0 auto; height: 2px; background: var(--brand); content: ""; }
+.head { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 18px 22px; border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 13px; min-width: 0; }
+.logo { width: 52px; height: 52px; flex: 0 0 52px; object-fit: contain; border-radius: 13px; }
+.display { min-width: 0; }
+h1, h2, p { margin-top: 0; }
+h1 { margin-bottom: 3px; overflow-wrap: break-word; min-width: 0; font-size: clamp(1.25rem, 3vw, 1.65rem); line-height: 1.2; letter-spacing: -.025em; }
+.lead { max-width: 58ch; margin: 0; color: var(--muted); font-size: .94rem; }
+.secure { color: var(--quiet); font-size: .82rem; white-space: nowrap; }
+.content { padding: 20px 22px 22px; }
+.section-title { margin-bottom: 10px; font-size: .92rem; font-weight: 650; }
+.platforms { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; }
+.platform { min-width: 0; min-height: 60px; display: flex; align-items: center; justify-content: center; gap: 9px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-control); background: transparent; color: var(--muted); font: inherit; cursor: pointer; }
+.platform[aria-pressed="true"] { border-color: var(--blue); background: var(--surface-soft); color: var(--ink); }
+.mark { width: 24px; height: 24px; flex: 0 0 24px; display: block; object-fit: contain; }
+.platform-label { min-width: 0; overflow-wrap: break-word; font-size: .86rem; }
+.apps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; margin-top: 18px; }
+.app { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(130px, .82fr); grid-template-rows: auto 1fr; align-items: center; gap: 4px 12px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.app.featured { grid-column: 1 / -1; margin-bottom: 2px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-soft); }
+.app-head { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.featured-label { margin-left: auto; color: var(--green); font-size: .78rem; white-space: nowrap; }
+.app-mark { width: 36px; height: 36px; flex: 0 0 36px; display: grid; place-items: center; overflow: hidden; border-radius: 10px; background: var(--surface); }
+.featured .app-mark { width: 42px; height: 42px; flex-basis: 42px; }
+.app-logo { width: 100%; height: 100%; object-fit: contain; }
+.app-logo-vector { display: grid; place-items: center; color: var(--green); }
+.app-logo-vector svg { width: 25px; height: 25px; }
+.app h2 { min-width: 0; margin: 0; overflow-wrap: break-word; font-size: .98rem; line-height: 1.25; }
+.hint { min-width: 0; margin: 0; color: var(--quiet); font-size: .82rem; line-height: 1.4; }
+.actions { display: grid; grid-row: 1 / span 2; grid-column: 2; gap: 6px; }
+.button { min-height: 40px; display: flex; align-items: center; justify-content: center; padding: 8px 11px; border: 1px solid transparent; border-radius: 10px; background: var(--blue); color: var(--bg); font: inherit; font-size: .84rem; font-weight: 680; text-align: center; text-decoration: none; cursor: pointer; }
+.button.secondary { border-color: var(--line); background: transparent; color: var(--ink); font-weight: 550; }
+.featured-action { background: var(--green); }
+.button:hover { filter: brightness(1.08); }
+.site-copy { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.site-copy p { margin: 0; color: var(--quiet); font-size: .84rem; }
+.site-copy .button { min-width: 168px; background: transparent; border-color: var(--line); color: var(--ink); }
+button:focus-visible, a:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.status { min-height: 1.4em; margin: 10px 0 0; color: var(--green); font-size: .86rem; }
+.note { margin: 9px 0 0; color: var(--quiet); font-size: .82rem; }
+.noscript { margin: 16px 0 0; color: var(--muted); }
+@media (max-width: 680px) {
+  body { padding: 8px; place-items: start center; }
+  .head { grid-template-columns: minmax(0, 1fr); gap: 7px; padding: 16px; }
+  .logo { width: 46px; height: 46px; flex-basis: 46px; }
+  .secure { padding-left: 59px; }
+  .content { padding: 15px 16px 17px; }
+  .platforms { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .platform:last-child { grid-column: 1 / -1; }
+  .apps { grid-template-columns: minmax(0, 1fr); margin-top: 13px; }
+  .app { padding: 12px 0; }
+  .app.featured { padding: 12px; }
+  .site-copy { grid-template-columns: minmax(0, 1fr); gap: 9px; }
+  .site-copy .button { width: 100%; }
+}
+@media (max-width: 360px) {
+  .brand { align-items: flex-start; gap: 9px; }
+  .logo { width: 40px; height: 40px; flex-basis: 40px; }
+  .secure { padding-left: 49px; }
+  .app { grid-template-columns: minmax(0, 1fr) minmax(112px, .8fr); gap: 4px 8px; }
+  .app-mark { width: 32px; height: 32px; flex-basis: 32px; }
+  .featured .app-mark { width: 36px; height: 36px; flex-basis: 36px; }
+  .featured-label { font-size: .7rem; }
+  .button { padding-inline: 8px; font-size: .78rem; }
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 </style></head><body><main><section class="shell">
 <header class="head"><div class="brand"><img class="logo" src="/app/logo" alt="Логотип ByMeVPN" width="1254" height="1254"><div class="display"><h1>Подключение ByMeVPN</h1><p class="lead">Выберите устройство и приложение. Подписка добавится автоматически, если приложение поддерживает импорт.</p></div></div><span class="secure">Защищённая ссылка</span></header>
 <div class="content"><h2 class="section-title">Ваше устройство</h2><div class="platforms" id="platforms" aria-label="Выбор устройства"></div><div class="apps" id="apps"></div><div class="site-copy"><p>Если импорт не открылся, скопируйте ссылку и добавьте её в разделе подписок.</p><button type="button" class="button copy" id="copy-subscription">Скопировать ссылку</button></div><p class="status" id="status" role="status" aria-live="polite"></p><p class="note">Страница подключения ограничена по времени. Если ссылка истекла, откройте подключение заново из бота.</p>

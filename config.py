@@ -105,17 +105,17 @@ if (
         "TLS certificate verification matches; do not disable verification."
     )
 
-# Принудительно ограничиваем выдаваемые подписки этими четырьмя инбаундами.
+# Сохраняем текущие инбаунды и добавляем новые 13, 14 и 40 для подписок бота.
 # Значение из .env намеренно игнорируется, чтобы состав подписки не менялся случайно.
-XUI_INBOUND_IDS: list[int] = [12, 13, 14, 15]
+XUI_INBOUND_IDS: list[int] = [13, 14, 40]
 XUI_INBOUND_ID = XUI_INBOUND_IDS[0]  # primary (обратная совместимость)
-# Current panel remarks, verified against the live inbounds on 2026-10-17.
-# The panel remark is preferred at runtime; these labels are a safe fallback.
+# Panel remarks are preferred at runtime; these labels are safe fallbacks.
 XUI_INBOUND_NAMES = {
     12: "🇩🇪Germany-1",
     13: "🇩🇪Germany-2",
     14: "🇩🇪Germany-3",
     15: "🇩🇪Germany-4",
+    40: "ByMeVPN · 40",
 }
 XUI_SUB_PATH = os.getenv("XUI_SUB_PATH", "sub")
 

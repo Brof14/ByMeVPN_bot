@@ -1715,6 +1715,51 @@ async def add_key(
     return cur.lastrowid
 
 
+async def import_panel_key_if_missing(
+    user_id: int, key: str, remark: str, uuid: str, days: int,
+    limit_ip: int, expiry: int,
+) -> bool:
+    """Import a panel client only when the registered Telegram account has no key row.
+
+    The caller must match the 3x-ui client email to the exact Telegram user ID.
+    Repeated admin reconciliation is idempotent and never overwrites local keys.
+    """
+    db = await get_db()
+    cur = await db.execute(
+        "INSERT INTO keys(user_id, key, remark, uuid, days, limit_ip, created, expiry) "
+        "SELECT ?, ?, ?, ?, ?, ?, ?, ? "
+        "WHERE EXISTS (SELECT 1 FROM users WHERE user_id=?) "
+        "AND NOT EXISTS (SELECT 1 FROM keys WHERE user_id=?)",
+        (int(user_id), key, remark, uuid, max(1, int(days)), max(0, int(limit_ip)),
+         int(time.time()), int(expiry), int(user_id), int(user_id)),
+    )
+    await db.commit()
+    imported = cur.rowcount == 1
+    if imported:
+        from cache import invalidate_user_cache, invalidate_subscription_cache
+        invalidate_user_cache(int(user_id))
+        invalidate_subscription_cache(int(user_id))
+    return imported
+
+
+async def set_user_device_limit(user_id: int, limit: int) -> bool:
+    """Persist a verified panel device tier on every local key row for one user."""
+    if int(limit) not in (2, 5, 10):
+        return False
+    db = await get_db()
+    cur = await db.execute(
+        "UPDATE keys SET limit_ip=? WHERE user_id=?",
+        (int(limit), int(user_id)),
+    )
+    await db.commit()
+    if cur.rowcount:
+        from cache import invalidate_user_cache, invalidate_subscription_cache
+        invalidate_user_cache(int(user_id))
+        invalidate_subscription_cache(int(user_id))
+        return True
+    return False
+
+
 async def schedule_connection_reminder(
     key_id: int, traffic_baseline: int = 0, delay_seconds: int = 7200,
 ) -> bool:
@@ -4707,6 +4752,20 @@ async def find_user_by_id(user_id: int) -> Optional[dict]:
         "is_banned": bool(row[6]),
         "ban_reason": row[7],
     }
+
+
+async def find_user_by_username(username: str) -> Optional[dict]:
+    """Find one registered user by their exact Telegram username."""
+    normalized = str(username or "").strip().lstrip("@").casefold()
+    if not normalized or len(normalized) > 64:
+        return None
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT user_id FROM users WHERE lower(username)=? ORDER BY created DESC LIMIT 1",
+        (normalized,),
+    )
+    row = await cur.fetchone()
+    return await find_user_by_id(int(row[0])) if row else None
 
 
 async def delete_user_and_keys(user_id: int, *, source: str = "admin") -> list[str]:

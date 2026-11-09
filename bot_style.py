@@ -108,6 +108,7 @@ _ACTION_ICONS = {
     "key_history": "history",
     "admin_stats": "list",
     "admin_search": "search",
+    "admin_sync_panel_keys": "refresh",
     "legal": "legal",
     "marketing_optin": "notifications_on",
     "marketing_optout": "notifications_off",
@@ -116,6 +117,19 @@ _ACTION_ICONS = {
 }
 
 _PREFIX_ICONS = (
+    ("admin_set_device_limit:", "devices"),
+    ("admin_set_device_limit_value:", "devices"),
+    ("admin_grant_device_limit:", "devices"),
+    ("admin_grant_key:", "subscription"),
+    ("admin_user_keys:", "subscription"),
+    ("admin_user_pay:", "card"),
+    ("admin_extend_sub:", "renew"),
+    ("admin_add_days:", "renew"),
+    ("admin_grant_trial:", "gift"),
+    ("admin_pm:", "support"),
+    ("admin_reset_trial:", "refresh"),
+    ("admin_key_detail:", "subscription"),
+    ("admin_key_add_days:", "renew"),
     ("devtier_", "device_tier"),
     ("tariff_", "plans"),
     ("period_", "plans"),
@@ -162,6 +176,7 @@ _LEGACY_PREFIXES = (
     "🔑 ", "📱 ", "🛒 ", "💳 ", "⭐ ", "🎁 ", "👥 ",
     "📋 ", "📣 ", "🔙 ", "🏠 ", "🔄 ", "🔗 ",
     "📤 ", "✏️ ", "🗑 ", "🗑️ ", "💎 ", "🆘 ",
+    "⏰ ", "➕ ", "🆕 ", "✉️ ", "💰 ", "✅ ", "🚫 ",
     "◀️ ", "◀ ", "← ", "↻ ",
 )
 
