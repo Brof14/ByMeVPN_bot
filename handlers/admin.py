@@ -2893,14 +2893,17 @@ async def cb_set_device_limit_prompt(callback: CallbackQuery):
     if not key or int(key.get("user_id") or 0) != user_id:
         await callback.message.edit_text("Ключ не найден.", reply_markup=_back_kb())
         return
-    current = int(key.get("limit_ip") or 2)
+    current_value = key.get("limit_ip")
+    current = int(2 if current_value is None else current_value)
+    current_label = "без ограничений" if current == 0 else f"{current} устройств"
     rows = [[InlineKeyboardButton(
         text=("✓ " if current == limit else "") + f"{limit} устройств",
         callback_data=f"admin_set_device_limit_value:{key_id}:{user_id}:{limit}",
     ) for limit in (2, 5, 10)]]
     rows.append([InlineKeyboardButton(text="← К ключу", callback_data=f"admin_key_detail:{key_id}:{user_id}")])
     await callback.message.edit_text(
-        "Выберите новый лимит. Изменение применится к подписке в 3x-ui.",
+        f"Сейчас: <b>{current_label}</b>. Выберите новый лимит — он применится к подписке в 3x-ui.",
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
 

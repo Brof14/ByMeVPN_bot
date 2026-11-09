@@ -34,7 +34,9 @@ async def sync_missing_local_key_from_panel(user_id: int) -> str:
     if expiry <= 0:
         return "not_found"
     device_limit = int(details.get("limit_hwid") or 0)
-    if device_limit not in (2, 5, 10):
+    # Older panel clients may have no HWID limit (0) or a legacy tier. Preserve
+    # the panel's actual setting so admins can see the key and choose 2/5/10.
+    if device_limit < 0 or device_limit > 1000:
         return "unsupported_device_limit"
 
     days = max(1, (expiry - int(time.time()) + 86_399) // 86_400)
