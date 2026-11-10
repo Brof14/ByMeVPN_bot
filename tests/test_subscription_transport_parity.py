@@ -70,6 +70,13 @@ class SubscriptionTransportParityTests(unittest.TestCase):
         self.assertEqual(node["fingerprint"], "chrome")
         self.assertEqual(node["alpn"], "h3")
 
+    def test_hysteria_percent_encoded_password_is_decoded_before_xray_auth(self):
+        node = self.node(
+            "hysteria2://pa%3Ass%40word@vpn.example.com:59763?"
+            "sni=cdn.example.com#Hysteria"
+        )
+        self.assertEqual(node["uuid"], "pa:ss@word")
+
     def test_ipv6_authority_is_parsed_without_fake_server_address(self):
         node = self.node(
             f"vless://{UUID}@[2001:db8::42]:443?"
