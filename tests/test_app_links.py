@@ -1,6 +1,10 @@
 """Tests for the Telegram → ByMeVPN app handover links."""
 import time
 import unittest
+import os
+import json
+import re
+import struct
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, urlsplit
@@ -9,6 +13,9 @@ from app_links import (
     APP_LOGIN_CONTENT_SECURITY_POLICY,
     build_app_login_url,
     build_app_redirect_url,
+    build_connect_ticket,
+    read_connect_ticket,
+    CONNECT_TICKET_TTL_SECONDS,
     render_app_open_page,
     render_connection_choice_page,
 )
@@ -70,6 +77,11 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertTrue(logo.is_file())
         self.assertGreater(logo.stat().st_size, 1024)
         self.assertEqual(logo.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+        optimized = logo.parent / "app" / "assets" / "bymevpn-logo.png"
+        self.assertTrue(optimized.is_file())
+        self.assertLess(optimized.stat().st_size, logo.stat().st_size)
+        self.assertEqual(struct.unpack(">II", optimized.read_bytes()[16:24]),
+                         struct.unpack(">II", logo.read_bytes()[16:24]))
 
     def test_untrusted_values_cannot_break_out_of_script(self):
         page = render_app_open_page(
@@ -91,39 +103,95 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertIn("play.google.com/store/apps/details?id=llc.itdev.incy", page)
         self.assertIn("github.com/Happ-proxy/happ-android/releases/latest", page)
 
+    def test_download_and_platform_mapping_preserves_existing_clients(self):
+        page = render_connection_choice_page("https://sub.example/abc")
+        encoded = re.search(r'const apps=JSON.parse\(("(?:\\.|[^"\\])*")\)', page)
+        self.assertIsNotNone(encoded)
+        apps = json.loads(json.loads(encoded.group(1)))
+        self.assertEqual([a["name"] for a in apps["android"]], ["ByMeVPN", "Happ", "INCY", "v2rayTun", "v2rayNG", "Hiddify", "sing-box"])
+        self.assertEqual(apps["android"][0]["download"],
+                         "https://github.com/Brof14/ByMeVPN-app/releases/download/v1.0.13/ByMeVPN-v1.0.13.apk")
+        self.assertEqual([a["name"] for a in apps["ios"]], ["Happ", "INCY", "v2rayTun", "Hiddify", "sing-box"])
+        for platform in ("windows", "macos", "linux"):
+            self.assertIn("v2rayN", [a["name"] for a in apps[platform]])
+            self.assertIn("Koala Clash", [a["name"] for a in apps[platform]])
+            self.assertTrue(all("ByMeVPN-v1.0.13.apk" not in a["download"] for a in apps[platform]))
+
     def test_connection_page_has_os_marks_and_manual_copy_fallback(self):
         page = render_connection_choice_page("https://sub.example/abc")
 
-        for label in ("Android", "iPhone / iPad", "Windows", "macOS", "Linux"):
+        for label in ("Android", "iOS", "Windows", "macOS", "Linux"):
             self.assertIn(label, page)
         self.assertNotIn("🤖", page)
-        self.assertIn("Hallmark · v2.0.0", page)
-        self.assertIn("@media(max-width:680px)", page)
+        self.assertIn('id="platforms"', page)
         self.assertIn("overflow-x:clip", page)
         self.assertIn("prefers-reduced-motion", page)
         self.assertIn("Скопировать ссылку", page)
         self.assertNotIn("Если не открылось — скопировать", page)
-        self.assertIn('src="/app/logo"', page)
-        self.assertIn("Выберите устройство и приложение", page)
-        self.assertIn("github.com/Brof14/ByMeVPN-app/releases/download/v1.0.12/ByMeVPN-v1.0.12.apk", page)
-        self.assertIn('badge.textContent="Наше приложение"', page)
-        self.assertIn('className=a.featured?"app featured":"app"', page)
+        self.assertIn('src="/app/assets/bymevpn-logo.png"', page)
+        self.assertIn("Выберите приложение и подключитесь", page)
+        self.assertIn("github.com/Brof14/ByMeVPN-app/releases/download/v1.0.13/ByMeVPN-v1.0.13.apk", page)
+        self.assertIn("Рекомендуем", page)
+        self.assertIn('<details id="alternatives" open>', page)
         self.assertIn('id="copy-subscription"', page)
         self.assertEqual(page.count("Скопировать ссылку"), 1)
         self.assertNotIn("Если не открылось — скопировать ссылку", page)
         self.assertIn("https://play.google.com/store/apps/details?id=llc.itdev.incy", page)
-        for asset in (
-            "android.png", "apple.png", "happ.png", "incy.png", "koala.png", "linux.png",
-            "v2rayn.png", "windows.png",
-        ):
-            self.assertIn(asset, page)
-        self.assertIn('"/app/assets/"+platformIcons[k]', page)
-        self.assertIn('"/app/assets/happ.png"', page)
-        self.assertIn('"/app/assets/incy.png"', page)
-        self.assertIn('v2rayn:"/app/assets/v2rayn.png"', page)
-        self.assertIn('koala:"/app/assets/koala.png"', page)
-        self.assertIn("@media(max-width:680px)", page)
-        self.assertIn(".site-copy{grid-template-columns:minmax(0,1fr)", page)
+        for symbol in ("android", "apple", "windows", "linux"):
+            self.assertIn(f'id="os-{symbol}"', page)
+        self.assertIn('id="external-download"', page)
+        self.assertIn("viewport-fit=cover", page)
+
+    def test_connection_page_escapes_script_endings_and_template_markers(self):
+        page = render_connection_choice_page("https://sub.example/__APPS__?x=</script>")
+        self.assertNotIn("</script>\u003cscript>", page)
+        self.assertEqual(page.count("</script>"), 1)
+        self.assertIn("__APPS__", page)  # appears only inside the safely encoded URL
+        self.assertIn("\\u003c/script\\u003e", page)
+
+
+class TestConnectionPageHttp(unittest.TestCase):
+    def test_extended_lifetime_and_legacy_ticket(self):
+        import base64
+        from app_links import _connect_aead
+        with patch.dict(os.environ, {"APP_HANDOFF_SECRET": "isolated-test-secret"}):
+            ticket = build_connect_ticket("https://sub.example/demo", now=1_000_000)
+            self.assertEqual(read_connect_ticket(ticket, now=1_000_000 + 86400)["subscription_url"], "https://sub.example/demo")
+            with self.assertRaises(ValueError):
+                read_connect_ticket(ticket, now=1_000_001 + CONNECT_TICKET_TTL_SECONDS)
+            payload = json.dumps({"sub": "https://sub.example/demo", "exp": 1_000_000 + 900}).encode()
+            nonce = os.urandom(12)
+            legacy = base64.urlsafe_b64encode(nonce + _connect_aead().encrypt(nonce, payload, b"bymevpn-connect-ticket-v1")).decode().rstrip("=")
+            self.assertEqual(read_connect_ticket(legacy, now=1_000_000 + 86400)["subscription_url"], "https://sub.example/demo")
+            with self.assertRaises(ValueError):
+                read_connect_ticket(legacy, now=1_000_001 + CONNECT_TICKET_TTL_SECONDS)
+
+    def test_verified_import_links_escape_query_and_warning(self):
+        page = render_connection_choice_page("https://sub.example/abc?x=1&y=2")
+        encoded = re.search(r'const apps=JSON.parse\(("(?:\\.|[^"\\])*")\)', page)
+        apps = json.loads(json.loads(encoded.group(1)))
+        android = {a["name"]: a for a in apps["android"]}
+        self.assertEqual(parse_qs(urlsplit(android["v2rayNG"]["deep"]).query)["url"], ["https://sub.example/abc?x=1&y=2"])
+        self.assertEqual(parse_qs(urlsplit(android["Hiddify"]["deep"]).query)["url"], ["https://sub.example/abc?x=1&y=2"])
+        self.assertIn("v2raytun://import/https://sub.example/abc?x=1&y=2", android["v2rayTun"]["deep"])
+        self.assertTrue(android["sing-box"]["manual"])
+        self.assertIn("JSON", android["sing-box"]["note"])
+
+    def test_valid_and_expired_tickets_keep_existing_security_contract(self):
+        from fastapi.testclient import TestClient
+        from webhook import app
+
+        with patch.dict(os.environ, {"APP_HANDOFF_SECRET": "isolated-test-secret"}):
+            client = TestClient(app)
+            ticket = build_connect_ticket("https://sub.example/preview")
+            response = client.get("/connect", params={"ticket": ticket})
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("Подключение VPN", response.text)
+            self.assertIn("no-store", response.headers["cache-control"])
+            self.assertIn("default-src 'none'", response.headers["content-security-policy"])
+            expired = build_connect_ticket("https://sub.example/preview", now=int(time.time()) - CONNECT_TICKET_TTL_SECONDS - 1)
+            self.assertEqual(client.get("/connect", params={"ticket": expired}).status_code, 400)
+            self.assertEqual(client.get("/connect", params={"ticket": "invalid"}).status_code, 400)
 
 
 class TestAppOpenKeyboard(unittest.TestCase):

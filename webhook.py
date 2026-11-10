@@ -20,6 +20,7 @@ Config:   WEBHOOK_HOST, WEBHOOK_PORT in .env
 """
 import asyncio
 import base64
+import contextlib
 import ipaddress
 import json
 import logging
@@ -47,6 +48,17 @@ from subscription import deliver_key
 
 logger = logging.getLogger(__name__)
 
+
+class _BackgroundUvicornServer(uvicorn.Server):
+    """Leave process signals to aiogram's single polling lifecycle."""
+
+    @contextlib.contextmanager
+    def capture_signals(self):
+        # Multiple embedded Uvicorn servers each install process-wide signal
+        # handlers. In one event loop they overwrite and re-raise signals to
+        # each other, making a normal container stop look like worker failure.
+        yield
+
 MAX_YOOKASSA_WEBHOOK_BYTES = 64 * 1024
 YOOKASSA_PAYMENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 YOOKASSA_ALLOWED_NETWORKS = tuple(
@@ -68,7 +80,9 @@ def _is_allowed_yookassa_source(source_ip: str | None) -> bool:
         address = address.ipv4_mapped
     return any(address in network for network in YOOKASSA_ALLOWED_NETWORKS)
 
-app = FastAPI(docs_url=None, redoc_url=None)  # disable docs in production
+# Disable the schema endpoint as well as the interactive documentation pages.
+# Setting only docs_url/redoc_url to None still leaves /openapi.json public.
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
 try:
     from api_router import api_router
@@ -164,13 +178,14 @@ async def connection_choice_page(ticket: str = ""):
         page = render_connection_choice_page(payload["subscription_url"], payload["user_name"])
     except (ValueError, RuntimeError):
         return HTMLResponse(
-            "Ссылка подключения истекла. Вернитесь в бот и нажмите «Подключить» ещё раз.",
+            """<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Ссылка недоступна — ByMeVPN</title><style>body{margin:0;background:#07111d;color:#f3f7fb;font:16px/1.5 system-ui,sans-serif}main{max-width:480px;margin:12vh auto;padding:24px}h1{font-size:24px}p{color:#a9b9c8}a{color:#80dfff}</style><main><img src="/app/assets/bymevpn-logo.png" width="44" height="44" alt="ByMeVPN"><h1>Ссылка недоступна</h1><p>Возможно, она устарела или повреждена. Откройте бота и снова нажмите «Подключить» в разделе подписки.</p></main></html>""",
             status_code=400,
             headers={
                 "Cache-Control": "no-store, max-age=0",
                 "Referrer-Policy": "no-referrer",
                 "X-Content-Type-Options": "nosniff",
                 "X-Robots-Tag": "noindex, nofollow",
+                "Content-Security-Policy": APP_LOGIN_CONTENT_SECURITY_POLICY,
             },
         )
     return HTMLResponse(
@@ -1140,7 +1155,7 @@ async def start_webhook_server(bot: Bot, dp: Dispatcher) -> None:
         log_level="warning",
         access_log=False,
     )
-    server = uvicorn.Server(config)
+    server = _BackgroundUvicornServer(config)
     logger.info("Webhook server starting on %s:%d", WEBHOOK_HOST, WEBHOOK_PORT)
     await server.serve()
 
@@ -1162,7 +1177,8 @@ async def start_connection_tls_server() -> None:
     logo_path = Path(__file__).resolve().parent / "static" / "bymevpn-mark.png"
     asset_root = Path(__file__).resolve().parent / "static" / "app" / "assets"
     icon_assets = frozenset({
-        "android.png", "apple.png", "happ.png", "incy.png", "koala.png", "linux.png",
+        "android.png", "apple.png", "bymevpn-logo.png", "happ.png", "incy.png", "koala.png", "linux.png",
+        "v2raytun.png", "v2rayng.png", "hiddify.png", "singbox.png",
         "v2rayn.png", "windows.png",
     })
 
@@ -1203,6 +1219,6 @@ async def start_connection_tls_server() -> None:
         log_level="warning",
         access_log=False,
     )
-    server = uvicorn.Server(config)
+    server = _BackgroundUvicornServer(config)
     logger.info("Connection page HTTPS server starting on %s:%d", APP_CONNECT_TLS_HOST, APP_CONNECT_TLS_PORT)
     await server.serve()

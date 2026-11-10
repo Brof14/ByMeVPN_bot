@@ -31,11 +31,33 @@ class AdminNavigationTests(unittest.IsolatedAsyncioTestCase):
             message.answer.assert_awaited_once()
     def test_home_is_task_focused(self):
         home = _main_kb()
-        self.assertEqual(len(home.inline_keyboard), 5)
+        self.assertEqual(len(home.inline_keyboard), 3)
         self.assertEqual(
             actions(home),
-            ["admin_stats", "admin_clients_menu", "admin_finance_menu", "admin_growth", "admin_ops_menu"],
+            ["admin_stats", "admin_search", "admin_clients_menu", "admin_finance_menu", "admin_growth", "admin_ops_menu"],
         )
+
+    def test_admin_home_places_six_actions_in_three_two_column_rows(self):
+        self.assertEqual([len(row) for row in _main_kb().inline_keyboard], [2, 2, 2])
+
+    async def test_search_accepts_case_insensitive_username(self):
+        from handlers.admin import receive_search
+        query = AsyncMock()
+        query.fetchall = AsyncMock(return_value=[(123456789,)])
+        db = SimpleNamespace(execute=AsyncMock(return_value=query))
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=1), text="@ExampleUser", answer=AsyncMock(), bot=object(),
+        )
+        state = SimpleNamespace(get_data=AsyncMock(return_value={}), clear=AsyncMock())
+        with (
+            patch("handlers.admin._is_admin", return_value=True),
+            patch("handlers.admin.get_db", new=AsyncMock(return_value=db)),
+            patch("handlers.admin._show_user", new=AsyncMock()) as show_user,
+        ):
+            await receive_search(message, state)
+        self.assertEqual(db.execute.await_args.args[0].split("WHERE")[1].split("ORDER BY")[0].strip(), "lower(username)=lower(?)")
+        self.assertEqual(db.execute.await_args.args[1], ("ExampleUser",))
+        show_user.assert_awaited_once_with(message, 123456789)
 
     def test_all_previous_admin_actions_stay_reachable(self):
         available = set()

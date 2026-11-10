@@ -301,7 +301,7 @@ async def main() -> None:
 
     # Keep the bot running (polling mode)
     try:
-        await dp.start_polling(bot, handle_signals=False)
+        await dp.start_polling(bot, handle_signals=True)
     finally:
         # Graceful shutdown
         await cancel_background_tasks()

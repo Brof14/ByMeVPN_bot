@@ -26,7 +26,7 @@ class ConnectionTlsAssetTests(unittest.IsolatedAsyncioTestCase):
             patch.object(webhook, "APP_CONNECT_TLS_CERT_FILE", "/unused/cert.pem"),
             patch.object(webhook, "APP_CONNECT_TLS_KEY_FILE", "/unused/key.pem"),
             patch.object(webhook.uvicorn, "Config", _FakeConfig),
-            patch.object(webhook.uvicorn, "Server", _FakeServer),
+            patch.object(webhook, "_BackgroundUvicornServer", _FakeServer),
         ):
             await webhook.start_connection_tls_server()
 
@@ -37,7 +37,7 @@ class ConnectionTlsAssetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(logo.headers["x-content-type-options"], "nosniff")
 
         for name in (
-            "android.png", "apple.png", "happ.png", "incy.png", "koala.png", "linux.png",
+            "android.png", "apple.png", "bymevpn-logo.png", "happ.png", "incy.png", "koala.png", "linux.png",
             "v2rayn.png", "windows.png",
         ):
             with self.subTest(name=name):
@@ -48,6 +48,15 @@ class ConnectionTlsAssetTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(client.get("/app/assets/unknown.png").status_code, 404)
         self.assertEqual(client.get("/app/assets/../update.json").status_code, 404)
+
+    async def test_embedded_uvicorn_server_does_not_capture_process_signals(self):
+        server = webhook._BackgroundUvicornServer(webhook.uvicorn.Config(webhook.app))
+
+        with patch("uvicorn.server.signal.signal") as install_handler:
+            with server.capture_signals():
+                pass
+
+        install_handler.assert_not_called()
 
 
 if __name__ == "__main__":

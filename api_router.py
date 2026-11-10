@@ -46,7 +46,14 @@ logger = logging.getLogger(__name__)
 # authoritative when present.
 install_telegram_auth_storage_compat(database)
 
+# Keep the public API as one mount point while separating route groups by
+# responsibility. Authentication and response contracts stay unchanged.
 api_router = APIRouter()
+auth_api = APIRouter(prefix="/auth", tags=["authentication"])
+account_api = APIRouter(tags=["account"])
+subscription_api = APIRouter(prefix="/subscription", tags=["subscription"])
+billing_api = APIRouter(tags=["billing"])
+vpn_access_api = APIRouter(tags=["vpn-access"])
 
 # ---------------------------------------------------------------------------
 # Telegram Session Exchange & JWT Signing
@@ -77,6 +84,8 @@ def _correlated_http_error(
     error_code: Optional[str] = None,
 ) -> HTTPException:
     headers = {"X-Correlation-ID": correlation_id}
+    if status_code == 401:
+        headers["WWW-Authenticate"] = "Bearer"
     if error_code:
         headers["X-Error-Code"] = error_code
     return HTTPException(
@@ -300,16 +309,30 @@ async def _is_removed_account(user_id: int) -> bool:
 
 async def get_current_user_id(authorization: Optional[str] = Header(None)) -> int:
     if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+        raise HTTPException(
+            status_code=401,
+            detail="Missing or invalid Authorization header",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     token = authorization.removeprefix("Bearer ").strip()
     claims = _verified_token_claims(token)
     if not claims:
-        raise HTTPException(status_code=401, detail="Invalid or expired session token")
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired session token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     try:
         if await database.is_mobile_jwt_revoked(claims["jti"]):
-            raise HTTPException(status_code=401, detail="Session has been logged out")
+            raise HTTPException(
+                status_code=401, detail="Session has been logged out",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         if await _is_removed_account(claims["user_id"]):
-            raise HTTPException(status_code=401, detail="Account has been removed")
+            raise HTTPException(
+                status_code=401, detail="Account has been removed",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
     except HTTPException:
         raise
     except Exception as exc:
@@ -1252,7 +1275,7 @@ class SessionRequest(BaseModel):
 # 1. TELEGRAM 1-TAP AUTH (Zero Link Copying)
 # ---------------------------------------------------------------------------
 
-@api_router.post("/auth/telegram/create-session", response_model=CreateTelegramSessionResponse)
+@auth_api.post("/telegram/create-session", response_model=CreateTelegramSessionResponse)
 async def create_telegram_session(response: Response):
     token = f"auth_{secrets.token_urlsafe(32)}"
     state_hash = hashlib.sha256(token.removeprefix("auth_").encode("utf-8")).hexdigest()
@@ -1279,7 +1302,7 @@ async def create_telegram_session(response: Response):
     )
 
 
-@api_router.get("/auth/telegram/check-session", response_model=TelegramCheckResponse)
+@auth_api.get("/telegram/check-session", response_model=TelegramCheckResponse)
 async def check_telegram_session(
     token: str, request: Request, response: Response = None,
 ):
@@ -1382,7 +1405,7 @@ check_telegram_session_body = register_telegram_check_post(
 )
 
 
-@api_router.post("/auth/telegram/cancel-session")
+@auth_api.post("/telegram/cancel-session")
 async def cancel_telegram_session(req: TelegramSessionCancelRequest):
     """Cancel a short-lived login state without exposing it in a URL."""
     state = req.token.removeprefix("auth_") if req.token else ""
@@ -1397,7 +1420,7 @@ async def cancel_telegram_session(req: TelegramSessionCancelRequest):
 # 2. SECURE EMAIL REGISTRATION & LOGIN (Strict Password Verification)
 # ---------------------------------------------------------------------------
 
-@api_router.post("/auth/register")
+@auth_api.post("/register")
 async def register(req: RegisterRequest, request: Request):
     await _ensure_auth_db()
     email = req.email.strip().lower()
@@ -1444,7 +1467,7 @@ async def register(req: RegisterRequest, request: Request):
     }
 
 
-@api_router.post("/auth/login")
+@auth_api.post("/login")
 async def login(req: LoginRequest, request: Request):
     await _ensure_auth_db()
     email = req.email.strip().lower()
@@ -1501,7 +1524,7 @@ def _configured_google_audiences() -> tuple[str, ...]:
     return (web,)
 
 
-@api_router.get("/auth/google/desktop-client")
+@auth_api.get("/google/desktop-client")
 async def get_google_desktop_client():
     """Public OAuth client ID only: desktop PKCE never ships a client secret."""
     if not _google_signin_configured():
@@ -1516,7 +1539,7 @@ async def get_google_desktop_client():
     }
 
 
-@api_router.post("/auth/google/nonce")
+@auth_api.post("/google/nonce")
 async def create_google_nonce():
     """Issue a short-lived server nonce only when Google login is configured."""
     if not _google_signin_configured():
@@ -1531,7 +1554,7 @@ async def create_google_nonce():
     return {"nonce": nonce}
 
 
-@api_router.post("/auth/google/desktop-exchange")
+@auth_api.post("/google/desktop-exchange")
 async def exchange_google_desktop_code(req: GoogleDesktopCodeRequest, request: Request):
     """Exchange PKCE authorization code server-side without distributing the
     desktop OAuth client secret in the Windows executable. The normal
@@ -1607,7 +1630,7 @@ async def exchange_google_desktop_code(req: GoogleDesktopCodeRequest, request: R
     )
 
 
-@api_router.post("/auth/google")
+@auth_api.post("/google")
 async def login_google(req: GoogleLoginRequest, request: Request):
     correlation_id = secrets.token_hex(8)
 
@@ -1673,7 +1696,7 @@ async def login_google(req: GoogleLoginRequest, request: Request):
     }
 
 
-@api_router.post("/auth/refresh")
+@auth_api.post("/refresh")
 async def refresh_token(req: RefreshRequest):
     token = req.refresh.removeprefix("ref_")
     claims = _verified_token_claims(token)
@@ -1701,7 +1724,7 @@ async def refresh_token(req: RefreshRequest):
     }
 
 
-@api_router.post("/auth/logout")
+@auth_api.post("/logout")
 async def logout(
     authorization: Optional[str] = Header(None),
     user_id: int = Depends(get_current_user_id),
@@ -1718,7 +1741,7 @@ async def logout(
     return {"status": "ok"}
 
 
-@api_router.get("/me")
+@account_api.get("/me")
 async def get_me(user_id: int = Depends(get_current_user_id)):
     user = await database.find_user_by_id(user_id)
     username = user.get("username", "") if user else ""
@@ -1749,7 +1772,7 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
     }
 
 
-@api_router.delete("/me")
+@account_api.delete("/me")
 async def delete_me(
     user_id: int = Depends(get_current_user_id),
     confirmation: Optional[str] = Header(None, alias="X-Confirm-Account-Deletion"),
@@ -1852,7 +1875,7 @@ async def delete_me(
 # 3. SUBSCRIPTION & TRIAL (Calls 3x-ui to Create Real Clients)
 # ---------------------------------------------------------------------------
 
-@api_router.get("/subscription/status")
+@subscription_api.get("/status")
 async def get_subscription_status(request: Request, user_id: int = Depends(get_current_user_id)):
     headers = _subscription_headers_from_request(request)
     sub_url, servers, sub_dict = await get_user_real_subscription(
@@ -1872,7 +1895,7 @@ async def get_subscription_status(request: Request, user_id: int = Depends(get_c
     return sub_dict
 
 
-@api_router.post("/subscription/trial")
+@subscription_api.post("/trial")
 async def activate_trial(
     req: TrialRequest, request: Request, response: Response = None,
     user_id: int = Depends(_require_trial_user_id),
@@ -2276,7 +2299,7 @@ async def activate_trial(
     return result
 
 
-@api_router.get("/plans")
+@billing_api.get("/plans")
 async def get_plans(devices: int = 2):
     """Server-owned tariff catalog with legacy and desktop plan identifiers."""
     from constants import get_price_for_months, VALID_DEVICE_LIMITS
@@ -2310,7 +2333,7 @@ async def get_plans(devices: int = 2):
     }
 
 # ---------------------------------------------------------------------------
-@api_router.post("/payment/create")
+@billing_api.post("/payment/create")
 async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(get_current_user_id)):
     """Create an owned, idempotent checkout from the server-owned tariff catalog."""
     plan_map = {
@@ -2544,7 +2567,7 @@ async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(g
     }
 
 
-@api_router.get("/payment/check")
+@billing_api.get("/payment/check")
 async def api_check_payment(
     request: Request,
     invoice_id: Optional[str] = None,
@@ -2687,13 +2710,10 @@ async def check_mobile_v2_payment(
     )
 
 
-api_router.include_router(mobile_v2_router, prefix="/mobile/v2")
-
-
 # 4. SERVERS & VPN SESSIONS (Real Nodes Only)
 # ---------------------------------------------------------------------------
 
-@api_router.get("/servers")
+@vpn_access_api.get("/servers")
 async def get_servers(
     request: Request,
     response: Response = None,
@@ -2779,7 +2799,7 @@ async def get_servers(
     return payload
 
 
-@api_router.post("/vpn/session")
+@vpn_access_api.post("/vpn/session")
 async def create_vpn_session(req: SessionRequest, request: Request, user_id: int = Depends(get_current_user_id)):
     headers = await _require_opted_in_device_access(user_id, request)
     sub_url, servers, sub_dict = await get_user_real_subscription(
@@ -2826,7 +2846,7 @@ async def create_vpn_session(req: SessionRequest, request: Request, user_id: int
     return response
 
 
-@api_router.delete("/vpn/session")
+@vpn_access_api.delete("/vpn/session")
 async def delete_vpn_session(user_id: int = Depends(get_current_user_id)):
     return {"status": "ok"}
 
@@ -2873,7 +2893,7 @@ def _device_metadata_matches(item: dict, request: Request) -> bool:
     )
 
 
-@api_router.get("/devices")
+@vpn_access_api.get("/devices")
 async def get_devices(request: Request, user_id: int = Depends(get_current_user_id)):
     try:
         from xui_client import get_xui_devices
@@ -2907,7 +2927,7 @@ async def get_devices(request: Request, user_id: int = Depends(get_current_user_
     }
 
 
-@api_router.delete("/devices/{device_id}")
+@vpn_access_api.delete("/devices/{device_id}")
 async def delete_device(device_id: str, user_id: int = Depends(get_current_user_id)):
     if not device_id.isascii() or not device_id.isdecimal() or len(device_id) > 12:
         raise HTTPException(status_code=400, detail="Некорректный идентификатор устройства")
@@ -2929,3 +2949,14 @@ async def delete_device(device_id: str, user_id: int = Depends(get_current_user_
         logger.warning("Device deletion unavailable (%s)", type(exc).__name__)
         raise HTTPException(status_code=503, detail="Не удалось удалить устройство. Попробуйте позже") from None
     return {"status": "ok"}
+
+
+# Assemble the versioned API at one mount point; route groups above keep
+# authentication, billing, subscription, account, and VPN access boundaries
+# explicit and independently reviewable.
+api_router.include_router(auth_api)
+api_router.include_router(account_api)
+api_router.include_router(subscription_api)
+api_router.include_router(billing_api)
+api_router.include_router(vpn_access_api)
+api_router.include_router(mobile_v2_router, prefix="/mobile/v2", tags=["mobile-v2"])

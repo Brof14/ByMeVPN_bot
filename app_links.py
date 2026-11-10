@@ -8,6 +8,8 @@ the app immediately and keeps a manual button as a fallback.
 from __future__ import annotations
 
 import html
+from functools import lru_cache
+from pathlib import Path
 import base64
 import hashlib
 import json
@@ -166,7 +168,8 @@ def render_app_open_page(deep_link: str) -> str:
 </html>"""
 
 
-CONNECT_TICKET_TTL_SECONDS = 15 * 60
+CONNECT_TICKET_TTL_SECONDS = 7 * 24 * 60 * 60
+LEGACY_CONNECT_TICKET_TTL_SECONDS = 15 * 60
 
 
 def _connect_aead():
@@ -189,10 +192,12 @@ def build_connect_ticket(subscription_url: str, user_name: str = "", *, now: int
         or not parsed.hostname or parsed.username is not None or parsed.password is not None
     ):
         raise ValueError("invalid secure subscription URL")
+    issued = int(now if now is not None else time.time())
     payload = json.dumps({
         "sub": value,
         "name": "".join(ch for ch in user_name if ch.isprintable())[:MAX_USER_NAME_LENGTH],
-        "exp": int(now if now is not None else time.time()) + CONNECT_TICKET_TTL_SECONDS,
+        "iat": issued,
+        "exp": issued + CONNECT_TICKET_TTL_SECONDS,
     }, separators=(",", ":")).encode("utf-8")
     nonce = os.urandom(12)
     encrypted = _connect_aead().encrypt(nonce, payload, b"bymevpn-connect-ticket-v1")
@@ -210,11 +215,21 @@ def read_connect_ticket(ticket: str, *, now: int | None = None) -> dict[str, str
         payload = _connect_aead().decrypt(raw[:12], raw[12:], b"bymevpn-connect-ticket-v1")
         value = json.loads(payload)
         expiry = int(value.get("exp", 0))
+        current = int(now if now is not None else time.time())
+        if "iat" in value:
+            issued = int(value["iat"])
+            if issued > current + 5 or expiry != issued + CONNECT_TICKET_TTL_SECONDS:
+                raise ValueError
+        else:
+            # Tickets created by the earlier 15-minute release remain usable for
+            # seven days from issue, including links already sent by the bot.
+            if expiry > current + LEGACY_CONNECT_TICKET_TTL_SECONDS + 5:
+                raise ValueError
+            expiry += CONNECT_TICKET_TTL_SECONDS - LEGACY_CONNECT_TICKET_TTL_SECONDS
         subscription_url = str(value.get("sub", ""))
         parsed = urlsplit(subscription_url)
         if (
-            expiry < int(now if now is not None else time.time())
-            or expiry > int(now if now is not None else time.time()) + CONNECT_TICKET_TTL_SECONDS + 5
+            expiry < current
             or parsed.scheme != "https" or not parsed.hostname
             or parsed.username is not None or parsed.password is not None
             or len(subscription_url) > MAX_SUBSCRIPTION_URL_LENGTH
@@ -241,68 +256,52 @@ def build_connect_page_url(subscription_url: str, user_name: str = "") -> str:
     return f"{APP_CONNECT_PAGE_URL}/connect?ticket={quote(ticket)}"
 
 
+@lru_cache(maxsize=1)
+def _connection_page_template() -> str:
+    return (Path(__file__).resolve().parent / "templates" / "connect.html").read_text(encoding="utf-8")
+
+
 def render_connection_choice_page(subscription_url: str, user_name: str = "") -> str:
     """Render a responsive branded OS/app chooser with verified import fallbacks."""
     sub = _js_string(subscription_url)
     byme_link = build_app_login_url(subscription_url, user_name)
+    encoded_sub = quote(subscription_url, safe="")
+    tun = {"name": "v2rayTun", "icon": "v2raytun", "deep": "v2raytun://import/" + subscription_url, "download": "https://v2raytun.com/"}
+    hiddify = {"name": "Hiddify", "icon": "hiddify", "deep": "hiddify://install-sub?url=" + encoded_sub + "#ByMeVPN", "download": "https://github.com/hiddify/hiddify-app/releases/latest"}
+    singbox = {"name": "sing-box", "icon": "singbox", "manual": True, "note": "Требуется конфигурация sing-box в формате JSON; обычная ссылка подписки может не подойти.", "download": "https://sing-box.sagernet.org/clients/"}
     apps = {
         "android": [
-            {"name": "ByMeVPN", "icon": "bymevpn", "featured": True, "deep": byme_link, "download": "https://github.com/Brof14/ByMeVPN-app/releases/download/v1.0.12/ByMeVPN-v1.0.12.apk", "hint": "Подписка подключится автоматически"},
-            {"name": "Happ", "icon": "happ", "deep": "happ://add/" + subscription_url, "download": "https://github.com/Happ-proxy/happ-android/releases/latest", "hint": "Подписка добавится в Happ"},
-            {"name": "INCY", "icon": "incy", "deep": "incy://import/" + subscription_url, "download": "https://play.google.com/store/apps/details?id=llc.itdev.incy", "hint": "Подписка добавится в INCY"},
+            {"name": "ByMeVPN", "icon": "bymevpn", "deep": byme_link, "download": "https://github.com/Brof14/ByMeVPN-app/releases/download/v1.0.13/ByMeVPN-v1.0.13.apk"},
+            {"name": "Happ", "icon": "happ", "deep": "happ://add/" + subscription_url, "download": "https://github.com/Happ-proxy/happ-android/releases/latest"},
+            {"name": "INCY", "icon": "incy", "deep": "incy://import/" + subscription_url, "download": "https://play.google.com/store/apps/details?id=llc.itdev.incy"},
+            tun,
+            {"name": "v2rayNG", "icon": "v2rayng", "deep": "v2rayng://install-sub?url=" + encoded_sub + "#ByMeVPN", "download": "https://github.com/2dust/v2rayNG/releases/latest"},
+            hiddify, singbox,
         ],
         "ios": [
-            {"name": "Happ", "icon": "happ", "deep": "happ://add/" + subscription_url, "download": "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215", "hint": "Откроется подтверждение добавления подписки"},
-            {"name": "INCY", "icon": "incy", "deep": "incy://import/" + subscription_url, "download": "https://apps.apple.com/us/app/incy/id6756943388", "hint": "Откроется импорт подписки"},
+            {"name": "Happ", "icon": "happ", "deep": "happ://add/" + subscription_url, "download": "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215"},
+            {"name": "INCY", "icon": "incy", "deep": "incy://import/" + subscription_url, "download": "https://apps.apple.com/us/app/incy/id6756943388"},
+            tun, hiddify, singbox,
         ],
         "windows": [
-            {"name": "Happ", "icon": "happ", "deep": "happ://add/" + subscription_url, "download": "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe", "hint": "Откроется подтверждение добавления подписки"},
-            {"name": "v2rayN", "icon": "v2rayn", "manual": True, "download": "https://github.com/2dust/v2rayN/releases/latest", "hint": "Добавьте ссылку в подписки; TUN можно включить в настройках v2rayN"},
-            {"name": "Koala Clash", "icon": "koala", "manual": True, "download": "https://github.com/coolcoala/koala-clash/releases/latest", "hint": "Clash-совместимый профиль может импортироваться не полностью"},
+            {"name": "Happ", "icon": "happ", "deep": "happ://add/" + subscription_url, "download": "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe"},
+            {"name": "v2rayN", "icon": "v2rayn", "manual": True, "download": "https://github.com/2dust/v2rayN/releases/latest"},
+            {"name": "Koala Clash", "icon": "koala", "manual": True, "download": "https://github.com/coolcoala/koala-clash/releases/latest"},
+            tun, hiddify,
         ],
         "macos": [
-            {"name": "Happ", "icon": "happ", "deep": "happ://add/" + subscription_url, "download": "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/Happ.macOS.universal.dmg", "hint": "Откроется подтверждение добавления подписки"},
-            {"name": "INCY", "icon": "incy", "deep": "incy://import/" + subscription_url, "download": "https://docs.incy.cc/", "hint": "Откроется импорт подписки"},
-            {"name": "v2rayN", "icon": "v2rayn", "manual": True, "download": "https://github.com/2dust/v2rayN/releases/latest", "hint": "Добавьте ссылку в подписки; TUN можно включить в настройках v2rayN"},
-            {"name": "Koala Clash", "icon": "koala", "manual": True, "download": "https://github.com/coolcoala/koala-clash/releases/latest", "hint": "Clash-совместимый профиль может импортироваться не полностью"},
+            {"name": "Happ", "icon": "happ", "deep": "happ://add/" + subscription_url, "download": "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/Happ.macOS.universal.dmg"},
+            {"name": "INCY", "icon": "incy", "deep": "incy://import/" + subscription_url, "download": "https://docs.incy.cc/"},
+            {"name": "v2rayN", "icon": "v2rayn", "manual": True, "download": "https://github.com/2dust/v2rayN/releases/latest"},
+            {"name": "Koala Clash", "icon": "koala", "manual": True, "download": "https://github.com/coolcoala/koala-clash/releases/latest"},
+            tun, hiddify,
         ],
         "linux": [
-            {"name": "Happ", "icon": "happ", "deep": "happ://add/" + subscription_url, "download": "https://github.com/Happ-proxy/happ-desktop/releases/latest", "hint": "Откроется подтверждение добавления подписки"},
-            {"name": "v2rayN", "icon": "v2rayn", "manual": True, "download": "https://github.com/2dust/v2rayN/releases/latest", "hint": "Добавьте ссылку в подписки; TUN можно включить в настройках v2rayN"},
-            {"name": "Koala Clash", "icon": "koala", "manual": True, "download": "https://github.com/coolcoala/koala-clash/releases/latest", "hint": "Clash-совместимый профиль может импортироваться не полностью"},
+            {"name": "Happ", "icon": "happ", "deep": "happ://add/" + subscription_url, "download": "https://github.com/Happ-proxy/happ-desktop/releases/latest"},
+            {"name": "v2rayN", "icon": "v2rayn", "manual": True, "download": "https://github.com/2dust/v2rayN/releases/latest"},
+            {"name": "Koala Clash", "icon": "koala", "manual": True, "download": "https://github.com/coolcoala/koala-clash/releases/latest"},
+            hiddify,
         ],
     }
     apps_json = _js_string(json.dumps(apps, ensure_ascii=False))
-    template = '''<!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex,nofollow"><meta name="theme-color" content="#061020"><title>Подключение ByMeVPN</title>
-<style>
-/* Hallmark · v2.0.0 · custom brand direction: calm navy with electric blue and green */
-/* Critique: platform choice is the task; custom SVG marks replace emoji, no app claims are invented. */
-:root{color-scheme:dark;--font-ui:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;--bg:#061020;--surface:#0d1b2c;--surface-soft:#102238;--line:#20364d;--ink:#f3f8ff;--muted:#b3c2d2;--quiet:#8195aa;--blue:#21a5ff;--cyan:#27d5e8;--green:#43e58b;--focus:#a6ffcb;--shadow:rgb(0 0 0 / 34%);--brand:linear-gradient(112deg,var(--blue),var(--cyan) 54%,var(--green));--measure:980px;--radius:24px}
-*,*::before,*::after{box-sizing:border-box}html,body{overflow-x:clip}html{scroll-behavior:smooth}body{min-height:100svh;margin:0;padding:clamp(10px,3vw,32px);display:grid;place-items:center;background:radial-gradient(ellipse at 12% 0%,rgb(0 149 255 / 13%),transparent 45%),radial-gradient(ellipse at 92% 12%,rgb(67 229 139 / 8%),transparent 42%),var(--bg);color:var(--ink);font:16px/1.55 var(--font-ui)}
-main{width:min(100%,var(--measure));min-width:0}.shell{position:relative;overflow:clip;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);box-shadow:0 24px 80px var(--shadow)}.shell::before{position:absolute;inset:0 0 auto;height:3px;background:var(--brand);content:""}.head{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:24px;padding:clamp(22px,5vw,48px);border-bottom:1px solid var(--line)}
-.brand{display:flex;align-items:center;gap:16px;min-width:0}.logo{width:clamp(58px,10vw,92px);height:auto;aspect-ratio:1;object-fit:contain;border:1px solid var(--line);border-radius:20px}.display{min-width:0}h1,h2,p{margin-top:0}h1{margin-bottom:7px;overflow-wrap:break-word;min-width:0;font-size:clamp(1.55rem,4vw,2.25rem);line-height:1.12;letter-spacing:-.035em}.lead{max-width:55ch;margin:0;color:var(--muted)}.secure{padding:8px 12px;border:1px solid var(--line);border-radius:999px;color:var(--quiet);font-size:.84rem;white-space:nowrap}
-.content{padding:clamp(20px,4vw,40px)}.section-title{margin-bottom:12px;font-size:1rem;font-weight:650}.platforms{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}.platform{min-height:82px;display:grid;place-items:center;align-content:center;gap:7px;padding:10px 7px;border:1px solid var(--line);border-radius:16px;background:var(--surface-soft);color:var(--muted);font:inherit;cursor:pointer}.platform[aria-pressed="true"]{border-color:var(--blue);background:var(--surface);color:var(--ink);box-shadow:inset 0 0 0 1px var(--blue)}.mark{width:30px;height:30px;display:block;object-fit:contain}.platform-label{font-size:.88rem;text-align:center;overflow-wrap:break-word;min-width:0}
-.apps{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:26px}.app{min-width:0;padding:18px;border:1px solid var(--line);border-radius:18px;background:var(--surface-soft)}.app.featured{border:1px solid transparent;background:linear-gradient(var(--surface-soft),var(--surface-soft)) padding-box,var(--brand) border-box;box-shadow:0 14px 36px var(--shadow)}.app-head{display:flex;align-items:center;gap:12px;min-width:0;margin-bottom:10px}.featured-label{margin-left:auto;padding:5px 9px;border:1px solid var(--line);border-radius:999px;color:var(--green);font-size:.76rem;white-space:nowrap}.app-mark{width:42px;height:42px;flex:0 0 42px;display:grid;place-items:center;border:1px solid var(--line);border-radius:13px;background:var(--surface);color:var(--green)}.featured .app-mark{width:50px;height:50px;flex-basis:50px;border-color:var(--cyan);border-radius:15px}.app-logo{width:100%;height:100%;object-fit:contain;border-radius:8px}.app-logo-vector{display:grid;place-items:center}.app-logo-vector svg{width:27px;height:27px}.app h2{min-width:0;margin:0;overflow-wrap:break-word;font-size:1.05rem;line-height:1.25}.hint{min-height:3em;margin-bottom:14px;color:var(--muted);font-size:.9rem}.actions{display:grid;gap:8px}.button{min-height:46px;display:flex;align-items:center;justify-content:center;padding:10px 14px;border:1px solid var(--line);border-radius:12px;background:var(--blue);color:var(--bg);font:inherit;font-weight:700;text-align:center;text-decoration:none;cursor:pointer}.button.secondary{background:transparent;color:var(--ink)}.button.copy{border-color:var(--line);background:var(--surface);color:var(--muted);font-weight:550}.featured-action{border-color:transparent;background:var(--brand);color:var(--bg)}.site-copy{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:18px;margin-top:20px;padding:16px 18px;border:1px solid var(--line);border-radius:16px;background:var(--surface)}.site-copy p{margin:0;color:var(--quiet);font-size:.88rem}.button:hover{filter:brightness(1.08)}button:focus-visible,a:focus-visible{outline:3px solid var(--focus);outline-offset:3px}.status{min-height:1.5em;margin:16px 0 0;color:var(--green);font-size:.9rem}.note{margin:18px 0 0;padding-top:16px;border-top:1px solid var(--line);color:var(--quiet);font-size:.88rem}.noscript{margin:20px 0 0;padding:14px;border:1px solid var(--line);border-radius:12px;color:var(--muted)}
-@media(max-width:680px){body{padding:10px;place-items:start center}.head{grid-template-columns:minmax(0,1fr);gap:14px;padding:20px}.secure{justify-self:start}.content{padding:20px}.platforms{grid-template-columns:repeat(2,minmax(0,1fr))}.platform:last-child{grid-column:span 2}.apps{grid-template-columns:minmax(0,1fr);gap:10px;margin-top:20px}.app{padding:16px}.hint{min-height:0}.logo{border-radius:16px}.site-copy{grid-template-columns:minmax(0,1fr);gap:10px}.site-copy .button{width:100%}}
-@media(max-width:360px){.brand{align-items:flex-start;gap:10px}.logo{width:52px}.head,.content{padding:16px}.platform{min-height:74px}}
-@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
-</style></head><body><main><section class="shell">
-<header class="head"><div class="brand"><img class="logo" src="/app/logo" alt="Логотип ByMeVPN" width="1254" height="1254"><div class="display"><h1>Подключение ByMeVPN</h1><p class="lead">Выберите устройство и приложение. Подписка добавится автоматически, если приложение поддерживает импорт.</p></div></div><span class="secure">Защищённая ссылка</span></header>
-<div class="content"><h2 class="section-title">Ваше устройство</h2><div class="platforms" id="platforms" aria-label="Выбор устройства"></div><div class="apps" id="apps"></div><div class="site-copy"><p>Если импорт не открылся, скопируйте ссылку и добавьте её в разделе подписок.</p><button type="button" class="button copy" id="copy-subscription">Скопировать ссылку</button></div><p class="status" id="status" role="status" aria-live="polite"></p><p class="note">Страница подключения ограничена по времени. Если ссылка истекла, откройте подключение заново из бота.</p>
-<noscript><p class="noscript">Чтобы выбрать приложение и передать подписку автоматически, включите JavaScript в браузере. Для Android можно установить <a href="https://github.com/Brof14/ByMeVPN-app/releases/download/v1.0.12/ByMeVPN-v1.0.12.apk">ByMeVPN</a>, затем повторно открыть подключение из бота.</p></noscript>
-</div></section></main>
-<script>
-(function(){const sub=__SUB__;const apps=JSON.parse(__APPS__);const platforms={android:"Android",ios:"iPhone / iPad",windows:"Windows",macos:"macOS",linux:"Linux"};
-const platformIcons={android:"android.png",ios:"apple.png",windows:"windows.png",macos:"apple.png",linux:"linux.png"};
-const appIcons={bymevpn:"/app/logo",happ:"/app/assets/happ.png",incy:"/app/assets/incy.png",v2rayn:"/app/assets/v2rayn.png",koala:"/app/assets/koala.png"};
-const marks={v2rayn:'<svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="m5 9 11 16L27 9M9 9l7 10 7-10" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',koala:'<svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><circle cx="9" cy="11" r="4" stroke="currentColor" stroke-width="2"/><circle cx="23" cy="11" r="4" stroke="currentColor" stroke-width="2"/><path d="M7 19c0-5 4-8 9-8s9 3 9 8-4 9-9 9-9-4-9-9Z" stroke="currentColor" stroke-width="2"/><path d="M13 19h.1m6 0h.1m-4 3 1 .5 1-.5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>'};
-const ua=navigator.userAgent;let current=/Android/i.test(ua)?"android":/iPhone|iPad/i.test(ua)?"ios":/Windows/i.test(ua)?"windows":/Macintosh/i.test(ua)?"macos":"linux";const os=document.getElementById("platforms"),root=document.getElementById("apps"),status=document.getElementById("status"),copyButton=document.getElementById("copy-subscription");
-copyButton.addEventListener("click",async()=>{const copied=await copy();status.textContent=copied?"Ссылка скопирована. Добавьте её в выбранное приложение.":"Скопируйте ссылку из открывшегося окна."});
-async function copy(){try{await navigator.clipboard.writeText(sub);return true}catch(_){window.prompt("Скопируйте ссылку",sub);return false}}
-function makeImage(src,className){const img=document.createElement("img");img.className=className;img.src=src;img.alt="";img.decoding="async";img.loading="eager";img.width=48;img.height=48;return img}
-function render(){os.replaceChildren();Object.keys(platforms).forEach(k=>{const b=document.createElement("button");b.type="button";b.className="platform";b.setAttribute("aria-pressed",String(k===current));b.append(makeImage("/app/assets/"+platformIcons[k],"mark"));const label=document.createElement("span");label.className="platform-label";label.textContent=platforms[k];b.append(label);b.onclick=()=>{current=k;render()};os.appendChild(b)});root.replaceChildren();apps[current].forEach(a=>{const d=document.createElement("article");d.className=a.featured?"app featured":"app";const head=document.createElement("div");head.className="app-head";const icon=document.createElement("span");icon.className="app-mark";if(appIcons[a.icon]){icon.append(makeImage(appIcons[a.icon],"app-logo"))}else{const vector=document.createElement("span");vector.className="app-logo app-logo-vector";vector.innerHTML=marks[a.icon];icon.append(vector)}const h=document.createElement("h2");h.textContent=a.name;head.append(icon,h);if(a.featured){const badge=document.createElement("span");badge.className="featured-label";badge.textContent="Наше приложение";head.append(badge)}const hint=document.createElement("p");hint.className="hint";hint.textContent=a.hint;const actions=document.createElement("div");actions.className="actions";if(!a.manual){const action=document.createElement("a");action.className=a.featured?"button featured-action":"button";action.textContent="Добавить в "+a.name;action.href=a.deep;actions.append(action)}const download=document.createElement("a");download.className="button secondary";download.href=a.download;download.target="_blank";download.rel="noopener noreferrer";download.textContent="Установить "+a.name;actions.append(download);d.append(head,hint,actions);root.appendChild(d)})}
-render();})();
-</script></body></html>'''
-    return template.replace("__SUB__", sub).replace("__APPS__", apps_json)
+    return _connection_page_template().replace("__APPS__", apps_json, 1).replace("__SUB__", sub, 1)

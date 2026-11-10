@@ -113,6 +113,15 @@ class TestJwtConfiguration(unittest.TestCase):
 
 
 class TestGoogleLoginClosed(unittest.IsolatedAsyncioTestCase):
+    async def test_missing_or_invalid_bearer_is_challenged_correctly(self):
+        from fastapi import HTTPException
+        for value in (None, "Basic abc", "Bearer invalid"):
+            with self.subTest(value=value):
+                with self.assertRaises(HTTPException) as error:
+                    await api_router.get_current_user_id(value)
+                self.assertEqual(error.exception.status_code, 401)
+                self.assertEqual(error.exception.headers.get("WWW-Authenticate"), "Bearer")
+
     async def test_unverified_google_payload_is_never_accepted(self):
         from fastapi import HTTPException
         from starlette.requests import Request

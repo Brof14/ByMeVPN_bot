@@ -15,6 +15,29 @@ from scripts.check_runtime_bundle import main as check_runtime_bundle
 
 
 class TestRuntimeCompatibility(unittest.TestCase):
+    @staticmethod
+    def _route_methods(router, prefix=""):
+        """Support both flattened routers and FastAPI's deferred includes."""
+        methods = {}
+        for route in router.routes:
+            path = getattr(route, "path", None)
+            if path is not None:
+                methods.setdefault(f"{prefix}{path}", set()).update(
+                    getattr(route, "methods", None) or ()
+                )
+                continue
+
+            included = getattr(route, "original_router", None)
+            context = getattr(route, "include_context", None)
+            if included is not None:
+                nested_prefix = getattr(context, "prefix", "") if context else ""
+                nested = TestRuntimeCompatibility._route_methods(
+                    included, f"{prefix}{nested_prefix}"
+                )
+                for nested_path, nested_methods in nested.items():
+                    methods.setdefault(nested_path, set()).update(nested_methods)
+        return methods
+
     def test_image_build_guard_accepts_current_bundle(self):
         check_runtime_bundle()
 
@@ -40,9 +63,7 @@ class TestRuntimeCompatibility(unittest.TestCase):
         self.assertTrue(callable(telegram_post_compat.register_telegram_check_post))
 
     def test_api_router_keeps_legacy_get_and_registers_post(self):
-        route_methods = {}
-        for route in api_router.api_router.routes:
-            route_methods.setdefault(route.path, set()).update(route.methods or ())
+        route_methods = self._route_methods(api_router.api_router)
         session_path = "/auth/telegram/check-session"
         self.assertIn("GET", route_methods.get(session_path, set()))
         self.assertIn("POST", route_methods.get(session_path, set()))

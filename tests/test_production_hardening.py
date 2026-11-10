@@ -153,6 +153,8 @@ class TestNotificationSeparation(unittest.IsolatedAsyncioTestCase):
         await database.ensure_user(user_id)
         bot = MagicMock()
         bot.send_photo = AsyncMock()
+        bot.send_photo.return_value = type("SentPhoto", (), {"photo": []})()
+        bot.send_message = AsyncMock()
 
         with patch.object(subscription, "get_user_keys", new=AsyncMock(return_value=[])), \
              patch("xui_client.get_xui_client_details", new=AsyncMock(return_value=None)), \

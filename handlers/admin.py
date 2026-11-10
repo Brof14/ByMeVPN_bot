@@ -86,13 +86,14 @@ _ADMIN_HOME_TEXT = "<b>ByMeVPN · Управление</b>\n\nВыберите �
 
 
 def _main_kb() -> InlineKeyboardMarkup:
-    """Navigation by task, not by implementation detail."""
+    """Compact dashboard with common destinations available immediately."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Обзор", callback_data="admin_stats")],
-        [InlineKeyboardButton(text="Пользователи и подписки", callback_data="admin_clients_menu")],
-        [InlineKeyboardButton(text="Платежи и финансы", callback_data="admin_finance_menu")],
-        [InlineKeyboardButton(text="Маркетинг", callback_data="admin_growth")],
-        [InlineKeyboardButton(text="Система", callback_data="admin_ops_menu")],
+        [InlineKeyboardButton(text="Обзор", callback_data="admin_stats"),
+         InlineKeyboardButton(text="Найти пользователя", callback_data="admin_search")],
+        [InlineKeyboardButton(text="Пользователи и подписки", callback_data="admin_clients_menu"),
+         InlineKeyboardButton(text="Платежи и финансы", callback_data="admin_finance_menu")],
+        [InlineKeyboardButton(text="Маркетинг", callback_data="admin_growth"),
+         InlineKeyboardButton(text="Система", callback_data="admin_ops_menu")],
     ])
 
 
@@ -879,7 +880,7 @@ async def cb_user_list(callback: CallbackQuery):
         kb_rows = user_rows
         if nav_row:
             kb_rows = kb_rows + [nav_row]
-        kb_rows.append([InlineKeyboardButton(text="🔍 Найти по ID", callback_data="admin_search")])
+        kb_rows.append([InlineKeyboardButton(text="🔍 Найти по ID или username", callback_data="admin_search")])
         kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")])
 
         await callback.message.edit_text(
@@ -953,7 +954,7 @@ async def cb_user_list_ext(callback: CallbackQuery):
         nav_row.append(InlineKeyboardButton(text="▶", callback_data=f"admin_users_ext:{page+1}"))
 
     kb_rows = [
-        [InlineKeyboardButton(text="🔍 Поиск по ID", callback_data="admin_search")],
+        [InlineKeyboardButton(text="🔍 Поиск по ID или username", callback_data="admin_search")],
     ]
     if nav_row:
         kb_rows.append(nav_row)
@@ -1049,7 +1050,8 @@ async def cb_search(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await state.set_state(AdminFlow.search_user)
     await callback.message.edit_text(
-        "🔍 Введите Telegram ID пользователя:",
+        "🔍 Отправьте Telegram ID или username.\nНапример: <code>123456789</code> или <code>@username</code>.",
+        parse_mode="HTML",
         reply_markup=_back_kb()
     )
 
@@ -1060,11 +1062,47 @@ async def receive_search(message: Message, state: FSMContext):
         return
     flow_data = await state.get_data()
     await state.clear()
-    try:
-        uid = int(message.text.strip())
-    except (ValueError, AttributeError):
-        await message.answer("❌ Введите числовой ID.")
+    query = (message.text or "").strip()
+    if not query:
+        await message.answer("Отправьте Telegram ID или username.", reply_markup=_back_kb())
         return
+    if query.isdecimal():
+        uid = int(query)
+    else:
+        username = query.removeprefix("@").strip()
+        if not username or len(username) > 64 or any(ch.isspace() for ch in username):
+            await message.answer(
+                "Не удалось распознать запрос. Отправьте ID или username, например @username.",
+                reply_markup=_back_kb(),
+            )
+            return
+        db = await get_db()
+        cursor = await db.execute(
+            "SELECT user_id FROM users WHERE lower(username)=lower(?) "
+            "ORDER BY created DESC, user_id DESC LIMIT 2",
+            (username,),
+        )
+        rows = await cursor.fetchall()
+        if not rows:
+            await message.answer(
+                f"Пользователь с username @{escape(username)} не найден.",
+                reply_markup=_back_kb(),
+            )
+            return
+        if len(rows) > 1:
+            matches = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text=f"Открыть пользователя {int(row[0])}",
+                    callback_data=f"admin_user:{int(row[0])}",
+                )]
+                for row in rows
+            ] + [[InlineKeyboardButton(text="К списку пользователей", callback_data="admin_users:0")]])
+            await message.answer(
+                f"Найдено несколько записей с username @{escape(username)}. Выберите нужную:",
+                reply_markup=matches,
+            )
+            return
+        uid = int(rows[0][0])
     if flow_data.get("refund_mode"):
         text, keyboard = await _build_refund_user_view(uid)
         await message.answer(text, parse_mode="HTML", reply_markup=keyboard)

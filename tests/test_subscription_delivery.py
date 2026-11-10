@@ -18,6 +18,18 @@ import subscription
 
 
 class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
+    def test_activation_message_uses_the_current_connection_page_flow(self):
+        text = subscription._activation_message(
+            "<b>Подписка активирована</b>", "", 3, 2, 1_800_000_000,
+        )
+        self.assertIn("Доступ: <b>3 дней</b>", text)
+        self.assertIn("Устройства: <b>2</b>", text)
+        self.assertIn("Действует до:", text)
+        self.assertIn("Нажмите «Подключить VPN» ниже", text)
+        self.assertIn("подберёт приложение для вашего устройства", text)
+        self.assertNotIn("Установите Happ", text)
+        self.assertNotIn("<code>", text)
+
     async def asyncSetUp(self):
         # Provisioning tests exercise panel/DB state transitions; cross-process
         # lease semantics are covered separately against a real SQLite file.
@@ -260,6 +272,7 @@ class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
         bot = MagicMock()
         bot.send_photo = AsyncMock()
         bot.send_message = AsyncMock()
+        bot.send_photo.return_value = type("SentPhoto", (), {"photo": []})()
 
         xui_result = {
             "subscription_url": "https://panel.example/sub/test-sub-id",
@@ -303,6 +316,7 @@ class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
         bot = MagicMock()
         bot.send_photo = AsyncMock()
         bot.send_message = AsyncMock()
+        bot.send_photo.return_value = type("SentPhoto", (), {"photo": []})()
         existing_key = {
             "id": 7,
             "key": "https://panel.example/sub/existing-sub-id",
