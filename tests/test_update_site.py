@@ -63,7 +63,7 @@ class UpdateSiteTests(unittest.TestCase):
         self.assertIn("/app/logo", get.text)
         self.assertIn("/app/update.json", get.text)
         self.assertIn("Android 7.0", get.text)
-        self.assertIn('href="https://github.com/Brof14/ByMeVPN-app/releases/download/v1.0.14/ByMeVPN-v1.0.14.apk"', get.text)
+        self.assertIn('href="https://bymevpn.duckdns.org/app/downloads/ByMeVPN-v1.0.14.apk"', get.text)
         self.assertIn('src="/app/logo"', get.text)
         self.assertIn("@media (max-width: 680px)", get.text)
         self.assertIn("prefers-reduced-motion", get.text)
