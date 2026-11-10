@@ -21,6 +21,7 @@ from legacy_trial_bootstrap import (
     _trial_panel_limits_match,
     _valid_panel_device_state,
     install_legacy_trial_bootstrap,
+    _select_session_node,
 )
 from ops.patch_legacy_trial_bootstrap import MARKER, patched_text
 
@@ -64,6 +65,27 @@ class SessionRequest(BaseModel):
 
 
 class LegacyTrialBootstrapTests(unittest.IsolatedAsyncioTestCase):
+    async def test_legacy_adapter_honors_windows_transport_capabilities(self):
+        configs = [
+            {"node_code": "grpc", "config": {
+                "protocol": "vless", "security": "tls", "network": "grpc",
+                "uuid": "uuid-from-upstream", "server": "vpn.example.com",
+                "server_name": "cdn.example.com"}},
+            {"node_code": "reality", "config": {
+                "protocol": "vless", "security": "reality", "network": "tcp",
+                "uuid": "uuid-from-upstream", "server": "vpn.example.com",
+                "server_name": "cdn.example.com", "public_key": "server-owned-public-key"}},
+        ]
+        legacy = _select_session_node(configs, "auto", True, "")
+        self.assertEqual(legacy["node_code"], "reality")
+        modern = _select_session_node(configs, "auto", True, "vless-tls,vless-grpc")
+        self.assertEqual(modern["node_code"], "grpc")
+        with self.assertRaises(Exception) as raised:
+            _select_session_node(configs, "grpc", True, "")
+        self.assertEqual(getattr(raised.exception, "status_code", None), 422)
+        # Never silently switch a manual selection to another server.
+        self.assertEqual(_select_session_node(configs, "grpc", False, "")["node_code"], "grpc")
+
     async def test_bootstrap_grant_is_single_and_does_not_extend_on_retry(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "trial.sqlite3"
