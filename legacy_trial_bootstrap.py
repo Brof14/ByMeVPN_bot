@@ -19,6 +19,62 @@ import httpx
 from fastapi import Depends, HTTPException, Request
 
 
+def _select_session_node(
+    servers: list[dict[str, Any]],
+    node_code: str,
+    is_windows: bool,
+    capabilities: str,
+) -> dict[str, Any]:
+    """Version-gate Windows routes even with the legacy trial overlay.
+
+    This adapter can be bind-mounted alone on older servers. When the shared
+    capability module is not deployed yet, keep legacy Reality TCP available
+    and fail closed for any advertised new transport rather than breaking
+    existing mobile sessions.
+    """
+    if not is_windows:
+        return next(
+            (node for node in servers if node.get("node_code") == node_code),
+            servers[0],
+        )
+
+    try:
+        from desktop_vpn_capabilities import windows_vpn_compatible
+    except ModuleNotFoundError:
+        def windows_vpn_compatible(node: dict, _capabilities: str) -> bool:
+            config = node.get("config") or {}
+            return (
+                config.get("protocol") == "vless"
+                and config.get("security") == "reality"
+                and config.get("network", "tcp") in ("tcp", "raw")
+                and bool(config.get("public_key"))
+            )
+
+    if node_code in ("auto", "", None):
+        match = next(
+            (node for node in servers if windows_vpn_compatible(node, capabilities)),
+            None,
+        )
+        if match is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Нет серверов с поддерживаемым протоколом для Windows",
+            )
+        return match
+    match = next(
+        (node for node in servers if node.get("node_code") == node_code),
+        None,
+    )
+    if match is None:
+        raise HTTPException(status_code=404, detail="Выбранный сервер больше не доступен")
+    if not windows_vpn_compatible(match, capabilities):
+        raise HTTPException(
+            status_code=422,
+            detail="Выбранный сервер не поддерживается Windows",
+        )
+    return match
+
+
 BOOTSTRAP_TTL_SECONDS = 10 * 60
 BOOTSTRAP_SCHEMA = """
 CREATE TABLE IF NOT EXISTS mobile_trial_bootstrap (
@@ -528,7 +584,12 @@ def install_legacy_trial_bootstrap(router: Any, namespace: dict[str, Any]) -> No
         servers = await _fetch_nodes(sub_url, headers, namespace["parse_single_node_line"]) if sub_url else []
         if not servers:
             raise HTTPException(status_code=403, detail="Нет активной подписки или серверов")
-        matched = next((row for row in servers if row.get("node_code") == req.node_code), servers[0])
+        matched = _select_session_node(
+            servers,
+            req.node_code,
+            request.headers.get("x-device-os", "").casefold() == "windows",
+            request.headers.get("x-vpn-capabilities", ""),
+        )
         config = matched.get("config")
         if not config or not config.get("uuid"):
             raise HTTPException(status_code=503, detail="Не удалось получить конфигурацию VPN")
