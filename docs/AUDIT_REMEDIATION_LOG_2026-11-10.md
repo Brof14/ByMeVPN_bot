@@ -54,6 +54,32 @@ explicitly excluded and were not changed.
 - Load and payment-to-VPN end-to-end tests: they require isolated payment and
   3x-ui environments; the production services were not used for test traffic.
 
-Deployment configuration still needs `APP_CONNECT_PAGE_URL` on both bot
-instances. For webhook mode, configure the same `TELEGRAM_WEBHOOK_SECRET` in
-the runtime and Telegram's `setWebhook`; polling mode should leave it unset.
+## VPS follow-up
+
+- Verified the SSH host key from the VPS console screenshot and connected only
+  to `2.27.16.7` with `StrictHostKeyChecking=yes`. The older address shown in
+  the console was not used.
+- Confirmed `APP_CONNECT_PAGE_URL` is configured for both bot containers. A
+  dummy connection ticket round-tripped through the encrypted ticket reader
+  for `https://bymevpn.duckdns.org/connect`; no real subscription URL was used.
+- Confirmed both containers use inbound IDs `13,14,40` and both FastAPI apps
+  disable `/docs`, `/redoc`, and `/openapi.json`.
+- The active production compose stack mounts older webhook implementations
+  from separate release overlays. Added the same fail-closed Telegram webhook
+  guard, 1 MiB body bound, and legacy `/app/login?sub=...` rejection to the two
+  active overlay files. Backups are stored under
+  `/root/bymevpn-backups/audit-remediation-20261110/` on the VPS.
+- Restarted only `vpnbot` and `bymevpn-newbot`, one at a time. Both returned to
+  `healthy`; Redis, support, and ByMeAudio containers stayed running.
+- Both bots run polling. `TELEGRAM_WEBHOOK_SECRET` remains unset, so the public
+  Telegram webhook endpoint fails closed with HTTP 503. If switching to
+  webhook mode later, configure a secret in the runtime and Telegram's
+  `setWebhook` together.
+
+The production base checkout is still at `17c7a93`; its active compose stack
+layers many release overlays and includes an untracked compose override.
+The complete base image was not rebuilt from `495ab988ddeb24e7cbcd3cffd655d2ce68872831`:
+doing so without reconciling those overlays could replace live bot features or
+alter startup database migrations. The runtime security fixes above were
+applied narrowly to the mounted files and verified by container health. A
+full source-to-runtime reconciliation remains pending.
