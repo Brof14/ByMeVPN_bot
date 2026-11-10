@@ -486,7 +486,7 @@ def parse_single_node_line(line: str, index: int, fallback_uuid: Optional[str] =
             remark = unquote(hash_parts[1]) if len(hash_parts) > 1 else f"ByMeVPN Fast {index + 1}"
 
             at_parts = main_part.split("@", 1)
-            password = at_parts[0]
+            password = unquote(at_parts[0])
             host_and_rest = at_parts[1]
 
             q_parts = host_and_rest.split("?", 1)
