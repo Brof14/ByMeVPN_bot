@@ -9,6 +9,7 @@ import time
 import json
 import logging
 import math
+import re
 from typing import Optional
 import aiosqlite
 from cache import cache_user_info, invalidate_user_cache, invalidate_subscription_cache
@@ -517,6 +518,21 @@ async def get_db() -> aiosqlite.Connection:
     return _db_pool
 
 
+async def _ensure_schema_column(
+    db: aiosqlite.Connection, table: str, column: str, definition: str,
+) -> bool:
+    """Add one missing schema column and let every unexpected SQLite error surface."""
+    identifier = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+    if not identifier.fullmatch(table) or not identifier.fullmatch(column):
+        raise ValueError("schema identifiers must be static SQL names")
+    rows = await (await db.execute(f"PRAGMA table_info({table})")).fetchall()
+    if column in {row[1] for row in rows}:
+        return False
+    await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    logger.info("Migration: added %s.%s", table, column)
+    return True
+
+
 async def _run_migrations(db: aiosqlite.Connection) -> None:
     """Run database migrations."""
     referral_columns = {
@@ -580,31 +596,12 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         )"""
     )
 
-    # Migration: add limit_ip column for existing databases
-    try:
-        await db.execute("ALTER TABLE keys ADD COLUMN limit_ip INTEGER NOT NULL DEFAULT 1")
-        logger.info("Migration: added limit_ip column to keys table")
-    except Exception:
-        pass  # Column already exists
+    await _ensure_schema_column(db, "keys", "limit_ip", "INTEGER NOT NULL DEFAULT 1")
 
     # Migration: enhance payments table for detailed logging
-    try:
-        await db.execute("ALTER TABLE payments ADD COLUMN status TEXT DEFAULT 'success'")
-        logger.info("Migration: added status column to payments table")
-    except Exception:
-        pass  # Column already exists
-
-    try:
-        await db.execute("ALTER TABLE payments ADD COLUMN tariff TEXT")
-        logger.info("Migration: added tariff column to payments table")
-    except Exception:
-        pass  # Column already exists
-
-    try:
-        await db.execute("ALTER TABLE payments ADD COLUMN devices INTEGER DEFAULT 1")
-        logger.info("Migration: added devices column to payments table")
-    except Exception:
-        pass  # Column already exists
+    await _ensure_schema_column(db, "payments", "status", "TEXT DEFAULT 'success'")
+    await _ensure_schema_column(db, "payments", "tariff", "TEXT")
+    await _ensure_schema_column(db, "payments", "devices", "INTEGER DEFAULT 1")
 
     # Migration: create ref_bonus_claims table for existing databases
     try:
@@ -619,7 +616,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_rbc_referrer ON ref_bonus_claims(referrer_id)")
         logger.info("Migration: created ref_bonus_claims table")
     except Exception:
-        pass  # Table already exists
+        raise
 
     # Migration: create yookassa idempotency + pending tables
     try:
@@ -637,20 +634,18 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
             "next_check INTEGER NOT NULL DEFAULT 0, last_status TEXT, "
             "created INTEGER DEFAULT (strftime('%s','now')))"
         )
-        pending_columns = {row[1] for row in await (await db.execute("PRAGMA table_info(yookassa_pending)")).fetchall()}
         for column, definition in (
             ("poll_attempts", "INTEGER NOT NULL DEFAULT 0"),
             ("next_check", "INTEGER NOT NULL DEFAULT 0"),
             ("last_status", "TEXT"),
         ):
-            if column not in pending_columns:
-                await db.execute(f"ALTER TABLE yookassa_pending ADD COLUMN {column} {definition}")
+            await _ensure_schema_column(db, "yookassa_pending", column, definition)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_ykp_next_check ON yookassa_pending(next_check)")
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_ykp_user ON yookassa_pending(user_id)"
         )
     except Exception:
-        pass
+        raise
 
     # Migration: create Crypto Bot idempotency + pending tables
     try:
@@ -666,30 +661,15 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
             "amount_rub INTEGER NOT NULL DEFAULT 0, "
             "created INTEGER DEFAULT (strftime('%s','now')))"
         )
-        crypto_pending_columns = {
-            row[1] for row in await (await db.execute("PRAGMA table_info(crypto_pending)")).fetchall()
-        }
-        if "payload" not in crypto_pending_columns:
-            await db.execute("ALTER TABLE crypto_pending ADD COLUMN payload TEXT")
+        await _ensure_schema_column(db, "crypto_pending", "payload", "TEXT")
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_cp_user ON crypto_pending(user_id)"
         )
     except Exception:
-        pass
+        raise
 
-    # Migration: add short_id column to keys table
-    try:
-        await db.execute("ALTER TABLE keys ADD COLUMN short_id TEXT")
-        logger.info("Migration: added short_id column to keys table")
-    except Exception:
-        pass  # Column already exists
-
-    # Migration: add last_notification_at column to keys table
-    try:
-        await db.execute("ALTER TABLE keys ADD COLUMN last_notification_at INTEGER DEFAULT 0")
-        logger.info("Migration: added last_notification_at column to keys table")
-    except Exception:
-        pass  # Column already exists
+    await _ensure_schema_column(db, "keys", "short_id", "TEXT")
+    await _ensure_schema_column(db, "keys", "last_notification_at", "INTEGER DEFAULT 0")
 
     # One-time onboarding reminder for newly issued keys that have no VPN traffic.
     for column, definition in (
@@ -698,27 +678,19 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         ("connect_traffic_baseline", "INTEGER NOT NULL DEFAULT 0"),
         ("connect_reminder_attempts", "INTEGER NOT NULL DEFAULT 0"),
     ):
-        try:
-            await db.execute(f"ALTER TABLE keys ADD COLUMN {column} {definition}")
-            logger.info("Migration: added %s to keys table", column)
-        except Exception:
-            pass  # Column already exists
+        await _ensure_schema_column(db, "keys", column, definition)
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_keys_connect_reminder "
         "ON keys(connect_reminder_status, connect_reminder_due)"
     )
 
-    # Migration: add email column for existing databases
-    try:
-        await db.execute("ALTER TABLE users ADD COLUMN email TEXT UNIQUE")
-        logger.info("Migration: added email column to users table")
-    except Exception:
-        pass  # Column already exists
+    await _ensure_schema_column(db, "users", "email", "TEXT")
+    await db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique "
+        "ON users(email) WHERE email IS NOT NULL"
+    )
 
-    # Migration: add total_paid column for existing databases
-    try:
-        await db.execute("ALTER TABLE users ADD COLUMN total_paid INTEGER DEFAULT 0")
-        logger.info("Migration: added total_paid column to users table")
+    if await _ensure_schema_column(db, "users", "total_paid", "INTEGER DEFAULT 0"):
         # Populate total_paid for existing users
         await db.execute("""
             UPDATE users SET total_paid = (
@@ -728,8 +700,6 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
             )
         """)
         logger.info("Migration: populated total_paid for existing users")
-    except Exception:
-        pass  # Column already exists
 
     # Migration: create refunds table for existing databases
     try:
@@ -752,7 +722,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_refunds_created ON refunds(created)")
         logger.info("Migration: created refunds table")
     except Exception:
-        pass
+        raise
 
     # Migration: create new referral program tables
     try:
@@ -768,7 +738,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_referral_balance_user ON referral_balance(user_id)")
         logger.info("Migration: created referral_balance table")
     except Exception:
-        pass
+        raise
 
     try:
         await db.execute("""
@@ -785,7 +755,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_referral_payouts_user ON referral_payouts(user_id)")
         logger.info("Migration: created referral_payouts table")
     except Exception:
-        pass
+        raise
 
     try:
         await db.execute("""
@@ -802,14 +772,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_referral_earnings_referrer ON referral_earnings(referrer_id)")
         logger.info("Migration: created referral_earnings table")
     except Exception:
-        pass
-
-    # Migration: add email column to users table
-    try:
-        await db.execute("ALTER TABLE users ADD COLUMN email TEXT UNIQUE")
-        logger.info("Migration: added email column to users table")
-    except Exception:
-        pass  # Column already exists
+        raise
 
     # Migration: create email_auth table
     try:
@@ -829,7 +792,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_email_auth_email ON email_auth(email)")
         logger.info("Migration: created email_auth table")
     except Exception:
-        pass
+        raise
 
     # Migration: create referral_clicks table
     try:
@@ -846,7 +809,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_referral_clicks_created ON referral_clicks(clicked_at)")
         logger.info("Migration: created referral_clicks table")
     except Exception:
-        pass
+        raise
 
     # Migration: create admin_logs table
     try:
@@ -864,71 +827,22 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_admin_logs_created ON admin_logs(created)")
         logger.info("Migration: created admin_logs table")
     except Exception:
-        pass
+        raise
 
-    # Migration: enhance promo_codes table with new columns
-    try:
-        await db.execute("ALTER TABLE promo_codes ADD COLUMN promo_type TEXT DEFAULT 'percent'")
-        logger.info("Migration: added promo_type column to promo_codes")
-    except Exception:
-        pass
+    await _ensure_schema_column(db, "promo_codes", "promo_type", "TEXT DEFAULT 'percent'")
+    await _ensure_schema_column(db, "promo_codes", "discount_value", "INTEGER DEFAULT 10")
+    await _ensure_schema_column(db, "promo_codes", "tariff_binding", "INTEGER")
 
-    try:
-        await db.execute("ALTER TABLE promo_codes ADD COLUMN discount_value INTEGER DEFAULT 10")
-        logger.info("Migration: added discount_value column to promo_codes")
-    except Exception:
-        pass
-
-    try:
-        await db.execute("ALTER TABLE promo_codes ADD COLUMN tariff_binding INTEGER")
-        logger.info("Migration: added tariff_binding column to promo_codes")
-    except Exception:
-        pass
-
-    try:
-        await db.execute("ALTER TABLE promo_codes ADD COLUMN start_date INTEGER")
+    if await _ensure_schema_column(db, "promo_codes", "start_date", "INTEGER"):
         # Set default value for existing rows
         await db.execute("UPDATE promo_codes SET start_date = created WHERE start_date IS NULL")
         logger.info("Migration: added start_date column to promo_codes")
-    except Exception as e:
-        # Check if it's a duplicate column error (SQLite specific)
-        if "duplicate column name" in str(e).lower():
-            logger.debug("Migration: start_date column already exists in promo_codes")
-        else:
-            logger.info("Migration: start_date column may already exist: %s", e)
 
-    # Migration: add user ban columns
-    try:
-        await db.execute("ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0")
-        logger.info("Migration: added is_banned column to users")
-    except Exception:
-        pass
-
-    try:
-        await db.execute("ALTER TABLE users ADD COLUMN ban_reason TEXT")
-        logger.info("Migration: added ban_reason column to users")
-    except Exception:
-        pass
-
-    # Migration: add source tracking to users
-    try:
-        await db.execute("ALTER TABLE users ADD COLUMN source TEXT DEFAULT 'direct'")
-        logger.info("Migration: added source column to users")
-    except Exception:
-        pass
-
-    # Migration: add provider and provider_payment_id to payments with unique index
-    try:
-        await db.execute("ALTER TABLE payments ADD COLUMN provider TEXT")
-        logger.info("Migration: added provider column to payments")
-    except Exception:
-        pass
-
-    try:
-        await db.execute("ALTER TABLE payments ADD COLUMN provider_payment_id TEXT")
-        logger.info("Migration: added provider_payment_id column to payments")
-    except Exception:
-        pass
+    await _ensure_schema_column(db, "users", "is_banned", "INTEGER DEFAULT 0")
+    await _ensure_schema_column(db, "users", "ban_reason", "TEXT")
+    await _ensure_schema_column(db, "users", "source", "TEXT DEFAULT 'direct'")
+    await _ensure_schema_column(db, "payments", "provider", "TEXT")
+    await _ensure_schema_column(db, "payments", "provider_payment_id", "TEXT")
 
     try:
         await db.execute("UPDATE payments SET provider = method WHERE provider IS NULL OR provider = ''")
@@ -946,6 +860,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         logger.info("Migration: created unique index idx_payments_provider_id on payments(provider, provider_payment_id)")
     except Exception as e:
         logger.warning("Migration: idx_payments_provider_id notice: %s", e)
+        raise
 
     # Migration: create analytics_events table
     try:
@@ -970,6 +885,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         logger.info("Migration: created analytics_events table")
     except Exception as e:
         logger.warning("Migration: analytics_events notice: %s", e)
+        raise
 
     # Migration: create ad_campaigns table
     try:
@@ -991,6 +907,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         logger.info("Migration: created ad_campaigns table")
     except Exception as e:
         logger.warning("Migration: ad_campaigns notice: %s", e)
+        raise
 
     # Migration: create ad_applications table
     try:
@@ -1025,6 +942,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         logger.info("Migration: created ad_applications table")
     except Exception as e:
         logger.warning("Migration: ad_applications notice: %s", e)
+        raise
 
     # Migration: create ad_notifications table
     try:
@@ -1043,6 +961,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         logger.info("Migration: created ad_notifications table")
     except Exception as e:
         logger.warning("Migration: ad_notifications notice: %s", e)
+        raise
 
     # Migration: ad_audit_log (admin actions audit trail)
     try:
@@ -1060,16 +979,12 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         logger.info("Migration: created ad_audit_log table")
     except Exception as e:
         logger.warning("Migration: ad_audit_log notice: %s", e)
+        raise
 
     # Migration: ad_applications.channel_ref — normalized channel identity
     # (username lowercased / invite reference) so duplicate applications for
     # the same channel are reliably blocked even when channel_id is NULL.
-    try:
-        await db.execute("ALTER TABLE ad_applications ADD COLUMN channel_ref TEXT")
-        logger.info("Migration: added ad_applications.channel_ref")
-    except Exception as e:
-        if "duplicate column" not in str(e).lower():
-            logger.warning("Migration: ad_applications.channel_ref notice: %s", e)
+    await _ensure_schema_column(db, "ad_applications", "channel_ref", "TEXT")
     try:
         await db.execute(
             "UPDATE ad_applications SET channel_ref = LOWER(channel_username) "
@@ -1082,6 +997,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         )
     except Exception as e:
         logger.warning("Migration: ad_applications.channel_ref index notice: %s", e)
+        raise
 
     # Migration: create giveaways tables
     try:
@@ -1135,11 +1051,8 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
             ("giveaway_participants", "referral_count INTEGER DEFAULT 0"),
             ("giveaway_participants", "winner_rank INTEGER"),
         ):
-            try:
-                await db.execute(f"ALTER TABLE {table} ADD COLUMN {definition}")
-            except Exception as e:
-                if "duplicate column" not in str(e).lower():
-                    raise
+            column, sql_definition = definition.split(" ", 1)
+            await _ensure_schema_column(db, table, column, sql_definition)
         await db.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_giveaways_automation_key "
             "ON giveaways(automation_key) WHERE automation_key IS NOT NULL"
@@ -1164,6 +1077,7 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         logger.info("Migration: created giveaways tables")
     except Exception as e:
         logger.warning("Migration: giveaways notice: %s", e)
+        raise
 
     # Migration: auto-renew subscriptions for YooKassa
     try:
@@ -1194,25 +1108,16 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         logger.info("Migration: created auto_renew_subscriptions table")
     except Exception as e:
         logger.warning("Migration: auto_renew_subscriptions notice: %s", e)
+        raise
 
     # Migration: referral_earnings.payment_status (code writes this column;
     # older databases created the table without it)
-    try:
-        await db.execute(
-            "ALTER TABLE referral_earnings ADD COLUMN payment_status TEXT DEFAULT 'pending'"
-        )
-        logger.info("Migration: added referral_earnings.payment_status")
-    except Exception as e:
-        if "duplicate column" not in str(e).lower():
-            logger.warning("Migration: referral_earnings.payment_status notice: %s", e)
+    await _ensure_schema_column(
+        db, "referral_earnings", "payment_status", "TEXT DEFAULT 'pending'",
+    )
 
     # Migration: keys.cleaned (admin cleanup soft-delete marker)
-    try:
-        await db.execute("ALTER TABLE keys ADD COLUMN cleaned INTEGER DEFAULT 0")
-        logger.info("Migration: added keys.cleaned")
-    except Exception as e:
-        if "duplicate column" not in str(e).lower():
-            logger.warning("Migration: keys.cleaned notice: %s", e)
+    await _ensure_schema_column(db, "keys", "cleaned", "INTEGER DEFAULT 0")
 
 
 async def init_db() -> None:

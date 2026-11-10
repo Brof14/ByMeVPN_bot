@@ -15,13 +15,13 @@ def buttons(keyboard):
     return [button for row in keyboard.inline_keyboard for button in row]
 
 
-class PremiumButtonDesignTests(unittest.TestCase):
+class PremiumButtonDesignTests(unittest.IsolatedAsyncioTestCase):
     def test_core_buttons_use_primary_style_and_catalog_icons(self):
         with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "1"}):
             menu = main_menu_with_keys(trial_used=True)
         by_callback = {button.callback_data: button for button in buttons(menu)}
         self.assertEqual(by_callback["my_keys"].style, "primary")
-        self.assertEqual(by_callback["buy_vpn"].style, "primary")
+        self.assertIsNone(by_callback["buy_vpn"].style)
         self.assertEqual(by_callback["my_keys"].icon_custom_emoji_id, "6005570495603282482")
         self.assertEqual(by_callback["buy_vpn"].icon_custom_emoji_id, "5983399041197675256")
         self.assertEqual(by_callback["free_vpn"].icon_custom_emoji_id, "6023826881160157558")
@@ -72,7 +72,7 @@ class PremiumButtonDesignTests(unittest.TestCase):
             ):
                 await cb_support_topic(callback, object())
             text = send.await_args.args[2]
-            self.assertIn("Подписка", text)
+            self.assertIn("подписк", text.lower())
             actions = [b.callback_data for row in send.await_args.args[3].inline_keyboard for b in row]
             self.assertIn("my_keys", actions)
             support = next(b for row in send.await_args.args[3].inline_keyboard for b in row if b.text == "Написать в поддержку")

@@ -500,8 +500,7 @@ async def _deliver_key_unlocked(
             )
             return False
 
-        # Логируем ссылку для отладки
-        logger.info("Subscription URL for user %d: %s", user_id, subscription_url[:50] + "...")
+        # Subscription URLs are access credentials; never write any part to logs.
 
         # Сохраняем ссылку на подписку и настоящий UUID клиента в БД
         client_uuid = user_result.get("uuid") or subscription_url

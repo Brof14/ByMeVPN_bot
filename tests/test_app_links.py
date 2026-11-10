@@ -13,6 +13,7 @@ from app_links import (
     APP_LOGIN_CONTENT_SECURITY_POLICY,
     build_app_login_url,
     build_app_redirect_url,
+    build_connect_page_url,
     build_connect_ticket,
     read_connect_ticket,
     CONNECT_TICKET_TTL_SECONDS,
@@ -23,6 +24,20 @@ from keyboards import app_open_kb
 
 
 class TestAppLinkBuilders(unittest.TestCase):
+    def test_connection_button_requires_an_explicit_https_page_origin(self):
+        with patch("app_links.APP_CONNECT_PAGE_URL", ""):
+            with self.assertRaises(RuntimeError):
+                build_connect_page_url("https://sub.example/private-token")
+
+        with (
+            patch("app_links.APP_CONNECT_PAGE_URL", "https://connect.example:8443"),
+            patch.dict(os.environ, {"APP_HANDOFF_SECRET": "isolated-test-secret"}),
+        ):
+            url = build_connect_page_url("https://sub.example/private-token", "tester")
+        self.assertEqual(urlsplit(url).netloc, "connect.example:8443")
+        self.assertIn("/connect?ticket=", url)
+        self.assertNotIn("private-token", url)
+
     def test_login_url_keeps_subscription_and_user_name(self):
         url = build_app_login_url("https://sub.example/abc?token=1&x=2", "@user name")
 
@@ -32,13 +47,16 @@ class TestAppLinkBuilders(unittest.TestCase):
         self.assertEqual(query["name"], ["@user name"])
 
     def test_redirect_url_targets_the_public_handover_page(self):
-        url = build_app_redirect_url("https://sub.example/abc", "user")
+        with patch.dict(os.environ, {"APP_HANDOFF_SECRET": "isolated-test-secret"}):
+            url = build_app_redirect_url("https://sub.example/abc", "user")
 
         self.assertIn("/app/login?", url)
         self.assertEqual(urlsplit(url).scheme, "https")
         query = parse_qs(urlsplit(url).query)
-        self.assertEqual(query["sub"], ["https://sub.example/abc"])
-        self.assertEqual(query["name"], ["user"])
+        self.assertEqual(set(query), {"ticket"})
+        with patch.dict(os.environ, {"APP_HANDOFF_SECRET": "isolated-test-secret"}):
+            self.assertEqual(read_connect_ticket(query["ticket"][0])["subscription_url"], "https://sub.example/abc")
+        self.assertNotIn("https://sub.example/abc", url)
 
     def test_unsafe_public_url_cannot_carry_subscription_credentials(self):
         with patch("app_links.APP_PUBLIC_URL", "http://public.example:8080"):

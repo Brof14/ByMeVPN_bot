@@ -245,8 +245,6 @@ def _button_style(label: str, callback: str, *, destructive: bool, navigation: b
         return "danger"
     if callback == "trial_free":
         return "success"
-    if callback.startswith("tariff_3_"):
-        return "success"
     return "primary"
 
 
@@ -261,7 +259,12 @@ def themed_button(*args, **kwargs) -> TelegramInlineKeyboardButton:
     destructive = callback.startswith(_DESTRUCTIVE_PREFIXES)
     navigation = _is_navigation(label, callback)
 
-    if kwargs.get("style") not in {"primary", "success", "danger"}:
+    # ``None`` is an explicit request for the client's neutral button style.
+    # Only infer a color when the caller omitted ``style`` altogether.
+    if "style" not in kwargs:
+        style = _button_style(label, callback, destructive=destructive, navigation=navigation)
+        kwargs["style"] = style or "primary"
+    elif kwargs["style"] not in {None, "primary", "success", "danger"}:
         style = _button_style(label, callback, destructive=destructive, navigation=navigation)
         kwargs["style"] = style or "primary"
 

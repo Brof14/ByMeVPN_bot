@@ -2,6 +2,7 @@
 import json
 import unittest
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import webhook
 
@@ -78,6 +79,56 @@ class TestYooKassaWebhookHardening(unittest.IsolatedAsyncioTestCase):
         body = json.dumps({"event": "payment.succeeded", "object": {"id": "../../bad"}}).encode()
         response = await webhook.yookassa_webhook(_Request("185.71.76.12", body))
         self.assertEqual(response.status_code, 400)
+
+
+class TestTelegramWebhookHardening(unittest.TestCase):
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        self.client = TestClient(webhook.app)
+
+    def test_missing_secret_fails_closed_before_dispatch(self):
+        dispatcher = SimpleNamespace(feed_update=AsyncMock())
+        with patch.object(webhook, "dispatcher", dispatcher), \
+             patch.object(webhook, "TELEGRAM_WEBHOOK_SECRET", "", create=True):
+            response = self.client.post("/webhook/telegram", json={"update_id": 1})
+        self.assertEqual(response.status_code, 503)
+        dispatcher.feed_update.assert_not_awaited()
+
+    def test_wrong_secret_is_rejected_before_dispatch(self):
+        dispatcher = SimpleNamespace(feed_update=AsyncMock())
+        with patch.object(webhook, "dispatcher", dispatcher), \
+             patch.object(webhook, "TELEGRAM_WEBHOOK_SECRET", "expected-secret", create=True):
+            response = self.client.post(
+                "/webhook/telegram", json={"update_id": 1},
+                headers={"X-Telegram-Bot-Api-Secret-Token": "wrong-secret"},
+            )
+        self.assertEqual(response.status_code, 401)
+        dispatcher.feed_update.assert_not_awaited()
+
+    def test_valid_secret_dispatches_and_internal_errors_are_retryable(self):
+        dispatcher = SimpleNamespace(feed_update=AsyncMock())
+        bot = object()
+        webhook.app.state.bot = bot
+        headers = {"X-Telegram-Bot-Api-Secret-Token": "expected-secret"}
+        with patch.object(webhook, "dispatcher", dispatcher), \
+             patch.object(webhook, "TELEGRAM_WEBHOOK_SECRET", "expected-secret", create=True):
+            response = self.client.post("/webhook/telegram", json={"update_id": 1}, headers=headers)
+            self.assertEqual(response.status_code, 200)
+            dispatcher.feed_update.assert_awaited_once()
+
+            dispatcher.feed_update.side_effect = RuntimeError("dispatch failed")
+            failed = self.client.post("/webhook/telegram", json={"update_id": 2}, headers=headers)
+        self.assertEqual(failed.status_code, 500)
+
+    def test_app_login_accepts_encrypted_ticket_without_subscription_query(self):
+        from app_links import build_connect_ticket
+
+        with patch.dict("os.environ", {"APP_HANDOFF_SECRET": "isolated-test-secret"}):
+            ticket = build_connect_ticket("https://sub.example/private")
+            response = self.client.get("/app/login", params={"ticket": ticket})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("bymevpn://login?sub=", response.text)
+        self.assertIn("no-store", response.headers["cache-control"])
 
 
 if __name__ == "__main__":

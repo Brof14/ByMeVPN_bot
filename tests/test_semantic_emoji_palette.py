@@ -75,7 +75,7 @@ class SemanticPremiumEmojiTests(unittest.TestCase):
                 self.assertEqual(icons[1:], [ICON_IDS["gift"]] * 3)
                 self.assertEqual(
                     [marked[f"tariff_{m}_{devices}"].style for m in (1, 3, 6, 12)],
-                    ["primary", "success", "primary", "primary"],
+                    ["primary", "primary", "primary", "primary"],
                 )
                 self.assertIn("🎁", marked[f"tariff_3_{devices}"].text)
 
@@ -91,8 +91,12 @@ class SemanticPremiumEmojiTests(unittest.TestCase):
         actions = [b.callback_data for b in all_buttons(kb)]
         self.assertEqual(actions[0], "my_keys")
         self.assertIn("my_keys", actions)
-        self.assertTrue(all(b.style in {"primary", "success", "danger"} for b in all_buttons(kb)))
+        self.assertTrue(all(b.style in {None, "primary", "success", "danger"} for b in all_buttons(kb)))
         self.assertTrue(kb.inline_keyboard[-1][-1].url.startswith("https://t.me/ByMeVPNSupportBot"))
+
+    def test_explicit_neutral_style_is_preserved(self):
+        button = themed_button(text="Тарифы", callback_data="buy_vpn", style=None)
+        self.assertIsNone(button.style)
 
     def test_delivery_and_platform_guide_prioritize_connection(self):
         kb = after_key_kb("https://example.test/sub")

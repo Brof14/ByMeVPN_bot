@@ -105,9 +105,25 @@ if (
         "TLS certificate verification matches; do not disable verification."
     )
 
-# Принудительно ограничиваем выдаваемые подписки этими четырьмя инбаундами.
-# Значение из .env намеренно игнорируется, чтобы состав подписки не менялся случайно.
-XUI_INBOUND_IDS: list[int] = [12, 13, 14, 15]
+# Inbound set is configurable for controlled panel migrations; production defaults
+# to the currently used client subscription set.
+def _parse_xui_inbound_ids(value: str | None) -> list[int]:
+    """Parse configured panel inbounds; default to the current production set."""
+    raw = (value or "13,14,40").strip()
+    try:
+        inbound_ids = [int(item.strip()) for item in raw.split(",") if item.strip()]
+    except ValueError as exc:
+        raise ValueError("XUI_INBOUND_IDS must be comma-separated positive integers") from exc
+    if (
+        not inbound_ids
+        or any(item <= 0 for item in inbound_ids)
+        or len(set(inbound_ids)) != len(inbound_ids)
+    ):
+        raise ValueError("XUI_INBOUND_IDS must contain unique positive integers")
+    return inbound_ids
+
+
+XUI_INBOUND_IDS: list[int] = _parse_xui_inbound_ids(os.getenv("XUI_INBOUND_IDS"))
 XUI_INBOUND_ID = XUI_INBOUND_IDS[0]  # primary (обратная совместимость)
 # Current panel remarks, verified against the live inbounds on 2026-10-17.
 # The panel remark is preferred at runtime; these labels are a safe fallback.
@@ -116,6 +132,7 @@ XUI_INBOUND_NAMES = {
     13: "🇩🇪Germany-2",
     14: "🇩🇪Germany-3",
     15: "🇩🇪Germany-4",
+    40: "ByMeVPN · 40",
 }
 XUI_SUB_PATH = os.getenv("XUI_SUB_PATH", "sub")
 
@@ -144,6 +161,7 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 # ============================================================================
 WEBHOOK_HOST = os.getenv("WEBHOOK_HOST") or "0.0.0.0"
 WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT") or "8080")
+TELEGRAM_WEBHOOK_SECRET = (os.getenv("TELEGRAM_WEBHOOK_SECRET") or "").strip()
 # YooKassa documents these source ranges for incoming HTTP notifications.
 # Keep this overrideable so the allowlist can be updated without code changes.
 YOOKASSA_WEBHOOK_ALLOWED_IPS = os.getenv(

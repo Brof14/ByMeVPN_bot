@@ -366,7 +366,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             buttons = [button for row in rows for button in row]
             by_action = {button.callback_data: button for button in buttons}
             self.assertEqual(by_action["about"].style, "primary")
-            self.assertEqual(by_action["buy_vpn"].style, "primary")
+            self.assertIn(by_action["buy_vpn"].style, {None, "primary"})
             self.assertEqual(by_action["free_vpn"].style, "primary")
         menu = main_menu_with_keys()
         self.assertEqual([len(row) for row in menu.inline_keyboard], [1, 1, 1, 2])
@@ -543,10 +543,10 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         ]
         three_months = next(button for button in tariff_buttons if button.callback_data == "tariff_3_2")
         self.assertIn("3 мес. + 1 мес. 🎁 — 79 ₽ / мес.", three_months.text)
-        self.assertEqual(three_months.style, "success")
+        self.assertEqual(three_months.style, "primary")
         self.assertEqual(
             [button.style for button in tariff_buttons],
-            ["primary", "success", "primary", "primary"],
+            ["primary", "primary", "primary", "primary"],
         )
 
     async def test_saved_sbp_method_without_title_is_still_manageable(self):

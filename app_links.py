@@ -51,14 +51,14 @@ def build_app_login_url(subscription_url: str = "", user_name: str = "") -> str:
 
 
 def build_app_redirect_url(subscription_url: str = "", user_name: str = "") -> str:
-    """Only hand credential-bearing subscription URLs to a trusted HTTPS origin."""
+    """Hand a short-lived encrypted ticket to the trusted HTTPS app opener."""
     base = urlsplit(APP_PUBLIC_URL)
     if subscription_url and (
         base.scheme != "https" or not base.hostname or base.username is not None
         or base.password is not None or base.query or base.fragment
     ):
         raise ValueError("APP_PUBLIC_URL must be a secure HTTPS origin for app handover")
-    query = urlencode(_login_params(subscription_url, user_name))
+    query = urlencode({"ticket": build_connect_ticket(subscription_url, user_name)} if subscription_url else {})
     return f"{APP_PUBLIC_URL}/app/login" + (f"?{query}" if query else "")
 
 
@@ -244,11 +244,8 @@ def read_connect_ticket(ticket: str, *, now: int | None = None) -> dict[str, str
 
 
 def build_connect_page_url(subscription_url: str, user_name: str = "") -> str:
-    # Keep direct-connect behaviour until a dedicated public HTTPS origin is
-    # configured and its /connect route is exposed by the proxy. WEBHOOK_URL
-    # may point to an internal or placeholder address and is not sufficient.
     if not APP_CONNECT_PAGE_URL:
-        return subscription_url
+        raise RuntimeError("APP_CONNECT_PAGE_URL must be configured for secure connection handover")
     base = urlsplit(APP_CONNECT_PAGE_URL)
     if base.scheme != "https" or not base.hostname or base.path or base.username is not None or base.password is not None:
         raise ValueError("APP_CONNECT_PAGE_URL must be an HTTPS origin")
