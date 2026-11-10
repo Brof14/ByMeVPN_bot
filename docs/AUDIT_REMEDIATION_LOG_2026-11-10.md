@@ -91,11 +91,12 @@ explicitly excluded and were not changed.
   headers. The dummy URL was not a customer subscription. `/docs`, `/redoc`,
   and `/openapi.json` each returned 404. Public logo/app asset routes returned
   HTTP 200; `/connect` without a ticket returned an expected HTTP 400.
-- The bare public `/app` path currently redirects to port `9443`, which is not
-  publicly reachable. The active connection flow uses `/connect` and its
-  `/app/assets/...` paths, which were verified working. The bare `/app`
-  reverse-proxy redirect was not changed because it is a separate Nginx route
-  outside the bot repository.
+- Found and fixed the bare `/app` reverse-proxy redirect to the internal,
+  unreachable port `9443`. Added exact `/app` and `/app/` routes in the tracked
+  `deploy/nginx/bymevpn-app-page.conf`, included that file in the live Nginx
+  server, backed up the prior config, passed `nginx -t`, and reloaded Nginx.
+  Both paths and the public app page now return HTTP 200 with the v1.0.13 APK
+  link; logo and app asset routes also return HTTP 200.
 
 The production stack still intentionally retains its device-admin,
 worker-shutdown, and XUI log-redaction release overlays. They are preserved
