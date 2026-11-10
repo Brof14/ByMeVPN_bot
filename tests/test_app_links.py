@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlsplit
 from app_links import (
     APP_LOGIN_CONTENT_SECURITY_POLICY,
     build_app_login_url,
+    build_app_telegram_auth_url,
     build_app_redirect_url,
     build_connect_page_url,
     build_connect_ticket,
@@ -67,6 +68,9 @@ class TestAppLinkBuilders(unittest.TestCase):
     def test_empty_login_url_opens_the_app_without_parameters(self):
         self.assertEqual(build_app_login_url(), "bymevpn://login")
         self.assertTrue(build_app_redirect_url().endswith("/app/login"))
+
+    def test_telegram_auth_handoff_contains_no_subscription_bearer_link(self):
+        self.assertEqual(build_app_telegram_auth_url(), "bymevpn://login?auth=telegram")
 
 
 class TestAppOpenPage(unittest.TestCase):
@@ -127,13 +131,15 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertIsNotNone(encoded)
         apps = json.loads(json.loads(encoded.group(1)))
         self.assertEqual([a["name"] for a in apps["android"]], ["ByMeVPN", "Happ", "INCY", "v2rayTun", "v2rayNG", "Hiddify", "sing-box"])
+        self.assertEqual(apps["android"][0]["deep"], "bymevpn://login?auth=telegram")
+        self.assertNotIn("sub.example", apps["android"][0]["deep"])
         self.assertEqual(apps["android"][0]["download"],
-                         "https://github.com/Brof14/ByMeVPN-app/releases/download/v1.0.13/ByMeVPN-v1.0.13.apk")
+                         "https://github.com/Brof14/ByMeVPN-app/releases/download/v1.0.14/ByMeVPN-v1.0.14.apk")
         self.assertEqual([a["name"] for a in apps["ios"]], ["Happ", "INCY", "v2rayTun", "Hiddify", "sing-box"])
         for platform in ("windows", "macos", "linux"):
             self.assertIn("v2rayN", [a["name"] for a in apps[platform]])
             self.assertIn("Koala Clash", [a["name"] for a in apps[platform]])
-            self.assertTrue(all("ByMeVPN-v1.0.13.apk" not in a["download"] for a in apps[platform]))
+            self.assertTrue(all("ByMeVPN-v1.0.14.apk" not in a["download"] for a in apps[platform]))
 
     def test_connection_page_has_os_marks_and_manual_copy_fallback(self):
         page = render_connection_choice_page("https://sub.example/abc")
@@ -148,7 +154,7 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertNotIn("Если не открылось — скопировать", page)
         self.assertIn('src="/app/assets/bymevpn-logo.png"', page)
         self.assertIn("Выберите приложение и подключитесь", page)
-        self.assertIn("github.com/Brof14/ByMeVPN-app/releases/download/v1.0.13/ByMeVPN-v1.0.13.apk", page)
+        self.assertIn("github.com/Brof14/ByMeVPN-app/releases/download/v1.0.14/ByMeVPN-v1.0.14.apk", page)
         self.assertIn("Рекомендуем", page)
         self.assertIn('<details id="alternatives" open>', page)
         self.assertIn('id="copy-subscription"', page)
@@ -158,6 +164,8 @@ class TestAppOpenPage(unittest.TestCase):
         for symbol in ("android", "apple", "windows", "linux"):
             self.assertIn(f'id="os-{symbol}"', page)
         self.assertIn('id="external-download"', page)
+        self.assertIn('id="account-help"', page)
+        self.assertIn("аккаунт и подписка загрузятся в приложение", page)
         self.assertIn("viewport-fit=cover", page)
 
     def test_connection_page_escapes_script_endings_and_template_markers(self):
