@@ -167,6 +167,18 @@ async def app_login_redirect(sub: str = "", name: str = "", ticket: str = ""):
             )
         sub = handoff["subscription_url"]
         name = handoff["user_name"]
+    elif sub:
+        return HTMLResponse(
+            "Ссылка устарела. Откройте бота и снова нажмите «Подключить VPN».",
+            status_code=400,
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "Referrer-Policy": "no-referrer",
+                "X-Robots-Tag": "noindex, nofollow",
+                "X-Content-Type-Options": "nosniff",
+                "Content-Security-Policy": APP_LOGIN_CONTENT_SECURITY_POLICY,
+            },
+        )
     sub = sub.strip()
     name = "".join(ch for ch in name if ch.isprintable())[:MAX_USER_NAME_LENGTH].strip()
 

@@ -130,6 +130,14 @@ class TestTelegramWebhookHardening(unittest.TestCase):
         self.assertIn("bymevpn://login?sub=", response.text)
         self.assertIn("no-store", response.headers["cache-control"])
 
+    def test_app_login_rejects_legacy_raw_subscription_query(self):
+        response = self.client.get(
+            "/app/login", params={"sub": "https://sub.example/private-token"}
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertNotIn("private-token", response.text)
+        self.assertEqual(response.headers["referrer-policy"], "no-referrer")
+
 
 if __name__ == "__main__":
     unittest.main()
