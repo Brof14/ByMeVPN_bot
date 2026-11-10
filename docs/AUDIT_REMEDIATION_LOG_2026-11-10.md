@@ -59,27 +59,47 @@ explicitly excluded and were not changed.
 - Verified the SSH host key from the VPS console screenshot and connected only
   to `2.27.16.7` with `StrictHostKeyChecking=yes`. The older address shown in
   the console was not used.
-- Confirmed `APP_CONNECT_PAGE_URL` is configured for both bot containers. A
-  dummy connection ticket round-tripped through the encrypted ticket reader
-  for `https://bymevpn.duckdns.org/connect`; no real subscription URL was used.
-- Confirmed both containers use inbound IDs `13,14,40` and both FastAPI apps
-  disable `/docs`, `/redoc`, and `/openapi.json`.
-- The active production compose stack mounts older webhook implementations
-  from separate release overlays. Added the same fail-closed Telegram webhook
-  guard, 1 MiB body bound, and legacy `/app/login?sub=...` rejection to the two
-  active overlay files. Backups are stored under
-  `/root/bymevpn-backups/audit-remediation-20261110/` on the VPS.
-- Restarted only `vpnbot` and `bymevpn-newbot`, one at a time. Both returned to
-  `healthy`; Redis, support, and ByMeAudio containers stayed running.
-- Both bots run polling. `TELEGRAM_WEBHOOK_SECRET` remains unset, so the public
-  Telegram webhook endpoint fails closed with HTTP 503. If switching to
-  webhook mode later, configure a secret in the runtime and Telegram's
-  `setWebhook` together.
+- Saved the shared SQLite database using SQLite's online backup API and
+  verified the snapshot. Preserved both bot `.env` files, the untracked compose
+  override, and the modified runtime overlays under
+  `/root/bymevpn-backups/full-rollout-20261110/` on the VPS.
+- Fast-forwarded the VPS checkout to GitHub `main` at
+  `d5da71bae5532b660c68b179926d881e8720acd7`. Rebuilt the shared bot image
+  from that checkout. The APK download on the app page now points to the
+  requested v1.0.13 asset.
+- Found stale active overlays that bypassed the audited app-link and API code:
+  they accepted raw subscription URLs and logged a subscription URL fragment.
+  Replaced the primary and secondary `app_links.py`, `api_router.py`, and
+  `subscription.py` overlays with the current GitHub versions; updated the
+  primary connection-page template, update-site handler, and public app logos.
+  Preserved the separate device-admin, worker-shutdown, and XUI log-redaction
+  overlays. Applied the audited migration changes to both device-admin database
+  overlays without removing their additional admin features.
+- Stopped the secondary bot during the shared-database startup migration, then
+  recreated the primary and secondary bots sequentially. Both are running
+  `healthy` on the same newly built image. Redis, support, ByMeAudio, and VPN
+  services were not recreated.
+- After startup, SQLite `integrity_check` returned `ok`; both containers had
+  zero restart count and no `connection_tls_server` or `webhook_server`
+  background-task failures in the observed five-minute window.
+- Ran the full standard-library unit suite inside an isolated container from
+  the new image: 643 tests passed. The Docker build's runtime-bundle check and
+  Python compilation also passed.
+- Smoke-checked a generated dummy connection ticket against the active primary
+  app: the connection page returned HTTP 200, included ByMeVPN, Happ, INCY,
+  v2rayN, Koala Clash, and the v1.0.13 APK link, and set no-store/no-referrer
+  headers. The dummy URL was not a customer subscription. `/docs`, `/redoc`,
+  and `/openapi.json` each returned 404. Public logo/app asset routes returned
+  HTTP 200; `/connect` without a ticket returned an expected HTTP 400.
+- The bare public `/app` path currently redirects to port `9443`, which is not
+  publicly reachable. The active connection flow uses `/connect` and its
+  `/app/assets/...` paths, which were verified working. The bare `/app`
+  reverse-proxy redirect was not changed because it is a separate Nginx route
+  outside the bot repository.
 
-The production base checkout is still at `17c7a93`; its active compose stack
-layers many release overlays and includes an untracked compose override.
-The complete base image was not rebuilt from `495ab988ddeb24e7cbcd3cffd655d2ce68872831`:
-doing so without reconciling those overlays could replace live bot features or
-alter startup database migrations. The runtime security fixes above were
-applied narrowly to the mounted files and verified by container health. A
-full source-to-runtime reconciliation remains pending.
+The production stack still intentionally retains its device-admin,
+worker-shutdown, and XUI log-redaction release overlays. They are preserved
+and are not represented by the just-built base image alone; each active mount
+must remain part of future deployments unless its code is merged into the
+repository. The untracked compose override and secrets are preserved on the
+VPS and were not committed.
