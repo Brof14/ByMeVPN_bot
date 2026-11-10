@@ -2,7 +2,17 @@
 
 Regression fixtures are synthetic URIs, never production credentials.
 """
+import os
+import secrets
+import sys
 import unittest
+from pathlib import Path
+
+ROOT = str(Path(__file__).resolve().parent.parent)
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+os.environ.setdefault("DB_FILE", "/tmp/test_subscription_transport_parity.db")
+os.environ.setdefault("JWT_SECRET", secrets.token_urlsafe(48))
 
 from api_router import parse_single_node_line
 
