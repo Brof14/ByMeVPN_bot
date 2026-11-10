@@ -411,9 +411,9 @@ def parse_single_node_line(line: str, index: int, fallback_uuid: Optional[str] =
             host_port = q_parts[0]
             query_str = q_parts[1] if len(q_parts) > 1 else ""
 
-            hp_parts = host_port.split(":")
-            raw_host = hp_parts[0]
-            port = int(hp_parts[1]) if len(hp_parts) > 1 else 443
+            address = urlparse(line)
+            raw_host = address.hostname or ""
+            port = address.port or 443
             server_ip = raw_host
 
             params = parse_qs(query_str)
@@ -421,9 +421,16 @@ def parse_single_node_line(line: str, index: int, fallback_uuid: Optional[str] =
             sid = params.get("sid", [""])[0]
             sni = params.get("sni", [raw_host or "www.cloudflare.com"])[0]
             fp = params.get("fp", ["chrome"])[0]
-            flow = params.get("flow", ["xtls-rprx-vision"])[0]
-            security = params.get("security", ["reality"])[0]
+            # Subscription URI is the source of truth. Never invent Vision for
+            # gRPC, WS, TLS or nodes that did not advertise a flow.
+            flow = params.get("flow", [""])[0]
+            security = params.get("security", ["reality" if pbk else "tls"])[0]
             net_type = params.get("type", ["tcp"])[0]
+            transport_path = (params.get("serviceName")
+                              or params.get("servicename")
+                              or params.get("path") or [""])[0]
+            transport_host = params.get("host", [""])[0]
+            transport_mode = params.get("mode", [""])[0]
 
             country, country_code, base_city, flag = _detect_geo(remark)
             sec_lower = security.lower()
@@ -458,7 +465,7 @@ def parse_single_node_line(line: str, index: int, fallback_uuid: Optional[str] =
                     "server": server_ip,
                     "port": port,
                     "uuid": uuid_str,
-                    "encryption": "none",
+                    "encryption": params.get("encryption", ["none"])[0],
                     "flow": flow,
                     "security": security,
                     "server_name": sni,
@@ -466,6 +473,10 @@ def parse_single_node_line(line: str, index: int, fallback_uuid: Optional[str] =
                     "short_id": sid,
                     "fingerprint": fp,
                     "network": net_type,
+                    "transport_path": transport_path,
+                    "transport_host": transport_host,
+                    "transport_mode": transport_mode,
+                    "alpn": params.get("alpn", [""])[0],
                 },
             }
         elif line.startswith("hysteria2://") or line.startswith("hy2://"):
@@ -479,9 +490,9 @@ def parse_single_node_line(line: str, index: int, fallback_uuid: Optional[str] =
             host_and_rest = at_parts[1]
 
             q_parts = host_and_rest.split("?", 1)
-            hp_parts = q_parts[0].split(":")
-            raw_host = hp_parts[0]
-            port = int(hp_parts[1]) if len(hp_parts) > 1 else 443
+            address = urlparse(line)
+            raw_host = address.hostname or ""
+            port = address.port or 443
             server_ip = raw_host
 
             query_str = q_parts[1] if len(q_parts) > 1 else ""
@@ -520,18 +531,21 @@ def parse_single_node_line(line: str, index: int, fallback_uuid: Optional[str] =
                     "server": server_ip,
                     "port": port,
                     "uuid": password,
-                    "encryption": "",
-                    "flow": "",
+                    "encryption": params.get("obfs", [""])[0],
+                    "flow": params.get("obfs-password", [""])[0],
                     "security": "tls",
                     "server_name": sni,
                     "public_key": "",
                     "short_id": "",
-                    "fingerprint": "firefox",
+                    "fingerprint": params.get("fp", ["firefox"])[0],
                     "network": "udp",
+                    "alpn": params.get("alpn", [""])[0],
                 },
             }
-    except Exception as e:
-        logger.warning(f"Error parsing node line {line[:50]}: {e}")
+    except Exception:
+        # Subscription URIs embed credentials; never log even a truncated URI
+        # or exception text containing untrusted userinfo.
+        logger.warning("Rejected malformed subscription node at index %s", index)
     return None
 
 
