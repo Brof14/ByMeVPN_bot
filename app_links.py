@@ -272,7 +272,7 @@ def render_connection_choice_page(subscription_url: str, user_name: str = "") ->
     singbox = {"name": "sing-box", "icon": "singbox", "manual": True, "note": "Требуется конфигурация sing-box в формате JSON; обычная ссылка подписки может не подойти.", "download": "https://sing-box.sagernet.org/clients/"}
     apps = {
         "android": [
-            {"name": "ByMeVPN", "icon": "bymevpn", "deep": build_app_telegram_auth_url(), "download": "https://github.com/Brof14/ByMeVPN-app/releases/download/v1.0.14/ByMeVPN-v1.0.14.apk"},
+            {"name": "ByMeVPN", "icon": "bymevpn", "deep": build_app_telegram_auth_url(), "download": "https://bymevpn.duckdns.org/app/downloads/ByMeVPN-v1.0.14.apk"},
             {"name": "Happ", "icon": "happ", "deep": "happ://add/" + subscription_url, "download": "https://github.com/Happ-proxy/happ-android/releases/latest"},
             {"name": "INCY", "icon": "incy", "deep": "incy://import/" + subscription_url, "download": "https://play.google.com/store/apps/details?id=llc.itdev.incy"},
             tun,

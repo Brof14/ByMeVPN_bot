@@ -134,7 +134,7 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertEqual(apps["android"][0]["deep"], "bymevpn://login?auth=telegram")
         self.assertNotIn("sub.example", apps["android"][0]["deep"])
         self.assertEqual(apps["android"][0]["download"],
-                         "https://github.com/Brof14/ByMeVPN-app/releases/download/v1.0.14/ByMeVPN-v1.0.14.apk")
+                         "https://bymevpn.duckdns.org/app/downloads/ByMeVPN-v1.0.14.apk")
         self.assertEqual([a["name"] for a in apps["ios"]], ["Happ", "INCY", "v2rayTun", "Hiddify", "sing-box"])
         for platform in ("windows", "macos", "linux"):
             self.assertIn("v2rayN", [a["name"] for a in apps[platform]])
@@ -154,7 +154,7 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertNotIn("Если не открылось — скопировать", page)
         self.assertIn('src="/app/assets/bymevpn-logo.png"', page)
         self.assertIn("Выберите приложение и подключитесь", page)
-        self.assertIn("github.com/Brof14/ByMeVPN-app/releases/download/v1.0.14/ByMeVPN-v1.0.14.apk", page)
+        self.assertIn("https://bymevpn.duckdns.org/app/downloads/ByMeVPN-v1.0.14.apk", page)
         self.assertIn("Рекомендуем", page)
         self.assertIn('<details id="alternatives" open>', page)
         self.assertIn('id="copy-subscription"', page)
