@@ -60,6 +60,39 @@ class WindowsVpnCapabilitiesTests(unittest.TestCase):
             protocol="hysteria2", security="tls", network="udp", encryption="unknown",
         ), capabilities))
 
+    def test_windows_negotiates_all_vless_transports_that_android_generator_accepts(self):
+        header = "hysteria2,vless-xhttp,vless-tls,vless-grpc,vless-ws,vless-httpupgrade,vless-none"
+        for network, security in (
+            ("grpc", "reality"),
+            ("grpc", "tls"),
+            ("ws", "tls"),
+            ("websocket", "none"),
+            ("httpupgrade", "tls"),
+            ("httpupgrade", "none"),
+            ("tcp", "none"),
+            ("raw", "none"),
+        ):
+            with self.subTest(network=network, security=security):
+                self.assertTrue(windows_vpn_compatible(node(
+                    network=network, security=security,
+                    public_key=BASE["public_key"] if security == "reality" else "",
+                ), header))
+        self.assertFalse(windows_vpn_compatible(node(network="ws"), header))
+        self.assertFalse(windows_vpn_compatible(node(network="httpupgrade"), header))
+        self.assertFalse(windows_vpn_compatible(node(network="grpc"), "vless-tls"))
+        self.assertFalse(windows_vpn_compatible(node(network="ws", security="none"), "vless-ws"))
+        self.assertFalse(windows_vpn_compatible(node(network="none"), header))
+
+    def test_tls_or_none_can_have_no_sni_but_reality_cannot(self):
+        header = "vless-tls,vless-ws,vless-none"
+        self.assertTrue(windows_vpn_compatible(
+            node(network="ws", security="tls", server_name=""), header))
+        self.assertTrue(windows_vpn_compatible(
+            node(network="ws", security="none", server_name=""), header))
+        self.assertFalse(windows_vpn_compatible(
+            node(network="grpc", security="reality", server_name=""),
+            "vless-grpc"))
+
     def test_capabilities_are_only_selection_hints(self):
         extended = "hysteria2,vless-xhttp,vless-tls"
         self.assertFalse(windows_vpn_compatible({"config": None}, extended))
