@@ -21,6 +21,7 @@ Config:   WEBHOOK_HOST, WEBHOOK_PORT in .env
 import asyncio
 import base64
 import contextlib
+import hmac
 import ipaddress
 import json
 import logging
@@ -40,6 +41,7 @@ from fastapi import FastAPI, Request, Response
 from config import (
     YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY,
     WEBHOOK_HOST, WEBHOOK_PORT, ADMIN_ID, REDIS_URL, YOOKASSA_WEBHOOK_ALLOWED_IPS,
+    TELEGRAM_WEBHOOK_SECRET,
     APP_CONNECT_TLS_HOST, APP_CONNECT_TLS_PORT,
     APP_CONNECT_TLS_CERT_FILE, APP_CONNECT_TLS_KEY_FILE,
 )
@@ -60,6 +62,7 @@ class _BackgroundUvicornServer(uvicorn.Server):
         yield
 
 MAX_YOOKASSA_WEBHOOK_BYTES = 64 * 1024
+MAX_TELEGRAM_WEBHOOK_BYTES = 1024 * 1024
 YOOKASSA_PAYMENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 YOOKASSA_ALLOWED_NETWORKS = tuple(
     ipaddress.ip_network(value.strip(), strict=False)
@@ -131,7 +134,7 @@ async def readiness_check():
 
 
 @app.get("/app/login")
-async def app_login_redirect(sub: str = "", name: str = ""):
+async def app_login_redirect(sub: str = "", name: str = "", ticket: str = ""):
     """Open the ByMeVPN app from a Telegram inline button.
 
     Telegram rejects custom URL schemes in buttons, so the bot links here and
@@ -144,8 +147,26 @@ async def app_login_redirect(sub: str = "", name: str = ""):
         MAX_SUBSCRIPTION_URL_LENGTH,
         MAX_USER_NAME_LENGTH,
         build_app_login_url,
+        read_connect_ticket,
         render_app_open_page,
     )
+    if ticket:
+        try:
+            handoff = read_connect_ticket(ticket)
+        except (ValueError, RuntimeError):
+            return HTMLResponse(
+                "Ссылка подключения недействительна или устарела. Откройте бота и запросите новую.",
+                status_code=400,
+                headers={
+                    "Cache-Control": "no-store, max-age=0",
+                    "Referrer-Policy": "no-referrer",
+                    "X-Robots-Tag": "noindex, nofollow",
+                    "X-Content-Type-Options": "nosniff",
+                    "Content-Security-Policy": APP_LOGIN_CONTENT_SECURITY_POLICY,
+                },
+            )
+        sub = handoff["subscription_url"]
+        name = handoff["user_name"]
     sub = sub.strip()
     name = "".join(ch for ch in name if ch.isprintable())[:MAX_USER_NAME_LENGTH].strip()
 
@@ -228,19 +249,43 @@ async def telegram_webhook(request: Request) -> Response:
     Receive Telegram bot updates via webhook.
     Forwards updates to aiogram dispatcher for processing.
     """
+    if not TELEGRAM_WEBHOOK_SECRET:
+        logger.error("Telegram webhook disabled: secret token is not configured")
+        return Response(status_code=503)
+
+    supplied_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not hmac.compare_digest(supplied_secret, TELEGRAM_WEBHOOK_SECRET):
+        return Response(status_code=401)
+
     if not dispatcher:
-        logger.error("Telegram webhook: dispatcher not set")
-        return Response(status_code=500)
+        logger.error("Telegram webhook unavailable: dispatcher not set")
+        return Response(status_code=503)
+
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_TELEGRAM_WEBHOOK_BYTES:
+                return Response(status_code=413)
+        except ValueError:
+            return Response(status_code=400)
+
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > MAX_TELEGRAM_WEBHOOK_BYTES:
+            return Response(status_code=413)
+    try:
+        update = Update.model_validate_json(body)
+    except (ValueError, TypeError):
+        logger.warning("Telegram webhook rejected: invalid update payload")
+        return Response(status_code=400)
 
     try:
-        body = await request.json()
-        update = Update.model_validate(body)
-        bot = app.state.bot  # Get bot from app state
-        await dispatcher.feed_update(bot, update)
+        await dispatcher.feed_update(app.state.bot, update)
         return Response(status_code=200)
-    except Exception as e:
-        logger.error("Telegram webhook error: %s", e)
-        return Response(status_code=200)  # Always return 200 to avoid retries
+    except Exception as exc:
+        logger.error("Telegram webhook processing failed (%s)", type(exc).__name__)
+        return Response(status_code=500)
 
 
 # ---------------------------------------------------------------------------
