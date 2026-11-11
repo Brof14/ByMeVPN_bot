@@ -150,7 +150,8 @@ async def create_yookassa_payment(
         "metadata": metadata,
     }
 
-    should_save_method = is_yookassa_recurring_supported() if save_payment_method is None else bool(save_payment_method)
+    # Saving a payment method requires an explicit caller opt-in; environment defaults are not customer consent.
+    should_save_method = bool(save_payment_method)
     if should_save_method:
         payload["save_payment_method"] = True
 
