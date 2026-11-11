@@ -35,29 +35,38 @@ async def _notify_autorenew_failed(
         from keyboards import my_keys_list_kb
         from database import get_user_keys
 
-        safe_pm_title = escape(str(pm_title or "Сохранённый способ оплаты"))
-        safe_reason = escape(str(reason or ""))
-
+        safe_pm_title = escape(str(pm_title or "сохранённый способ оплаты"))
         if disabled:
             text = (
-                f"<b>Автопродление отключено</b>\n\n"
+                "<b>Автопродление остановлено</b>\n\n"
                 f"Не удалось списать <b>{amount_rub} ₽</b> через {safe_pm_title} "
-                f"после нескольких попыток"
-                f"{f' ({safe_reason})' if safe_reason else ''}.\n\n"
-                f"Ваша подписка истекла. Пожалуйста, продлите доступ вручную, "
-                f"чтобы продолжить пользоваться VPN."
+                "после повторных попыток.\n\n"
+                "Новых автоматических списаний по этому способу оплаты не будет. "
+                "При необходимости продлите VPN вручную."
             )
         else:
             text = (
-                f"<b>Не удалось продлить подписку</b>\n\n"
-                f"Сумма к списанию: <b>{amount_rub} ₽</b>\n"
+                "<b>Автопродление пока не прошло</b>\n\n"
+                f"Планируемая сумма: <b>{amount_rub} ₽</b>\n"
                 f"Способ оплаты: {safe_pm_title}\n\n"
-                f"Проверьте способ оплаты. Мы повторим попытку позже.\n"
-                f"Подписку также можно продлить вручную."
+                "Проверьте способ оплаты. Мы повторим попытку позже. "
+                "Пока доступ активен, повторно платить вручную необязательно."
             )
-
-        keys = await get_user_keys(user_id)
-        kb = my_keys_list_kb(keys) if keys else None
+        from bot_style import themed_button as InlineKeyboardButton
+        from aiogram.types import InlineKeyboardMarkup
+        buttons = []
+        if key_id:
+            buttons.append([InlineKeyboardButton(
+                text="Оплата и автопродление",
+                callback_data=f"manage_payment_methods:{int(key_id)}",
+            )])
+            buttons.append([InlineKeyboardButton(
+                text="Продлить вручную",
+                callback_data=f"key_renew:{int(key_id)}",
+            )])
+        else:
+            buttons.append([InlineKeyboardButton(text="Моя подписка", callback_data="my_keys")])
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
         await bot.send_message(chat_id=user_id, text=text, parse_mode="HTML", reply_markup=kb)
     except Exception as e:
         logger.error("Failed to notify user %d about auto-renewal failure: %s", user_id, e)
