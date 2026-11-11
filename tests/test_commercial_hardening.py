@@ -158,7 +158,10 @@ class FreeRewardAtomicityTests(unittest.IsolatedAsyncioTestCase):
         ):
             await cb_my_keys(callback, object())
         self.assertIn("Подписка активна на сервере", send.await_args.args[2])
-        self.assertIn("поддержка", send.await_args.args[2].lower() + " " + str(callbacks(send.await_args.args[3])))
+        self.assertTrue(any(
+            button.url and "ByMeVPNSupportBot" in button.url
+            for row in send.await_args.args[3].inline_keyboard for button in row
+        ))
 
 
 if __name__ == "__main__":
