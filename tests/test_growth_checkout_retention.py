@@ -102,6 +102,7 @@ class RetentionQualityTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch("notifications.is_promotional_opted_out", new=AsyncMock(return_value=False)),
             patch("database.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value=None)),
             patch("notifications._get_active_autorenew", new=AsyncMock(return_value=None)),
         ):
             self.assertTrue(await _send_winback_notification(bot, item))
@@ -109,6 +110,22 @@ class RetentionQualityTests(unittest.IsolatedAsyncioTestCase):
         actions = [b.callback_data for row in bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard for b in row]
         self.assertIn("marketing_optout", actions)
         self.assertIn("key_renew:4", actions)
+
+    async def test_winback_never_targets_panel_only_active_customer(self):
+        from notifications import _send_winback_notification
+        item = {"user_id": 123, "key_id": 4, "expiry": int(time.time()) - 3 * 86400}
+        bot = SimpleNamespace(send_message=AsyncMock())
+        with (
+            patch("notifications.is_promotional_opted_out", new=AsyncMock(return_value=False)),
+            patch("database.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(
+                return_value={"expiry_time": (int(time.time()) + 7200) * 1000}
+            )),
+            patch("notifications._get_active_autorenew", new=AsyncMock()) as renew,
+        ):
+            self.assertFalse(await _send_winback_notification(bot, item))
+        renew.assert_not_awaited()
+        bot.send_message.assert_not_awaited()
 
     async def test_new_ad_reward_tiers_are_capped(self):
         from database import calculate_bonus_months
