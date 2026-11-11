@@ -513,7 +513,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             await cb_partner(callback, bot)
 
         text = send.call_args.args[2]
-        self.assertIn("<b>Приглашайте друзей. Получайте больше.</b>", text)
+        self.assertIn("<b>Пригласите друга — получите до 45 дней</b>", text)
         self.assertIn("15 дней", text)
         self.assertIn("+30 дней", text)
         self.assertIn("Получено: <b>15 дней</b>", text)
