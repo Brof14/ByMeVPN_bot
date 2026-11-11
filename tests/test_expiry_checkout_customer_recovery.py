@@ -139,7 +139,6 @@ class ExpiryReminderRegression(unittest.IsolatedAsyncioTestCase):
             return {"status": "active", "payment_method_id": "other-key"} if key_id is None else None
         with (
             patch("database.get_auto_renew_subscription", new=AsyncMock(side_effect=lookup)),
-            patch("notifications._optional_renewal_promo", new=AsyncMock(return_value=(None, None))),
         ):
             await _send_urgent_notification(bot, item)
         text = bot.send_message.await_args.args[1]
@@ -152,20 +151,18 @@ class ExpiryReminderRegression(unittest.IsolatedAsyncioTestCase):
         item = {"user_id": 123, "key_id": 456, "expiry": int(time.time()) + 2 * 86400}
         with (
             patch("notifications._get_active_autorenew", new=AsyncMock(return_value=None)),
-            patch("notifications._optional_renewal_promo", new=AsyncMock(return_value=(None, None))),
         ):
             await _send_urgent_notification(bot, item)
         buttons = bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard
         self.assertEqual(buttons[0][0].callback_data, "key_renew:456")
 
-    async def test_optional_promo_failure_never_blocks_expiry_notice(self):
+    async def test_renewal_reminder_needs_no_discount_service(self):
         from notifications import _send_warning_notification
         bot = SimpleNamespace(send_message=AsyncMock())
         item = {"user_id": 123, "key_id": 7, "expiry": int(time.time()) + 10 * 86400}
         with (
             patch("notifications._get_active_autorenew", new=AsyncMock(return_value=None)),
             patch("notifications.is_promotional_opted_out", new=AsyncMock(return_value=False)),
-            patch("notifications.get_or_create_renewal_promo", new=AsyncMock(side_effect=RuntimeError("db outage"))),
         ):
             await _send_warning_notification(bot, item)
         text = bot.send_message.await_args.args[1]
