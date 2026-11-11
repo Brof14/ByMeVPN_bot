@@ -163,85 +163,65 @@ async def _optional_renewal_promo(user_id: int) -> tuple[str | None, dict | None
         return None, None
 
 
-async def _send_urgent_notification(bot: Bot, item: dict) -> None:
-    """Send urgent notification for keys expiring in 1-3 days."""
+async def _send_urgent_notification(bot: Bot, item: dict) -> bool:
+    """Last three days for paid subscriptions; last day for free trials."""
+    remaining = int(item["expiry"]) - int(time.time())
+    if remaining <= 0 or (item.get("is_trial") and remaining > 86400):
+        return False
     sub = await _get_active_autorenew(item["user_id"], item.get("key_id"))
     if sub:
         return await _send_autorenew_upcoming(bot, item, sub)
-
+    days_left = max(1, (remaining + 86399) // 86400)
     date_str = datetime.fromtimestamp(item["expiry"]).strftime("%d.%m.%Y")
-    days_left = max(1, int((item["expiry"] - int(time.time())) / 86400))
-
-    promo_code, promo = await _optional_renewal_promo(item["user_id"])
-    promo_expiry = datetime.fromtimestamp(promo["expires_at"]).strftime("%d.%m.%Y") if promo else None
-    text = (
-        f"<b>До окончания подписки — {days_left} {get_day_word(days_left)}</b>\n\n"
-        f"Доступ активен до <b>{date_str}</b>. Продлите подписку, чтобы пользоваться VPN и дальше.\n\n"
-        + (f"🎁 Промокод <code>{promo_code}</code> даёт <b>30% скидки</b> до {promo_expiry}, пока не исчерпан лимит применений.\n\n" if promo_expiry else "")
-        + "Откройте тарифы, чтобы выбрать срок и лимит устройств."
-    )
-
+    if item.get("is_trial"):
+        text = (
+            "<b>Пробный доступ заканчивается</b>\n\n"
+            f"VPN будет работать до <b>{date_str}</b>. "
+            "Выберите подписку, чтобы продолжить пользоваться без перерыва.\n\n"
+            "Ваш ключ и настройки сохранятся."
+        )
+        action = "Выбрать подписку"
+    else:
+        text = (
+            f"<b>До окончания подписки — {days_left} {get_day_word(days_left)}</b>\n\n"
+            f"Доступ сохранится до <b>{date_str}</b>. "
+            "Продлите заранее: ключ и настройки менять не придётся."
+        )
+        action = "Продлить подписку"
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Продлить подписку", callback_data=_renewal_callback(item), )],
-        [InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn")],
-        *([[InlineKeyboardButton(text="Применить промокод", callback_data=f"activate_promo:{promo_code}")]] if promo_expiry else []),
+        [InlineKeyboardButton(text=action, callback_data=_renewal_callback(item))],
+        [InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn")],
     ])
-
     await bot.send_message(item["user_id"], text, parse_mode="HTML", reply_markup=kb)
     return True
 
 
-async def _send_warning_notification(bot: Bot, item: dict) -> None:
-    """Send warning notification for keys expiring in 7-14 days."""
+async def _send_warning_notification(bot: Bot, item: dict) -> bool:
+    """One polite paid-subscription reminder, without blanket discounting."""
+    if item.get("is_trial"):
+        return False
     sub = await _get_active_autorenew(item["user_id"], item.get("key_id"))
     if sub:
-        # Keep renewal messages to one clear reminder in the final days.
         return False
-
     date_str = datetime.fromtimestamp(item["expiry"]).strftime("%d.%m.%Y")
-    days_left = max(1, int((item["expiry"] - int(time.time())) / 86400))
-
-    promo_code, promo = await _optional_renewal_promo(item["user_id"])
-    promo_expiry = datetime.fromtimestamp(promo["expires_at"]).strftime("%d.%m.%Y") if promo else None
+    days_left = max(1, (int(item["expiry"]) - int(time.time()) + 86399) // 86400)
     text = (
-        f"<b>Подписка активна до {date_str}</b>\n"
-        f"Осталось {days_left} {get_day_word(days_left)}. Продлите заранее, чтобы сохранить непрерывный доступ. Ключи и настройки останутся прежними.\n\n"
-        + (f"🎁 Промокод <code>{promo_code}</code> — <b>30% скидки</b> до {promo_expiry}, пока не исчерпан лимит применений.\n\n" if promo_expiry else "")
-        + "Откройте тарифы, чтобы выбрать срок и лимит устройств."
+        f"<b>Подписка активна до {date_str}</b>\n\n"
+        f"Осталось {days_left} {get_day_word(days_left)}. "
+        "При продлении ключ и настройки останутся прежними.\n\n"
+        "Выберите удобный срок продления."
     )
-
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Продлить подписку", callback_data=_renewal_callback(item), )],
-        [InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn")],
-        *([[InlineKeyboardButton(text="Применить промокод", callback_data=f"activate_promo:{promo_code}")]] if promo_expiry else []),
+        [InlineKeyboardButton(text="Продлить подписку", callback_data=_renewal_callback(item))],
+        [InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn")],
     ])
-
     await bot.send_message(item["user_id"], text, parse_mode="HTML", reply_markup=kb)
     return True
 
 
-async def _send_early_notification(bot: Bot, item: dict) -> None:
-    """Send early notification for keys expiring in 21-30 days."""
-    sub = await _get_active_autorenew(item["user_id"], item.get("key_id"))
-    if sub:
-        # An auto-renewing customer only gets the pre-charge reminder close to billing.
-        return False
-
-    date_str = datetime.fromtimestamp(item["expiry"]).strftime("%d.%m.%Y")
-    days_left = max(1, int((item["expiry"] - int(time.time())) / 86400))
-
-    text = (
-        f"<b>Подписка активна ещё {days_left} {get_day_word(days_left)}</b>\n\n"
-        f"Доступ завершится {date_str}. Откройте тарифы, чтобы выбрать подходящий срок."
-    )
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Посмотреть тарифы", callback_data=_renewal_callback(item), )],
-        [InlineKeyboardButton(text="Получить VPN бесплатно", callback_data="free_vpn")]
-    ])
-
-    await bot.send_message(item["user_id"], text, parse_mode="HTML", reply_markup=kb)
-    return True
+async def _send_early_notification(bot: Bot, item: dict) -> bool:
+    """Retained for compatibility; no sales spam right after purchase."""
+    return False
 
 
 async def _send_expiry_notifications(bot: Bot) -> None:
@@ -253,17 +233,16 @@ async def _send_expiry_notifications(bot: Bot) -> None:
     current_time = int(_time.time())
     
     # Minimum interval between notifications (in seconds)
-    # Urgent (1-3 days): once per 2 days
-    # Warning (7-14 days): once per 10 days
-    # Early (21-30 days): once per 25 days
+    # Urgent (0-3 days): one reminder for an expiring key
+    # Warning (7-10 days): one early reminder for non-recurring customers
+    # No 21-30 day reminder immediately after a monthly purchase
     URGENT_INTERVAL = 2 * 86400      # 2 days
     WARNING_INTERVAL = 10 * 86400    # 10 days
-    EARLY_INTERVAL = 25 * 86400      # 25 days
+
     
     batches = [
-        ("urgent", URGENT_INTERVAL, await get_keys_nearing_expiry(days_min=1, days_max=3), _send_urgent_notification),
-        ("warning", WARNING_INTERVAL, await get_keys_nearing_expiry(days_min=7, days_max=14), _send_warning_notification),
-        ("early", EARLY_INTERVAL, await get_keys_nearing_expiry(days_min=21, days_max=30), _send_early_notification),
+        ("urgent", URGENT_INTERVAL, await get_keys_nearing_expiry(days_min=0, days_max=3), _send_urgent_notification),
+        ("warning", WARNING_INTERVAL, await get_keys_nearing_expiry(days_min=7, days_max=10), _send_warning_notification),
     ]
     # One reminder per user per daily pass; the nearest expiry / highest urgency wins.
     candidates = {}
@@ -437,8 +416,9 @@ async def _referral_nudge_pass(bot: Bot) -> None:
             await bot.send_message(
                 user_id,
                 "<b>Если ByMeVPN оказался полезен</b>\n\n"
-                "Можно получать дополнительные дни: +15 за регистрацию друга, "
-                "+30 после его первой подходящей оплаты, а также VPN за рекламу "
+                "Получайте +15 дней за регистрацию друга и ещё +30 за его "
+                "первую успешную оплату (включая пробную за 1 ₽). "
+                "Также можно получить VPN за рекламу "
                 "в собственном Telegram-канале.\n\n"
                 "Это необязательно. Мы отправляем такое предложение только один раз.",
                 parse_mode="HTML",
@@ -494,7 +474,7 @@ async def _connection_reminder_pass(bot: Bot) -> None:
             await bot.send_message(
                 item["user_id"],
                 "<b>Помочь подключить VPN?</b>\n\n"
-                "По статистике ключ пока не использовался. Нажмите кнопку — подскажем, как добавить его в приложение.",
+                "Похоже, VPN ещё не подключён. Откройте инструкцию — поможем добавить подписку в приложение.",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="Подключить VPN", callback_data=f"key_instructions:{key_id}")],
