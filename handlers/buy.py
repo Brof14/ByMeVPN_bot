@@ -329,6 +329,7 @@ async def _get_checkout_params(state: FSMContext, user_id: int) -> dict | None:
         "months": int(data.get("months", 1)),
         "devices": validate_device_limit(data.get("devices", DEFAULT_DEVICE_LIMIT)),
         "promo_code": data.get("promo_code", ""),
+        "renew_key_id": int(data["renew_key_id"]) if data.get("renew_key_id") else None,
     }
 
 
@@ -464,7 +465,9 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
         return
     try:
         url = await create_yookassa_payment(
-            price_rub, f"ByMeVPN {days} дней ({devices} устр.)", user_id, days, devices, promo_code=promo_code, months=months,
+            price_rub, f"ByMeVPN {days} дней ({devices} устр.)", user_id, days, devices,
+            promo_code=promo_code, months=months,
+            extra_metadata={"key_id": params["renew_key_id"]} if params.get("renew_key_id") else None,
         )
     except Exception as exc:
         # A provider timeout is ambiguous. Never leak internal error details to customers.
