@@ -164,5 +164,40 @@ class FreeRewardAtomicityTests(unittest.IsolatedAsyncioTestCase):
         ))
 
 
+class AutomatedGrowthTests(unittest.IsolatedAsyncioTestCase):
+    async def test_one_time_offer_promotes_ads_and_referrals_with_optout(self):
+        from notifications import _referral_nudge_pass
+        bot = SimpleNamespace(send_message=AsyncMock())
+        with (
+            patch("database.get_due_referral_nudges", new=AsyncMock(return_value=[1001])),
+            patch("notifications.is_promotional_opted_out", new=AsyncMock(return_value=False)),
+            patch("database.log_analytics_event_once", new=AsyncMock(return_value=True)) as only_once,
+            patch("database.log_analytics_event", new=AsyncMock()),
+        ):
+            await _referral_nudge_pass(bot)
+        only_once.assert_awaited_once_with(1001, "referral_nudge_attempted")
+        buttons = callbacks(bot.send_message.await_args.kwargs["reply_markup"])
+        self.assertIn("partner", buttons)
+        self.assertIn("free_vpn", buttons)
+        self.assertIn("marketing_optout", buttons)
+        self.assertTrue(all(
+            button.style in ("primary", "success", "danger")
+            for row in bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ))
+
+    async def test_opted_out_user_never_receives_growth_offer(self):
+        from notifications import _referral_nudge_pass
+        bot = SimpleNamespace(send_message=AsyncMock())
+        with (
+            patch("database.get_due_referral_nudges", new=AsyncMock(return_value=[1001])),
+            patch("notifications.is_promotional_opted_out", new=AsyncMock(return_value=True)),
+            patch("database.log_analytics_event_once", new=AsyncMock()) as only_once,
+        ):
+            await _referral_nudge_pass(bot)
+        bot.send_message.assert_not_awaited()
+        only_once.assert_not_awaited()
+
+
 if __name__ == "__main__":
     unittest.main()
