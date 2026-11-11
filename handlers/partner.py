@@ -16,15 +16,20 @@ from bot_style import themed_button as InlineKeyboardButton
 router = Router()
 
 
-def partner_main_kb(link: str) -> InlineKeyboardMarkup:
-    share_text = quote_plus(
+def referral_share_url(link: str) -> str:
+    """One consistent, editable friend-to-friend invitation everywhere."""
+    text = (
         "Попробуй ByMeVPN — VPN для телефона и компьютера.\n\n"
         "3 дня бесплатно, без карты. Подключение за пару нажатий.\n\n"
         "Это моя ссылка-приглашение: если зарегистрируешься по ней, "
         "мне начислят бонусные дни."
     )
+    return f"https://t.me/share/url?url={quote_plus(link)}&text={quote_plus(text)}"
+
+
+def partner_main_kb(link: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Пригласить друга", url=f"https://t.me/share/url?url={quote_plus(link)}&text={share_text}")],
+        [InlineKeyboardButton(text="Пригласить друга", url=referral_share_url(link))],
         [InlineKeyboardButton(text="Скопировать ссылку", copy_text={"text": link})],
         [InlineKeyboardButton(text="Мои приглашения", callback_data="partner_referrals_list")],
         [InlineKeyboardButton(text="← Назад", callback_data="free_vpn")],
