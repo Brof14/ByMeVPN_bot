@@ -68,7 +68,9 @@ class ExpiryReminderRegression(unittest.IsolatedAsyncioTestCase):
             patch("handlers.buy.validate_promo_code", new=AsyncMock(return_value=promo)),
             patch("handlers.buy.has_user_used_promo", new=AsyncMock(return_value=False)),
             patch("handlers.buy.deliver_key", new=AsyncMock(return_value=True)) as deliver,
-            patch("handlers.buy.record_fulfilled_promo", new=AsyncMock()),
+            patch("database.reserve_free_promo_order", new=AsyncMock(return_value=True)),
+            patch("database.complete_free_promo_order", new=AsyncMock(return_value=True)),
+            patch("handlers.buy.record_fulfilled_promo", new=AsyncMock(return_value=True)),
         ):
             await cb_select_tariff(callback, object(), state)
         self.assertIn("Доступ активирован", send.await_args.args[2])

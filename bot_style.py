@@ -221,7 +221,7 @@ def _icon_for(text: str, callback: str, *, copy: bool, destructive: bool, back: 
     if callback.startswith("tariff_1_"):
         return ICON_IDS["tariff_1"]
     if callback.startswith(("tariff_3_", "tariff_6_", "tariff_12_")):
-        return ICON_IDS["gift"]
+        return ICON_IDS["tariff_1"]
     if callback.startswith("autorenew_enable:"):
         return ICON_IDS["notifications_on"]
     if callback.startswith(("autorenew_unbind", "autorenew_cancel")):
@@ -243,7 +243,7 @@ def _button_style(label: str, callback: str, *, destructive: bool, navigation: b
     """Keep every button colored: blue actions, green claims, red destructive actions."""
     if destructive:
         return "danger"
-    if callback in {"trial_free", "channel_bonus_check"}:
+    if callback in {"trial_free", "channel_bonus_check", "free_vpn"}:
         return "success"
     return "primary"
 
@@ -251,8 +251,8 @@ def _button_style(label: str, callback: str, *, destructive: bool, navigation: b
 def themed_button(*args, **kwargs) -> TelegramInlineKeyboardButton:
     """Apply a coherent style and optional premium icon to any button.
 
-    Callers may override the exact style or icon. Navigation is neutral,
-    common customer actions blue, trial green, destructive actions red.
+    Callers may override the exact style or icon. Every button remains colored:
+    navigation and standard actions blue, reward actions green, destructive red.
     """
     label = str(kwargs.get("text") or (args[0] if args else ""))
     callback = str(kwargs.get("callback_data") or "")

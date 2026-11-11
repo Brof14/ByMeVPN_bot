@@ -380,11 +380,11 @@ async def _deliver_key_unlocked(
                 int(xui_client.get("expiry_time") or 0) // 1000,
                 int(time.time()),
             ) + days * 86400
-            if payload and (is_paid or method == "channel_bonus"):
+            if payload and (is_paid or method in {"channel_bonus", "promo"}):
                 target_expiry = await database.get_or_create_provisioning_intent(
                     method, payload, user_id, target_expiry
                 )
-            if payload and (is_paid or method == "channel_bonus") and target_expiry < int(xui_client.get("expiry_time") or 0) // 1000:
+            if payload and (is_paid or method in {"channel_bonus", "promo"}) and target_expiry < int(xui_client.get("expiry_time") or 0) // 1000:
                 logger.error("Order %s requires panel reconciliation for user %d", payload, user_id)
                 return False
             xui_res = await update_xui_user(
@@ -472,7 +472,9 @@ async def _deliver_key_unlocked(
         logger.info("deliver_key: user=%d name='%s' days=%d limit_ip=%d method=%s", user_id, config_name, days, limit_ip, method)
 
         target_expiry = int(time.time()) + days * 86400
-        if is_paid and payload:
+        # Free channel grants and fully discounted promo orders need exactly
+        # the same immutable target-expiry guarantee as paid orders.
+        if payload and (is_paid or method in {"channel_bonus", "promo"}):
             target_expiry = await database.get_or_create_provisioning_intent(
                 method, payload, user_id, target_expiry
             )

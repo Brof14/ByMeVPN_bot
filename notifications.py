@@ -437,12 +437,16 @@ async def _referral_nudge_pass(bot: Bot) -> None:
             await bot.send_message(
                 user_id,
                 "<b>Если ByMeVPN оказался полезен</b>\n\n"
-                "Можете пригласить друга и получить бонусные дни: "
-                "+15 дней за регистрацию и +30 дней за его первую подходящую оплату.\n\n"
-                "Это необязательно.",
+                "Можно получать дополнительные дни: +15 за регистрацию друга, "
+                "+30 после его первой подходящей оплаты, а также VPN за рекламу "
+                "в собственном Telegram-канале.\n\n"
+                "Это необязательно. Мы отправляем такое предложение только один раз.",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="Пригласить друга", callback_data="partner")],
+                    [
+                        InlineKeyboardButton(text="Пригласить друга", callback_data="partner"),
+                        InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"),
+                    ],
                     [InlineKeyboardButton(text="Отключить предложения", callback_data="marketing_optout")],
                 ]),
             )

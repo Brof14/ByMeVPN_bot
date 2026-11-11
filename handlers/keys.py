@@ -8,7 +8,7 @@ from html import escape
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import StateFilter
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup
 
 from database import (
     get_user_keys, get_key_by_id, delete_key_by_id,
@@ -21,7 +21,7 @@ from keyboards import (
     payment_kb, back_to_menu, connection_guide_kb, tariff_selection_kb,
     autorenew_cancel_confirm_kb, manage_payment_methods_kb, key_settings_kb,
     key_devices_kb, key_device_detail_kb, confirm_delete_device_kb, key_history_kb,
-    confirm_reissue_kb,
+    confirm_reissue_kb, support_url,
 )
 from utils import send_with_photo, send_or_edit, safe_answer
 from constants import format_timestamp as fmt_date, format_days_left as fmt_days_left
@@ -89,11 +89,78 @@ async def cb_my_keys(callback: CallbackQuery, bot: Bot):
     keys = await get_user_keys(user_id)
 
     if not keys:
-        text = (
-            "Пока нет активной подписки.\n\n"
-            "Выберите тариф или получите дополнительные дни в разделе «Бесплатные дни»."
-        )
-        await send_with_photo(bot, callback, text, back_to_menu(), photo=KEY)
+        # 3x-ui may retain a valid entitlement while the local SQLite key
+        # needs reconciliation. Do not contradict the active home screen or
+        # silently create/charge a second subscription.
+        from xui_client import get_xui_client_details
+        panel_error = False
+        try:
+            panel = await get_xui_client_details(user_id, strict=True)
+        except Exception:
+            logger.exception("Panel entitlement unavailable for user %d", user_id)
+            panel, panel_error = None, True
+        if isinstance(panel, dict):
+            enabled = str(panel.get("enable")).strip().lower() in {"true", "1", "yes", "on"}
+            expires = int(panel.get("expiry_time") or 0) // 1000
+            if enabled and expires > int(time.time()):
+                # Automatic, read-only panel import: no new VPN user, no
+                # expiry extension, no billing, and no device-limit changes.
+                try:
+                    from panel_recovery import restore_panel_only_subscription
+                    restored_key_id = await restore_panel_only_subscription(user_id, panel)
+                except Exception:
+                    logger.exception("Panel-only subscription import failed for user %d", user_id)
+                    restored_key_id = None
+                if restored_key_id is not None:
+                    restored = await get_key_by_id(restored_key_id)
+                    if restored and restored.get("user_id") == user_id:
+                        content, keyboard = await _key_info_content(user_id, restored)
+                        await send_or_edit(bot, callback, content, keyboard, photo=KEY)
+                        return
+                from app_links import build_connect_page_url
+                from constants import format_timestamp
+                buttons = []
+                sub_url = str(panel.get("subscription_url") or "")
+                if sub_url:
+                    try:
+                        connect_url = build_connect_page_url(sub_url)
+                    except (RuntimeError, ValueError):
+                        connect_url = None
+                    if connect_url:
+                        buttons.append([InlineKeyboardButton(text="Подключить VPN", url=connect_url)])
+                buttons.extend([
+                    [InlineKeyboardButton(text="Восстановить данные · поддержка", url=support_url())],
+                    [InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn")],
+                    [InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu")],
+                ])
+                await send_with_photo(
+                    bot, callback,
+                    "<b>Подписка активна на сервере</b>\n\n"
+                    f"Действует до: <b>{format_timestamp(expires)[:10]}</b>\n"
+                    "Локальные данные требуют синхронизации. Повторно оплачивать не нужно.",
+                    InlineKeyboardMarkup(inline_keyboard=buttons), photo=KEY,
+                )
+                return
+        if panel_error:
+            text = (
+                "Не удалось проверить состояние подписки на сервере.\n\n"
+                "Повторная оплата не требуется. Попробуйте позже или откройте поддержку."
+            )
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Поддержка", url=support_url())],
+                [InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu")],
+            ])
+        else:
+            text = (
+                "Пока нет активной подписки.\n\n"
+                "Выберите тариф или получите дополнительные дни в разделе «Бесплатные дни»."
+            )
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn")],
+                [InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn")],
+                [InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu")],
+            ])
+        await send_with_photo(bot, callback, text, keyboard, photo=KEY)
         return
 
     now = int(time.time())
@@ -176,6 +243,7 @@ async def _key_info_content(user_id: int, k: dict) -> tuple[str, object]:
 
     return text, key_detail_kb(
         key_id, subscription_url=subscription_url, has_history=has_history,
+        is_active=k["expiry"] > now,
     )
 
 

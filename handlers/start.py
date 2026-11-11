@@ -34,7 +34,8 @@ from database import (
 from app_links import build_app_login_url, build_app_redirect_url
 from config import CHANNEL_BONUS_CHAT_ID, CHANNEL_BONUS_URL
 from keyboards import (
-    main_menu_new_user, main_menu_existing, main_menu_with_keys, main_menu_active, main_menu_expired,
+    main_menu_new_user, main_menu_existing, main_menu_with_keys, main_menu_active,
+    main_menu_panel_active, main_menu_expired,
     back_to_menu, cancel_kb, support_url, app_open_kb,
 )
 from utils import send_with_photo, safe_answer, get_cached_bot_info
@@ -257,6 +258,7 @@ async def _send_main_menu(
             "ваш доступ и платежи не изменены. Попробуйте немного позже."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn")],
             [InlineKeyboardButton(text="Поддержка", url=support_url())],
             [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
         ])
@@ -358,6 +360,10 @@ async def _send_main_menu(
         # With multiple active subscriptions, let the customer choose.
         if len(active_keys) == 1:
             kb = main_menu_active(int(active_keys[0]["id"]), str(active_keys[0].get("key") or ""))
+        elif not active_keys and _panel_client_is_active(panel_client):
+            # Keep the home screen usable if the VPN panel is authoritative but
+            # SQLite has not yet imported the entitlement.
+            kb = main_menu_panel_active(str(panel_client.get("subscription_url") or ""))
         else:
             kb = main_menu_with_keys(trial_used=True)
 
@@ -842,15 +848,27 @@ async def cb_free_vpn(callback: CallbackQuery, bot: Bot):
         await log_analytics_event(callback.from_user.id, "channel_bonus_offered", source="free_days")
     except Exception:
         logger.debug("Could not record free-days offer exposure")
+    from database import get_channel_subscription_bonus_status
+    try:
+        channel_status = await get_channel_subscription_bonus_status(callback.from_user.id)
+    except Exception:
+        logger.exception("Could not read channel reward state for user %d", callback.from_user.id)
+        channel_status = None
+    reward_rows = (
+        [[InlineKeyboardButton(text="+10 дней уже начислены · подписка", callback_data="my_keys")]]
+        if channel_status == "awarded" else
+        [[InlineKeyboardButton(text="Подписаться на канал · +10 дней", url=CHANNEL_BONUS_URL)],
+         [InlineKeyboardButton(text="Проверить подписку · получить +10 дней", callback_data="channel_bonus_check", style="success")]]
+    )
     text = (
         "<b>Больше доступа — без оплаты.</b>\n\n"
         "Получайте дни за приглашения друзей, подписку на канал или размещение "
-        "рекламы в своём Telegram-канале. Бонус за подписку можно получить один раз; начисленные дни останутся у вас, даже если вы позже отпишетесь.\n\n"
-        "Выберите удобный способ:"
+        "рекламы в своём Telegram-канале. За канал начисляется +10 дней один раз.\n\n"
+        + ("Бонус за канал уже получен.\n\n" if channel_status == "awarded" else "")
+        + "Выберите удобный способ:"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Подписаться на канал · +10 дней", url=CHANNEL_BONUS_URL)],
-        [InlineKeyboardButton(text="Проверить подписку · получить +10 дней", callback_data="channel_bonus_check", style="success")],
+        *reward_rows,
         [InlineKeyboardButton(text="Пригласить друзей", callback_data="partner")],
         [InlineKeyboardButton(text="VPN за рекламу", callback_data="ad_program")],
         [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu")],
@@ -883,9 +901,28 @@ async def cb_channel_bonus_check(callback: CallbackQuery, bot: Bot):
         await safe_answer(callback, "Сначала подпишитесь на канал, затем нажмите «Проверить подписку».", alert=True)
         return
 
-    from database import reserve_channel_subscription_bonus, complete_channel_subscription_bonus, log_analytics_event
-    if not await reserve_channel_subscription_bonus(user_id):
-        await safe_answer(callback, "Бонус уже начислен или проверяется. Если дни не появились, напишите в поддержку.", alert=True)
+    from database import (
+        reserve_channel_subscription_bonus, complete_channel_subscription_bonus,
+        get_channel_subscription_bonus_status, log_analytics_event,
+    )
+    try:
+        reserved = await reserve_channel_subscription_bonus(user_id)
+    except Exception:
+        logger.exception("Could not reserve channel reward for user %d", user_id)
+        await safe_answer(callback, "Не удалось проверить выдачу бонуса. Попробуйте позже.", alert=True)
+        return
+    if not reserved:
+        try:
+            status = await get_channel_subscription_bonus_status(user_id)
+        except Exception:
+            logger.exception("Could not read channel reward state for user %d", user_id)
+            status = None
+        message = (
+            "Бонус +10 дней уже начислен."
+            if status == "awarded" else
+            "Бонус уже проверяется. Повторите попытку позже; не нужно оформлять новый доступ."
+        )
+        await safe_answer(callback, message, alert=True)
         return
 
     try:
@@ -910,9 +947,19 @@ async def cb_channel_bonus_check(callback: CallbackQuery, bot: Bot):
         return
 
     try:
-        await complete_channel_subscription_bonus(user_id)
+        recorded = await complete_channel_subscription_bonus(user_id)
     except Exception:
         logger.exception("Could not finalize channel bonus ledger for user %d", user_id)
+        recorded = False
+    if not recorded:
+        # Actual provisioning may have succeeded. Never mark the user as
+        # definitively awarded until the durable ledger confirms it.
+        await safe_answer(
+            callback, "Доступ мог быть продлён, но подтверждение ещё проверяется. "
+            "Не нажимайте повторно; при необходимости обратитесь в поддержку.",
+            alert=True,
+        )
+        return
     try:
         await log_analytics_event(user_id, "channel_bonus_awarded", source="telegram_channel")
     except Exception:

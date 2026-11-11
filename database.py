@@ -6745,39 +6745,161 @@ async def close_db() -> None:
         _db_pool = None
 
 
-# One award per Telegram ID. A reserved row is intentionally retained after an
-# uncertain delivery so retries cannot accidentally grant a duplicate reward.
-async def reserve_channel_subscription_bonus(user_id: int) -> bool:
+# One reward per Telegram user. A separate SQLite lease prevents concurrent
+# delivery attempts, while an immutable provisioning intent makes uncertain
+# retries safe after a worker crashes. Never clear an awarded record.
+_CHANNEL_BONUS_LEASE_SECONDS = 900
+
+
+async def get_channel_subscription_bonus_status(user_id: int) -> str | None:
+    """Return 'reserved', 'awarded', or None; never infer an award from a click."""
     db = await get_db()
-    await db.execute("""
-        CREATE TABLE IF NOT EXISTS channel_subscription_bonus (
-            user_id INTEGER PRIMARY KEY,
-            status TEXT NOT NULL DEFAULT 'reserved',
-            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-            awarded_at INTEGER
+    table = await (await db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='channel_subscription_bonus'"
+    )).fetchone()
+    if not table:
+        return None
+    row = await (await db.execute(
+        "SELECT status FROM channel_subscription_bonus WHERE user_id=?", (int(user_id),)
+    )).fetchone()
+    return str(row[0]) if row else None
+
+
+async def reserve_channel_subscription_bonus(user_id: int) -> bool:
+    """Lease an unawarded reward atomically across all bot workers.
+
+    A crashed/uncertain attempt can retry after the lease expires. Its target
+    expiry remains immutable in provisioning_intents, so it cannot add 10 days
+    twice. Other callbacks must not run provisioning while the lease is live.
+    """
+    user_id = int(user_id)
+    if user_id <= 0:
+        return False
+    now = int(time.time())
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS channel_subscription_bonus (
+                user_id INTEGER PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'reserved',
+                created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                awarded_at INTEGER
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS channel_subscription_bonus_leases (
+                user_id INTEGER PRIMARY KEY,
+                expires_at INTEGER NOT NULL
+            )
+        """)
+        await db.execute(
+            "INSERT OR IGNORE INTO channel_subscription_bonus(user_id, status) VALUES(?, 'reserved')",
+            (user_id,),
         )
-    """)
-    await db.execute(
-        "INSERT OR IGNORE INTO channel_subscription_bonus(user_id, status) VALUES(?, 'reserved')",
-        (int(user_id),),
-    )
-    cur = await db.execute(
-        "SELECT status FROM channel_subscription_bonus WHERE user_id=?",
-        (int(user_id),),
-    )
-    row = await cur.fetchone()
-    await db.commit()
-    # A reserved reward can be retried safely: channel_bonus provisioning keeps
-    # one immutable expiry target. Awarded rows remain permanently closed.
-    return bool(row and row[0] == "reserved")
+        row = await (await db.execute(
+            "SELECT status FROM channel_subscription_bonus WHERE user_id=?", (user_id,)
+        )).fetchone()
+        if not row or row[0] != "reserved":
+            await db.rollback()
+            return False
+        claim = await db.execute("""
+            INSERT INTO channel_subscription_bonus_leases(user_id, expires_at)
+            VALUES(?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET expires_at=excluded.expires_at
+            WHERE channel_subscription_bonus_leases.expires_at <= ?
+        """, (user_id, now + _CHANNEL_BONUS_LEASE_SECONDS, now))
+        reserved = claim.rowcount == 1
+        if reserved:
+            await db.commit()
+        else:
+            await db.rollback()
+        return reserved
 
 
 async def complete_channel_subscription_bonus(user_id: int) -> bool:
-    db = await get_db()
-    cur = await db.execute(
-        "UPDATE channel_subscription_bonus SET status='awarded', awarded_at=strftime('%s','now') "
-        "WHERE user_id=? AND status='reserved'",
-        (int(user_id),),
-    )
-    await db.commit()
-    return cur.rowcount == 1
+    """Finalize once. Keep the claim on any failed/uncertain provisioning."""
+    user_id = int(user_id)
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        result = await db.execute(
+            "UPDATE channel_subscription_bonus SET status='awarded', awarded_at=strftime('%s','now') "
+            "WHERE user_id=? AND status='reserved'",
+            (user_id,),
+        )
+        if result.rowcount == 1:
+            await db.execute(
+                "DELETE FROM channel_subscription_bonus_leases WHERE user_id=?", (user_id,)
+            )
+        await db.commit()
+        return result.rowcount == 1
+
+
+# Free orders are financially different from paid webhooks: no payment provider
+# enforces a unique invoice. Freeze the first selected entitlement and reserve
+# scarce promo capacity before calling 3x-ui. Retried calls reuse that order.
+async def reserve_free_promo_order(
+    user_id: int, code: str, months: int, devices: int, days: int,
+) -> bool:
+    user_id, months, devices, days = int(user_id), int(months), int(devices), int(days)
+    code = str(code).strip().upper()
+    if user_id <= 0 or not code or months <= 0 or devices <= 0 or days <= 0:
+        return False
+    now = int(time.time())
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS free_promo_orders (
+                user_id INTEGER NOT NULL,
+                code TEXT NOT NULL,
+                months INTEGER NOT NULL,
+                devices INTEGER NOT NULL,
+                days INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at INTEGER NOT NULL,
+                awarded_at INTEGER,
+                PRIMARY KEY (user_id, code)
+            )
+        """)
+        existing = await (await db.execute(
+            "SELECT months, devices, days, status FROM free_promo_orders WHERE user_id=? AND code=?",
+            (user_id, code),
+        )).fetchone()
+        if existing:
+            await db.rollback()
+            return (existing[3] == "pending" and
+                    tuple(int(v) for v in existing[:3]) == (months, devices, days))
+        promo = await (await db.execute(
+            "SELECT max_uses, uses_count, is_active, start_date, expires_at "
+            "FROM promo_codes WHERE code=?", (code,),
+        )).fetchone()
+        if (not promo or not promo[2] or int(promo[3] or 0) > now
+                or int(promo[4] or 0) < now):
+            await db.rollback()
+            return False
+        outstanding = await (await db.execute(
+            "SELECT COUNT(*) FROM free_promo_orders WHERE code=? AND status='pending'",
+            (code,),
+        )).fetchone()
+        if int(promo[1]) + int(outstanding[0]) >= int(promo[0]):
+            await db.rollback()
+            return False
+        await db.execute(
+            "INSERT INTO free_promo_orders(user_id, code, months, devices, days, created_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (user_id, code, months, devices, days, now),
+        )
+        await db.commit()
+        return True
+
+
+async def complete_free_promo_order(user_id: int, code: str) -> bool:
+    """Mark the entitlement complete only after delivery and promo accounting."""
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        updated = await db.execute(
+            "UPDATE free_promo_orders SET status='awarded', awarded_at=? "
+            "WHERE user_id=? AND code=? AND status='pending'",
+            (int(time.time()), int(user_id), str(code).strip().upper()),
+        )
+        await db.commit()
+        return updated.rowcount == 1
