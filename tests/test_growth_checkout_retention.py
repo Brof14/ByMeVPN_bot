@@ -20,6 +20,35 @@ class CheckoutUxTests(unittest.IsolatedAsyncioTestCase):
             for row in disabled.inline_keyboard for b in row
         ))
 
+    def test_ten_device_renewal_matches_approved_screen(self):
+        from handlers.buy import _tariff_intro
+        from keyboards import tariff_selection_kb
+        with patch.dict("os.environ", {"BOT_PREMIUM_BUTTON_ICONS": "0"}):
+            kb = tariff_selection_kb(devices=10)
+        expected = [
+            ("devtier_2", "2 устройства"),
+            ("devtier_5", "5 устройств"),
+            ("devtier_10", "✓ 10 устройств"),
+            ("tariff_1_10", "1 мес. — 129 ₽"),
+            ("tariff_3_10", "3+1 мес. 🎁 — 119 ₽/мес. · 476 ₽"),
+            ("tariff_6_10", "6+2 мес. 🎁 — 109 ₽/мес. · 872 ₽"),
+            ("tariff_12_10", "12+3 мес. 🎁 — 99 ₽/мес. · 1 485 ₽"),
+            ("back_to_menu", "← Назад"),
+        ]
+        actual = [
+            (button.callback_data, button.text)
+            for row in kb.inline_keyboard for button in row
+        ]
+        self.assertEqual(actual, expected)
+        self.assertTrue(all(len(row) == 1 for row in kb.inline_keyboard))
+        self.assertEqual(
+            _tariff_intro(10, renewal=True),
+            "<b>Продление подписки</b>\\n\\n"
+            "10 устройств — для вас и ваших близких.\\n\\n"
+            "Выберите срок подписки. Чем дольше срок, тем ниже стоимость месяца.\\n"
+            "Полная сумма указана в каждом тарифе.",
+        )
+
     def test_checkout_uses_bundles_and_discloses_future_charge(self):
         from handlers.buy import _checkout_confirmation_text
         base = {
