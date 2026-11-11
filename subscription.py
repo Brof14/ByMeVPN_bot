@@ -221,7 +221,7 @@ async def _deliver_key_unlocked(
             
             base_time = max(old_expiry or 0, current_time)
             new_expiry = base_time + days * 86400
-            if payload and (is_paid or method == "channel_bonus"):
+            if payload and (is_paid or method in {"channel_bonus", "promo"}):
                 new_expiry = await database.get_or_create_provisioning_intent(
                     method, payload, user_id, new_expiry
                 )
