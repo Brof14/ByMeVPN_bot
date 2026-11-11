@@ -274,9 +274,9 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
     text += (
         "\nДоступ активируется после подтверждения оплаты.\n\n"
         "<b>Автопродление</b>\n"
-        "При сохранении способа оплаты в ЮKassa подписка может автоматически "
-        f"продлеваться на {days} дней за {price_rub} ₽. Условия и возможность отключения "
-        "доступны в разделе «Оплата и автопродление».\n\n"
+        f"Разовый платёж через ЮKassa не включает автопродление. Для него выберите отдельную кнопку "
+        f"ЮKassa с автопродлением: тогда по окончании срока будет списываться {price_rub} ₽ за {days} дней. "
+        "Отключить его можно в разделе «Оплата и автопродление».\n\n"
         "Telegram Stars и CryptoBot — разовые платежи.\n\n"
         "Продолжая, вы принимаете условия <a href='https://telegra.ph/Publichnaya-oferta-na-okazanie-uslug-ByMeVPN-10-25'>оферты</a> и "
         "<a href='https://telegra.ph/Politika-v-otnoshenii-obrabotki-personalnyh-dannyh-ByMeVPN-10-25'>политики конфиденциальности</a>.\n\n"
@@ -446,7 +446,7 @@ async def cb_pay_stars(callback: CallbackQuery, bot: Bot, state: FSMContext):
 # Payment: YooKassa
 # ---------------------------------------------------------------------------
 
-@router.callback_query(F.data == "pay_yookassa")
+@router.callback_query(F.data.in_({"pay_yookassa", "pay_yookassa_autorenew"}))
 async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await safe_answer(callback)
     params = await _get_checkout_params(state, callback.from_user.id)
@@ -459,6 +459,7 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
     devices: int = params["devices"]
     promo_code: str = params["promo_code"]
     user_id = callback.from_user.id
+    save_payment_method = callback.data == "pay_yookassa_autorenew"
 
     if not claim_yookassa_checkout(user_id):
         await callback.message.answer("Запрос на оплату уже выполняется. Подождите немного.")
@@ -467,7 +468,11 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
         url = await create_yookassa_payment(
             price_rub, f"ByMeVPN {days} дней ({devices} устр.)", user_id, days, devices,
             promo_code=promo_code, months=months,
-            extra_metadata={"key_id": params["renew_key_id"]} if params.get("renew_key_id") else None,
+            extra_metadata={
+                **({"key_id": params["renew_key_id"]} if params.get("renew_key_id") else {}),
+                **({"auto_renew_consent": "1"} if save_payment_method else {}),
+            },
+            save_payment_method=save_payment_method,
         )
     except Exception as exc:
         # A provider timeout is ambiguous. Never leak internal error details to customers.
