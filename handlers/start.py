@@ -843,7 +843,7 @@ async def cb_free_vpn(callback: CallbackQuery, bot: Bot):
     text = (
         "<b>Больше доступа — без оплаты.</b>\n\n"
         "Получайте дни за приглашения друзей, подписку на канал или размещение "
-        "рекламы в своём Telegram-канале. Бонус за подписку можно получить один раз.\n\n"
+        "рекламы в своём Telegram-канале. Бонус за подписку можно получить один раз; начисленные дни останутся у вас, даже если вы позже отпишетесь.\n\n"
         "Выберите удобный способ:"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -907,7 +907,10 @@ async def cb_channel_bonus_check(callback: CallbackQuery, bot: Bot):
         await safe_answer(callback, "Запрос принят, но выдачу нужно проверить. Напишите в поддержку, если бонус не появился.", alert=True)
         return
 
-    await complete_channel_subscription_bonus(user_id)
+    try:
+        await complete_channel_subscription_bonus(user_id)
+    except Exception:
+        logger.exception("Could not finalize channel bonus ledger for user %d", user_id)
     try:
         await log_analytics_event(user_id, "channel_bonus_awarded", source="telegram_channel")
     except Exception:
