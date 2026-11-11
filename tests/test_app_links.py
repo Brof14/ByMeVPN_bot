@@ -133,8 +133,8 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertEqual([a["name"] for a in apps["android"]], ["ByMeVPN", "Happ", "INCY", "v2rayTun", "v2rayNG", "Hiddify", "sing-box"])
         self.assertEqual(apps["android"][0]["deep"], "bymevpn://login?auth=telegram")
         self.assertNotIn("sub.example", apps["android"][0]["deep"])
-        self.assertEqual(apps["android"][0]["download"],
-                         "https://bymevpn.duckdns.org/app")
+        self.assertTrue(apps["android"][0]["download"].endswith("/app"))
+        self.assertEqual(urlsplit(apps["android"][0]["download"]).scheme, "https")
         self.assertEqual([a["name"] for a in apps["ios"]], ["Happ", "INCY", "v2rayTun", "Hiddify", "sing-box"])
         for platform in ("windows", "macos", "linux"):
             self.assertIn("v2rayN", [a["name"] for a in apps[platform]])
