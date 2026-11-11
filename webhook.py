@@ -169,7 +169,7 @@ async def app_login_redirect(sub: str = "", name: str = "", ticket: str = ""):
         name = handoff["user_name"]
     elif sub:
         return HTMLResponse(
-            "Ссылка устарела. <a href="https://t.me/ByMeVPNSupportBot">Откройте поддержку</a> или вернитесь в бот и снова нажмите «Подключить VPN».",
+            "Ссылка устарела. <a href='https://t.me/ByMeVPNSupportBot'>Откройте поддержку</a> или вернитесь в бот и снова нажмите «Подключить VPN».",
             status_code=400,
             headers={
                 "Cache-Control": "no-store, max-age=0",
