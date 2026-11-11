@@ -8,7 +8,7 @@ from html import escape
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import StateFilter
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup
 
 from database import (
     get_user_keys, get_key_by_id, delete_key_by_id,
@@ -21,7 +21,7 @@ from keyboards import (
     payment_kb, back_to_menu, connection_guide_kb, tariff_selection_kb,
     autorenew_cancel_confirm_kb, manage_payment_methods_kb, key_settings_kb,
     key_devices_kb, key_device_detail_kb, confirm_delete_device_kb, key_history_kb,
-    confirm_reissue_kb,
+    confirm_reissue_kb, support_url,
 )
 from utils import send_with_photo, send_or_edit, safe_answer
 from constants import format_timestamp as fmt_date, format_days_left as fmt_days_left
