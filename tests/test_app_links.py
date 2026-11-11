@@ -156,7 +156,7 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertIn("Выберите приложение и подключитесь", page)
         self.assertIn("https://bymevpn.duckdns.org/app/downloads/ByMeVPN-v1.0.14.apk", page)
         self.assertIn("Рекомендуем", page)
-        self.assertIn('<details id="alternatives" open>', page)
+        self.assertIn('<details id="alternatives">', page)
         self.assertIn('id="copy-subscription"', page)
         self.assertEqual(page.count("Скопировать ссылку"), 1)
         self.assertNotIn("Если не открылось — скопировать ссылку", page)
