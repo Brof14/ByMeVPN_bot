@@ -23,7 +23,7 @@
 | Mac | MacBook / Apple icons | `5323440478232783499` |
 | Android TV | Television / TopicIcons | `5355012477883004708` |
 
-Tariff buttons use the catalog calendar `6023880246128810031` for all durations. Gift icons were removed from these buttons because the current calculation charges for the full included period. The actual prices and durations remain the existing purchase contract.
+Tariff buttons use the calendar `6023880246128810031` for 1 month and one consistent custom gift icon `6023826881160157558` for 3+1, 6+2 and 12+3 bundles. The gift mark describes the longer **bundled period**, not zero-price months: the total payable amount is shown directly on each button, and the calculation charges for the entire delivered period.
 
 ## UX release checklist
 1. Check button icons on Android Telegram, iOS Telegram and Telegram Desktop, both dark and light theme. Compare stroke weight, cropping, animation, tap targets and legibility; replace visibly mismatched exceptions after actual visual review.
