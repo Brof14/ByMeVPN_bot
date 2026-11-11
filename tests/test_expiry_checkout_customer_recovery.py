@@ -524,7 +524,7 @@ class PlatformGuideRegression(unittest.IsolatedAsyncioTestCase):
 
 class PaymentProviderFailures(unittest.IsolatedAsyncioTestCase):
     def callback(self):
-        return SimpleNamespace(from_user=SimpleNamespace(id=123), message=SimpleNamespace(answer=AsyncMock()))
+        return SimpleNamespace(data="pay_yookassa", from_user=SimpleNamespace(id=123), message=SimpleNamespace(answer=AsyncMock()))
 
     def state(self):
         return SimpleNamespace(get_data=AsyncMock(return_value={
