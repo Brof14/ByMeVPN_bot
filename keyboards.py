@@ -165,8 +165,12 @@ def payment_kb(price_rub: int, days: int, devices: int = DEFAULT_DEVICE_LIMIT, y
         callback_data="pay_stars",
     ))
     kb.row(InlineKeyboardButton(
-        text=f"ЮKassa · {price_rub} ₽",
+        text=f"ЮKassa · {price_rub} ₽ · разово",
         callback_data="pay_yookassa",
+    ))
+    kb.row(InlineKeyboardButton(
+        text=f"ЮKassa · {price_rub} ₽ · с автопродлением",
+        callback_data="pay_yookassa_autorenew",
     ))
     kb.row(InlineKeyboardButton(
         text=f"CryptoBot · {price_rub} ₽",
