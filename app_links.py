@@ -268,12 +268,13 @@ def render_connection_choice_page(subscription_url: str, user_name: str = "") ->
     """Render a responsive branded OS/app chooser with verified import fallbacks."""
     sub = _js_string(subscription_url)
     encoded_sub = quote(subscription_url, safe="")
+    bymevpn_download = f"{APP_PUBLIC_URL.rstrip('/')}/app"
     tun = {"name": "v2rayTun", "icon": "v2raytun", "deep": "v2raytun://import/" + subscription_url, "download": "https://v2raytun.com/"}
     hiddify = {"name": "Hiddify", "icon": "hiddify", "deep": "hiddify://install-sub?url=" + encoded_sub + "#ByMeVPN", "download": "https://github.com/hiddify/hiddify-app/releases/latest"}
     singbox = {"name": "sing-box", "icon": "singbox", "manual": True, "note": "Требуется конфигурация sing-box в формате JSON; обычная ссылка подписки может не подойти.", "download": "https://sing-box.sagernet.org/clients/"}
     apps = {
         "android": [
-            {"name": "ByMeVPN", "icon": "bymevpn", "deep": build_app_telegram_auth_url(), "download": "https://bymevpn.duckdns.org/app/downloads/ByMeVPN-v1.0.14.apk"},
+            {"name": "ByMeVPN", "icon": "bymevpn", "deep": build_app_telegram_auth_url(), "download": bymevpn_download},
             {"name": "Happ", "icon": "happ", "deep": "happ://add/" + subscription_url, "download": "https://github.com/Happ-proxy/happ-android/releases/latest"},
             {"name": "INCY", "icon": "incy", "deep": "incy://import/" + subscription_url, "download": "https://play.google.com/store/apps/details?id=llc.itdev.incy"},
             tun,
