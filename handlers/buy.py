@@ -6,7 +6,6 @@ import asyncio
 import time
 import logging
 import weakref
-from urllib.parse import quote_plus
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
@@ -476,10 +475,6 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
 
     if not url:
         await safe_answer(callback)
-        support_text = quote_plus(
-            f"Здравствуйте! Не открывается оплата ByMeVPN через ЮKassa. "
-            f"Хочу оплатить картой: {days} дней, {devices} устройства, {price_rub} ₽."
-        )
         await callback.message.answer(
             "Не удалось открыть оплату через ЮKassa.\n\n"
             "Напишите в поддержку — поможем оплатить подписку банковской картой. "
@@ -487,7 +482,7 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
                     text="💬 Оплатить картой через поддержку",
-                    url=f"https://t.me/ByMeVPNSupportBot?text={support_text}",
+                    url="https://t.me/ByMeVPNSupportBot",
                 )],
                 [InlineKeyboardButton(text="Оплатить через Telegram Stars", callback_data="pay_stars", )],
             ]),
