@@ -105,7 +105,9 @@
     }
     .download:hover { background: var(--color-focus); border-color: var(--color-focus); }
     .download:focus-visible, button:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 4px; }
-    .release { margin: 12px 0 0; color: var(--color-quiet); font-size: .9rem; }
+    .release { margin: 12px 0 0; color: var(--color-quiet); font-size: .9rem; overflow-wrap: anywhere; }
+    .release-help { display: inline-block; margin-top: 12px; font-size: .95rem; }
+    .release-help[hidden] { display: none; }
     .details {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -148,7 +150,9 @@
       <h1>ByMeVPN для Android</h1>
       <p class="lead">Подключайтесь к привычным приложениям и сайтам — в пару простых шагов.</p>
       <a class="download" id="download" href="#" hidden rel="noopener noreferrer">Скачать ByMeVPN для Android</a>
-      <p class="release" id="release" role="status" aria-live="polite">Поддерживается Android 7.0 и новее · Сверьте SHA-256 перед установкой</p>
+      <p class="release" id="release" role="status" aria-live="polite">Проверяем актуальную версию приложения…</p>
+      <a class="release-help" id="release-help" href="https://t.me/ByMeVPNSupportBot" rel="noopener noreferrer" hidden>Получить помощь с установкой</a>
+      <noscript><p class="release">Для безопасной загрузки необходим JavaScript, чтобы проверить опубликованный релиз. <a href="https://t.me/ByMeVPNSupportBot">Поддержка</a>.</p></noscript>
     </div>
     <div class="brand-stage">
       <img class="brand-logo" src="/app/logo" alt="Логотип ByMeVPN" width="1254" height="1254" fetchpriority="high">
@@ -200,7 +204,8 @@
       const signing = /^[a-f\d]{64}$/i.test(data.signing_certificate_sha256 || '') ? ` · сертификат SHA-256: ${data.signing_certificate_sha256}` : '';
       status.textContent = `Версия ${String(data.version_name)} · Android ${android}+ · SHA-256: ${data.sha256}${size}${published}${signing}`;
     } catch (_) {
-      status.textContent = 'Актуальный релиз временно недоступен. Напишите в поддержку ByMeVPN.';
+      status.textContent = 'Не удалось проверить актуальную версию. Не устанавливайте неподтверждённый APK.';
+      document.getElementById('release-help').hidden = false;
     }
   })();
 </script>
