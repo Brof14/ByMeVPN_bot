@@ -80,6 +80,19 @@ TARIFF_DAYS = {
 # bonus period.  For example, 3 + 1 months at 79 ₽/month cost 4 × 79 ₽.
 TARIFF_BONUS_MONTHS = {1: 0, 3: 1, 6: 2, 12: 3}
 
+# Canonical Telegram-channel advertising rewards for NEW applications.
+# Existing applications retain their stored bonus_months values.
+# (minimum subscribers, maximum subscribers inclusive or None, months)
+AD_BONUS_TIERS: tuple[tuple[int, int | None, int], ...] = (
+    (1, 49, 1),
+    (50, 99, 2),
+    (100, 149, 3),
+    (150, 249, 4),
+    (250, 349, 6),
+    (350, None, 12),
+)
+
+
 # ============================================================================
 # Intro Trial (paid): 1 ₽ → 3 days of access → 89 ₽/мес recurring
 # ============================================================================

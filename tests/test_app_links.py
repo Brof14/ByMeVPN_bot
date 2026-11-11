@@ -153,7 +153,7 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertIn("Скопировать ссылку", page)
         self.assertNotIn("Если не открылось — скопировать", page)
         self.assertIn('src="/app/assets/bymevpn-logo.png"', page)
-        self.assertIn("Выберите приложение и подключитесь", page)
+        self.assertIn("Выберите своё устройство и приложение", page)
         self.assertIn("Не удалось определить устройство. Выберите платформу вручную ниже.", page)
         self.assertIn("href=\"/app\">открыть страницу загрузки ByMeVPN", page)
         self.assertIn("Рекомендуем", page)

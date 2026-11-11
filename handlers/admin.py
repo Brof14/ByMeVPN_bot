@@ -126,6 +126,7 @@ def _growth_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="Воронка", callback_data="admin_funnel"),
          InlineKeyboardButton(text="Оплаты / конверсия", callback_data="admin_checkout_funnel")],
         [InlineKeyboardButton(text="Органический рост", callback_data="admin_referral_funnel")],
+        [InlineKeyboardButton(text="Проверка рефералов", callback_data="admin_referral_risk")],
         [InlineKeyboardButton(text="Рассылки", callback_data="admin_broadcast")],
         [InlineKeyboardButton(text="← Главное меню", callback_data="admin_menu")],
     ])
@@ -290,6 +291,43 @@ async def cb_admin_referral_funnel(callback: CallbackQuery):
         "Бонусные дни — не денежная прибыль и не стоимость привлечения."
     )
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=_growth_kb())
+
+
+@router.callback_query(F.data == "admin_referral_risk")
+async def cb_admin_referral_risk(callback: CallbackQuery):
+    """Show signals for manual review, not accusations or automatic sanctions."""
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    from growth_metrics import referral_risk_snapshot
+    report = await referral_risk_snapshot(days=1, min_invites=5)
+    text = [
+        "<b>Рефералы: сигналы для проверки · 24 часа</b>",
+        "",
+        f"Бонусов за первые платежи в 1 ₽: <b>{report['one_rub_referral_rewards']}</b>",
+        f"Обещано бонусных дней по ним: <b>{report['promised_days_from_one_rub']}</b>",
+        "",
+        "<b>Пригласили от 5 аккаунтов за сутки:</b>",
+    ]
+    if report["suspicious_accounts"]:
+        for row in report["suspicious_accounts"]:
+            text.append(
+                f"ID <code>{row['referrer_id']}</code> · "
+                f"{row['invitations']} приглашений · "
+                f"{row['one_rub_trials']} платежей в 1 ₽"
+            )
+    else:
+        text.append("Нет таких пользователей за выбранные сутки.")
+    text.extend([
+        "", "Это только индикаторы необычной активности, не доказательство нарушений. "
+        "Начисления не блокируются автоматически.",
+        "Бонусные дни не равны себестоимости и не позволяют вычислить прибыль без затрат VPS, "
+        "эквайринга, поддержки и трафика.",
+    ])
+    await callback.message.edit_text(
+        "\n".join(text), parse_mode="HTML", reply_markup=_growth_kb(),
+    )
 
 
 def _broadcast_controls() -> InlineKeyboardMarkup:

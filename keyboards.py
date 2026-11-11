@@ -147,35 +147,39 @@ def tariff_selection_kb(
     devices = validate_device_limit(devices)
     kb = InlineKeyboardBuilder()
 
-    # Device selector row: 2, 5, 10 devices
-    dev_btns = []
-    for d in VALID_DEVICE_LIMITS:
-        label = f"{d} устройств"
-        if d == devices:
-            label = f"✓ {label}"
-        dev_btns.append(InlineKeyboardButton(
-            text=label, callback_data=f"devtier_{d}",
+    # Each device tier is its own row, readable on narrow Telegram screens.
+    for count in VALID_DEVICE_LIMITS:
+        selected = "✓ " if count == devices else ""
+        kb.row(InlineKeyboardButton(
+            text=f"{selected}{count} устройства" if count == 2 else f"{selected}{count} устройств",
+            callback_data=f"devtier_{count}",
         ))
-    kb.row(*dev_btns)
 
-    # Monthly price applies to every included month, including the bonus period.
+    # The monthly rate applies to the complete 1 / 4 / 8 / 15-month package,
+    # including its advertised bonus months. Never hide the total to pay.
     for months in (1, 3, 6, 12):
-        total_price, included_days = get_price_for_months(months, devices)
-        applies = discount_percent > 0 and (promo_tariff_months is None or promo_tariff_months == months)
+        total_price, _ = get_price_for_months(months, devices)
+        applies = discount_percent > 0 and (
+            promo_tariff_months is None or promo_tariff_months == months
+        )
+        included_months = months + TARIFF_BONUS_MONTHS[months]
         if applies:
             total_price = round(total_price * (100 - discount_percent) / 100)
-            monthly_display = str(round(total_price / (months + TARIFF_BONUS_MONTHS[months])))
+            monthly_display = round(total_price / included_months)
         else:
-            monthly_display = str(get_monthly_display(months, devices))
-        # Keep the attractive 3+1 / 6+2 / 12+3 bundle names without
-        # hiding that the price covers the ENTIRE delivered period.
-        bonus_months = TARIFF_BONUS_MONTHS[months]
-        period = f"{months}+{bonus_months} мес." if bonus_months else "1 мес."
-        gift_mark = "🎁 " if bonus_months else ""
-        text = f"{gift_mark}{period} · {monthly_display} ₽/мес. · {total_price} ₽ всего"
+            monthly_display = get_monthly_display(months, devices)
+
+        total_label = f"{total_price:,}".replace(",", " ")
+        if months == 1:
+            label = f"1 мес. — {total_label} ₽"
+        else:
+            label = (
+                f"{months}+{TARIFF_BONUS_MONTHS[months]} мес. 🎁 — "
+                f"{monthly_display} ₽/мес. · {total_label} ₽"
+            )
         if applies:
-            text += f" · −{discount_percent}%"
-        kb.row(InlineKeyboardButton(text=text, callback_data=f"tariff_{months}_{devices}"))
+            label += f" · −{discount_percent}%"
+        kb.row(InlineKeyboardButton(text=label, callback_data=f"tariff_{months}_{devices}"))
 
     kb.row(InlineKeyboardButton(text="← Назад", callback_data="back_to_menu"))
     return kb.as_markup()

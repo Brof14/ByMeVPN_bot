@@ -31,7 +31,7 @@ class TariffDesignTests(unittest.TestCase):
         self.assertIn("59 ₽/мес.", labels["tariff_12_2"])
         discounted = {b.callback_data: b.text for b in buttons(tariff_selection_kb(devices=2, discount_percent=100))}
         self.assertNotIn("Выгоднее", discounted["tariff_12_2"])
-        self.assertIn("316 ₽ всего", labels["tariff_3_2"])
+        self.assertIn("· 316 ₽", labels["tariff_3_2"])
         with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "1"}):
             premium = tariff_selection_kb(devices=2)
         bonus_buttons = [b for b in buttons(premium) if b.callback_data and b.callback_data.startswith("tariff_") and not b.callback_data.startswith("tariff_1_")]
@@ -165,8 +165,9 @@ class AdForwardingTests(unittest.IsolatedAsyncioTestCase):
         ):
             await cb_ad_program(callback, object(), state)
         text = send.await_args.args[2]
-        self.assertIn("После проверки выполнения условий", text)
-        self.assertIn("наш рекламный пост", text)
+        self.assertIn("Бонус начислим после проверки поста", text)
+        self.assertIn("официальный рекламный пост", text)
+        self.assertIn("30 дней", text)
         actions = [b.callback_data for b in buttons(send.await_args.args[3])]
         self.assertIn("ad_check_channel", actions)
         self.assertNotIn("partner", actions)

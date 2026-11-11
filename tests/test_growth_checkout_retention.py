@@ -20,6 +20,35 @@ class CheckoutUxTests(unittest.IsolatedAsyncioTestCase):
             for row in disabled.inline_keyboard for b in row
         ))
 
+    def test_ten_device_renewal_matches_approved_screen(self):
+        from handlers.buy import _tariff_intro
+        from keyboards import tariff_selection_kb
+        with patch.dict("os.environ", {"BOT_PREMIUM_BUTTON_ICONS": "0"}):
+            kb = tariff_selection_kb(devices=10)
+        expected = [
+            ("devtier_2", "2 устройства"),
+            ("devtier_5", "5 устройств"),
+            ("devtier_10", "✓ 10 устройств"),
+            ("tariff_1_10", "1 мес. — 129 ₽"),
+            ("tariff_3_10", "3+1 мес. 🎁 — 119 ₽/мес. · 476 ₽"),
+            ("tariff_6_10", "6+2 мес. 🎁 — 109 ₽/мес. · 872 ₽"),
+            ("tariff_12_10", "12+3 мес. 🎁 — 99 ₽/мес. · 1 485 ₽"),
+            ("back_to_menu", "← Назад"),
+        ]
+        actual = [
+            (button.callback_data, button.text)
+            for row in kb.inline_keyboard for button in row
+        ]
+        self.assertEqual(actual, expected)
+        self.assertTrue(all(len(row) == 1 for row in kb.inline_keyboard))
+        self.assertEqual(
+            _tariff_intro(10, renewal=True),
+            "<b>Продление подписки</b>\n\n"
+            "10 устройств — для вас и ваших близких.\n\n"
+            "Выберите срок подписки. Чем дольше срок, тем ниже стоимость месяца.\n"
+            "Полная сумма указана в каждом тарифе.",
+        )
+
     def test_checkout_uses_bundles_and_discloses_future_charge(self):
         from handlers.buy import _checkout_confirmation_text
         base = {
@@ -35,6 +64,34 @@ class CheckoutUxTests(unittest.IsolatedAsyncioTestCase):
         one_time = _checkout_confirmation_text({**base, "autorenew_enabled": False})
         self.assertIn("разовой", one_time)
         self.assertNotIn("соглашаетесь на повторное", one_time)
+
+    def test_promo_disclosure_shows_regular_future_billing_amount(self):
+        from handlers.buy import _checkout_confirmation_text
+        text = _checkout_confirmation_text({
+            "months": 3, "days": 125, "devices": 2, "price_rub": 221,
+            "original_price": 316,
+            "checkout_autorenew_disclosed": True, "autorenew_enabled": True,
+        })
+        self.assertIn("К оплате сейчас: <b>221 ₽</b>", text)
+        self.assertIn("повторное списание 316 ₽ за следующие 120 дней", text)
+
+    def test_recurring_quote_is_validated_and_legacy_terms_preserved(self):
+        from webhook import _recurring_terms_for_saved_method
+        quote = {
+            "months": "3", "auto_renew_recurring_price_rub": "316",
+            "auto_renew_recurring_days": "120",
+        }
+        self.assertEqual(_recurring_terms_for_saved_method(quote, 221, 125, 2), (316, 120))
+        self.assertIsNone(_recurring_terms_for_saved_method(
+            {**quote, "auto_renew_recurring_price_rub": "221"}, 221, 125, 2
+        ))
+        self.assertIsNone(_recurring_terms_for_saved_method(
+            {**quote, "auto_renew_recurring_days": "999"}, 221, 125, 2
+        ))
+        self.assertIsNone(_recurring_terms_for_saved_method(
+            {**quote, "auto_renew_recurring_days": None}, 221, 125, 2
+        ))
+        self.assertEqual(_recurring_terms_for_saved_method({}, 221, 125, 2), (221, 125))
 
     async def test_legacy_checkout_never_converts_one_time_into_recurring(self):
         from handlers.buy import _get_checkout_params

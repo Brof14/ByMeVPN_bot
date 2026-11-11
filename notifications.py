@@ -1,18 +1,15 @@
 """
 Background expiry notification scheduler.
 
-This module handles automated notifications for subscription expiry reminders
-and automatic promo code generation for renewals.
+This module handles trial, renewal and win-back service notifications.
 Also handles daily database backup at 03:00.
 """
 import asyncio
 import io
 import logging
 from contextlib import closing
-import secrets
 import sqlite3
 import tempfile
-import string
 import time
 import zipfile
 from datetime import datetime, timedelta, timezone
@@ -26,7 +23,7 @@ from aiogram.types import BufferedInputFile
 
 from config import ADMIN_ID, DB_FILE
 from database import (
-    get_keys_nearing_expiry, get_recently_expired_keys, create_promo_code, validate_promo_code,
+    get_keys_nearing_expiry, get_recently_expired_keys,
     update_key_last_notification, is_promotional_opted_out,
     get_due_connection_reminders, update_connection_reminder,
     retry_connection_reminder,
@@ -45,52 +42,6 @@ def get_day_word(days: int) -> str:
         return "дня"
     else:
         return "дней"
-
-
-def generate_promo_code(length: int = 5) -> str:
-    """Generate a short random promo code."""
-    alphabet = string.ascii_uppercase + string.digits
-    return "".join(secrets.choice(alphabet) for _ in range(length))
-
-
-async def get_or_create_renewal_promo(user_id: int) -> str:
-    """
-    Get existing renewal promo code for user or create a new one.
-
-    Creates a short 30% discount promo code valid for 7 days with multiple uses.
-    Uses a shared code approach: checks for existing active promo codes and reuses them.
-    """
-    # Try to find existing active 30% promo codes that are valid
-    from database import get_all_promo_codes, has_user_used_promo
-    promo_codes = await get_all_promo_codes()
-    now = int(time.time())
-
-    # Look for an existing 30% discount promo code that's active and valid
-    for promo in promo_codes:
-        if (promo["is_active"] and
-            promo["promo_type"] == "percent" and
-            promo["discount_value"] == 30 and
-            promo["uses_count"] < promo["max_uses"] and
-            promo["tariff_binding"] is None and
-            promo["start_date"] is not None and
-            promo["start_date"] <= now < promo["expires_at"]):
-            if not await has_user_used_promo(promo["code"], user_id):
-                return promo["code"]
-
-    # Keep existing discount and usage limits, but retry code collisions rather
-    # than returning a code the database failed to create.
-    for attempt in range(5):
-        code = generate_promo_code(5 + min(attempt, 2))
-        if await create_promo_code(
-            code=code,
-            promo_type="percent",
-            discount_value=30,
-            max_uses=10,
-            valid_days=7,
-        ):
-            logger.info("Created shared renewal promo code (30%%, 10 uses, 7 days)")
-            return code
-    raise RuntimeError("Could not create a unique renewal promo code after 5 attempts")
 
 
 async def _get_active_autorenew(user_id: int, key_id: int | None) -> dict | None:
@@ -150,19 +101,6 @@ def _renewal_callback(item: dict) -> str:
     return f"key_renew:{key_id}" if key_id > 0 else "buy_vpn"
 
 
-async def _optional_renewal_promo(user_id: int) -> tuple[str | None, dict | None]:
-    """An optional marketing offer must never block the service reminder."""
-    if await is_promotional_opted_out(user_id):
-        return None, None
-    try:
-        code = await get_or_create_renewal_promo(user_id)
-        promo = await validate_promo_code(code) if code else None
-        return code, promo
-    except Exception:
-        logger.exception("Optional renewal promotion unavailable for user %d", user_id)
-        return None, None
-
-
 async def _send_urgent_notification(bot: Bot, item: dict) -> bool:
     """Last three days for paid subscriptions; last day for free trials."""
     remaining = int(item["expiry"]) - int(time.time())
@@ -217,11 +155,6 @@ async def _send_warning_notification(bot: Bot, item: dict) -> bool:
     ])
     await bot.send_message(item["user_id"], text, parse_mode="HTML", reply_markup=kb)
     return True
-
-
-async def _send_early_notification(bot: Bot, item: dict) -> bool:
-    """Retained for compatibility; no sales spam right after purchase."""
-    return False
 
 
 async def _send_winback_notification(bot: Bot, item: dict) -> bool:

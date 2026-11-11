@@ -52,32 +52,21 @@ def _promo_purchase_keyboard() -> InlineKeyboardMarkup:
 
 
 def _tariff_intro(devices: int, *, renewal: bool = False, promo_binding: int | None = None) -> str:
-    """Clear, conversion-oriented copy shared by purchase and renewal."""
-    device_word = "устройства" if devices in (2,) else "устройств"
-    if renewal:
-        text = (
-            "<b>Продлить ByMeVPN</b>\n\n"
-            f"Ваш тариф: <b>{devices} {device_word}</b>\n\n"
-            "Выберите срок. Новые дни добавятся к действующей подписке — "
-            "переустанавливать VPN и менять ключ не потребуется.\n\n"
-            "🎁 Пакеты 3+1, 6+2 и 12+3 дают больше месяцев "
-            "по сниженной цене за месяц. Общая стоимость видна на кнопках."
-        )
-    else:
-        text = (
-            "<b>Тарифы ByMeVPN</b>\n\n"
-            f"Выбрано: <b>{devices} {device_word}</b>\n\n"
-            "Выберите срок: длительные пакеты выгоднее по цене за месяц.\n"
-            "🎁 Пакеты 3+1, 6+2 и 12+3: больше месяцев по меньшей цене за месяц. "
-            "Общая стоимость пакета указана на кнопках."
-        )
+    """Consistent purchase/renewal copy, with current selection as context."""
+    devices = validate_device_limit(devices)
+    device_word = "устройства" if devices == 2 else "устройств"
+    audience = "для вас" if devices == 2 else "для вас и ваших близких"
+    title = "Продление подписки" if renewal else "Тарифы ByMeVPN"
+    text = (
+        f"<b>{title}</b>\n\n"
+        f"{devices} {device_word} — {audience}.\n\n"
+        "Выберите срок подписки. Чем дольше срок, тем ниже стоимость месяца.\n"
+        "Полная сумма указана в каждом тарифе."
+    )
     if promo_binding in (1, 3, 6, 12):
-        text += (
-            f"\n\nПромокод действует на пакет "
-            f"{promo_binding}+{TARIFF_BONUS_MONTHS[promo_binding]} мес."
-            if TARIFF_BONUS_MONTHS[promo_binding] else
-            "\n\nПромокод действует на 1 месяц."
-        )
+        extra = TARIFF_BONUS_MONTHS[promo_binding]
+        term = f"{promo_binding}+{extra}" if extra else "1"
+        text += f"\n\nПромокод действует на тариф {term} мес."
     return text
 
 
@@ -90,6 +79,7 @@ def _checkout_confirmation_text(data: dict) -> str:
     bonus = TARIFF_BONUS_MONTHS[months]
     term = f"{months}+{bonus} мес." if bonus else "1 месяц"
     recurring = bool(data.get("checkout_autorenew_disclosed")) and bool(data.get("autorenew_enabled"))
+    recurring_price, recurring_days = get_price_for_months(months, devices)
     dev_name = DEVICE_CONFIG.get(devices, {}).get("name", f"{devices} устройств")
     lines = [
         "<b>Подтверждение подписки</b>",
@@ -110,7 +100,7 @@ def _checkout_confirmation_text(data: dict) -> str:
     if recurring:
         lines.append(
             f"При оплате через ЮKassa вы соглашаетесь на повторное списание "
-            f"{price_rub} ₽ за следующие {days} дней по окончании оплаченного срока. "
+            f"{recurring_price} ₽ за следующие {recurring_days} дней по окончании оплаченного срока. "
             "До оплаты можно отключить автопродление кнопкой ниже."
         )
     else:
@@ -557,6 +547,7 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
     # Old "pay_yookassa" buttons had one-time semantics. Only a checkout
     # freshly shown with explicit recurring disclosure may opt in by default.
     save_payment_method = callback.data == "pay_yookassa_autorenew" or params["autorenew_enabled"]
+    next_charge_rub, next_charge_days = get_price_for_months(months, devices)
 
     if not claim_yookassa_checkout(user_id):
         await callback.message.answer("Запрос на оплату уже выполняется. Подождите немного.")
@@ -568,7 +559,11 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
             promo_code=promo_code, months=months,
             extra_metadata={
                 **({"key_id": params["renew_key_id"]} if params.get("renew_key_id") else {}),
-                **({"auto_renew_consent": "1"} if save_payment_method else {}),
+                **({
+                    "auto_renew_consent": "1",
+                    "auto_renew_recurring_price_rub": str(next_charge_rub),
+                    "auto_renew_recurring_days": str(next_charge_days),
+                } if save_payment_method else {}),
             },
             save_payment_method=save_payment_method,
             return_payment_details=True,
@@ -621,7 +616,7 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
         f"Срок: {days} дней\n"
         f"Устройств: до {devices} одновременно\n\n"
         f"Автопродление: <b>{'включено' if recurring_checkout else 'выключено'}</b>. "
-        + (f"Следующее списание {price_rub} ₽ за {days} дней — по окончании срока. "
+        + (f"Следующее списание {next_charge_rub} ₽ за {next_charge_days} дней — по окончании срока. "
            "Отключить можно в настройках.\n\n" if recurring_checkout else
            "Если вы выбирали автопродление, сохранить способ оплаты не удалось: "
            "этот платёж будет разовым.\n\n" if save_payment_method else "\n\n")

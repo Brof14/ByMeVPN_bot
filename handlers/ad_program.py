@@ -32,6 +32,7 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import ADMIN_IDS
+from constants import AD_BONUS_TIERS
 from database import (
     create_ad_application, get_user_ad_applications, update_ad_application,
     get_ad_application_by_id, get_ad_applications_by_statuses,
@@ -62,15 +63,17 @@ class AdProgramFlow(StatesGroup):
     waiting_rejection_reason = State()
 
 
-# Bonus tiers (must match database.calculate_bonus_months)
-BONUS_TIERS = (
-    "1–49 — 1 месяц (после индивидуальной проверки)\n"
-    "50–99 — 2 месяца\n"
-    "100–149 — 3 месяца\n"
-    "150–249 — 4 месяца\n"
-    "250–349 — 6 месяцев\n"
-    "350+ — до 12 месяцев, после индивидуальной проверки"
-)
+def _bonus_tier_lines() -> str:
+    """Public reward description driven by the same tiers as actual grants."""
+    def month_word(value: int) -> str:
+        return "месяц" if value == 1 else "месяца" if value in (2, 3, 4) else "месяцев"
+
+    lines = []
+    for minimum, maximum, months in AD_BONUS_TIERS:
+        count_range = f"{minimum}–{maximum}" if maximum is not None else f"от {minimum}"
+        lines.append(f"{count_range} подписчиков — {months} {month_word(months)}")
+    return "\n".join(lines)
+
 
 # Statuses that mean "user is working on the application" (only one allowed)
 _ACTIVE_APP_STATUSES = ("draft", "channel_pending", "waiting_for_post", "post_submitted", "active_30_days", "grant_pending")
@@ -156,19 +159,19 @@ async def cb_ad_program(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await log_ad_analytics_event(user_id, "ad_offer_view")
 
     text = (
-        "<b>Ваш канал — ваши бонусы.</b>\n\n"
-        "Разместите ByMeVPN в своём Telegram-канале и получите <b>бесплатные месяцы VPN</b>.\n\n"
-        "<b>Как это работает:</b>\n"
-        "1. Отправьте ссылку на канал.\n"
-        "2. Разместите наш рекламный пост.\n"
-        "3. Сохраните публикацию на 30 дней.\n\n"
-        "После проверки выполнения условий начислим бонус.\n\n"
-        "Бонус зависит от аудитории, а публикацию нужно сохранить 30 дней. "
-        "Ранее одобренные заявки сохраняют свои условия."
+        "<b>VPN за рекламу</b>\n\n"
+        "Опубликуйте пост ByMeVPN в своём Telegram-канале и получите "
+        "дополнительные месяцы доступа.\n\n"
+        "<b>Всего три шага</b>\n"
+        "1. Укажите свой канал.\n"
+        "2. Перешлите официальный рекламный пост.\n"
+        "3. Отправьте ссылку и сохраните публикацию на 30 дней.\n\n"
+        "Бонус начислим после проверки поста. "
+        "Срок зависит от количества подписчиков."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Начать · указать канал", callback_data="ad_check_channel")],
-        [InlineKeyboardButton(text="Сколько дней можно получить?", callback_data="ad_bonus_tiers")],
+        [InlineKeyboardButton(text="Размер бонуса", callback_data="ad_bonus_tiers")],
         [InlineKeyboardButton(text="← Назад", callback_data="free_vpn")],
     ])
 
@@ -180,11 +183,15 @@ async def cb_ad_bonus_tiers(callback: CallbackQuery, bot: Bot):
     """Show campaign rewards only on request, not on the first screen."""
     await safe_answer(callback)
     text = (
-        "<b>Сколько VPN можно получить?</b>\n\n"
-        "Бонус зависит от количества подписчиков вашего канала.\n\n"
-        f"{BONUS_TIERS}\n\n"
-        "<b>Условия:</b> публикация на 30 дней; один бонус на канал после проверки. "
-        "По уже принятым заявкам действуют условия, указанные при подаче."
+        "<b>Бонус за рекламу</b>\n\n"
+        "Количество подписчиков → срок доступа:\n\n"
+        f"{_bonus_tier_lines()}\n\n"
+        "Для небольших каналов (до 50 подписчиков) и крупных (от 350) "
+        "предусмотрена дополнительная проверка.\n\n"
+        "<b>Условия:</b> один бонус на канал. "
+        "Опубликуйте оригинальный пост ByMeVPN и сохраните его на 30 дней. "
+        "Бонус выдаётся после проверки размещения.\n\n"
+        "Условия уже поданных заявок не изменяются."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Проверить канал", callback_data="ad_check_channel")],

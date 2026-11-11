@@ -77,7 +77,8 @@ class SemanticPremiumEmojiTests(unittest.TestCase):
                     [marked[f"tariff_{m}_{devices}"].style for m in (1, 3, 6, 12)],
                     ["primary", "primary", "primary", "primary"],
                 )
-                self.assertIn("₽ всего", marked[f"tariff_3_{devices}"].text)
+                self.assertIn("₽", marked[f"tariff_3_{devices}"].text)
+                self.assertNotIn("🎁", marked[f"tariff_3_{devices}"].text)
 
     def test_payment_methods_have_separate_branded_icons(self):
         with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "1"}):

@@ -35,13 +35,12 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
                 with self.subTest(devices=devices, renewal=renewal):
                     text = _tariff_intro(devices, renewal=renewal)
                     self.assertIn(str(devices), text)
-                    self.assertIn("3+1", text)
-                    self.assertIn("6+2", text)
-                    self.assertIn("12+3", text)
-                    self.assertIn("стоимость", text)
+                    self.assertIn("<b>Продление подписки</b>" if renewal else "<b>Тарифы ByMeVPN</b>", text)
+                    self.assertIn("Чем дольше срок, тем ниже стоимость месяца.", text)
+                    self.assertIn("Полная сумма указана в каждом тарифе.", text)
 
     def test_tariff_copy_preserves_promo_duration_suffix(self):
-        self.assertIn("Промокод действует на пакет 3+1 мес.", _tariff_intro(2, promo_binding=3))
+        self.assertIn("Промокод действует на тариф 3+1 мес.", _tariff_intro(2, promo_binding=3))
 
     async def test_bot_identity_helper_uses_aiogram_cache_when_available(self):
         from utils import get_cached_bot_info
@@ -541,7 +540,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             if button.callback_data and button.callback_data.startswith("tariff_")
         ]
         three_months = next(button for button in tariff_buttons if button.callback_data == "tariff_3_2")
-        self.assertIn("3+1 мес. · 79 ₽/мес. · 316 ₽ всего", three_months.text)
+        self.assertIn("3+1 мес. 🎁 — 79 ₽/мес. · 316 ₽", three_months.text)
         self.assertEqual(three_months.style, "primary")
         self.assertEqual(
             [button.style for button in tariff_buttons],

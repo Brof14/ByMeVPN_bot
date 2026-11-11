@@ -186,7 +186,8 @@ async def create_yookassa_payment(
             payload.pop("save_payment_method", None)
             # The fallback is explicitly one-time: never leave a recurring
             # consent marker on a charge that cannot save a payment method.
-            payload["metadata"].pop("auto_renew_consent", None)
+            for field in ("auto_renew_consent", "auto_renew_recurring_price_rub", "auto_renew_recurring_days"):
+                payload["metadata"].pop(field, None)
             headers["Idempotence-Key"] = hashlib.sha256((stable_key + ":standard").encode()).hexdigest()
             try:
                 async with yookassa_client(timeout=15.0) as client:
