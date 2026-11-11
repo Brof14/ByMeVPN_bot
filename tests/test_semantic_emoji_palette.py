@@ -72,7 +72,7 @@ class SemanticPremiumEmojiTests(unittest.TestCase):
                     self.assertIn(action, marked)
                     icons.append(marked[action].icon_custom_emoji_id)
                 self.assertEqual(icons[0], ICON_IDS["tariff_1"])
-                self.assertEqual(icons[1:], [ICON_IDS["tariff_1"]] * 3)
+                self.assertEqual(icons[1:], [ICON_IDS["gift"]] * 3)
                 self.assertEqual(
                     [marked[f"tariff_{m}_{devices}"].style for m in (1, 3, 6, 12)],
                     ["primary", "primary", "primary", "primary"],
