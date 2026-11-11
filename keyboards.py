@@ -1,4 +1,3 @@
-from urllib.parse import quote_plus
 import time
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -9,10 +8,7 @@ from constants import (
     TARIFF_BONUS_MONTHS, get_monthly_display, get_price_for_months, validate_device_limit,
 )
 
-_SUPPORT_URL = (
-    "https://t.me/ByMeVPNSupportBot?text="
-    + quote_plus("Привет, у меня вопрос по ByMeVPN.")
-)
+_SUPPORT_URL = "https://t.me/ByMeVPNSupportBot"
 
 
 def _customer_menu(*, has_subscription: bool, trial_used: bool) -> InlineKeyboardMarkup:
@@ -106,11 +102,8 @@ def support_url() -> str:
 
 
 def feedback_url() -> str:
-    """Direct users to support with a clear bug-report / suggestion prompt."""
-    return (
-        "https://t.me/ByMeVPNSupportBot?text="
-        + quote_plus("Здравствуйте! Хочу сообщить об ошибке или предложить улучшение ByMeVPN.\n")
-    )
+    """Open the support bot using a standard Telegram deep link."""
+    return "https://t.me/ByMeVPNSupportBot"
 
 
 def authorized_user_menu() -> InlineKeyboardMarkup:
