@@ -96,6 +96,7 @@ def render_app_open_page(deep_link: str) -> str:
     js_link = _js_string(deep_link)
     js_intent = _js_string(build_android_intent_url(deep_link))
 
+    install_url = html.escape(APP_PUBLIC_URL.rstrip("/") + "/app", quote=True)
     return f"""<!doctype html>
 <html lang="ru">
 <head>
@@ -156,9 +157,9 @@ def render_app_open_page(deep_link: str) -> str:
 <main><section class="panel">
   <img class="logo" src="/app/logo" alt="Логотип ByMeVPN" width="132" height="132">
   <h1>Открываем приложение…</h1>
-  <p>Если ByMeVPN не открылся автоматически, нажмите кнопку ниже — подписка подключится сама.</p>
+  <p>Открываем ByMeVPN. Страница передаёт подписку в приложение; само открытие ещё не подтверждает подключение VPN.</p>
   <a id="open-app" class="button" href="{escaped_link}">Открыть ByMeVPN</a>
-  <p class="hint">Если приложение не установлено, установите его и откройте эту ссылку снова.</p>
+  <p class="hint">Если приложение не открылось, нажмите кнопку ещё раз. <a href="{install_url}">Скачать ByMeVPN для Android</a> · <a href="https://t.me/ByMeVPNSupportBot">Поддержка</a></p>
 </section></main>
 <script>
 (function () {{
