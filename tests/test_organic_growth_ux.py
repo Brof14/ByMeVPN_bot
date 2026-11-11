@@ -22,10 +22,10 @@ class ConversionUXTests(unittest.TestCase):
             for months, rubles in zip((1, 3, 6, 12), totals):
                 text = actions[f"tariff_{months}_{limit}"]
                 self.assertIn(f"{rubles // (months + {1: 0, 3: 1, 6: 2, 12: 3}[months])} ₽/мес.", text)
-                self.assertIn("/ мес.", text)
+                self.assertIn("/мес.", text)
                 self.assertIn(f"{rubles} ₽ всего", text)
                 if months > 1:
-                    self.assertIn(f"{months + {3: 1, 6: 2, 12: 3}[months]} мес.", text)
+                    self.assertIn(f"{months}+{{3: 1, 6: 2, 12: 3}[months]} мес.", text)
                 else:
                     self.assertIn("1 мес.", text)
 
