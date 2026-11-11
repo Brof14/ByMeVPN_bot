@@ -167,11 +167,12 @@ def tariff_selection_kb(
             monthly_display = str(round(total_price / (months + TARIFF_BONUS_MONTHS[months])))
         else:
             monthly_display = str(get_monthly_display(months, devices))
-        # State the full service period and charge up front. The previous
-        # "gift months" wording implied they were free although billed.
-        total_months = months + TARIFF_BONUS_MONTHS[months]
-        period = f"{total_months} мес."
-        text = f"{period} · {monthly_display} ₽ / мес. · {total_price} ₽ всего"
+        # Keep the attractive 3+1 / 6+2 / 12+3 bundle names without
+        # hiding that the price covers the ENTIRE delivered period.
+        bonus_months = TARIFF_BONUS_MONTHS[months]
+        period = f"{months}+{bonus_months} мес." if bonus_months else "1 мес."
+        gift_mark = "🎁 " if bonus_months else ""
+        text = f"{gift_mark}{period} · {monthly_display} ₽/мес. · {total_price} ₽ всего"
         if applies:
             text += f" · −{discount_percent}%"
         kb.row(InlineKeyboardButton(text=text, callback_data=f"tariff_{months}_{devices}"))
@@ -180,7 +181,10 @@ def tariff_selection_kb(
     return kb.as_markup()
 
 
-def payment_kb(price_rub: int, days: int, devices: int = DEFAULT_DEVICE_LIMIT, yookassa_url: str = "") -> InlineKeyboardMarkup:
+def payment_kb(
+    price_rub: int, days: int, devices: int = DEFAULT_DEVICE_LIMIT,
+    yookassa_url: str = "", *, autorenew_enabled: bool = True,
+) -> InlineKeyboardMarkup:
     """Stars = rubles (1:1, intentional — covers Telegram commission)."""
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(
@@ -188,12 +192,12 @@ def payment_kb(price_rub: int, days: int, devices: int = DEFAULT_DEVICE_LIMIT, y
         callback_data="pay_stars",
     ))
     kb.row(InlineKeyboardButton(
-        text=f"ЮKassa · {price_rub} ₽ · разово",
+        text=f"ЮKassa · {price_rub} ₽",
         callback_data="pay_yookassa",
     ))
     kb.row(InlineKeyboardButton(
-        text=f"ЮKassa · {price_rub} ₽ · с автопродлением",
-        callback_data="pay_yookassa_autorenew",
+        text=("Автопродление: включено" if autorenew_enabled else "Автопродление: выключено"),
+        callback_data="autorenew_checkout_toggle",
     ))
     kb.row(InlineKeyboardButton(
         text=f"CryptoBot · {price_rub} ₽",
