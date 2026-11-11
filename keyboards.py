@@ -22,7 +22,7 @@ def _customer_menu(*, has_subscription: bool, trial_used: bool) -> InlineKeyboar
         kb.row(InlineKeyboardButton(text="Подписка", callback_data="my_keys"))
     elif not trial_used:
         kb.row(InlineKeyboardButton(text="3 дня бесплатно", callback_data="trial_free"))
-    kb.row(InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn", style=None if has_subscription else "primary"))
+    kb.row(InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn", style="primary"))
     kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
@@ -43,11 +43,27 @@ def main_menu_with_keys(trial_used: bool = False) -> InlineKeyboardMarkup:
     return _customer_menu(has_subscription=True, trial_used=trial_used)
 
 
-def main_menu_active(key_id: int) -> InlineKeyboardMarkup:
-    """Give a one-key subscriber an immediate connection path, without checkout."""
+def main_menu_active(key_id: int, subscription_url: str = "") -> InlineKeyboardMarkup:
+    """Put the active subscriber's connection action first in the home menu."""
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="Подписка", callback_data="my_keys"))
-    kb.row(InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn", style=None))
+    connect_url = None
+    if subscription_url:
+        try:
+            from app_links import build_connect_page_url
+            connect_url = build_connect_page_url(subscription_url)
+        except (RuntimeError, ValueError):
+            connect_url = None
+    connect_button = (
+        InlineKeyboardButton(text="Подключить VPN", url=connect_url)
+        if connect_url else
+        InlineKeyboardButton(text="Подключить VPN", callback_data=f"key_instructions:{key_id}")
+    )
+    kb.row(connect_button)
+    kb.row(
+        InlineKeyboardButton(text="Подписка", callback_data="my_keys"),
+        InlineKeyboardButton(text="Устройства", callback_data=f"key_devices:{key_id}"),
+    )
+    kb.row(InlineKeyboardButton(text="Продлить", callback_data=f"key_renew:{key_id}"))
     kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
