@@ -32,6 +32,7 @@ from database import (
     has_ever_had_key, get_user_keys,
 )
 from app_links import build_app_login_url, build_app_redirect_url
+from config import CHANNEL_BONUS_CHAT_ID
 from keyboards import (
     main_menu_new_user, main_menu_existing, main_menu_with_keys, main_menu_active, main_menu_expired,
     back_to_menu, cancel_kb, support_url, app_open_kb,
@@ -356,7 +357,7 @@ async def _send_main_menu(
         # Direct connection only when there is exactly one active key.
         # With multiple active subscriptions, let the customer choose.
         if len(active_keys) == 1:
-            kb = main_menu_active(int(active_keys[0]["id"]))
+            kb = main_menu_active(int(active_keys[0]["id"]), str(active_keys[0].get("key") or ""))
         else:
             kb = main_menu_with_keys(trial_used=True)
 
@@ -841,11 +842,13 @@ async def cb_free_vpn(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
         "<b>Больше доступа — без оплаты.</b>\n\n"
-        "Получайте дополнительные дни ByMeVPN за приглашения друзей или размещение "
-        "рекламы в своём Telegram-канале.\n\n"
+        "Получайте дни за приглашения друзей, подписку на канал или размещение "
+        "рекламы в своём Telegram-канале. Бонус за подписку можно получить один раз.\n\n"
         "Выберите удобный способ:"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Подписаться на канал · +10 дней", url="https://t.me/ByMeVPN")],
+        [InlineKeyboardButton(text="Проверить подписку · получить +10 дней", callback_data="channel_bonus_check", style="success")],
         [InlineKeyboardButton(text="Пригласить друзей", callback_data="partner")],
         [InlineKeyboardButton(text="VPN за рекламу", callback_data="ad_program")],
         [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu")],
@@ -858,3 +861,55 @@ async def cb_free_vpn(callback: CallbackQuery, bot: Bot):
 # ---------------------------------------------------------------------------
 # My Keys handlers (moved to keys.py to avoid duplicates)
 # ---------------------------------------------------------------------------
+
+
+@router.callback_query(F.data == "channel_bonus_check")
+async def cb_channel_bonus_check(callback: CallbackQuery, bot: Bot):
+    """Award a one-time +10 day bonus after a live Telegram membership check."""
+    user_id = callback.from_user.id
+    try:
+        member = await bot.get_chat_member(chat_id=CHANNEL_BONUS_CHAT_ID, user_id=user_id)
+    except Exception as exc:
+        logger.warning("Channel membership check failed (%s)", type(exc).__name__)
+        await safe_answer(callback, "Не удалось проверить подписку. Попробуйте позже.", alert=True)
+        return
+
+    is_member = member.status in {"creator", "administrator", "member"}
+    if member.status == "restricted":
+        is_member = bool(getattr(member, "is_member", False))
+    if not is_member:
+        await safe_answer(callback, "Сначала подпишитесь на канал, затем нажмите «Проверить подписку».", alert=True)
+        return
+
+    from database import reserve_channel_subscription_bonus, complete_channel_subscription_bonus, log_analytics_event
+    if not await reserve_channel_subscription_bonus(user_id):
+        await safe_answer(callback, "Бонус уже начислен или проверяется. Если дни не появились, напишите в поддержку.", alert=True)
+        return
+
+    try:
+        from subscription import deliver_key
+        from constants import DEFAULT_DEVICE_LIMIT
+        keys = await get_user_keys(user_id)
+        latest = max(keys, key=lambda item: int(item.get("expiry") or 0)) if keys else None
+        delivered = await deliver_key(
+            bot=bot, user_id=user_id, chat_id=user_id,
+            config_name=f"ByMeVPN_{user_id}", days=10,
+            limit_ip=int(latest.get("limit_ip") or DEFAULT_DEVICE_LIMIT) if latest else DEFAULT_DEVICE_LIMIT,
+            is_paid=False, amount=0, method="channel_bonus",
+            payload=f"channel_bonus_{user_id}", extend_existing=True,
+        )
+    except Exception:
+        logger.exception("Channel subscription bonus delivery failed for user %d", user_id)
+        delivered = False
+
+    if not delivered:
+        # Keep the reservation after an uncertain result to prevent duplicate grants.
+        await safe_answer(callback, "Запрос принят, но выдачу нужно проверить. Напишите в поддержку, если бонус не появился.", alert=True)
+        return
+
+    await complete_channel_subscription_bonus(user_id)
+    try:
+        await log_analytics_event(user_id, "channel_bonus_awarded", source="telegram_channel")
+    except Exception:
+        logger.warning("Could not record channel bonus analytics for user %d", user_id)
+    await safe_answer(callback, "Готово: начислено +10 дней.", alert=True)
