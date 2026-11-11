@@ -18,17 +18,17 @@ class TariffDesignTests(unittest.TestCase):
             tariff_selection_kb(devices=2, discount_percent=30, promo_tariff_months=3)
         )}
         self.assertIn("89 ₽", labels["tariff_1_2"])
-        self.assertIn("55 ₽ / мес.", labels["tariff_3_2"])
+        self.assertIn("55 ₽/мес.", labels["tariff_3_2"])
         self.assertNotIn("−30%", labels["tariff_1_2"])
         self.assertIn("−30%", labels["tariff_3_2"])
 
     def test_tariffs_show_monthly_rates_and_highlight_bonus_months(self):
         keyboard = tariff_selection_kb(devices=2)
         labels = {b.callback_data: b.text for b in buttons(keyboard)}
-        self.assertIn("4 мес.", labels["tariff_3_2"])
-        self.assertIn("8 мес.", labels["tariff_6_2"])
-        self.assertIn("15 мес.", labels["tariff_12_2"])
-        self.assertIn("59 ₽ / мес.", labels["tariff_12_2"])
+        self.assertIn("3+1 мес.", labels["tariff_3_2"])
+        self.assertIn("6+2 мес.", labels["tariff_6_2"])
+        self.assertIn("12+3 мес.", labels["tariff_12_2"])
+        self.assertIn("59 ₽/мес.", labels["tariff_12_2"])
         discounted = {b.callback_data: b.text for b in buttons(tariff_selection_kb(devices=2, discount_percent=100))}
         self.assertNotIn("Выгоднее", discounted["tariff_12_2"])
         self.assertIn("316 ₽ всего", labels["tariff_3_2"])
@@ -37,7 +37,7 @@ class TariffDesignTests(unittest.TestCase):
         bonus_buttons = [b for b in buttons(premium) if b.callback_data and b.callback_data.startswith("tariff_") and not b.callback_data.startswith("tariff_1_")]
         self.assertEqual(
             [b.icon_custom_emoji_id for b in bonus_buttons],
-            [ICON_IDS["tariff_1"]] * 3,
+            [ICON_IDS["gift"]] * 3,
         )
 
     def test_five_device_selector_is_short_and_three_plus_one_has_no_extra_claim(self):
