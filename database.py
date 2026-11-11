@@ -6832,3 +6832,74 @@ async def complete_channel_subscription_bonus(user_id: int) -> bool:
             )
         await db.commit()
         return result.rowcount == 1
+
+
+# Free orders are financially different from paid webhooks: no payment provider
+# enforces a unique invoice. Freeze the first selected entitlement and reserve
+# scarce promo capacity before calling 3x-ui. Retried calls reuse that order.
+async def reserve_free_promo_order(
+    user_id: int, code: str, months: int, devices: int, days: int,
+) -> bool:
+    user_id, months, devices, days = int(user_id), int(months), int(devices), int(days)
+    code = str(code).strip().upper()
+    if user_id <= 0 or not code or months <= 0 or devices <= 0 or days <= 0:
+        return False
+    now = int(time.time())
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS free_promo_orders (
+                user_id INTEGER NOT NULL,
+                code TEXT NOT NULL,
+                months INTEGER NOT NULL,
+                devices INTEGER NOT NULL,
+                days INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at INTEGER NOT NULL,
+                awarded_at INTEGER,
+                PRIMARY KEY (user_id, code)
+            )
+        """)
+        existing = await (await db.execute(
+            "SELECT months, devices, days, status FROM free_promo_orders WHERE user_id=? AND code=?",
+            (user_id, code),
+        )).fetchone()
+        if existing:
+            await db.rollback()
+            return (existing[3] == "pending" and
+                    tuple(int(v) for v in existing[:3]) == (months, devices, days))
+        promo = await (await db.execute(
+            "SELECT max_uses, uses_count, is_active, start_date, expires_at "
+            "FROM promo_codes WHERE code=?", (code,),
+        )).fetchone()
+        if (not promo or not promo[2] or int(promo[3] or 0) > now
+                or int(promo[4] or 0) < now):
+            await db.rollback()
+            return False
+        outstanding = await (await db.execute(
+            "SELECT COUNT(*) FROM free_promo_orders WHERE code=? AND status='pending'",
+            (code,),
+        )).fetchone()
+        if int(promo[1]) + int(outstanding[0]) >= int(promo[0]):
+            await db.rollback()
+            return False
+        await db.execute(
+            "INSERT INTO free_promo_orders(user_id, code, months, devices, days, created_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (user_id, code, months, devices, days, now),
+        )
+        await db.commit()
+        return True
+
+
+async def complete_free_promo_order(user_id: int, code: str) -> bool:
+    """Mark the entitlement complete only after delivery and promo accounting."""
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        updated = await db.execute(
+            "UPDATE free_promo_orders SET status='awarded', awarded_at=? "
+            "WHERE user_id=? AND code=? AND status='pending'",
+            (int(time.time()), int(user_id), str(code).strip().upper()),
+        )
+        await db.commit()
+        return updated.rowcount == 1
