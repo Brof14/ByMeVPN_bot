@@ -221,11 +221,11 @@ async def _deliver_key_unlocked(
             
             base_time = max(old_expiry or 0, current_time)
             new_expiry = base_time + days * 86400
-            if is_paid and payload:
+            if payload and (is_paid or method == "channel_bonus"):
                 new_expiry = await database.get_or_create_provisioning_intent(
                     method, payload, user_id, new_expiry
                 )
-            if is_paid and payload and old_expiry and new_expiry < old_expiry:
+            if payload and (is_paid or method == "channel_bonus") and old_expiry and new_expiry < old_expiry:
                 # Another operation has moved the subscription past this old
                 # order intent. Applying it would shorten paid access; leave
                 # the order pending for reconciliation instead.
@@ -367,11 +367,11 @@ async def _deliver_key_unlocked(
                 int(xui_client.get("expiry_time") or 0) // 1000,
                 int(time.time()),
             ) + days * 86400
-            if is_paid and payload:
+            if payload and (is_paid or method == "channel_bonus"):
                 target_expiry = await database.get_or_create_provisioning_intent(
                     method, payload, user_id, target_expiry
                 )
-            if is_paid and payload and target_expiry < int(xui_client.get("expiry_time") or 0) // 1000:
+            if payload and (is_paid or method == "channel_bonus") and target_expiry < int(xui_client.get("expiry_time") or 0) // 1000:
                 logger.error("Order %s requires panel reconciliation for user %d", payload, user_id)
                 return False
             xui_res = await update_xui_user(
