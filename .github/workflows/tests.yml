@@ -26,4 +26,4 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
       - name: Run unit tests
-        run: python -m unittest discover -s tests -v
+        run: python -c 'import faulthandler,runpy; faulthandler.dump_traceback_later(60, repeat=True); runpy.run_module("unittest", run_name="__main__")' discover -s tests -v
