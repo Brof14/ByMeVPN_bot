@@ -23,10 +23,11 @@ class ConversionUXTests(unittest.TestCase):
                 text = actions[f"tariff_{months}_{limit}"]
                 self.assertIn(f"{rubles // (months + {1: 0, 3: 1, 6: 2, 12: 3}[months])} ₽ / мес.", text)
                 self.assertIn("/ мес.", text)
+                self.assertIn(f"{rubles} ₽ всего", text)
                 if months > 1:
-                    self.assertIn("🎁", text)
+                    self.assertIn(f"{months + {3: 1, 6: 2, 12: 3}[months]} мес.", text)
                 else:
-                    self.assertNotIn("🎁", text)
+                    self.assertIn("1 мес.", text)
 
 
 class OrganicGrowthMetricsTests(unittest.IsolatedAsyncioTestCase):
