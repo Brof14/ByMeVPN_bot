@@ -36,6 +36,34 @@ class CheckoutUxTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("разовой", one_time)
         self.assertNotIn("соглашаетесь на повторное", one_time)
 
+    def test_promo_disclosure_shows_regular_future_billing_amount(self):
+        from handlers.buy import _checkout_confirmation_text
+        text = _checkout_confirmation_text({
+            "months": 3, "days": 125, "devices": 2, "price_rub": 221,
+            "original_price": 316,
+            "checkout_autorenew_disclosed": True, "autorenew_enabled": True,
+        })
+        self.assertIn("К оплате сейчас: <b>221 ₽</b>", text)
+        self.assertIn("повторное списание 316 ₽ за следующие 120 дней", text)
+
+    def test_recurring_quote_is_validated_and_legacy_terms_preserved(self):
+        from webhook import _recurring_terms_for_saved_method
+        quote = {
+            "months": "3", "auto_renew_recurring_price_rub": "316",
+            "auto_renew_recurring_days": "120",
+        }
+        self.assertEqual(_recurring_terms_for_saved_method(quote, 221, 125, 2), (316, 120))
+        self.assertIsNone(_recurring_terms_for_saved_method(
+            {**quote, "auto_renew_recurring_price_rub": "221"}, 221, 125, 2
+        ))
+        self.assertIsNone(_recurring_terms_for_saved_method(
+            {**quote, "auto_renew_recurring_days": "999"}, 221, 125, 2
+        ))
+        self.assertIsNone(_recurring_terms_for_saved_method(
+            {**quote, "auto_renew_recurring_days": None}, 221, 125, 2
+        ))
+        self.assertEqual(_recurring_terms_for_saved_method({}, 221, 125, 2), (221, 125))
+
     async def test_legacy_checkout_never_converts_one_time_into_recurring(self):
         from handlers.buy import _get_checkout_params
         state = SimpleNamespace(get_data=AsyncMock(return_value={
