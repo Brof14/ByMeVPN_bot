@@ -69,5 +69,13 @@ automatic server selection) remain gated on feasibility, pricing approval,
 or measured production data. The audit itself recommends testing before
 shipping these features. Tariff or bonus-month pricing was not changed.
 
+The audit also recommends restructuring the large database, admin, API, and
+payment modules. That behavior-neutral refactor is kept separate from this
+customer-facing and billing-safety change so it can be reviewed and tested by
+responsibility boundaries. Likewise, single-use handoff tickets need a design
+that accounts for legitimate browser/link previews; this PR shortens their
+lifetime to one hour and keeps subscription URLs out of the ticket query.
+
+
 The user confirms the bot is already an administrator in the channel; this is
 not listed as an outstanding prerequisite.
