@@ -194,7 +194,10 @@
       const head = await fetch(url.href, {method:'HEAD', cache:'no-store', credentials:'omit'});
       const bytes = head.ok ? Number(head.headers.get('content-length') || 0) : 0;
       const size = bytes ? ` · ${(bytes / 1024 / 1024).toFixed(1)} МБ` : '';
-      status.textContent = `Версия ${String(data.version_name)} · Android 7.0+ · SHA-256: ${data.sha256}${size}`;
+      const android = data.min_android_version || '7.0';
+      const published = data.published_at ? ` · опубликовано ${data.published_at}` : '';
+      const signing = /^[a-f\\d]{64}$/i.test(data.signing_certificate_sha256 || '') ? ` · сертификат SHA-256: ${data.signing_certificate_sha256}` : '';
+      status.textContent = `Версия ${String(data.version_name)} · Android ${android}+ · SHA-256: ${data.sha256}${size}${published}${signing}`;
     } catch (_) {
       // The direct official release link remains available when the feed is offline.
     }
