@@ -154,7 +154,7 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertNotIn("Если не открылось — скопировать", page)
         self.assertIn('src="/app/assets/bymevpn-logo.png"', page)
         self.assertIn("Выберите приложение и подключитесь", page)
-        self.assertIn("https://bymevpn.duckdns.org/app/downloads/ByMeVPN-v1.0.14.apk", page)
+        self.assertIn("href=\"/app\">открыть страницу загрузки ByMeVPN", page)
         self.assertIn("Рекомендуем", page)
         self.assertIn('<details id="alternatives">', page)
         self.assertIn('id="copy-subscription"', page)
