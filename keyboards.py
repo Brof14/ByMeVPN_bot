@@ -259,7 +259,8 @@ def key_detail_kb(
         if connect_url else
         InlineKeyboardButton(text="Подключить", callback_data=f"key_instructions:{key_id}")
     )
-    kb.row(connect_button, InlineKeyboardButton(text="Продлить", callback_data=f"key_renew:{key_id}"))
+    kb.row(connect_button)
+    kb.row(InlineKeyboardButton(text="Продлить", callback_data=f"key_renew:{key_id}"))
     # Manual import remains available within the connection instructions.
     if has_history:
         kb.row(InlineKeyboardButton(text="История подписок", callback_data="key_history"))
