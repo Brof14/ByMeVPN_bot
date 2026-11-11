@@ -51,8 +51,8 @@ def _load_manifest() -> dict:
                 or parsed.path != f"/app/downloads/{filename}"
                 or parsed.query or parsed.fragment
                 or not re.fullmatch(r"[a-fA-F0-9]{64}", digest)
-                or (published_at and not re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}", published_at))
-                or not re.fullmatch(r"\\d+\\.\\d+(?:\\.\\d+)?", min_android_version)
+                or (published_at and not re.fullmatch(r"\d{4}-\\d{2}-\\d{2}", published_at))
+                or not re.fullmatch(r"\d+\.\\d+(?:\.\\d+)?", min_android_version)
                 or (signing_certificate_sha256 and not re.fullmatch(r"[a-f0-9]{64}", signing_certificate_sha256))
                 or (manifest_size is not None and (not isinstance(manifest_size, int) or isinstance(manifest_size, bool) or manifest_size <= 0))
                 or len(notes) > 4000):
