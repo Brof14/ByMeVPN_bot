@@ -6757,12 +6757,19 @@ async def reserve_channel_subscription_bonus(user_id: int) -> bool:
             awarded_at INTEGER
         )
     """)
-    cur = await db.execute(
+    await db.execute(
         "INSERT OR IGNORE INTO channel_subscription_bonus(user_id, status) VALUES(?, 'reserved')",
         (int(user_id),),
     )
+    cur = await db.execute(
+        "SELECT status FROM channel_subscription_bonus WHERE user_id=?",
+        (int(user_id),),
+    )
+    row = await cur.fetchone()
     await db.commit()
-    return cur.rowcount == 1
+    # A reserved reward can be retried safely: channel_bonus provisioning keeps
+    # one immutable expiry target. Awarded rows remain permanently closed.
+    return bool(row and row[0] == "reserved")
 
 
 async def complete_channel_subscription_bonus(user_id: int) -> bool:
