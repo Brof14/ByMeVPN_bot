@@ -6336,19 +6336,22 @@ async def mark_ad_notification_opened(user_id: int, campaign_id: int) -> bool:
 
 
 async def calculate_bonus_months(subscriber_count: int) -> int:
-    """Calculate bonus months based on subscriber count."""
+    """New campaign rewards; existing applications retain their saved terms.
+
+    Caps high-cost free access for low-reach channels. This is intentionally
+    independent of historic ad_applications.bonus_months.
+    """
     if subscriber_count >= 350:
-        return 24  # 2 years
-    elif subscriber_count >= 250:
-        return 12  # 1 year
-    elif subscriber_count >= 150:
-        return 8
-    elif subscriber_count >= 100:
+        return 12
+    if subscriber_count >= 250:
         return 6
-    elif subscriber_count >= 50:
+    if subscriber_count >= 150:
         return 4
-    else:
+    if subscriber_count >= 100:
+        return 3
+    if subscriber_count >= 50:
         return 2
+    return 1
 
 
 async def log_ad_analytics_event(user_id: int, event_type: str, details: dict = None) -> None:
