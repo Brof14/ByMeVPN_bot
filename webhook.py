@@ -924,7 +924,10 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                     logger.debug("Failed to send autorenew notification to user %d: %s", user_id, notify_e)
             else:
                 pm = payment.get("payment_method") or {}
-                if pm.get("saved") and pm.get("id"):
+                if (
+                    pm.get("saved") and pm.get("id") and key_id is not None
+                    and metadata.get("auto_renew_consent") == "1"
+                ):
                     pm_id = pm["id"]
                     pm_title = pm.get("title", "")
                     pm_type = pm.get("type", "bank_card")
