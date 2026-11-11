@@ -57,23 +57,23 @@ class ExpiryReminderRegression(unittest.IsolatedAsyncioTestCase):
         self.assertIn("К оплате: 221 ₽", send.await_args.args[2])
         self.assertEqual(state.update_data.await_args.kwargs["promo_code"], "BOUND")
 
-    async def test_zero_price_promo_does_not_offer_an_unpayable_invoice(self):
+    async def test_zero_price_promo_is_delivered_without_an_invoice(self):
         from handlers.buy import cb_select_tariff
         callback = SimpleNamespace(data="tariff_1_2", from_user=SimpleNamespace(id=123))
         promo = {"code": "FREE", "promo_type": "percent", "discount_value": 100, "tariff_binding": None}
-        state = SimpleNamespace(get_data=AsyncMock(return_value={"promo_info": promo, "promo_code": "FREE"}), update_data=AsyncMock())
+        state = SimpleNamespace(get_data=AsyncMock(return_value={"promo_info": promo, "promo_code": "FREE"}), update_data=AsyncMock(), clear=AsyncMock())
         with (
             patch("handlers.buy.safe_answer", new=AsyncMock()),
             patch("handlers.buy.send_with_photo", new=AsyncMock()) as send,
             patch("handlers.buy.validate_promo_code", new=AsyncMock(return_value=promo)),
             patch("handlers.buy.has_user_used_promo", new=AsyncMock(return_value=False)),
+            patch("handlers.buy.deliver_key", new=AsyncMock(return_value=True)) as deliver,
+            patch("handlers.buy.record_fulfilled_promo", new=AsyncMock()),
         ):
             await cb_select_tariff(callback, object(), state)
-        self.assertIn("нулевой суммой", send.await_args.args[2])
-        actions = [button.callback_data for row in send.await_args.args[3].inline_keyboard for button in row]
-        self.assertFalse(any(action and action.startswith("pay_") for action in actions))
-        self.assertIsNone(state.update_data.await_args.kwargs["price_rub"])
-
+        self.assertIn("Доступ активирован", send.await_args.args[2])
+        self.assertEqual(deliver.await_args.kwargs["method"], "promo")
+        self.assertFalse(any(button.callback_data and button.callback_data.startswith("pay_") for row in send.await_args.args[3].inline_keyboard for button in row))
     async def test_stale_zero_price_order_cannot_create_invoice(self):
         from handlers.buy import _get_checkout_params
         state = SimpleNamespace(get_data=AsyncMock(return_value={"price_rub": 0, "days": 30, "months": 1, "devices": 2}))
