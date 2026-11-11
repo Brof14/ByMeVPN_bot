@@ -876,12 +876,9 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(await get_yookassa_trial_pending(user_id))
             self.assertTrue(await is_yookassa_processed("yk_trial_payment_1"))
 
-            ars = await get_auto_renew_subscription(user_id)
-            self.assertIsNotNone(ars)
-            self.assertEqual(ars["amount_rub"], constants.RECURRING_MONTHLY_PRICE)  # 89, not 1
-            self.assertEqual(ars["days"], constants.RECURRING_DAYS)                # 30, not 3
-            self.assertEqual(ars["payment_method_id"], "pm_trial_1")
-            self.assertEqual(ars["status"], "active")
+            # The provider returning a saved method is not customer consent.
+            # This legacy trial metadata has no explicit recurring opt-in.
+            self.assertIsNone(await get_auto_renew_subscription(user_id))
 
         asyncio.run(run_test())
 
