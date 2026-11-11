@@ -155,7 +155,7 @@ async def app_login_redirect(sub: str = "", name: str = "", ticket: str = ""):
             handoff = read_connect_ticket(ticket)
         except (ValueError, RuntimeError):
             return HTMLResponse(
-                "Ссылка подключения истекла или недействительна. <a href="https://t.me/ByMeVPNSupportBot">Откройте поддержку</a> или вернитесь в бот и запросите новую.",
+                "Ссылка подключения истекла или недействительна. <a href='https://t.me/ByMeVPNSupportBot'>Откройте поддержку</a> или вернитесь в бот и запросите новую.",
                 status_code=400,
                 headers={
                     "Cache-Control": "no-store, max-age=0",
