@@ -55,11 +55,11 @@ def main_menu_active(key_id: int, subscription_url: str = "") -> InlineKeyboardM
         InlineKeyboardButton(text="Подключить VPN", callback_data=f"key_instructions:{key_id}")
     )
     kb.row(connect_button)
+    # Device management belongs to the subscription details, not the home hub.
     kb.row(
         InlineKeyboardButton(text="Подписка", callback_data="my_keys"),
-        InlineKeyboardButton(text="Устройства", callback_data=f"key_devices:{key_id}"),
+        InlineKeyboardButton(text="Продлить", callback_data=f"key_renew:{key_id}"),
     )
-    kb.row(InlineKeyboardButton(text="Продлить", callback_data=f"key_renew:{key_id}"))
     kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
@@ -249,6 +249,7 @@ def key_detail_kb(
     autorenew_active: bool = False,
     subscription_url: str = "",
     has_history: bool = False,
+    is_active: bool = True,
 ) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     connect_url = None
@@ -263,13 +264,19 @@ def key_detail_kb(
         if connect_url else
         InlineKeyboardButton(text="Подключить", callback_data=f"key_instructions:{key_id}")
     )
-    kb.row(connect_button)
-    kb.row(InlineKeyboardButton(text="Продлить", callback_data=f"key_renew:{key_id}"))
-    # Manual import remains available within the connection instructions.
+    if is_active:
+        kb.row(connect_button)
+        kb.row(
+            InlineKeyboardButton(text="Продлить", callback_data=f"key_renew:{key_id}"),
+            InlineKeyboardButton(text="Устройства", callback_data=f"key_devices:{key_id}"),
+        )
+    else:
+        # An expired entitlement must not suggest that the tunnel is usable.
+        kb.row(InlineKeyboardButton(text="Продлить VPN", callback_data=f"key_renew:{key_id}"))
+        kb.row(InlineKeyboardButton(text="Устройства", callback_data=f"key_devices:{key_id}"))
+    kb.row(InlineKeyboardButton(text="Управление подпиской", callback_data=f"key_settings:{key_id}"))
     if has_history:
         kb.row(InlineKeyboardButton(text="История подписок", callback_data="key_history"))
-    kb.row(InlineKeyboardButton(text="Устройства", callback_data=f"key_devices:{key_id}"))
-    kb.row(InlineKeyboardButton(text="Управление", callback_data=f"key_settings:{key_id}"))
     kb.row(InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu"))
     return kb.as_markup()
 
@@ -325,7 +332,6 @@ def key_settings_kb(key_id: int) -> InlineKeyboardMarkup:
         text="Перевыпустить подписку",
         callback_data=f"key_reissue_confirm:{key_id}",
     ))
-    kb.row(InlineKeyboardButton(text="Проверить подключение", callback_data=f"key_diagnostics:{key_id}"))
     kb.row(InlineKeyboardButton(text="Оплата и автопродление", callback_data=f"manage_payment_methods:{key_id}"))
     # Deliberately do not expose destructive subscription deletion in the customer UI.
     kb.row(InlineKeyboardButton(text="← К подписке", callback_data=f"key_info:{key_id}"))
