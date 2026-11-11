@@ -63,7 +63,7 @@ class UpdateSiteTests(unittest.TestCase):
         self.assertIn("/app/logo", get.text)
         self.assertIn("/app/update.json", get.text)
         self.assertIn("Android 7.0", get.text)
-        self.assertIn('href="https://bymevpn.duckdns.org/app/downloads/ByMeVPN-v1.0.14.apk"', get.text)
+        self.assertIn('id="download" href="#" hidden', get.text)
         self.assertIn('src="/app/logo"', get.text)
         self.assertIn("@media (max-width: 680px)", get.text)
         self.assertIn("prefers-reduced-motion", get.text)
@@ -79,7 +79,7 @@ class UpdateSiteTests(unittest.TestCase):
         manifest = self.client.get("/app/update.json")
         self.assertEqual(manifest.status_code, 200)
         self.assertEqual(set(manifest.json()), {
-            "version_name", "version_code", "download_url", "sha256", "release_notes"})
+            "version_name", "version_code", "download_url", "sha256", "apk_size_bytes", "release_notes", "published_at", "min_android_version", "signing_certificate_sha256"})
         self.assertEqual(manifest.headers["cache-control"], "no-store, max-age=0")
         self.assertEqual(manifest.json()["sha256"], hashlib.sha256(apk_bytes).hexdigest())
         manifest_head = self.client.head("/app/update.json")
