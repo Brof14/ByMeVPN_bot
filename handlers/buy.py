@@ -211,18 +211,28 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
         promo_text = ""
 
     if price_rub <= 0:
-        await state.update_data(price_rub=None, days=None)
-        await send_with_photo(
-            bot, callback,
-            "<b>Промокод покрывает стоимость</b>\n\n"
-            "Заказ с нулевой суммой пока нельзя оформить автоматически. "
-            "Промокод не использован: выберите другой срок или напишите в поддержку.",
-            InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Написать в поддержку", url=support_url())],
-                [InlineKeyboardButton(text="← К тарифам", callback_data=f"devtier_{devices}")],
-            ]),
-            photo=PLANS,
+        payload = f"freepromo_{callback.from_user.id}_{promo_code}_{months}_{devices}"
+        delivered = await deliver_key(
+            bot=bot, user_id=callback.from_user.id, chat_id=callback.from_user.id,
+            config_name=f"ByMeVPN_{callback.from_user.id}", days=days, limit_ip=devices,
+            is_paid=False, amount=0, method="promo", payload=payload, extend_existing=True,
         )
+        if not delivered:
+            await send_with_photo(bot, callback,
+                "<b>Не удалось активировать промокод</b>\\n\\nПромокод не отмечен использованным. Попробуйте позже или обратитесь в поддержку.",
+                InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Поддержка", url=support_url())],
+                    [InlineKeyboardButton(text="← К тарифам", callback_data=f"devtier_{devices}")],
+                ]), photo=PLANS)
+            return
+        await record_fulfilled_promo(bot, promo_code, callback.from_user.id, "free_promo", payload)
+        await state.clear()
+        await send_with_photo(bot, callback,
+            f"<b>Доступ активирован</b>\\n\\nНачислено {days} дней ByMeVPN по промокоду.",
+            InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Подключить VPN", callback_data="my_keys")],
+                [InlineKeyboardButton(text="Главное меню", callback_data="back_to_menu")],
+            ]), photo=PLANS)
         return
 
     await state.update_data(
