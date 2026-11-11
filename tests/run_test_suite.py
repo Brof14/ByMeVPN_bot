@@ -20,7 +20,6 @@ def main() -> int:
     suite = unittest.defaultTestLoader.discover(
         start_dir=str(PROJECT_ROOT / "tests"),
         pattern="test_*.py",
-        top_level_dir=str(PROJECT_ROOT),
     )
     result = unittest.TextTestRunner(
         verbosity=0 if args.quiet else 2 if args.verbose else 1,
