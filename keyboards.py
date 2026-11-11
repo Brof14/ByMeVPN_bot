@@ -200,10 +200,6 @@ def payment_kb(
         callback_data="pay_yookassa",
     ))
     kb.row(InlineKeyboardButton(
-        text=("Автопродление: включено" if autorenew_enabled else "Автопродление: выключено"),
-        callback_data="autorenew_checkout_toggle",
-    ))
-    kb.row(InlineKeyboardButton(
         text=f"CryptoBot · {price_rub} ₽",
         callback_data="pay_crypto",
     ))

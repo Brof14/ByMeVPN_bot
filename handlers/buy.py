@@ -82,7 +82,9 @@ def _checkout_confirmation_text(data: dict) -> str:
     recurring_price, recurring_days = get_price_for_months(months, devices)
     dev_name = DEVICE_CONFIG.get(devices, {}).get("name", f"{devices} устройств")
     lines = [
-        "<b>Подтверждение подписки</b>",
+        "<b>Проверьте заказ перед оплатой</b>",
+        "",
+        "После подтверждения платежа доступ активируется автоматически.",
         "",
         f"Срок: <b>{term}</b> ({days} дней)",
         f"Устройства: <b>{dev_name}</b>",
@@ -109,7 +111,6 @@ def _checkout_confirmation_text(data: dict) -> str:
         "Отключить автопродление позже можно в настройках подписки; оплаченные дни сохранятся.",
         "Telegram Stars и CryptoBot — разовые платежи.",
         "",
-        "Доступ откроется после подтверждения оплаты.",
         "Оплачивая, вы соглашаетесь с <a href='https://telegra.ph/Publichnaya-oferta-na-okazanie-uslug-ByMeVPN-10-25'>офертой</a> "
         "и <a href='https://telegra.ph/Politika-v-otnoshenii-obrabotki-personalnyh-dannyh-ByMeVPN-10-25'>политикой конфиденциальности</a>.",
         "",

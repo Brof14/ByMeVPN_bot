@@ -112,7 +112,7 @@ if (
 # to the currently used client subscription set.
 def _parse_xui_inbound_ids(value: str | None) -> list[int]:
     """Parse configured panel inbounds; default to the current production set."""
-    raw = (value or "13,14,40").strip()
+    raw = (value or "14,45,47").strip()
     try:
         inbound_ids = [int(item.strip()) for item in raw.split(",") if item.strip()]
     except ValueError as exc:

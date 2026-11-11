@@ -1307,9 +1307,11 @@ async def start_connection_tls_server() -> None:
     from pathlib import Path
 
     from fastapi import FastAPI, HTTPException
+    from fastapi.middleware.gzip import GZipMiddleware
     from fastapi.responses import FileResponse, JSONResponse
 
     secure_app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    secure_app.add_middleware(GZipMiddleware, minimum_size=1024)
     secure_app.add_api_route("/connect", connection_choice_page, methods=["GET"])
     secure_app.add_api_route("/app/login", app_login_redirect, methods=["GET"])
 
