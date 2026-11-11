@@ -155,7 +155,7 @@ async def app_login_redirect(sub: str = "", name: str = "", ticket: str = ""):
             handoff = read_connect_ticket(ticket)
         except (ValueError, RuntimeError):
             return HTMLResponse(
-                "Ссылка подключения недействительна или устарела. Откройте бота и запросите новую.",
+                "Ссылка подключения истекла или недействительна. <a href="https://t.me/ByMeVPNSupportBot">Откройте поддержку</a> или вернитесь в бот и запросите новую.",
                 status_code=400,
                 headers={
                     "Cache-Control": "no-store, max-age=0",
@@ -169,7 +169,7 @@ async def app_login_redirect(sub: str = "", name: str = "", ticket: str = ""):
         name = handoff["user_name"]
     elif sub:
         return HTMLResponse(
-            "Ссылка устарела. Откройте бота и снова нажмите «Подключить VPN».",
+            "Ссылка устарела. <a href="https://t.me/ByMeVPNSupportBot">Откройте поддержку</a> или вернитесь в бот и снова нажмите «Подключить VPN».",
             status_code=400,
             headers={
                 "Cache-Control": "no-store, max-age=0",
@@ -211,7 +211,7 @@ async def connection_choice_page(ticket: str = ""):
         page = render_connection_choice_page(payload["subscription_url"], payload["user_name"])
     except (ValueError, RuntimeError):
         return HTMLResponse(
-            """<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Ссылка недоступна — ByMeVPN</title><style>body{margin:0;background:#07111d;color:#f3f7fb;font:16px/1.5 system-ui,sans-serif}main{max-width:480px;margin:12vh auto;padding:24px}h1{font-size:24px}p{color:#a9b9c8}a{color:#80dfff}</style><main><img src="/app/assets/bymevpn-logo.png" width="44" height="44" alt="ByMeVPN"><h1>Ссылка недоступна</h1><p>Возможно, она устарела или повреждена. Откройте бота и снова нажмите «Подключить» в разделе подписки.</p></main></html>""",
+            """<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Ссылка недоступна — ByMeVPN</title><style>body{margin:0;background:#07111d;color:#f3f7fb;font:16px/1.5 system-ui,sans-serif}main{max-width:480px;margin:12vh auto;padding:24px}h1{font-size:24px}p{color:#a9b9c8}a{color:#80dfff}</style><main><img src="/app/assets/bymevpn-logo.png" width="44" height="44" alt="ByMeVPN"><h1>Ссылка недоступна</h1><p>Возможно, ссылка устарела или повреждена. Вернитесь в бот и запросите новую ссылку в разделе подписки.</p><p><a href="https://t.me/ByMeVPNSupportBot">Открыть поддержку ByMeVPN</a></p></main></html>""",
             status_code=400,
             headers={
                 "Cache-Control": "no-store, max-age=0",
