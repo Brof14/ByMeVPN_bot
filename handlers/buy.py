@@ -127,8 +127,11 @@ def _checkout_confirmation_text(data: dict) -> str:
     return "\n".join(lines)
 
 
-async def _show_checkout(bot: Bot, callback: CallbackQuery, state: FSMContext) -> None:
-    data = await state.get_data()
+async def _show_checkout(
+    bot: Bot, callback: CallbackQuery, state: FSMContext, data: dict | None = None,
+) -> None:
+    if data is None:
+        data = await state.get_data()
     await send_with_photo(
         bot, callback, _checkout_confirmation_text(data),
         payment_kb(
@@ -346,7 +349,17 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
         amount=price_rub, promo=promo_info.get("code") if promo_info else None,
     )
 
-    await _show_checkout(bot, callback, state)
+    # Render from the authoritative newly calculated order. Tests and adapter
+    # FSM backends need not reflect update_data() in get_data() immediately.
+    checkout_display = {
+        **data,
+        "months": months, "devices": devices, "price_rub": price_rub,
+        "days": days, "original_price": original_price,
+        "promo_mismatch": promo_mismatch,
+        "checkout_autorenew_disclosed": True,
+        "autorenew_enabled": bool(data.get("autorenew_enabled", True)),
+    }
+    await _show_checkout(bot, callback, state, checkout_display)
 
 # ---------------------------------------------------------------------------
 # Step 3: Choose payment method
