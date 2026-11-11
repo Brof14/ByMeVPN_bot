@@ -56,13 +56,14 @@ class CommercialNavigationTests(unittest.TestCase):
         from keyboards import tariff_selection_kb
         menu = tariff_selection_kb(devices=2)
         labels = {b.callback_data: b.text for row in menu.inline_keyboard for b in row}
-        for months, duration, total in (
-            (1, 1, 89), (3, 4, 316), (6, 8, 552), (12, 15, 885)
+        for months, label, total in (
+            (1, "1 мес.", 89), (3, "3+1 мес.", 316),
+            (6, "6+2 мес.", 552), (12, "12+3 мес.", 885)
         ):
             text = labels[f"tariff_{months}_2"]
-            self.assertIn(f"{duration} мес.", text)
+            self.assertIn(label, text)
             self.assertIn(f"{total} ₽ всего", text)
-            self.assertNotIn("🎁", text)
+            self.assertEqual("🎁" in text, months > 1)
 
     def test_connection_html_has_no_stale_apk_hardcoding(self):
         root = Path(__file__).resolve().parents[1]
