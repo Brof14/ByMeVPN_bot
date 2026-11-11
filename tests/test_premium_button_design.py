@@ -21,7 +21,7 @@ class PremiumButtonDesignTests(unittest.IsolatedAsyncioTestCase):
             menu = main_menu_with_keys(trial_used=True)
         by_callback = {button.callback_data: button for button in buttons(menu)}
         self.assertEqual(by_callback["my_keys"].style, "primary")
-        self.assertIsNone(by_callback["buy_vpn"].style)
+        self.assertEqual(by_callback["buy_vpn"].style, "primary")
         self.assertEqual(by_callback["my_keys"].icon_custom_emoji_id, "6005570495603282482")
         self.assertEqual(by_callback["buy_vpn"].icon_custom_emoji_id, "5983399041197675256")
         self.assertEqual(by_callback["free_vpn"].icon_custom_emoji_id, "6023826881160157558")
@@ -43,13 +43,13 @@ class PremiumButtonDesignTests(unittest.IsolatedAsyncioTestCase):
         delete = themed_button(text="Удалить", callback_data="key_device_delete:5:10")
         back = themed_button(text="Назад", callback_data="back_to_menu")
         self.assertEqual(delete.style, "danger")
-        self.assertEqual(back.style, "danger")
+        self.assertEqual(back.style, "primary")
 
     def test_legacy_back_buttons_are_red(self):
         with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "1"}):
             for title in ("🔙 Главное меню", "🏠 Главное меню", "← Назад", "◀️ Назад"):
                 button = themed_button(text=title, callback_data="admin_menu")
-                self.assertEqual(button.style, "danger")
+                self.assertEqual(button.style, "primary")
                 self.assertEqual(button.icon_custom_emoji_id, "5875082500023258804")
                 self.assertNotIn("Главное менюГлавное меню", button.text)
 

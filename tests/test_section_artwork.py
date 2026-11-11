@@ -45,6 +45,7 @@ class TestSectionArtwork(unittest.IsolatedAsyncioTestCase):
         callback = SimpleNamespace(from_user=SimpleNamespace(id=5))
         with (
             patch("handlers.start.safe_answer", new=AsyncMock()),
+            patch("database.log_analytics_event", new=AsyncMock()),
             patch("handlers.start.send_with_photo", new=AsyncMock()) as send,
         ):
             await cb_free_vpn(callback, object())

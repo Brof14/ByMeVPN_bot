@@ -51,13 +51,13 @@
       grid-template-columns: minmax(0, 1.2fr) minmax(180px, .8fr);
       align-items: center;
       gap: clamp(24px, 5vw, 72px);
-      min-height: 430px;
-      padding: clamp(28px, 6vw, 72px);
+      min-height: 0;
+      padding: clamp(24px, 4vw, 44px);
       overflow: clip;
       border: 1px solid var(--color-line);
       border-radius: var(--radius-card);
       background: var(--color-surface);
-      box-shadow: 0 24px 80px var(--color-shadow);
+      box-shadow: 0 12px 36px var(--color-shadow);
     }
     .hero::before {
       position: absolute;
@@ -70,13 +70,13 @@
     .brand-stage { display: grid; place-items: center; }
     .brand-logo {
       display: block;
-      width: min(100%, 250px);
+      width: min(100%, 144px);
       height: auto;
       aspect-ratio: 1;
       object-fit: contain;
       border: 1px solid var(--color-line);
-      border-radius: 30px;
-      box-shadow: 0 16px 54px var(--color-shadow);
+      border-radius: 22px;
+      box-shadow: 0 8px 24px var(--color-shadow);
     }
     h1, h2, p { margin-top: 0; }
     h1 {
@@ -84,7 +84,7 @@
       margin-bottom: 16px;
       overflow-wrap: break-word;
       min-width: 0;
-      font-size: clamp(2.3rem, 7vw, 5rem);
+      font-size: clamp(2rem, 5vw, 3.5rem);
       line-height: 1.02;
       letter-spacing: -.045em;
     }
@@ -147,8 +147,8 @@
     <div class="hero-copy">
       <h1>ByMeVPN для Android</h1>
       <p class="lead">Подключайтесь к привычным приложениям и сайтам — в пару простых шагов.</p>
-      <a class="download" href="https://bymevpn.duckdns.org/app/downloads/ByMeVPN-v1.0.14.apk" rel="noopener noreferrer">Скачать ByMeVPN для Android</a>
-      <p class="release" id="release" role="status" aria-live="polite">Версия 1.0.14 · APK из официального релиза ByMeVPN</p>
+      <a class="download" id="download" href="#" hidden rel="noopener noreferrer">Скачать ByMeVPN для Android</a>
+      <p class="release" id="release" role="status" aria-live="polite">Поддерживается Android 7.0 и новее · Сверьте SHA-256 перед установкой</p>
     </div>
     <div class="brand-stage">
       <img class="brand-logo" src="/app/logo" alt="Логотип ByMeVPN" width="1254" height="1254" fetchpriority="high">
@@ -165,7 +165,7 @@
     </article>
     <article class="detail">
       <h2>Другие платформы</h2>
-      <p>На странице подключения выберите Android, iPhone, Windows, macOS или Linux — список приложений подстроится под устройство.</p>
+      <p>После установки вернитесь в бот ByMeVPN и нажмите «Подключить VPN».</p>
     </article>
     <article class="detail">
       <h2>Нужна помощь?</h2>
@@ -183,15 +183,24 @@
     const status = document.getElementById('release');
     try {
       const response = await fetch('/app/update.json', {cache:'no-store', credentials:'omit'});
-      if (!response.ok) return;
+      if (!response.ok) throw new Error('release feed unavailable');
       const data = await response.json();
       const url = new URL(data.download_url);
       if (url.protocol !== 'https:' || url.hostname !== 'bymevpn.duckdns.org' ||
           !/^\/app\/downloads\/ByMeVPN-v\d+\.\d+\.\d+\.apk$/.test(url.pathname) ||
-          !/^[a-f\d]{64}$/i.test(data.sha256)) return;
-      status.textContent = `В ленте опубликована версия ${String(data.version_name)}. Кнопка скачивания ведёт на релиз 1.0.12.`;
+          !/^[a-f\d]{64}$/i.test(data.sha256)) throw new Error('invalid release manifest');
+      const download = document.getElementById('download');
+      download.href = url.href;
+      download.hidden = false;
+      const head = await fetch(url.href, {method:'HEAD', cache:'no-store', credentials:'omit'});
+      const bytes = head.ok ? Number(head.headers.get('content-length') || 0) : 0;
+      const size = bytes ? ` · ${(bytes / 1024 / 1024).toFixed(1)} МБ` : '';
+      const android = data.min_android_version || '7.0';
+      const published = data.published_at ? ` · опубликовано ${data.published_at}` : '';
+      const signing = /^[a-f\d]{64}$/i.test(data.signing_certificate_sha256 || '') ? ` · сертификат SHA-256: ${data.signing_certificate_sha256}` : '';
+      status.textContent = `Версия ${String(data.version_name)} · Android ${android}+ · SHA-256: ${data.sha256}${size}${published}${signing}`;
     } catch (_) {
-      // The direct official release link remains available when the feed is offline.
+      status.textContent = 'Актуальный релиз временно недоступен. Напишите в поддержку ByMeVPN.';
     }
   })();
 </script>

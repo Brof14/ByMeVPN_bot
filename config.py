@@ -46,6 +46,9 @@ from bot_instance import normalize_bot_instance_mode
 BOT_INSTANCE_MODE = normalize_bot_instance_mode(os.getenv("BOT_INSTANCE_MODE"))
 REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
 SUPPORT_USERNAME = "@ByMeVPNSupportBot"
+# The bot must be an administrator of this channel for getChatMember checks.
+CHANNEL_BONUS_CHAT_ID = os.getenv("CHANNEL_BONUS_CHAT_ID", "@ByMeVPN").strip() or "@ByMeVPN"
+CHANNEL_BONUS_URL = os.getenv("CHANNEL_BONUS_URL", "https://t.me/ByMeVPN").strip() or "https://t.me/ByMeVPN"
 MENU_PHOTO = os.getenv("MENU_PHOTO", "")
 # DB_FILE is NOT defined independently here anymore — database.py is the single
 # source of truth (it reads the same .env var). Re-exporting it avoids the old

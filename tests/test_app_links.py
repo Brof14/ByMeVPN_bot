@@ -133,8 +133,8 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertEqual([a["name"] for a in apps["android"]], ["ByMeVPN", "Happ", "INCY", "v2rayTun", "v2rayNG", "Hiddify", "sing-box"])
         self.assertEqual(apps["android"][0]["deep"], "bymevpn://login?auth=telegram")
         self.assertNotIn("sub.example", apps["android"][0]["deep"])
-        self.assertEqual(apps["android"][0]["download"],
-                         "https://bymevpn.duckdns.org/app/downloads/ByMeVPN-v1.0.14.apk")
+        self.assertTrue(apps["android"][0]["download"].endswith("/app"))
+        self.assertEqual(urlsplit(apps["android"][0]["download"]).scheme, "https")
         self.assertEqual([a["name"] for a in apps["ios"]], ["Happ", "INCY", "v2rayTun", "Hiddify", "sing-box"])
         for platform in ("windows", "macos", "linux"):
             self.assertIn("v2rayN", [a["name"] for a in apps[platform]])
@@ -154,9 +154,10 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertNotIn("Если не открылось — скопировать", page)
         self.assertIn('src="/app/assets/bymevpn-logo.png"', page)
         self.assertIn("Выберите приложение и подключитесь", page)
-        self.assertIn("https://bymevpn.duckdns.org/app/downloads/ByMeVPN-v1.0.14.apk", page)
+        self.assertIn("Не удалось определить устройство. Выберите платформу вручную ниже.", page)
+        self.assertIn("href=\"/app\">открыть страницу загрузки ByMeVPN", page)
         self.assertIn("Рекомендуем", page)
-        self.assertIn('<details id="alternatives" open>', page)
+        self.assertIn('<details id="alternatives">', page)
         self.assertIn('id="copy-subscription"', page)
         self.assertEqual(page.count("Скопировать ссылку"), 1)
         self.assertNotIn("Если не открылось — скопировать ссылку", page)
@@ -177,18 +178,18 @@ class TestAppOpenPage(unittest.TestCase):
 
 
 class TestConnectionPageHttp(unittest.TestCase):
-    def test_extended_lifetime_and_legacy_ticket(self):
+    def test_current_and_legacy_tickets_expire_within_one_hour(self):
         import base64
         from app_links import _connect_aead
         with patch.dict(os.environ, {"APP_HANDOFF_SECRET": "isolated-test-secret"}):
             ticket = build_connect_ticket("https://sub.example/demo", now=1_000_000)
-            self.assertEqual(read_connect_ticket(ticket, now=1_000_000 + 86400)["subscription_url"], "https://sub.example/demo")
+            self.assertEqual(read_connect_ticket(ticket, now=1_000_000 + 3600)["subscription_url"], "https://sub.example/demo")
             with self.assertRaises(ValueError):
                 read_connect_ticket(ticket, now=1_000_001 + CONNECT_TICKET_TTL_SECONDS)
             payload = json.dumps({"sub": "https://sub.example/demo", "exp": 1_000_000 + 900}).encode()
             nonce = os.urandom(12)
             legacy = base64.urlsafe_b64encode(nonce + _connect_aead().encrypt(nonce, payload, b"bymevpn-connect-ticket-v1")).decode().rstrip("=")
-            self.assertEqual(read_connect_ticket(legacy, now=1_000_000 + 86400)["subscription_url"], "https://sub.example/demo")
+            self.assertEqual(read_connect_ticket(legacy, now=1_000_000 + 1800)["subscription_url"], "https://sub.example/demo")
             with self.assertRaises(ValueError):
                 read_connect_ticket(legacy, now=1_000_001 + CONNECT_TICKET_TTL_SECONDS)
 

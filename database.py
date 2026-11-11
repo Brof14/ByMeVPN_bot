@@ -6743,3 +6743,41 @@ async def close_db() -> None:
     if _db_pool:
         await _db_pool.close()
         _db_pool = None
+
+
+# One award per Telegram ID. A reserved row is intentionally retained after an
+# uncertain delivery so retries cannot accidentally grant a duplicate reward.
+async def reserve_channel_subscription_bonus(user_id: int) -> bool:
+    db = await get_db()
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS channel_subscription_bonus (
+            user_id INTEGER PRIMARY KEY,
+            status TEXT NOT NULL DEFAULT 'reserved',
+            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+            awarded_at INTEGER
+        )
+    """)
+    await db.execute(
+        "INSERT OR IGNORE INTO channel_subscription_bonus(user_id, status) VALUES(?, 'reserved')",
+        (int(user_id),),
+    )
+    cur = await db.execute(
+        "SELECT status FROM channel_subscription_bonus WHERE user_id=?",
+        (int(user_id),),
+    )
+    row = await cur.fetchone()
+    await db.commit()
+    # A reserved reward can be retried safely: channel_bonus provisioning keeps
+    # one immutable expiry target. Awarded rows remain permanently closed.
+    return bool(row and row[0] == "reserved")
+
+
+async def complete_channel_subscription_bonus(user_id: int) -> bool:
+    db = await get_db()
+    cur = await db.execute(
+        "UPDATE channel_subscription_bonus SET status='awarded', awarded_at=strftime('%s','now') "
+        "WHERE user_id=? AND status='reserved'",
+        (int(user_id),),
+    )
+    await db.commit()
+    return cur.rowcount == 1

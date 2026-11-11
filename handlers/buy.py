@@ -6,7 +6,6 @@ import asyncio
 import time
 import logging
 import weakref
-from urllib.parse import quote_plus
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
@@ -211,18 +210,28 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
         promo_text = ""
 
     if price_rub <= 0:
-        await state.update_data(price_rub=None, days=None)
-        await send_with_photo(
-            bot, callback,
-            "<b>Промокод покрывает стоимость</b>\n\n"
-            "Заказ с нулевой суммой пока нельзя оформить автоматически. "
-            "Промокод не использован: выберите другой срок или напишите в поддержку.",
-            InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Написать в поддержку", url=support_url())],
-                [InlineKeyboardButton(text="← К тарифам", callback_data=f"devtier_{devices}")],
-            ]),
-            photo=PLANS,
+        payload = f"freepromo_{callback.from_user.id}_{promo_code}_{months}_{devices}"
+        delivered = await deliver_key(
+            bot=bot, user_id=callback.from_user.id, chat_id=callback.from_user.id,
+            config_name=f"ByMeVPN_{callback.from_user.id}", days=days, limit_ip=devices,
+            is_paid=False, amount=0, method="promo", payload=payload, extend_existing=True,
         )
+        if not delivered:
+            await send_with_photo(bot, callback,
+                "<b>Не удалось активировать промокод</b>\\n\\nПромокод не отмечен использованным. Попробуйте позже или обратитесь в поддержку.",
+                InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Поддержка", url=support_url())],
+                    [InlineKeyboardButton(text="← К тарифам", callback_data=f"devtier_{devices}")],
+                ]), photo=PLANS)
+            return
+        await record_fulfilled_promo(bot, promo_code, callback.from_user.id, "free_promo", payload)
+        await state.clear()
+        await send_with_photo(bot, callback,
+            f"<b>Доступ активирован</b>\\n\\nНачислено {days} дней ByMeVPN по промокоду.",
+            InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Подключить VPN", callback_data="my_keys")],
+                [InlineKeyboardButton(text="Главное меню", callback_data="back_to_menu")],
+            ]), photo=PLANS)
         return
 
     await state.update_data(
@@ -265,9 +274,9 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
     text += (
         "\nДоступ активируется после подтверждения оплаты.\n\n"
         "<b>Автопродление</b>\n"
-        "При сохранении способа оплаты в ЮKassa подписка может автоматически "
-        f"продлеваться на {days} дней за {price_rub} ₽. Условия и возможность отключения "
-        "доступны в разделе «Оплата и автопродление».\n\n"
+        f"Разовый платёж через ЮKassa не включает автопродление. Для него выберите отдельную кнопку "
+        f"ЮKassa с автопродлением: тогда по окончании срока будет списываться {price_rub} ₽ за {days} дней. "
+        "Отключить его можно в разделе «Оплата и автопродление».\n\n"
         "Telegram Stars и CryptoBot — разовые платежи.\n\n"
         "Продолжая, вы принимаете условия <a href='https://telegra.ph/Publichnaya-oferta-na-okazanie-uslug-ByMeVPN-10-25'>оферты</a> и "
         "<a href='https://telegra.ph/Politika-v-otnoshenii-obrabotki-personalnyh-dannyh-ByMeVPN-10-25'>политики конфиденциальности</a>.\n\n"
@@ -320,6 +329,7 @@ async def _get_checkout_params(state: FSMContext, user_id: int) -> dict | None:
         "months": int(data.get("months", 1)),
         "devices": validate_device_limit(data.get("devices", DEFAULT_DEVICE_LIMIT)),
         "promo_code": data.get("promo_code", ""),
+        "renew_key_id": int(data["renew_key_id"]) if data.get("renew_key_id") else None,
     }
 
 
@@ -436,7 +446,7 @@ async def cb_pay_stars(callback: CallbackQuery, bot: Bot, state: FSMContext):
 # Payment: YooKassa
 # ---------------------------------------------------------------------------
 
-@router.callback_query(F.data == "pay_yookassa")
+@router.callback_query(F.data.in_({"pay_yookassa", "pay_yookassa_autorenew"}))
 async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await safe_answer(callback)
     params = await _get_checkout_params(state, callback.from_user.id)
@@ -449,13 +459,20 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
     devices: int = params["devices"]
     promo_code: str = params["promo_code"]
     user_id = callback.from_user.id
+    save_payment_method = callback.data == "pay_yookassa_autorenew"
 
     if not claim_yookassa_checkout(user_id):
         await callback.message.answer("Запрос на оплату уже выполняется. Подождите немного.")
         return
     try:
         url = await create_yookassa_payment(
-            price_rub, f"ByMeVPN {days} дней ({devices} устр.)", user_id, days, devices, promo_code=promo_code, months=months,
+            price_rub, f"ByMeVPN {days} дней ({devices} устр.)", user_id, days, devices,
+            promo_code=promo_code, months=months,
+            extra_metadata={
+                **({"key_id": params["renew_key_id"]} if params.get("renew_key_id") else {}),
+                **({"auto_renew_consent": "1"} if save_payment_method else {}),
+            },
+            save_payment_method=save_payment_method,
         )
     except Exception as exc:
         # A provider timeout is ambiguous. Never leak internal error details to customers.
@@ -466,10 +483,6 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
 
     if not url:
         await safe_answer(callback)
-        support_text = quote_plus(
-            f"Здравствуйте! Не открывается оплата ByMeVPN через ЮKassa. "
-            f"Хочу оплатить картой: {days} дней, {devices} устройства, {price_rub} ₽."
-        )
         await callback.message.answer(
             "Не удалось открыть оплату через ЮKassa.\n\n"
             "Напишите в поддержку — поможем оплатить подписку банковской картой. "
@@ -477,7 +490,7 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
                     text="💬 Оплатить картой через поддержку",
-                    url=f"https://t.me/ByMeVPNSupportBot?text={support_text}",
+                    url="https://t.me/ByMeVPNSupportBot",
                 )],
                 [InlineKeyboardButton(text="Оплатить через Telegram Stars", callback_data="pay_stars", )],
             ]),

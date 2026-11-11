@@ -88,15 +88,17 @@ class SemanticPremiumEmojiTests(unittest.TestCase):
 
     def test_active_customer_actions_are_colored(self):
         kb = main_menu_active(42)
-        actions = [b.callback_data for b in all_buttons(kb)]
-        self.assertEqual(actions[0], "my_keys")
+        buttons = all_buttons(kb)
+        actions = [b.callback_data for b in buttons]
+        self.assertEqual(buttons[0].text, "Подключить VPN")
+        self.assertEqual(actions[0], "key_instructions:42")
         self.assertIn("my_keys", actions)
-        self.assertTrue(all(b.style in {None, "primary", "success", "danger"} for b in all_buttons(kb)))
+        self.assertTrue(all(b.style in {"primary", "success", "danger"} for b in buttons))
         self.assertTrue(kb.inline_keyboard[-1][-1].url.startswith("https://t.me/ByMeVPNSupportBot"))
 
-    def test_explicit_neutral_style_is_preserved(self):
+    def test_explicit_none_still_receives_a_visible_color(self):
         button = themed_button(text="Тарифы", callback_data="buy_vpn", style=None)
-        self.assertIsNone(button.style)
+        self.assertEqual(button.style, "primary")
 
     def test_delivery_and_platform_guide_prioritize_connection(self):
         kb = after_key_kb("https://example.test/sub")

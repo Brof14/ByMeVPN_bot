@@ -27,6 +27,7 @@ import json
 import logging
 import re
 import traceback
+import time
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
@@ -155,7 +156,7 @@ async def app_login_redirect(sub: str = "", name: str = "", ticket: str = ""):
             handoff = read_connect_ticket(ticket)
         except (ValueError, RuntimeError):
             return HTMLResponse(
-                "Ссылка подключения недействительна или устарела. Откройте бота и запросите новую.",
+                "Ссылка подключения истекла или недействительна. <a href='https://t.me/ByMeVPNSupportBot'>Откройте поддержку</a> или вернитесь в бот и запросите новую.",
                 status_code=400,
                 headers={
                     "Cache-Control": "no-store, max-age=0",
@@ -169,7 +170,7 @@ async def app_login_redirect(sub: str = "", name: str = "", ticket: str = ""):
         name = handoff["user_name"]
     elif sub:
         return HTMLResponse(
-            "Ссылка устарела. Откройте бота и снова нажмите «Подключить VPN».",
+            "Ссылка устарела. <a href='https://t.me/ByMeVPNSupportBot'>Откройте поддержку</a> или вернитесь в бот и снова нажмите «Подключить VPN».",
             status_code=400,
             headers={
                 "Cache-Control": "no-store, max-age=0",
@@ -211,7 +212,7 @@ async def connection_choice_page(ticket: str = ""):
         page = render_connection_choice_page(payload["subscription_url"], payload["user_name"])
     except (ValueError, RuntimeError):
         return HTMLResponse(
-            """<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Ссылка недоступна — ByMeVPN</title><style>body{margin:0;background:#07111d;color:#f3f7fb;font:16px/1.5 system-ui,sans-serif}main{max-width:480px;margin:12vh auto;padding:24px}h1{font-size:24px}p{color:#a9b9c8}a{color:#80dfff}</style><main><img src="/app/assets/bymevpn-logo.png" width="44" height="44" alt="ByMeVPN"><h1>Ссылка недоступна</h1><p>Возможно, она устарела или повреждена. Откройте бота и снова нажмите «Подключить» в разделе подписки.</p></main></html>""",
+            """<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Ссылка недоступна — ByMeVPN</title><style>body{margin:0;background:#07111d;color:#f3f7fb;font:16px/1.5 system-ui,sans-serif}main{max-width:480px;margin:12vh auto;padding:24px}h1{font-size:24px}p{color:#a9b9c8}a{color:#80dfff}</style><main><img src="/app/assets/bymevpn-logo.png" width="44" height="44" alt="ByMeVPN"><h1>Ссылка недоступна</h1><p>Возможно, ссылка устарела или повреждена. Вернитесь в бот и запросите новую ссылку в разделе подписки.</p><p><a href="https://t.me/ByMeVPNSupportBot">Открыть поддержку ByMeVPN</a></p></main></html>""",
             status_code=400,
             headers={
                 "Cache-Control": "no-store, max-age=0",
@@ -657,6 +658,36 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
             await _notify_admin(bot, "⚠️ Данные мобильного платежа не совпали с сохранённым тарифом. Автоматическая выдача остановлена.")
             return
 
+        # Bind a renewal to the key selected when checkout started. Older
+        # checkout metadata may omit it; in that case mirror deliver_key's
+        # deterministic latest-expiry selection. Never use list position.
+        target_key_id = None
+        raw_key_id = metadata.get("key_id")
+        if raw_key_id not in (None, ""):
+            try:
+                target_key_id = int(raw_key_id)
+            except (TypeError, ValueError):
+                target_key_id = 0
+            from database import get_key_by_id
+            selected_key = await get_key_by_id(target_key_id) if target_key_id > 0 else None
+            if not selected_key or selected_key.get("user_id") != user_id:
+                logger.error("YooKassa payment %s has invalid subscription binding", payment_id)
+                await _notify_admin(bot, "⚠️ Платёж YooKassa содержит неверную привязку подписки. Автоматическая выдача остановлена.")
+                return
+        else:
+            from database import get_user_keys
+            now = int(time.time())
+            existing_keys = await get_user_keys(user_id)
+            extendable = [k for k in existing_keys if int(k.get("expiry") or 0) > now - 7 * 86400]
+            if extendable:
+                target_key_id = max(extendable, key=lambda k: int(k.get("expiry") or 0))["id"]
+
+        is_autorenew = metadata.get("auto_renew") == "1"
+        if is_autorenew and target_key_id is None:
+            logger.error("Auto-renew payment %s has no unambiguous subscription binding", payment_id)
+            await _notify_admin(bot, "⚠️ Автоплатёж YooKassa не связан с подпиской. Автоматическая выдача остановлена.")
+            return
+
         logger.info(
             "Webhook: processing payment %s — user=%d days=%d devices=%d amount=%d",
             payment_id, user_id, days, devices, amount_rub,
@@ -771,6 +802,7 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
             payload=payment_id,
             extend_existing=True,
             skip_referral_bonus=is_trial,
+            target_key_id=target_key_id,
         )
 
         if success:
@@ -790,15 +822,21 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                 await record_fulfilled_promo(bot, promo_code, user_id, "yookassa", payment_id)
             logger.info("YooKassa payment %s successfully fulfilled for user %d", payment_id, user_id)
 
-            # Auto-renew handling
-            is_autorenew = metadata.get("auto_renew") == "1"
+            # Auto-renew handling: use the exact key targeted by delivery.
             from database import (
                 get_user_keys,
                 save_auto_renew_subscription,
                 update_auto_renew_charge_success_by_user_key,
             )
             user_keys = await get_user_keys(user_id)
-            key_id = user_keys[0]["id"] if user_keys else None
+            key_id = target_key_id
+            if key_id is None and len(user_keys) == 1:
+                key_id = user_keys[0]["id"]
+            if key_id is None and user_keys:
+                logger.warning(
+                    "Skipping saved payment method for user %d: checkout has no unique subscription binding",
+                    user_id,
+                )
 
             if is_trial:
                 # Intro trial succeeded: mark trial as used, clean pending link
@@ -816,7 +854,7 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                     logger.warning("Trial bookkeeping failed for user %d: %s", user_id, e)
 
                 pm = payment.get("payment_method") or {}
-                if pm.get("saved") and pm.get("id"):
+                if pm.get("saved") and pm.get("id") and key_id is not None and metadata.get("auto_renew_consent") == "1":
                     await save_auto_renew_subscription(
                         user_id=user_id,
                         key_id=key_id,
@@ -861,7 +899,7 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                             text=(
                                 f"🎁 <b>Пробный период активирован!</b>\n\n"
                                 f"✅ Сегодня списано <b>1 ₽</b>, доступ — <b>{INTRO_TRIAL_DAYS} дня</b>.\n\n"
-                                f"Автопродление не подключено: банк не вернул сохранённый способ оплаты.\n"
+                                f"Автопродление не подключено.\n"
                                 f"Продлить после окончания можно вручную — пришлём напоминание."
                             ),
                             parse_mode="HTML",
@@ -886,7 +924,10 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                     logger.debug("Failed to send autorenew notification to user %d: %s", user_id, notify_e)
             else:
                 pm = payment.get("payment_method") or {}
-                if pm.get("saved") and pm.get("id"):
+                if (
+                    pm.get("saved") and pm.get("id") and key_id is not None
+                    and metadata.get("auto_renew_consent") == "1"
+                ):
                     pm_id = pm["id"]
                     pm_title = pm.get("title", "")
                     pm_type = pm.get("type", "bank_card")
@@ -916,6 +957,17 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                         )
                     except Exception as notify_e:
                         logger.debug("Failed to send autorenew confirmation to user %d: %s", user_id, notify_e)
+                elif metadata.get("auto_renew_consent") == "1":
+                    try:
+                        await bot.send_message(
+                            chat_id=user_id,
+                            text=(
+                                "Подписка активирована, но сохранить способ оплаты не удалось. "
+                                "Автопродление не включено; после окончания срока продлите подписку вручную."
+                            ),
+                        )
+                    except Exception as notify_e:
+                        logger.debug("Failed to send one-time renewal fallback to user %d: %s", user_id, notify_e)
 
             # Referral reward: single canonical path — idempotent (UNIQUE in DB)
             # and trial-safe. One qualifying payment = exactly one reward.

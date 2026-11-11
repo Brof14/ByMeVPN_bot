@@ -109,6 +109,7 @@ async def deliver_key(
     extend_existing: bool = True,
     skip_referral_bonus: bool = False,
     delivery_target=None,
+    target_key_id: int | None = None,
 ) -> bool:
     # Keep the lightweight in-process lock to avoid needless contention.
     # The SQLite lease below also serializes workers running in *other* bot
@@ -158,7 +159,7 @@ async def deliver_key(
             delivered = await _deliver_key_unlocked(
                 bot, user_id, chat_id, config_name, days, limit_ip, is_paid,
                 amount, currency, method, payload, extend_existing,
-                skip_referral_bonus, delivery_target,
+                skip_referral_bonus, delivery_target, target_key_id,
             )
             # Confirm ownership at the end as well: a stalled event loop may
             # miss its heartbeat while another worker reclaims an expired lease.
@@ -196,6 +197,7 @@ async def _deliver_key_unlocked(
     extend_existing: bool = True,
     skip_referral_bonus: bool = False,
     delivery_target=None,
+    target_key_id: int | None = None,
 ) -> bool:
     """
     Создать или обновить клиента в 3x-ui, сохранить в БД, отправить ссылку на подписку пользователю.
@@ -212,20 +214,31 @@ async def _deliver_key_unlocked(
         # Find active or expired keys (extend even expired keys within 7 days grace period)
         extendable_keys = [k for k in existing_keys if k.get("expiry", 0) > current_time - 7*86400]
         
-        if extendable_keys:
+        if target_key_id is not None:
+            # A renewal started from a specific subscription must extend that
+            # same record; never silently renew whichever key sorts first.
+            key_to_extend = next((k for k in existing_keys if int(k.get("id") or 0) == int(target_key_id)), None)
+            if key_to_extend is None:
+                logger.error("Requested renewal key %s does not belong to user %d", target_key_id, user_id)
+                return False
+        elif extendable_keys:
             extendable_keys.sort(key=lambda k: k.get("expiry", 0), reverse=True)
             key_to_extend = extendable_keys[0]
+        else:
+            key_to_extend = None
+
+        if key_to_extend is not None:
             key_id = key_to_extend["id"]
             old_expiry = key_to_extend["expiry"]
             old_limit = key_to_extend.get("limit_ip", 2)
             
             base_time = max(old_expiry or 0, current_time)
             new_expiry = base_time + days * 86400
-            if is_paid and payload:
+            if payload and (is_paid or method in {"channel_bonus", "promo"}):
                 new_expiry = await database.get_or_create_provisioning_intent(
                     method, payload, user_id, new_expiry
                 )
-            if is_paid and payload and old_expiry and new_expiry < old_expiry:
+            if payload and (is_paid or method == "channel_bonus") and old_expiry and new_expiry < old_expiry:
                 # Another operation has moved the subscription past this old
                 # order intent. Applying it would shorten paid access; leave
                 # the order pending for reconciliation instead.
@@ -367,11 +380,11 @@ async def _deliver_key_unlocked(
                 int(xui_client.get("expiry_time") or 0) // 1000,
                 int(time.time()),
             ) + days * 86400
-            if is_paid and payload:
+            if payload and (is_paid or method == "channel_bonus"):
                 target_expiry = await database.get_or_create_provisioning_intent(
                     method, payload, user_id, target_expiry
                 )
-            if is_paid and payload and target_expiry < int(xui_client.get("expiry_time") or 0) // 1000:
+            if payload and (is_paid or method == "channel_bonus") and target_expiry < int(xui_client.get("expiry_time") or 0) // 1000:
                 logger.error("Order %s requires panel reconciliation for user %d", payload, user_id)
                 return False
             xui_res = await update_xui_user(

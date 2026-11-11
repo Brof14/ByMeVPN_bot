@@ -1,4 +1,3 @@
-from urllib.parse import quote_plus
 import time
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -9,10 +8,7 @@ from constants import (
     TARIFF_BONUS_MONTHS, get_monthly_display, get_price_for_months, validate_device_limit,
 )
 
-_SUPPORT_URL = (
-    "https://t.me/ByMeVPNSupportBot?text="
-    + quote_plus("Привет, у меня вопрос по ByMeVPN.")
-)
+_SUPPORT_URL = "https://t.me/ByMeVPNSupportBot"
 
 
 def _customer_menu(*, has_subscription: bool, trial_used: bool) -> InlineKeyboardMarkup:
@@ -22,7 +18,7 @@ def _customer_menu(*, has_subscription: bool, trial_used: bool) -> InlineKeyboar
         kb.row(InlineKeyboardButton(text="Подписка", callback_data="my_keys"))
     elif not trial_used:
         kb.row(InlineKeyboardButton(text="3 дня бесплатно", callback_data="trial_free"))
-    kb.row(InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn", style=None if has_subscription else "primary"))
+    kb.row(InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn", style="primary"))
     kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
@@ -43,11 +39,27 @@ def main_menu_with_keys(trial_used: bool = False) -> InlineKeyboardMarkup:
     return _customer_menu(has_subscription=True, trial_used=trial_used)
 
 
-def main_menu_active(key_id: int) -> InlineKeyboardMarkup:
-    """Give a one-key subscriber an immediate connection path, without checkout."""
+def main_menu_active(key_id: int, subscription_url: str = "") -> InlineKeyboardMarkup:
+    """Put the active subscriber's connection action first in the home menu."""
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="Подписка", callback_data="my_keys"))
-    kb.row(InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn", style=None))
+    connect_url = None
+    if subscription_url:
+        try:
+            from app_links import build_connect_page_url
+            connect_url = build_connect_page_url(subscription_url)
+        except (RuntimeError, ValueError):
+            connect_url = None
+    connect_button = (
+        InlineKeyboardButton(text="Подключить VPN", url=connect_url)
+        if connect_url else
+        InlineKeyboardButton(text="Подключить VPN", callback_data=f"key_instructions:{key_id}")
+    )
+    kb.row(connect_button)
+    kb.row(
+        InlineKeyboardButton(text="Подписка", callback_data="my_keys"),
+        InlineKeyboardButton(text="Устройства", callback_data=f"key_devices:{key_id}"),
+    )
+    kb.row(InlineKeyboardButton(text="Продлить", callback_data=f"key_renew:{key_id}"))
     kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
@@ -90,11 +102,8 @@ def support_url() -> str:
 
 
 def feedback_url() -> str:
-    """Direct users to support with a clear bug-report / suggestion prompt."""
-    return (
-        "https://t.me/ByMeVPNSupportBot?text="
-        + quote_plus("Здравствуйте! Хочу сообщить об ошибке или предложить улучшение ByMeVPN.\n")
-    )
+    """Open the support bot using a standard Telegram deep link."""
+    return "https://t.me/ByMeVPNSupportBot"
 
 
 def authorized_user_menu() -> InlineKeyboardMarkup:
@@ -156,8 +165,12 @@ def payment_kb(price_rub: int, days: int, devices: int = DEFAULT_DEVICE_LIMIT, y
         callback_data="pay_stars",
     ))
     kb.row(InlineKeyboardButton(
-        text=f"ЮKassa · {price_rub} ₽",
+        text=f"ЮKassa · {price_rub} ₽ · разово",
         callback_data="pay_yookassa",
+    ))
+    kb.row(InlineKeyboardButton(
+        text=f"ЮKassa · {price_rub} ₽ · с автопродлением",
+        callback_data="pay_yookassa_autorenew",
     ))
     kb.row(InlineKeyboardButton(
         text=f"CryptoBot · {price_rub} ₽",
@@ -250,7 +263,8 @@ def key_detail_kb(
         if connect_url else
         InlineKeyboardButton(text="Подключить", callback_data=f"key_instructions:{key_id}")
     )
-    kb.row(connect_button, InlineKeyboardButton(text="Продлить", callback_data=f"key_renew:{key_id}"))
+    kb.row(connect_button)
+    kb.row(InlineKeyboardButton(text="Продлить", callback_data=f"key_renew:{key_id}"))
     # Manual import remains available within the connection instructions.
     if has_history:
         kb.row(InlineKeyboardButton(text="История подписок", callback_data="key_history"))
@@ -267,7 +281,7 @@ def key_devices_kb(key_id: int, devices: list[dict] | None = None, page: int = 0
     page = max(0, min(int(page), max(0, (len(devices) - 1) // page_size)))
     start = page * page_size
     for device in devices[start:start + page_size]:
-        label = device.get("model") or device.get("user_agent") or device.get("os") or "Устройство"
+        label = device.get("model") or device.get("os") or "Устройство"
         label = label[:34]
         kb.row(InlineKeyboardButton(
             text=f"{label} · {device.get('last_seen_label', '—')}"[:64],
@@ -311,6 +325,7 @@ def key_settings_kb(key_id: int) -> InlineKeyboardMarkup:
         text="Перевыпустить подписку",
         callback_data=f"key_reissue_confirm:{key_id}",
     ))
+    kb.row(InlineKeyboardButton(text="Проверить подключение", callback_data=f"key_diagnostics:{key_id}"))
     kb.row(InlineKeyboardButton(text="Оплата и автопродление", callback_data=f"manage_payment_methods:{key_id}"))
     # Deliberately do not expose destructive subscription deletion in the customer UI.
     kb.row(InlineKeyboardButton(text="← К подписке", callback_data=f"key_info:{key_id}"))

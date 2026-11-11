@@ -394,7 +394,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         ):
             await cb_free_vpn(callback, None)
         actions = callbacks(send.call_args.args[3])
-        self.assertEqual(actions, ["partner", "ad_program", "back_to_menu"])
+        self.assertEqual(actions, ["channel_bonus_check", "partner", "ad_program", "back_to_menu"])
 
     async def test_ad_bonus_retry_uses_same_idempotent_grant_and_keeps_application_open(self):
         from types import SimpleNamespace

@@ -38,6 +38,10 @@ def _load_manifest() -> dict:
         url = str(value["download_url"])
         digest = str(value["sha256"])
         notes = str(value["release_notes"])
+        published_at = str(value.get("published_at", ""))
+        min_android_version = str(value.get("min_android_version", "7.0"))
+        signing_certificate_sha256 = str(value.get("signing_certificate_sha256", "")).lower()
+        manifest_size = value.get("apk_size_bytes")
         parsed = urlparse(url)
         filename = Path(parsed.path).name
         if (not isinstance(code, int) or isinstance(code, bool) or code <= 0
@@ -47,6 +51,10 @@ def _load_manifest() -> dict:
                 or parsed.path != f"/app/downloads/{filename}"
                 or parsed.query or parsed.fragment
                 or not re.fullmatch(r"[a-fA-F0-9]{64}", digest)
+                or (published_at and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", published_at))
+                or not re.fullmatch(r"\d+\.\d+(?:\.\d+)?", min_android_version)
+                or (signing_certificate_sha256 and not re.fullmatch(r"[a-f0-9]{64}", signing_certificate_sha256))
+                or (manifest_size is not None and (not isinstance(manifest_size, int) or isinstance(manifest_size, bool) or manifest_size <= 0))
                 or len(notes) > 4000):
             raise ValueError("invalid manifest fields")
         download_root = (ROOT / "downloads").resolve()
@@ -56,6 +64,8 @@ def _load_manifest() -> dict:
         stat = apk_path.stat()
         if stat.st_size <= 0 or stat.st_size > 200 * 1024 * 1024:
             raise ValueError("invalid APK size")
+        if manifest_size is not None and manifest_size != stat.st_size:
+            raise ValueError("manifest APK size does not match file")
         cache_key = (str(apk_path), stat.st_size, stat.st_mtime_ns)
         actual_digest = _verified_digest_cache.get(cache_key)
         if actual_digest is None:
@@ -68,8 +78,17 @@ def _load_manifest() -> dict:
             _verified_digest_cache[cache_key] = actual_digest
         if actual_digest != digest.lower():
             raise ValueError("manifest digest does not match APK")
-        return {"version_name": version, "version_code": code,
-                "download_url": url, "sha256": digest.lower(), "release_notes": notes}
+        return {
+            "version_name": version,
+            "version_code": code,
+            "download_url": url,
+            "sha256": digest.lower(),
+            "apk_size_bytes": stat.st_size,
+            "release_notes": notes,
+            "published_at": published_at,
+            "min_android_version": min_android_version,
+            "signing_certificate_sha256": signing_certificate_sha256,
+        }
     except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
         raise HTTPException(status_code=404, detail="Обновление пока недоступно") from None
 

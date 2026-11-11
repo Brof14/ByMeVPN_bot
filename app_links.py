@@ -96,6 +96,7 @@ def render_app_open_page(deep_link: str) -> str:
     js_link = _js_string(deep_link)
     js_intent = _js_string(build_android_intent_url(deep_link))
 
+    install_url = html.escape(APP_PUBLIC_URL.rstrip("/") + "/app", quote=True)
     return f"""<!doctype html>
 <html lang="ru">
 <head>
@@ -156,9 +157,9 @@ def render_app_open_page(deep_link: str) -> str:
 <main><section class="panel">
   <img class="logo" src="/app/logo" alt="Логотип ByMeVPN" width="132" height="132">
   <h1>Открываем приложение…</h1>
-  <p>Если ByMeVPN не открылся автоматически, нажмите кнопку ниже — подписка подключится сама.</p>
+  <p>Открываем ByMeVPN. Страница передаёт подписку в приложение; само открытие ещё не подтверждает подключение VPN.</p>
   <a id="open-app" class="button" href="{escaped_link}">Открыть ByMeVPN</a>
-  <p class="hint">Если приложение не установлено, установите его и откройте эту ссылку снова.</p>
+  <p class="hint">Если приложение не открылось, нажмите кнопку ещё раз. <a href="{install_url}">Скачать ByMeVPN для Android</a> · <a href="https://t.me/ByMeVPNSupportBot">Поддержка</a></p>
 </section></main>
 <script>
 (function () {{
@@ -173,7 +174,7 @@ def render_app_open_page(deep_link: str) -> str:
 </html>"""
 
 
-CONNECT_TICKET_TTL_SECONDS = 7 * 24 * 60 * 60
+CONNECT_TICKET_TTL_SECONDS = 60 * 60
 LEGACY_CONNECT_TICKET_TTL_SECONDS = 15 * 60
 
 
@@ -227,7 +228,7 @@ def read_connect_ticket(ticket: str, *, now: int | None = None) -> dict[str, str
                 raise ValueError
         else:
             # Tickets created by the earlier 15-minute release remain usable for
-            # seven days from issue, including links already sent by the bot.
+            # up to one hour from issue, including links already sent by the bot.
             if expiry > current + LEGACY_CONNECT_TICKET_TTL_SECONDS + 5:
                 raise ValueError
             expiry += CONNECT_TICKET_TTL_SECONDS - LEGACY_CONNECT_TICKET_TTL_SECONDS
@@ -267,12 +268,13 @@ def render_connection_choice_page(subscription_url: str, user_name: str = "") ->
     """Render a responsive branded OS/app chooser with verified import fallbacks."""
     sub = _js_string(subscription_url)
     encoded_sub = quote(subscription_url, safe="")
+    bymevpn_download = f"{APP_PUBLIC_URL.rstrip('/')}/app"
     tun = {"name": "v2rayTun", "icon": "v2raytun", "deep": "v2raytun://import/" + subscription_url, "download": "https://v2raytun.com/"}
     hiddify = {"name": "Hiddify", "icon": "hiddify", "deep": "hiddify://install-sub?url=" + encoded_sub + "#ByMeVPN", "download": "https://github.com/hiddify/hiddify-app/releases/latest"}
     singbox = {"name": "sing-box", "icon": "singbox", "manual": True, "note": "Требуется конфигурация sing-box в формате JSON; обычная ссылка подписки может не подойти.", "download": "https://sing-box.sagernet.org/clients/"}
     apps = {
         "android": [
-            {"name": "ByMeVPN", "icon": "bymevpn", "deep": build_app_telegram_auth_url(), "download": "https://bymevpn.duckdns.org/app/downloads/ByMeVPN-v1.0.14.apk"},
+            {"name": "ByMeVPN", "icon": "bymevpn", "deep": build_app_telegram_auth_url(), "download": bymevpn_download},
             {"name": "Happ", "icon": "happ", "deep": "happ://add/" + subscription_url, "download": "https://github.com/Happ-proxy/happ-android/releases/latest"},
             {"name": "INCY", "icon": "incy", "deep": "incy://import/" + subscription_url, "download": "https://play.google.com/store/apps/details?id=llc.itdev.incy"},
             tun,

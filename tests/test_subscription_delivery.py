@@ -87,6 +87,29 @@ class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
                     update_panel.assert_not_awaited()
                     add_key.assert_not_awaited()
 
+    async def test_selected_renewal_key_is_passed_to_delivery(self):
+        bot = MagicMock()
+        with patch("subscription._deliver_key_unlocked", new=AsyncMock(return_value=True)) as provision:
+            result = await subscription.deliver_key(
+                bot, 123, 123, "ByMeVPN_123", 30, target_key_id=42,
+            )
+        self.assertTrue(result)
+        self.assertEqual(provision.await_args.args[-1], 42)
+
+    async def test_selected_renewal_key_must_belong_to_user(self):
+        key = {"id": 7, "key": "https://example.test/sub", "expiry": int(time.time()) + 3600, "limit_ip": 2}
+        with (
+            patch("subscription.get_user_keys", new=AsyncMock(return_value=[key])),
+            patch("subscription.set_key_expiry", new=AsyncMock()) as set_expiry,
+            patch("xui_client.update_xui_user", new=AsyncMock()) as update_panel,
+        ):
+            result = await subscription._deliver_key_unlocked(
+                MagicMock(), 123, 123, "ByMeVPN_123", 30, target_key_id=999,
+            )
+        self.assertFalse(result)
+        set_expiry.assert_not_awaited()
+        update_panel.assert_not_awaited()
+
     async def test_different_users_can_be_provisioned_concurrently(self):
         entered = []
         both_entered = asyncio.Event()
