@@ -31,11 +31,11 @@ def callbacks(markup):
 class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
     def test_all_five_tariff_screen_copies(self):
         expected = {
-            (2, False): "<b>Тарифы</b>\n\n2 устройства — одна подписка для ваших устройств.\n\nВыберите срок: чем дольше подписка, тем ниже цена. При покупке на 3, 6 или 12 месяцев — дополнительные месяцы в подарок.",
-            (5, False): "<b>Тарифы</b>\n\n5 устройств — одна подписка для всей семьи.\n\nВыберите срок: чем дольше подписка, тем ниже цена. При покупке на 3, 6 или 12 месяцев — дополнительные месяцы в подарок.",
-            (2, True): "<b>Продление подписки</b>\n\n<b>2 устройства</b>\n\nВыберите срок продления. Чем дольше подписка, тем ниже цена.\n\nБонусные месяцы уже включены в предложения.",
-            (5, True): "<b>Продление подписки</b>\n\n<b>5 устройств</b> — для семьи и личных устройств.\n\nВыберите срок продления. Чем дольше подписка, тем ниже цена.\n\nБонусные месяцы уже включены в предложения.",
-            (10, True): "<b>Продление подписки</b>\n\n<b>10 устройств</b> — для всей семьи и личных устройств.\n\nВыберите срок продления. Чем дольше подписка, тем ниже цена.\n\nБонусные месяцы уже включены в предложения.",
+            (2, False): "<b>Тарифы</b>\n\n2 устройства — одна подписка для ваших устройств.\n\nВыберите срок: чем дольше подписка, тем ниже стоимость месяца. В кнопках указан полный срок и итоговая цена.",
+            (5, False): "<b>Тарифы</b>\n\n5 устройств — одна подписка для всей семьи.\n\nВыберите срок: чем дольше подписка, тем ниже стоимость месяца. В кнопках указан полный срок и итоговая цена.",
+            (2, True): "<b>Продление подписки</b>\n\n<b>2 устройства</b>\n\nВыберите срок продления. Чем дольше подписка, тем ниже цена.\n\nВ кнопках указаны полный срок доступа и сумма к оплате.",
+            (5, True): "<b>Продление подписки</b>\n\n<b>5 устройств</b> — для семьи и личных устройств.\n\nВыберите срок продления. Чем дольше подписка, тем ниже цена.\n\nВ кнопках указаны полный срок доступа и сумма к оплате.",
+            (10, True): "<b>Продление подписки</b>\n\n<b>10 устройств</b> — для всей семьи и личных устройств.\n\nВыберите срок продления. Чем дольше подписка, тем ниже цена.\n\nВ кнопках указаны полный срок доступа и сумма к оплате.",
         }
         for (devices, renewal), text in expected.items():
             with self.subTest(devices=devices, renewal=renewal):
@@ -45,7 +45,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Промокод действует на срок", _tariff_intro(2, promo_binding=3))
 
     def test_unrequested_purchase_screen_keeps_existing_copy(self):
-        self.assertEqual(_tariff_intro(10), "<b>Тарифы</b>\n\nВыбрано: <b>10 устройств</b>\n\nЧем дольше подписка, тем выгоднее условия. При выборе тарифа на 3, 6 или 12 месяцев вы получаете <b>дополнительные месяцы в подарок</b>.\n\nВыберите подходящий срок:")
+        self.assertEqual(_tariff_intro(10), "<b>Тарифы</b>\n\nВыбрано: <b>10 устройств</b>\n\nЧем дольше подписка, тем ниже стоимость месяца. Итоговая цена и полный срок указаны на кнопках.\n\nВыберите подходящий срок:")
 
     async def test_bot_identity_helper_uses_aiogram_cache_when_available(self):
         from utils import get_cached_bot_info
@@ -367,7 +367,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             by_action = {button.callback_data: button for button in buttons}
             self.assertEqual(by_action["about"].style, "primary")
             self.assertIn(by_action["buy_vpn"].style, {None, "primary"})
-            self.assertEqual(by_action["free_vpn"].style, "primary")
+            self.assertEqual(by_action["free_vpn"].style, "success")
         menu = main_menu_with_keys()
         self.assertEqual([len(row) for row in menu.inline_keyboard], [1, 1, 1, 2])
         self.assertEqual(menu.inline_keyboard[0][0].style, "primary")
@@ -542,7 +542,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             if button.callback_data and button.callback_data.startswith("tariff_")
         ]
         three_months = next(button for button in tariff_buttons if button.callback_data == "tariff_3_2")
-        self.assertIn("3 мес. + 1 мес. 🎁 — 79 ₽ / мес.", three_months.text)
+        self.assertIn("4 мес. · 79 ₽ / мес. · 316 ₽ всего", three_months.text)
         self.assertEqual(three_months.style, "primary")
         self.assertEqual(
             [button.style for button in tariff_buttons],
