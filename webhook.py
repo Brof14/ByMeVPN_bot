@@ -957,6 +957,17 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                         )
                     except Exception as notify_e:
                         logger.debug("Failed to send autorenew confirmation to user %d: %s", user_id, notify_e)
+                elif metadata.get("auto_renew_consent") == "1":
+                    try:
+                        await bot.send_message(
+                            chat_id=user_id,
+                            text=(
+                                "Подписка активирована, но сохранить способ оплаты не удалось. "
+                                "Автопродление не включено; после окончания срока продлите подписку вручную."
+                            ),
+                        )
+                    except Exception as notify_e:
+                        logger.debug("Failed to send one-time renewal fallback to user %d: %s", user_id, notify_e)
 
             # Referral reward: single canonical path — idempotent (UNIQUE in DB)
             # and trial-safe. One qualifying payment = exactly one reward.
