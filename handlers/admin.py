@@ -281,7 +281,7 @@ async def cb_admin_referral_funnel(callback: CallbackQuery):
         "<b>Органический рост · 30 дней</b>\n\n"
         f"Приглашено: <b>{stats['invited']}</b>\n"
         f"Приглашали: <b>{stats['advocates']}</b> пользователей\n"
-        f"С первой подходящей оплатой: <b>{stats['paying']}</b>\n"
+        f"С первой успешной оплатой: <b>{stats['paying']}</b>\n"
         f"Без подтверждённой оплаты: <b>{stats['unconverted']}</b>\n"
         f"Конверсия: <b>{stats['conversion_pct']:.1f}%</b>\n"
         f"Начислено или ожидает начисления: <b>{stats['bonus_days']} бонусных дней</b>\n\n"
