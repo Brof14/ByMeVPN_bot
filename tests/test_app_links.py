@@ -178,7 +178,7 @@ class TestAppOpenPage(unittest.TestCase):
 
 
 class TestConnectionPageHttp(unittest.TestCase):
-    def test_extended_lifetime_and_legacy_ticket(self):
+    def test_current_and_legacy_tickets_expire_within_one_hour(self):
         import base64
         from app_links import _connect_aead
         with patch.dict(os.environ, {"APP_HANDOFF_SECRET": "isolated-test-secret"}):
@@ -189,7 +189,7 @@ class TestConnectionPageHttp(unittest.TestCase):
             payload = json.dumps({"sub": "https://sub.example/demo", "exp": 1_000_000 + 900}).encode()
             nonce = os.urandom(12)
             legacy = base64.urlsafe_b64encode(nonce + _connect_aead().encrypt(nonce, payload, b"bymevpn-connect-ticket-v1")).decode().rstrip("=")
-            self.assertEqual(read_connect_ticket(legacy, now=1_000_000 + 86400)["subscription_url"], "https://sub.example/demo")
+            self.assertEqual(read_connect_ticket(legacy, now=1_000_000 + 1800)["subscription_url"], "https://sub.example/demo")
             with self.assertRaises(ValueError):
                 read_connect_ticket(legacy, now=1_000_001 + CONNECT_TICKET_TTL_SECONDS)
 
