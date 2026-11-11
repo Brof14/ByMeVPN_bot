@@ -27,6 +27,7 @@ import json
 import logging
 import re
 import traceback
+import time
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
@@ -675,7 +676,7 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                 return
         else:
             from database import get_user_keys
-            now = int(__import__("time").time())
+            now = int(time.time())
             existing_keys = await get_user_keys(user_id)
             extendable = [k for k in existing_keys if int(k.get("expiry") or 0) > now - 7 * 86400]
             if extendable:
