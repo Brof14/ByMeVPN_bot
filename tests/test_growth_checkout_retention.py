@@ -43,9 +43,9 @@ class CheckoutUxTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(len(row) == 1 for row in kb.inline_keyboard))
         self.assertEqual(
             _tariff_intro(10, renewal=True),
-            "<b>Продление подписки</b>\\n\\n"
-            "10 устройств — для вас и ваших близких.\\n\\n"
-            "Выберите срок подписки. Чем дольше срок, тем ниже стоимость месяца.\\n"
+            "<b>Продление подписки</b>\n\n"
+            "10 устройств — для вас и ваших близких.\n\n"
+            "Выберите срок подписки. Чем дольше срок, тем ниже стоимость месяца.\n"
             "Полная сумма указана в каждом тарифе.",
         )
 
