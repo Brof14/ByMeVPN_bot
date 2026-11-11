@@ -52,32 +52,21 @@ def _promo_purchase_keyboard() -> InlineKeyboardMarkup:
 
 
 def _tariff_intro(devices: int, *, renewal: bool = False, promo_binding: int | None = None) -> str:
-    """Clear, conversion-oriented copy shared by purchase and renewal."""
-    device_word = "устройства" if devices in (2,) else "устройств"
-    if renewal:
-        text = (
-            "<b>Продлить ByMeVPN</b>\n\n"
-            f"Ваш тариф: <b>{devices} {device_word}</b>\n\n"
-            "Выберите срок. Новые дни добавятся к действующей подписке — "
-            "переустанавливать VPN и менять ключ не потребуется.\n\n"
-            "🎁 Пакеты 3+1, 6+2 и 12+3 дают больше месяцев "
-            "по сниженной цене за месяц. Общая стоимость видна на кнопках."
-        )
-    else:
-        text = (
-            "<b>Тарифы ByMeVPN</b>\n\n"
-            f"Выбрано: <b>{devices} {device_word}</b>\n\n"
-            "Выберите срок: длительные пакеты выгоднее по цене за месяц.\n"
-            "🎁 Пакеты 3+1, 6+2 и 12+3: больше месяцев по меньшей цене за месяц. "
-            "Общая стоимость пакета указана на кнопках."
-        )
+    """Consistent purchase/renewal copy, with current selection as context."""
+    devices = validate_device_limit(devices)
+    device_word = "устройства" if devices == 2 else "устройств"
+    audience = "для вас" if devices == 2 else "для вас и ваших близких"
+    title = "Продление подписки" if renewal else "Тарифы ByMeVPN"
+    text = (
+        f"<b>{title}</b>\n\n"
+        f"{devices} {device_word} — {audience}.\n\n"
+        "Выберите срок подписки. Чем дольше срок, тем ниже стоимость месяца.\n"
+        "Полная сумма указана в каждом тарифе."
+    )
     if promo_binding in (1, 3, 6, 12):
-        text += (
-            f"\n\nПромокод действует на пакет "
-            f"{promo_binding}+{TARIFF_BONUS_MONTHS[promo_binding]} мес."
-            if TARIFF_BONUS_MONTHS[promo_binding] else
-            "\n\nПромокод действует на 1 месяц."
-        )
+        extra = TARIFF_BONUS_MONTHS[promo_binding]
+        term = f"{promo_binding}+{extra}" if extra else "1"
+        text += f"\n\nПромокод действует на тариф {term} мес."
     return text
 
 
