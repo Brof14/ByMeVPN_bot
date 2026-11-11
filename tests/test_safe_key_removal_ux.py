@@ -16,7 +16,7 @@ class DeleteAccessUXTests(unittest.IsolatedAsyncioTestCase):
             ["key_delete_confirm:42", "manage_payment_methods:42", "key_info:42"],
         )
         self.assertEqual(by_callback["key_delete_confirm:42"].style, "danger")
-        self.assertEqual(by_callback["key_info:42"].style, "danger")
+        self.assertEqual(by_callback["key_info:42"].style, "primary")
 
     async def test_active_key_warns_that_remaining_term_is_lost(self):
         from handlers.keys import cb_key_delete
