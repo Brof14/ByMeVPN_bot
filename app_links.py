@@ -228,7 +228,7 @@ def read_connect_ticket(ticket: str, *, now: int | None = None) -> dict[str, str
                 raise ValueError
         else:
             # Tickets created by the earlier 15-minute release remain usable for
-            # seven days from issue, including links already sent by the bot.
+            # up to one hour from issue, including links already sent by the bot.
             if expiry > current + LEGACY_CONNECT_TICKET_TTL_SECONDS + 5:
                 raise ValueError
             expiry += CONNECT_TICKET_TTL_SECONDS - LEGACY_CONNECT_TICKET_TTL_SECONDS
