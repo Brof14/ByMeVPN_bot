@@ -203,8 +203,8 @@ class ExpiryDatabaseRegression(unittest.IsolatedAsyncioTestCase):
     async def test_legacy_fixed_and_free_day_promotions_apply_to_order(self):
         from handlers.buy import cb_select_tariff
         for code, legacy_type, canonical_type, expected in (
-            ("FIXED10", "fixed", "fixed_rub", "К оплате: 79 ₽"),
-            ("DAYS5", "days", "free_days", "Доступ: <b>35 дней</b>"),
+            ("FIXED10", "fixed", "fixed_rub", "К оплате сейчас: <b>79 ₽</b>"),
+            ("DAYS5", "days", "free_days", "35 дней"),
         ):
             await self.db.create_promo_code(code, promo_type=legacy_type, discount_value=10 if legacy_type == "fixed" else 5)
             db = await self.db.get_db()
