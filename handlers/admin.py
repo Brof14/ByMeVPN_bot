@@ -2246,7 +2246,7 @@ async def cb_admin_retry_payment(callback: CallbackQuery):
         if success:
             from referral_system_new import award_referral_for_payment
             await award_referral_for_payment(
-                payment["user_id"], str(provider_payment_id), is_trial=False, bot=callback.bot
+                payment["user_id"], str(provider_payment_id), amount=int(payment["amount"]), bot=callback.bot
             )
         result_text = "Повторная выдача завершена. Проверьте статус платежа и ключ пользователя."
     await callback.message.answer(
