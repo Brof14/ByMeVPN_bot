@@ -6370,23 +6370,15 @@ async def mark_ad_notification_opened(user_id: int, campaign_id: int) -> bool:
 
 
 async def calculate_bonus_months(subscriber_count: int) -> int:
-    """New campaign rewards; existing applications retain their saved terms.
-
-    Caps high-cost free access for low-reach channels. This is intentionally
-    independent of historic ad_applications.bonus_months.
-    """
-    if subscriber_count >= 350:
-        return 12
-    if subscriber_count >= 250:
-        return 6
-    if subscriber_count >= 150:
-        return 4
-    if subscriber_count >= 100:
-        return 3
-    if subscriber_count >= 50:
-        return 2
-    return 1
-
+    """New application reward; historical applications keep their stored terms."""
+    from constants import AD_BONUS_TIERS
+    count = int(subscriber_count)
+    if count <= 0:
+        return 0
+    for minimum, maximum, months in AD_BONUS_TIERS:
+        if count >= minimum and (maximum is None or count <= maximum):
+            return months
+    return 0
 
 async def log_ad_analytics_event(user_id: int, event_type: str, details: dict = None) -> None:
     """Log ad-related analytics event."""
