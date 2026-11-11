@@ -277,7 +277,7 @@ def key_devices_kb(key_id: int, devices: list[dict] | None = None, page: int = 0
     page = max(0, min(int(page), max(0, (len(devices) - 1) // page_size)))
     start = page * page_size
     for device in devices[start:start + page_size]:
-        label = device.get("model") or device.get("user_agent") or device.get("os") or "Устройство"
+        label = device.get("model") or device.get("os") or "Устройство"
         label = label[:34]
         kb.row(InlineKeyboardButton(
             text=f"{label} · {device.get('last_seen_label', '—')}"[:64],
