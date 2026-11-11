@@ -819,14 +819,11 @@ async def cb_back_to_menu(callback: CallbackQuery, bot: Bot, state: FSMContext):
 async def cb_about(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
-        "<b>ByMeVPN — VPN, который просто работает.</b>\n\n"
-        "<i>Скорость. Свобода. Простота.</i>\n\n"
-        "Привычные сайты и приложения — без лишних сложностей.\n\n"
-        "— Удобное подключение.\n"
-        "— Подписки на 2, 5 или 10 устройств.\n"
-        "— 3 дня бесплатно для новых пользователей.\n"
-        "— Поддержка, когда она необходима.\n\n"
-        "<b>Всё необходимое для комфортного использования VPN.</b>"
+        "<b>ByMeVPN — VPN-подписка для телефона и компьютера.</b>\n\n"
+        "Подключите приложение, добавьте подписку и включите VPN в нём. "
+        "Поддерживаются планы на 2, 5 и 10 устройств.\n\n"
+        "Новые пользователи могут попробовать сервис 3 дня бесплатно. "
+        "Если подключение не получается, откройте поддержку из меню."
     )
     # Keep this screen informative and minimal; primary actions live in the menu.
     from aiogram.types import InlineKeyboardMarkup
@@ -840,6 +837,11 @@ async def cb_about(callback: CallbackQuery, bot: Bot):
 @router.callback_query(F.data == "free_vpn")
 async def cb_free_vpn(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
+    try:
+        from database import log_analytics_event
+        await log_analytics_event(callback.from_user.id, "channel_bonus_offered", source="free_days")
+    except Exception:
+        logger.debug("Could not record free-days offer exposure")
     text = (
         "<b>Больше доступа — без оплаты.</b>\n\n"
         "Получайте дни за приглашения друзей, подписку на канал или размещение "
