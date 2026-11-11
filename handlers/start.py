@@ -113,7 +113,7 @@ async def _handle_app_login(message: Message, user_id: int, user_name: str) -> N
                 return
             await message.answer(
                 "<b>Вход в приложение ByMeVPN</b>\n\n"
-                "Нажмите «🚀 Открыть приложение» — ByMeVPN откроется и подключит подписку автоматически.\n\n"
+                "Нажмите «🚀 Открыть приложение» — ссылка передаст подписку в ByMeVPN. Подключение VPN подтвердите в приложении.\n\n"
                 "Если приложение не открылось, скопируйте ссылку ниже и вставьте её в ByMeVPN вручную.\n\n"
                 f"<code>{escape(app_url)}</code>",
                 parse_mode="HTML",
