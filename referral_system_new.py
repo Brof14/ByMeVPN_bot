@@ -277,13 +277,13 @@ async def process_payment_referral_bonus(user_id: int, amount: int, bot) -> bool
 
 
 # ---------------------------------------------------------------------------
-# Canonical referral reward for a qualifying payment (single path)
+# Canonical referral reward for the first successful subscription payment
 # ---------------------------------------------------------------------------
 
 async def award_referral_for_payment(
     user_id: int,
     payment_ref: str,
-    amount: int = 50,
+    amount: int = 0,
     is_trial: bool = False,
     bot=None,
 ) -> bool:
@@ -291,18 +291,16 @@ async def award_referral_for_payment(
     The ONE place where a payment may award a referral reward.
 
     Guarantees:
-    - one qualifying payment → at most one reward through ref_bonus_claims;
-    - intro-trial payments (1 ₽) are never a paid conversion → no reward;
+    - any first verified successful subscription payment (>0), including 1 ₽ trial,
+      creates at most one reward per referred customer;
     - duplicate webhooks / retries / renewals → no second reward.
+    - callers must supply the settled positive provider amount.
 
     All payment handlers (YooKassa webhook, CryptoBot monitor, Telegram Stars)
     must call this instead of implementing their own bonus logic.
     """
-    if is_trial:
-        logger.info(
-            "Referral reward skipped: intro-trial payment for user %d is not a paid conversion",
-            user_id,
-        )
+    if amount <= 0 or not payment_ref:
+        logger.warning("Ignoring unverified or zero-value referral payment for user %d", user_id)
         return False
 
     try:
@@ -322,7 +320,7 @@ async def award_referral_for_payment(
             referred_id=user_id,
             event_type="payment_bonus",
             days_awarded=REFERRAL_FIRST_PAYMENT_BONUS_DAYS,
-            description=f"First paid subscription; payment={payment_ref}",
+            description=f"First settled subscription payment; payment={payment_ref}",
         )
         if not bonus_added:
             logger.info(
@@ -386,7 +384,7 @@ async def process_pending_referral_payment_rewards(bot, limit: int = 100) -> int
             try:
                 await bot.send_message(
                     referrer_id,
-                    "🎉 <b>Ваш друг оформил первую платную подписку!</b>\n\n"
+                    "🎉 <b>Друг совершил первую оплату!</b>\n\n"
                     f"Бонус <b>+{REFERRAL_FIRST_PAYMENT_BONUS_DAYS} дней ByMeVPN</b> уже автоматически начислен на ваш ключ.",
                     parse_mode="HTML",
                 )
