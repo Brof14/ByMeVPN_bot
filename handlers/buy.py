@@ -936,7 +936,7 @@ async def _process_successful_stars_payment(
 
         # Referral reward: single canonical path (idempotent, one per pair).
         from referral_system_new import award_referral_for_payment
-        await award_referral_for_payment(user_id, charge_id, bot=bot)
+        await award_referral_for_payment(user_id, charge_id, amount=int(payment.total_amount), bot=bot)
     else:
         await update_payment_status(pay_db_id, "failed")
         logger.error("Stars delivery failed for user %d, charge_id %s", user_id, charge_id)
