@@ -52,41 +52,92 @@ def _promo_purchase_keyboard() -> InlineKeyboardMarkup:
 
 
 def _tariff_intro(devices: int, *, renewal: bool = False, promo_binding: int | None = None) -> str:
-    """Copy for the five purchase and renewal tariff screens."""
+    """Clear, conversion-oriented copy shared by purchase and renewal."""
+    device_word = "устройства" if devices in (2,) else "устройств"
     if renewal:
-        device_line = {
-            2: "<b>2 устройства</b>",
-            5: "<b>5 устройств</b> — для семьи и личных устройств.",
-            10: "<b>10 устройств</b> — для всей семьи и личных устройств.",
-        }.get(devices, f"<b>{devices} устройств</b>")
         text = (
-            "<b>Продление подписки</b>\n\n"
-            f"{device_line}\n\n"
-            "Выберите срок продления. Чем дольше подписка, тем ниже цена.\n\n"
-            "В кнопках указаны полный срок доступа и сумма к оплате."
-        )
-    elif devices in (2, 5):
-        device_line = {
-            2: "2 устройства — одна подписка для ваших устройств.",
-            5: "5 устройств — одна подписка для всей семьи.",
-        }[devices]
-        text = (
-            "<b>Тарифы</b>\n\n"
-            f"{device_line}\n\n"
-            "Выберите срок: чем дольше подписка, тем ниже стоимость месяца. "
-            "В кнопках указан полный срок и итоговая цена."
+            "<b>Продлить ByMeVPN</b>\n\n"
+            f"Ваш тариф: <b>{devices} {device_word}</b>\n\n"
+            "Выберите срок. Новые дни добавятся к действующей подписке — "
+            "переустанавливать VPN и менять ключ не потребуется.\n\n"
+            "🎁 Пакеты 3+1, 6+2 и 12+3 дают больше месяцев "
+            "по сниженной цене за месяц. Общая стоимость видна на кнопках."
         )
     else:
         text = (
-            "<b>Тарифы</b>\n\n"
-            f"Выбрано: <b>{devices} устройств</b>\n\n"
-            "Чем дольше подписка, тем ниже стоимость месяца. "
-            "Итоговая цена и полный срок указаны на кнопках.\n\n"
-            "Выберите подходящий срок:"
+            "<b>Тарифы ByMeVPN</b>\n\n"
+            f"Выбрано: <b>{devices} {device_word}</b>\n\n"
+            "Выберите срок: длительные пакеты выгоднее по цене за месяц.\n"
+            "🎁 Дополнительные месяцы уже входят в срок и итоговую стоимость пакета."
         )
     if promo_binding in (1, 3, 6, 12):
-        text += f"\n\nПромокод действует на срок {get_price_for_months(promo_binding, devices)[1]} дней."
+        text += (
+            f"\n\nПромокод действует на пакет "
+            f"{promo_binding}+{TARIFF_BONUS_MONTHS[promo_binding]} мес."
+            if TARIFF_BONUS_MONTHS[promo_binding] else
+            "\n\nПромокод действует на 1 месяц."
+        )
     return text
+
+
+def _checkout_confirmation_text(data: dict) -> str:
+    """All payment choices share one accurate checkout summary."""
+    months = int(data["months"])
+    days = int(data["days"])
+    devices = int(data["devices"])
+    price_rub = int(data["price_rub"])
+    bonus = TARIFF_BONUS_MONTHS[months]
+    term = f"{months}+{bonus} мес." if bonus else "1 месяц"
+    recurring = bool(data.get("checkout_autorenew_disclosed")) and bool(data.get("autorenew_enabled"))
+    dev_name = DEVICE_CONFIG.get(devices, {}).get("name", f"{devices} устройств")
+    lines = [
+        "<b>Подтверждение подписки</b>",
+        "",
+        f"Срок: <b>{term}</b> ({days} дней)",
+        f"Устройства: <b>{dev_name}</b>",
+        f"К оплате сейчас: <b>{price_rub} ₽</b>",
+    ]
+    original = int(data.get("original_price") or price_rub)
+    if original > price_rub:
+        lines.append(f"Цена без промокода: <s>{original} ₽</s>")
+    if data.get("promo_mismatch"):
+        lines.append("Промокод для другого срока не применён.")
+    lines.extend([
+        "",
+        f"<b>Автопродление ЮKassa: {'включено' if recurring else 'выключено'}</b>",
+    ])
+    if recurring:
+        lines.append(
+            f"При оплате через ЮKassa вы соглашаетесь на повторное списание "
+            f"{price_rub} ₽ за следующие {days} дней по окончании оплаченного срока. "
+            "До оплаты можно отключить автопродление кнопкой ниже."
+        )
+    else:
+        lines.append("Оплата ЮKassa будет разовой. Автоматических списаний не будет.")
+    lines.extend([
+        "Отключить автопродление позже можно в настройках подписки; оплаченные дни сохранятся.",
+        "Telegram Stars и CryptoBot — разовые платежи.",
+        "",
+        "Доступ откроется после подтверждения оплаты.",
+        "Оплачивая, вы соглашаетесь с <a href='https://telegra.ph/Publichnaya-oferta-na-okazanie-uslug-ByMeVPN-10-25'>офертой</a> "
+        "и <a href='https://telegra.ph/Politika-v-otnoshenii-obrabotki-personalnyh-dannyh-ByMeVPN-10-25'>политикой конфиденциальности</a>.",
+        "",
+        "<b>Выберите способ оплаты:</b>",
+    ])
+    return "\n".join(lines)
+
+
+async def _show_checkout(bot: Bot, callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    await send_with_photo(
+        bot, callback, _checkout_confirmation_text(data),
+        payment_kb(
+            int(data["price_rub"]), int(data["days"]), devices=int(data["devices"]),
+            autorenew_enabled=bool(data.get("checkout_autorenew_disclosed")) and bool(data.get("autorenew_enabled")),
+        ),
+        photo=PAYMENT,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Step 1: Choose plan type & devices
@@ -276,6 +327,9 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
         months=months, devices=devices, price_rub=price_rub, days=days,
         original_price=original_price, promo_info=promo_info, promo_code=promo_code,
         promo_discount=promo_info.get("discount_value", 0) if promo_info.get("promo_type") == "percent" else 0,
+        promo_mismatch=promo_mismatch,
+        checkout_autorenew_disclosed=True,
+        autorenew_enabled=bool(data.get("autorenew_enabled", True)),
     )
     # A restart can erase MemoryStorage. Save only the choice, never its
     # computed price, so recovering cannot silently charge an old amount.
@@ -292,39 +346,7 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
         amount=price_rub, promo=promo_info.get("code") if promo_info else None,
     )
 
-    dev_name = DEVICE_CONFIG.get(devices, {}).get("name", f"{devices} устройств")
-    bonus_months = TARIFF_BONUS_MONTHS[months]
-    term_label = f"{months}+{bonus_months} мес." if bonus_months else f"{months} мес."
-
-    text = (
-        f"<b>Подтверждение заказа</b>\n\n"
-        f"Устройства: <b>{dev_name}</b>\n"
-        f"Доступ: <b>{days} дней</b>\n"
-        f"<b>К оплате: {price_rub} ₽</b>{promo_text}\n"
-    )
-
-    if promo_mismatch:
-        text += "Промокод действует на другой срок и не применён. Его можно активировать снова.\n"
-
-    if promo_info and promo_info.get("promo_type") in ["percent", "fixed_rub"]:
-        text += f"<s>Без скидки: {original_price} ₽</s>\n"
-
-    text += (
-        "\nДоступ активируется после подтверждения оплаты.\n\n"
-        "<b>Автопродление</b>\n"
-        f"Разовый платёж через ЮKassa не включает автопродление. Для него выберите отдельную кнопку "
-        f"ЮKassa с автопродлением: тогда по окончании срока будет списываться {price_rub} ₽ за {days} дней. "
-        "Отключить его можно в разделе «Оплата и автопродление».\n\n"
-        "Telegram Stars и CryptoBot — разовые платежи.\n\n"
-        "Продолжая, вы принимаете условия <a href='https://telegra.ph/Publichnaya-oferta-na-okazanie-uslug-ByMeVPN-10-25'>оферты</a> и "
-        "<a href='https://telegra.ph/Politika-v-otnoshenii-obrabotki-personalnyh-dannyh-ByMeVPN-10-25'>политики конфиденциальности</a>.\n\n"
-        "<b>Выберите способ оплаты:</b>"
-    )
-
-    await send_with_photo(
-        bot, callback, text, payment_kb(price_rub, days, devices=devices), photo=PAYMENT,
-    )
-
+    await _show_checkout(bot, callback, state)
 
 # ---------------------------------------------------------------------------
 # Step 3: Choose payment method
@@ -368,6 +390,8 @@ async def _get_checkout_params(state: FSMContext, user_id: int) -> dict | None:
         "devices": validate_device_limit(data.get("devices", DEFAULT_DEVICE_LIMIT)),
         "promo_code": data.get("promo_code", ""),
         "renew_key_id": int(data["renew_key_id"]) if data.get("renew_key_id") else None,
+        "autorenew_enabled": bool(data.get("checkout_autorenew_disclosed")) and bool(data.get("autorenew_enabled")),
+        "checkout_autorenew_disclosed": bool(data.get("checkout_autorenew_disclosed")),
     }
 
 
@@ -420,6 +444,13 @@ async def _ask_tariff_again(bot: Bot, callback: CallbackQuery) -> None:
 
 
 # Legacy handler for old period_* callbacks
+@router.callback_query(F.data == "checkout_resume")
+async def cb_checkout_resume(callback: CallbackQuery, bot: Bot):
+    """Open the saved selection without silently creating a new payment."""
+    await safe_answer(callback)
+    await _ask_tariff_again(bot, callback)
+
+
 @router.callback_query(F.data.startswith("period_"))
 async def cb_select_period_legacy(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await safe_answer(callback)
@@ -484,6 +515,18 @@ async def cb_pay_stars(callback: CallbackQuery, bot: Bot, state: FSMContext):
 # Payment: YooKassa
 # ---------------------------------------------------------------------------
 
+@router.callback_query(F.data == "autorenew_checkout_toggle")
+async def cb_autorenew_checkout_toggle(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    """Explicit visible checkout choice, never a hidden recurring debit."""
+    await safe_answer(callback)
+    params = await _get_checkout_params(state, callback.from_user.id)
+    if not params or not params["checkout_autorenew_disclosed"]:
+        await _ask_tariff_again(bot, callback)
+        return
+    await state.update_data(autorenew_enabled=not params["autorenew_enabled"])
+    await _show_checkout(bot, callback, state)
+
+
 @router.callback_query(F.data.in_({"pay_yookassa", "pay_yookassa_autorenew"}))
 async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await safe_answer(callback)
@@ -497,7 +540,9 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
     devices: int = params["devices"]
     promo_code: str = params["promo_code"]
     user_id = callback.from_user.id
-    save_payment_method = callback.data == "pay_yookassa_autorenew"
+    # Old "pay_yookassa" buttons had one-time semantics. Only a checkout
+    # freshly shown with explicit recurring disclosure may opt in by default.
+    save_payment_method = callback.data == "pay_yookassa_autorenew" or params["autorenew_enabled"]
 
     if not claim_yookassa_checkout(user_id):
         await callback.message.answer("Запрос на оплату уже выполняется. Подождите немного.")
@@ -553,7 +598,10 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
         f"Сумма: <b>{price_rub} ₽</b>\n"
         f"Срок: {days} дней\n"
         f"Устройств: до {devices} одновременно\n\n"
-        f"Подписка активируется после подтверждения оплаты.",
+        f"Автопродление: <b>{'включено' if save_payment_method else 'выключено'}</b>. "
+        + (f"Следующее списание {price_rub} ₽ за {days} дней — по окончании срока. "
+           "Отключить можно в настройках.\n\n" if save_payment_method else "\n\n")
+        + "Подписка активируется после подтверждения оплаты.",
         kb,
         photo=PAYMENT,
     )
