@@ -34,7 +34,8 @@ from database import (
 from app_links import build_app_login_url, build_app_redirect_url
 from config import CHANNEL_BONUS_CHAT_ID, CHANNEL_BONUS_URL
 from keyboards import (
-    main_menu_new_user, main_menu_existing, main_menu_with_keys, main_menu_active, main_menu_expired,
+    main_menu_new_user, main_menu_existing, main_menu_with_keys, main_menu_active,
+    main_menu_panel_active, main_menu_expired,
     back_to_menu, cancel_kb, support_url, app_open_kb,
 )
 from utils import send_with_photo, safe_answer, get_cached_bot_info
@@ -358,6 +359,10 @@ async def _send_main_menu(
         # With multiple active subscriptions, let the customer choose.
         if len(active_keys) == 1:
             kb = main_menu_active(int(active_keys[0]["id"]), str(active_keys[0].get("key") or ""))
+        elif not active_keys and _panel_client_is_active(panel_client):
+            # Keep the home screen usable if the VPN panel is authoritative but
+            # SQLite has not yet imported the entitlement.
+            kb = main_menu_panel_active(str(panel_client.get("subscription_url") or ""))
         else:
             kb = main_menu_with_keys(trial_used=True)
 
