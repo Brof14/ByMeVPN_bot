@@ -5049,6 +5049,40 @@ async def get_keys_nearing_expiry(days_min: int = 1, days_max: int = 3) -> list[
     ]
 
 
+async def get_recently_expired_keys(*, days_min: int = 2, days_max: int = 4) -> list[dict]:
+    """One win-back candidate per lapsed account; never target active access."""
+    db = await get_db()
+    now = int(time.time())
+    lower = now - int(days_max) * 86400
+    upper = now - int(days_min) * 86400
+    cur = await db.execute(
+        """
+        SELECT k.id, k.user_id, k.expiry, k.last_notification_at
+        FROM keys k
+        JOIN users u ON u.user_id = k.user_id
+        WHERE k.expiry BETWEEN ? AND ?
+          AND COALESCE(u.is_banned, 0) = 0
+          AND NOT EXISTS (
+              SELECT 1 FROM keys active
+              WHERE active.user_id = k.user_id AND active.expiry > ?
+          )
+          AND k.id = (
+              SELECT k2.id FROM keys k2
+              WHERE k2.user_id = k.user_id
+              ORDER BY k2.expiry DESC, k2.id DESC LIMIT 1
+          )
+        ORDER BY k.expiry DESC, k.id DESC
+        LIMIT 250
+        """,
+        (lower, upper, now),
+    )
+    return [
+        {"key_id": row[0], "user_id": row[1],
+         "expiry": row[2], "last_notification_at": row[3]}
+        for row in await cur.fetchall()
+    ]
+
+
 async def update_key_last_notification(user_id: int, expiry: int) -> None:
     """Update last_notification_at timestamp for a key."""
     db = await get_db()
