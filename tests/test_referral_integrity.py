@@ -4,7 +4,7 @@ Referral integrity regression tests.
 Invariant under test: ONE qualifying payment → AT MOST ONE referral day reward.
   - legacy duplicate add_referral_earning remains idempotent;
   - award_referral_for_payment creates one days-only reward record;
-  - intro-trial payments (1 ₽) never produce a reward;
+  - the first settled 1 ₽ introductory payment qualifies once;
   - renewals (second payment of the same referred user) produce no second reward;
   - duplicate provider payments (same provider_payment_id) are recorded once.
 
@@ -77,8 +77,8 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
     async def test_02_award_helper_idempotent(self):
         """award_referral_for_payment twice (duplicate webhook) → single reward."""
         await self._seed_pair()
-        first = await award_referral_for_payment(222, "yk-payment-id-1", bot=None)
-        second = await award_referral_for_payment(222, "yk-payment-id-1", bot=None)
+        first = await award_referral_for_payment(222, "yk-payment-id-1", amount=89, bot=None)
+        second = await award_referral_for_payment(222, "yk-payment-id-1", amount=89, bot=None)
         self.assertTrue(first)
         self.assertFalse(second)
         self.assertEqual(await self._payment_rewards_count(), 1)
@@ -86,24 +86,27 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
         events = await database.get_referral_events(111)
         self.assertTrue(any(event["event_type"] == "payment_bonus" and event["days_awarded"] == 30 for event in events))
 
-    async def test_03_trial_payment_never_awards(self):
-        """Intro-trial (1 ₽) is not a paid conversion → no reward, no row."""
+    async def test_03_first_paid_trial_awards_once(self):
+        """A settled 1 ₽ introductory charge counts as the first payment."""
         await self._seed_pair()
-        result = await award_referral_for_payment(222, "trial-payment-id", is_trial=True, bot=None)
-        self.assertFalse(result)
-        self.assertEqual(await self._payment_rewards_count(), 0)
+        result = await award_referral_for_payment(222, "trial-payment-id", is_trial=True, amount=1, bot=None)
+        self.assertTrue(result)
+        self.assertEqual(await self._payment_rewards_count(), 1)
+        later = await award_referral_for_payment(222, "later-payment-id", amount=89, bot=None)
+        self.assertFalse(later)
+        self.assertEqual(await self._payment_rewards_count(), 1)
 
     async def test_04_renewal_yields_no_second_reward(self):
         """Second (renewal) payment of the same referred user → no second reward."""
         await self._seed_pair()
-        await award_referral_for_payment(222, "first-payment", bot=None)
-        await award_referral_for_payment(222, "renewal-payment", bot=None)
+        await award_referral_for_payment(222, "first-payment", amount=89, bot=None)
+        await award_referral_for_payment(222, "renewal-payment", amount=89, bot=None)
         self.assertEqual(await self._payment_rewards_count(), 1)
 
     async def test_05_no_referrer_no_reward(self):
         """Payment by a user without a referrer → nothing happens."""
         await database.ensure_user(333)
-        result = await award_referral_for_payment(333, "some-payment", bot=None)
+        result = await award_referral_for_payment(333, "some-payment", amount=89, bot=None)
         self.assertFalse(result)
         self.assertEqual(await self._earnings_count(), 0)
 
@@ -178,9 +181,9 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
         from unittest.mock import AsyncMock, patch
         await self._seed_pair(referrer_id=1011, referred_id=1022)
         with patch("database.add_referral_event", new=AsyncMock(side_effect=RuntimeError("db unavailable"))):
-            self.assertFalse(await award_referral_for_payment(1022, "payment-1022", bot=None))
-        await award_referral_for_payment(1022, "payment-1022", bot=None)
-        await award_referral_for_payment(1022, "payment-1022", bot=None)
+            self.assertFalse(await award_referral_for_payment(1022, "payment-1022", amount=89, bot=None))
+        await award_referral_for_payment(1022, "payment-1022", amount=89, bot=None)
+        await award_referral_for_payment(1022, "payment-1022", amount=89, bot=None)
         events = await database.get_referral_events(1011)
         self.assertEqual(len([e for e in events if e["referred_id"] == 1022 and e["event_type"] == "payment_bonus"]), 1)
 

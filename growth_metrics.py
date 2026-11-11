@@ -1,7 +1,7 @@
 """Read-only, cohort-based referral analytics without schema migrations.
 
-A referral counts as paid only once the canonical payment_bonus has been
-awarded for a qualifying purchase. We do not equate issued VPN days with
+A referral counts as paid once the canonical payment_bonus has been
+recorded for the first successful subscription payment, including the 1 RUB trial. We do not equate issued VPN days with
 cash or profitability.
 """
 import time

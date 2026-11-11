@@ -831,7 +831,7 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
         1. Deliver a 3-day key (days from metadata).
         2. Set users.trial_used and clear the pending trial checkout.
         3. Save auto-renew renewal terms 89 ₽ / 30 days (NOT 1 ₽ / 3 days).
-        4. NOT trigger referral rewards (trial is not a paid conversion).
+        4. Trigger the first-payment referral milestone once, including a 1 ₽ trial.
         5. Mark the payment processed and idempotently recorded.
         """
         import webhook
@@ -869,8 +869,10 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(kwargs["amount"], 1)
                 self.assertTrue(kwargs["skip_referral_bonus"])
 
-                # Referral reward must be skipped for the 1 ₽ trial
-                mock_referral.assert_not_awaited()
+                # A successful paid trial qualifies as the first payment.
+                mock_referral.assert_awaited_once_with(
+                    user_id, "yk_trial_payment_1", amount=1, is_trial=True, bot=bot
+                )
 
             self.assertTrue(await has_trial_used(user_id))
             self.assertIsNone(await get_yookassa_trial_pending(user_id))

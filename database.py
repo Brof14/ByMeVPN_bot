@@ -5014,26 +5014,72 @@ async def get_refund_stats() -> dict:
 # ---------------------------------------------------------------------------
 
 async def get_keys_nearing_expiry(days_min: int = 1, days_max: int = 3) -> list[dict]:
-    """Get keys that will expire in the specified day range."""
-    db = await get_db()
-    current_time = int(time.time())
-    min_expiry = current_time + days_min * 86400
-    max_expiry = current_time + days_max * 86400
+    """Fetch due keys, segmenting trial-only users from paying customers.
 
+    A paid 1 ₽ intro trial is still a trial for notification copy; any later
+    successful subscription payment makes the customer a paying subscriber.
+    """
+    db = await get_db()
+    now = int(time.time())
+    min_expiry = now + days_min * 86400
+    max_expiry = now + days_max * 86400
     cur = await db.execute(
         """
-        SELECT id, user_id, expiry, last_notification_at
-        FROM keys
-        WHERE expiry BETWEEN ? AND ?
-        AND expiry > ?
-        ORDER BY expiry ASC, id ASC
+        SELECT k.id, k.user_id, k.expiry, k.last_notification_at,
+               CASE WHEN COALESCE(u.trial_used, 0) = 1
+                   AND NOT EXISTS (
+                       SELECT 1 FROM payments p
+                       WHERE p.user_id = k.user_id AND p.status = 'success'
+                         AND NOT (p.method = 'yookassa' AND p.amount = 1 AND p.days = 3)
+                   )
+               THEN 1 ELSE 0 END AS is_trial
+        FROM keys k
+        LEFT JOIN users u ON u.user_id = k.user_id
+        WHERE k.expiry BETWEEN ? AND ? AND k.expiry > ?
+        ORDER BY k.expiry ASC, k.id ASC
         """,
-        (min_expiry, max_expiry, current_time)
+        (min_expiry, max_expiry, now),
     )
-    rows = await cur.fetchall()
     return [
-        {"key_id": row[0], "user_id": row[1], "expiry": row[2], "last_notification_at": row[3]}
-        for row in rows
+        {
+            "key_id": row[0], "user_id": row[1], "expiry": row[2],
+            "last_notification_at": row[3], "is_trial": bool(row[4]),
+        }
+        for row in await cur.fetchall()
+    ]
+
+
+async def get_recently_expired_keys(*, days_min: int = 2, days_max: int = 4) -> list[dict]:
+    """One win-back candidate per lapsed account; never target active access."""
+    db = await get_db()
+    now = int(time.time())
+    lower = now - int(days_max) * 86400
+    upper = now - int(days_min) * 86400
+    cur = await db.execute(
+        """
+        SELECT k.id, k.user_id, k.expiry, k.last_notification_at
+        FROM keys k
+        JOIN users u ON u.user_id = k.user_id
+        WHERE k.expiry BETWEEN ? AND ?
+          AND COALESCE(u.is_banned, 0) = 0
+          AND NOT EXISTS (
+              SELECT 1 FROM keys active
+              WHERE active.user_id = k.user_id AND active.expiry > ?
+          )
+          AND k.id = (
+              SELECT k2.id FROM keys k2
+              WHERE k2.user_id = k.user_id
+              ORDER BY k2.expiry DESC, k2.id DESC LIMIT 1
+          )
+        ORDER BY k.expiry DESC, k.id DESC
+        LIMIT 250
+        """,
+        (lower, upper, now),
+    )
+    return [
+        {"key_id": row[0], "user_id": row[1],
+         "expiry": row[2], "last_notification_at": row[3]}
+        for row in await cur.fetchall()
     ]
 
 
@@ -6324,19 +6370,22 @@ async def mark_ad_notification_opened(user_id: int, campaign_id: int) -> bool:
 
 
 async def calculate_bonus_months(subscriber_count: int) -> int:
-    """Calculate bonus months based on subscriber count."""
+    """New campaign rewards; existing applications retain their saved terms.
+
+    Caps high-cost free access for low-reach channels. This is intentionally
+    independent of historic ad_applications.bonus_months.
+    """
     if subscriber_count >= 350:
-        return 24  # 2 years
-    elif subscriber_count >= 250:
-        return 12  # 1 year
-    elif subscriber_count >= 150:
-        return 8
-    elif subscriber_count >= 100:
+        return 12
+    if subscriber_count >= 250:
         return 6
-    elif subscriber_count >= 50:
+    if subscriber_count >= 150:
         return 4
-    else:
+    if subscriber_count >= 100:
+        return 3
+    if subscriber_count >= 50:
         return 2
+    return 1
 
 
 async def log_ad_analytics_event(user_id: int, event_type: str, details: dict = None) -> None:

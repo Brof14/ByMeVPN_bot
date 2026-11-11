@@ -201,89 +201,14 @@ async def get_referral_link(user_id: int, bot_username: str) -> str:
     return f"https://t.me/{bot_username}?start={user_id}"
 
 
-async def process_payment_referral_bonus(user_id: int, amount: int, bot) -> bool:
-    """
-    Process referral bonus when a referred user makes a payment.
-    Awards 30 days to the referrer for the first payment.
-    """
-    try:
-        from database import get_referrer, get_referral_events, get_user_keys, extend_key
-        from constants import REFERRAL_FIRST_PAYMENT_BONUS_DAYS
-        import time
-        
-        # Get referrer for this user
-        referrer_id = await get_referrer(user_id)
-        if not referrer_id:
-            logger.info(f"No referrer found for user {user_id}")
-            return False
-        
-        # Check if this is the first payment bonus for this referral
-        events = await get_referral_events(referrer_id, limit=100)
-        for event in events:
-            if event["referred_id"] == user_id and event["event_type"] == "payment_bonus":
-                logger.info(f"Payment bonus already claimed for referrer {referrer_id}, referred {user_id}")
-                return False
-        
-        bonus_days = REFERRAL_FIRST_PAYMENT_BONUS_DAYS
-        referrer_keys = await get_user_keys(referrer_id)
-        current_time = int(time.time())
-        
-        if referrer_keys:
-            # Extend the first active or recently expired key
-            extendable_keys = [k for k in referrer_keys if k.get("expiry", 0) > current_time - 7*86400]
-            if extendable_keys:
-                extendable_keys.sort(key=lambda k: k.get("expiry", 0), reverse=True)
-                key_to_extend = extendable_keys[0]
-                key_id = key_to_extend["id"]
-                
-                success = await extend_key(key_id, bonus_days)
-                if success:
-                    logger.info(f"Extended referrer {referrer_id} key {key_id} by {bonus_days} days")
-                else:
-                    logger.warning(f"Failed to extend referrer {referrer_id} key {key_id}")
-            else:
-                # No extendable keys - create new one or notify
-                logger.info(f"Referrer {referrer_id} has no extendable keys")
-        else:
-            # Referrer has no keys at all
-            logger.info(f"Referrer {referrer_id} has no keys")
-        
-        # Log the payment bonus event
-        await add_referral_event(
-            referrer_id=referrer_id,
-            referred_id=user_id,
-            event_type="payment_bonus",
-            days_awarded=bonus_days
-        )
-        
-        # Notify referrer
-        try:
-            await bot.send_message(
-                referrer_id,
-                f"💰 <b>Бонус за оплату реферала!</b>\n\n"
-                f"Ваш реферал оплатил подписку\n"
-                f"� Ваш ключ продлён на {bonus_days} дней\n"
-                f"💚 Продолжайте приглашать друзей!",
-                parse_mode="HTML"
-            )
-        except Exception as notify_error:
-            logger.error("Failed to notify referrer about payment bonus: %s", notify_error)
-        
-        logger.info(f"Payment bonus awarded: referrer={referrer_id}, referred={user_id}, days={bonus_days}")
-        return True
-    except Exception as e:
-        logger.error("Error processing payment referral bonus: %s", e)
-        return False
-
-
 # ---------------------------------------------------------------------------
-# Canonical referral reward for a qualifying payment (single path)
+# Canonical referral reward for the first successful subscription payment
 # ---------------------------------------------------------------------------
 
 async def award_referral_for_payment(
     user_id: int,
     payment_ref: str,
-    amount: int = 50,
+    amount: int = 0,
     is_trial: bool = False,
     bot=None,
 ) -> bool:
@@ -291,18 +216,16 @@ async def award_referral_for_payment(
     The ONE place where a payment may award a referral reward.
 
     Guarantees:
-    - one qualifying payment → at most one reward through ref_bonus_claims;
-    - intro-trial payments (1 ₽) are never a paid conversion → no reward;
+    - any first verified successful subscription payment (>0), including 1 ₽ trial,
+      creates at most one reward per referred customer;
     - duplicate webhooks / retries / renewals → no second reward.
+    - callers must supply the settled positive provider amount.
 
     All payment handlers (YooKassa webhook, CryptoBot monitor, Telegram Stars)
     must call this instead of implementing their own bonus logic.
     """
-    if is_trial:
-        logger.info(
-            "Referral reward skipped: intro-trial payment for user %d is not a paid conversion",
-            user_id,
-        )
+    if amount <= 0 or not payment_ref:
+        logger.warning("Ignoring unverified or zero-value referral payment for user %d", user_id)
         return False
 
     try:
@@ -322,7 +245,7 @@ async def award_referral_for_payment(
             referred_id=user_id,
             event_type="payment_bonus",
             days_awarded=REFERRAL_FIRST_PAYMENT_BONUS_DAYS,
-            description=f"First paid subscription; payment={payment_ref}",
+            description=f"First settled subscription payment; payment={payment_ref}",
         )
         if not bonus_added:
             logger.info(
@@ -386,7 +309,7 @@ async def process_pending_referral_payment_rewards(bot, limit: int = 100) -> int
             try:
                 await bot.send_message(
                     referrer_id,
-                    "🎉 <b>Ваш друг оформил первую платную подписку!</b>\n\n"
+                    "🎉 <b>Друг совершил первую оплату!</b>\n\n"
                     f"Бонус <b>+{REFERRAL_FIRST_PAYMENT_BONUS_DAYS} дней ByMeVPN</b> уже автоматически начислен на ваш ключ.",
                     parse_mode="HTML",
                 )

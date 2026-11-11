@@ -165,7 +165,7 @@ class TestUncertainAutoRenew(unittest.IsolatedAsyncioTestCase):
         failed.assert_awaited_once_with(79, "unknown")
         notify.assert_awaited_once()
 
-    async def test_failure_notification_escapes_provider_fields(self):
+    async def test_failure_notification_escapes_card_and_hides_internal_provider_error(self):
         bot = MagicMock()
         bot.send_message = AsyncMock()
         with patch("database.get_user_keys", new=AsyncMock(return_value=[])):
@@ -175,7 +175,7 @@ class TestUncertainAutoRenew(unittest.IsolatedAsyncioTestCase):
             )
         message = bot.send_message.await_args.kwargs["text"]
         self.assertIn("&lt;Card &amp; account&gt;", message)
-        self.assertIn("&lt;provider &amp; error&gt;", message)
+        self.assertNotIn("&lt;provider &amp; error&gt;", message)
         self.assertNotIn("<provider & error>", message)
 
     async def test_successful_charge_is_fulfilled_before_success_marker(self):

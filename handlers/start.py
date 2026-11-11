@@ -279,7 +279,7 @@ async def _send_main_menu(
             text = (
                 "<b>ByMeVPN</b>\n\n"
                 "Защитите интернет-соединение на телефоне и компьютере.\n\n"
-                "Попробуйте 3 дня бесплатно или сразу выберите подходящий тариф."
+                "Попробуйте VPN 3 дня бесплатно, без карты, или сразу выберите тариф."
             )
         kb = main_menu_new_user()
     elif state == "existing":
@@ -366,6 +366,21 @@ async def _send_main_menu(
             kb = main_menu_panel_active(str(panel_client.get("subscription_url") or ""))
         else:
             kb = main_menu_with_keys(trial_used=True)
+
+    # A saved checkout is a recovery opportunity, not a new marketing broadcast.
+    # Only show it to customers without an active subscription and never charge
+    # from a stored draft: the payment page recalculates the amount.
+    if state in {"new", "existing", "expired"}:
+        try:
+            from database import get_checkout_draft
+            draft = await get_checkout_draft(user_id)
+        except Exception:
+            draft = None
+        if draft:
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Продолжить оформление", callback_data="checkout_resume")],
+                *kb.inline_keyboard,
+            ])
 
     await send_with_photo(bot, target, text, kb, photo=MENU)
 

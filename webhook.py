@@ -969,13 +969,12 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                     except Exception as notify_e:
                         logger.debug("Failed to send one-time renewal fallback to user %d: %s", user_id, notify_e)
 
-            # Referral reward: single canonical path — idempotent (UNIQUE in DB)
-            # and trial-safe. One qualifying payment = exactly one reward.
-            # The outer guard is deliberate defense-in-depth: the helper also
-            # refuses trial payments internally.
-            if not is_trial:
-                from referral_system_new import award_referral_for_payment
-                await award_referral_for_payment(user_id, payment_id, is_trial=False, bot=bot)
+            # A successful first payment of ANY amount, including the paid
+            # 1 ₽ introductory trial, earns exactly one referral bonus.
+            from referral_system_new import award_referral_for_payment
+            await award_referral_for_payment(
+                user_id, payment_id, amount=amount_rub, is_trial=is_trial, bot=bot,
+            )
         else:
             await update_payment_status(pay_db_id, "failed")
             logger.error("YooKassa payment %s provisioning failed for user %d", payment_id, user_id)
@@ -1214,7 +1213,7 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
 
             # Referral reward: single canonical path (mirrors YooKassa's rule).
             from referral_system_new import award_referral_for_payment
-            await award_referral_for_payment(user_id, str(invoice_id), bot=bot)
+            await award_referral_for_payment(user_id, str(invoice_id), amount=amount_rub, bot=bot)
         else:
             await update_payment_status(pay_db_id, "failed")
             logger.error("CryptoBot invoice %s provisioning failed for user %d", invoice_id, user_id)

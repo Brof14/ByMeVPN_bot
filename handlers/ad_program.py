@@ -64,12 +64,12 @@ class AdProgramFlow(StatesGroup):
 
 # Bonus tiers (must match database.calculate_bonus_months)
 BONUS_TIERS = (
-    "1–49 — 2 месяца\n"
-    "50–99 — 4 месяца\n"
-    "100–149 — 6 месяцев\n"
-    "150–249 — 8 месяцев\n"
-    "250–349 — 12 месяцев\n"
-    "350+ — 24 месяца и индивидуальные условия"
+    "1–49 — 1 месяц (после индивидуальной проверки)\n"
+    "50–99 — 2 месяца\n"
+    "100–149 — 3 месяца\n"
+    "150–249 — 4 месяца\n"
+    "250–349 — 6 месяцев\n"
+    "350+ — до 12 месяцев, после индивидуальной проверки"
 )
 
 # Statuses that mean "user is working on the application" (only one allowed)
@@ -163,7 +163,8 @@ async def cb_ad_program(callback: CallbackQuery, bot: Bot, state: FSMContext):
         "2. Разместите наш рекламный пост.\n"
         "3. Сохраните публикацию на 30 дней.\n\n"
         "После проверки выполнения условий начислим бонус.\n\n"
-        "Чем больше аудитория, тем больше месяцев доступа."
+        "Бонус зависит от аудитории, а публикацию нужно сохранить 30 дней. "
+        "Ранее одобренные заявки сохраняют свои условия."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Начать · указать канал", callback_data="ad_check_channel")],
@@ -182,7 +183,8 @@ async def cb_ad_bonus_tiers(callback: CallbackQuery, bot: Bot):
         "<b>Сколько VPN можно получить?</b>\n\n"
         "Бонус зависит от количества подписчиков вашего канала.\n\n"
         f"{BONUS_TIERS}\n\n"
-        "<b>Условия:</b> публикация на 30 дней, один бонус на канал после проверки."
+        "<b>Условия:</b> публикация на 30 дней; один бонус на канал после проверки. "
+        "По уже принятым заявкам действуют условия, указанные при подаче."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Проверить канал", callback_data="ad_check_channel")],
@@ -312,9 +314,9 @@ async def _create_application_and_reply(
         await message.answer(text, reply_markup=kb)
         return
 
-    # 350+ needs individual agreement with the admin; everything else goes
+    # Small and large audiences require admin review; everything else goes
     # straight to "publish the post" step.
-    needs_review = subscriber_count >= 350 or manual_count
+    needs_review = subscriber_count < 50 or subscriber_count >= 350 or manual_count
     status = "channel_pending" if needs_review else "waiting_for_post"
 
     campaign = await get_active_ad_campaign()

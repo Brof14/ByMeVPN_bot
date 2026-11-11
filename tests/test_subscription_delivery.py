@@ -364,7 +364,6 @@ class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
             patch("subscription.record_payment_idempotent", new=AsyncMock()) as record_payment,
             patch("subscription.update_key_uuid", new=AsyncMock()),
             patch("subscription.log_analytics_event", new=AsyncMock()),
-            patch("referral_system_new.process_payment_referral_bonus", new=AsyncMock(return_value=None)),
         ):
             result = await subscription.deliver_key(
                 bot=bot,

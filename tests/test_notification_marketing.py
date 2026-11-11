@@ -29,27 +29,29 @@ class TestNotificationMarketing(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "AVAILABLE")
         create.assert_not_awaited()
 
-    async def test_expiry_offer_states_exact_promo_deadline_and_clear_actions(self):
+    async def test_expiry_does_not_distribute_blanket_thirty_percent_discount(self):
         bot = SimpleNamespace(send_message=AsyncMock())
         item = {"user_id": 901, "expiry": int(time.time()) + 2 * 86400}
         with (
             patch("notifications._get_active_autorenew", new=AsyncMock(return_value=None)),
-            patch("notifications.is_promotional_opted_out", new=AsyncMock(return_value=False)),
-            patch("notifications.get_or_create_renewal_promo", new=AsyncMock(return_value="TEST30")),
-            patch("notifications.validate_promo_code", new=AsyncMock(return_value={"expires_at": int(time.time()) + 86400})),
+            patch("notifications.get_or_create_renewal_promo", new=AsyncMock()) as create,
         ):
-            await _send_urgent_notification(bot, item)
-
+            self.assertTrue(await _send_urgent_notification(bot, item))
         text = bot.send_message.await_args.args[1]
         self.assertIn("До окончания подписки", text)
-        self.assertIn("30% скидки", text)
-        self.assertIn("до ", text)
-        self.assertIn("лимит применений", text)
-        self.assertNotIn("🚨", text)
+        self.assertNotIn("30% скидки", text)
+        create.assert_not_awaited()
         keyboard = bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard
         self.assertEqual(keyboard[0][0].callback_data, "buy_vpn")
-        self.assertEqual(keyboard[0][0].style, "primary")
         self.assertEqual(keyboard[1][0].callback_data, "free_vpn")
+
+    async def test_trial_message_is_delayed_until_last_day(self):
+        bot = SimpleNamespace(send_message=AsyncMock())
+        item = {"user_id": 901, "expiry": int(time.time()) + 2 * 86400, "is_trial": True}
+        with patch("notifications._get_active_autorenew", new=AsyncMock()) as auto:
+            self.assertFalse(await _send_urgent_notification(bot, item))
+        auto.assert_not_awaited()
+        bot.send_message.assert_not_awaited()
 
     async def test_opted_out_customer_gets_service_reminder_without_promo(self):
         bot = SimpleNamespace(send_message=AsyncMock())

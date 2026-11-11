@@ -281,7 +281,7 @@ async def cb_admin_referral_funnel(callback: CallbackQuery):
         "<b>Органический рост · 30 дней</b>\n\n"
         f"Приглашено: <b>{stats['invited']}</b>\n"
         f"Приглашали: <b>{stats['advocates']}</b> пользователей\n"
-        f"С первой подходящей оплатой: <b>{stats['paying']}</b>\n"
+        f"С первой успешной оплатой: <b>{stats['paying']}</b>\n"
         f"Без подтверждённой оплаты: <b>{stats['unconverted']}</b>\n"
         f"Конверсия: <b>{stats['conversion_pct']:.1f}%</b>\n"
         f"Начислено или ожидает начисления: <b>{stats['bonus_days']} бонусных дней</b>\n\n"
@@ -2246,7 +2246,7 @@ async def cb_admin_retry_payment(callback: CallbackQuery):
         if success:
             from referral_system_new import award_referral_for_payment
             await award_referral_for_payment(
-                payment["user_id"], str(provider_payment_id), is_trial=False, bot=callback.bot
+                payment["user_id"], str(provider_payment_id), amount=int(payment["amount"]), bot=callback.bot
             )
         result_text = "Повторная выдача завершена. Проверьте статус платежа и ключ пользователя."
     await callback.message.answer(
