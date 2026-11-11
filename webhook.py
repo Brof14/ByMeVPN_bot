@@ -657,6 +657,36 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
             await _notify_admin(bot, "⚠️ Данные мобильного платежа не совпали с сохранённым тарифом. Автоматическая выдача остановлена.")
             return
 
+        # Bind a renewal to the key selected when checkout started. Older
+        # checkout metadata may omit it; in that case mirror deliver_key's
+        # deterministic latest-expiry selection. Never use list position.
+        target_key_id = None
+        raw_key_id = metadata.get("key_id")
+        if raw_key_id not in (None, ""):
+            try:
+                target_key_id = int(raw_key_id)
+            except (TypeError, ValueError):
+                target_key_id = 0
+            from database import get_key_by_id
+            selected_key = await get_key_by_id(target_key_id) if target_key_id > 0 else None
+            if not selected_key or selected_key.get("user_id") != user_id:
+                logger.error("YooKassa payment %s has invalid subscription binding", payment_id)
+                await _notify_admin(bot, "⚠️ Платёж YooKassa содержит неверную привязку подписки. Автоматическая выдача остановлена.")
+                return
+        else:
+            from database import get_user_keys
+            now = int(__import__("time").time())
+            existing_keys = await get_user_keys(user_id)
+            extendable = [k for k in existing_keys if int(k.get("expiry") or 0) > now - 7 * 86400]
+            if extendable:
+                target_key_id = max(extendable, key=lambda k: int(k.get("expiry") or 0))["id"]
+
+        is_autorenew = metadata.get("auto_renew") == "1"
+        if is_autorenew and target_key_id is None:
+            logger.error("Auto-renew payment %s has no unambiguous subscription binding", payment_id)
+            await _notify_admin(bot, "⚠️ Автоплатёж YooKassa не связан с подпиской. Автоматическая выдача остановлена.")
+            return
+
         logger.info(
             "Webhook: processing payment %s — user=%d days=%d devices=%d amount=%d",
             payment_id, user_id, days, devices, amount_rub,
@@ -771,6 +801,7 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
             payload=payment_id,
             extend_existing=True,
             skip_referral_bonus=is_trial,
+            target_key_id=target_key_id,
         )
 
         if success:
@@ -790,15 +821,21 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                 await record_fulfilled_promo(bot, promo_code, user_id, "yookassa", payment_id)
             logger.info("YooKassa payment %s successfully fulfilled for user %d", payment_id, user_id)
 
-            # Auto-renew handling
-            is_autorenew = metadata.get("auto_renew") == "1"
+            # Auto-renew handling: use the exact key targeted by delivery.
             from database import (
                 get_user_keys,
                 save_auto_renew_subscription,
                 update_auto_renew_charge_success_by_user_key,
             )
             user_keys = await get_user_keys(user_id)
-            key_id = user_keys[0]["id"] if user_keys else None
+            key_id = target_key_id
+            if key_id is None and len(user_keys) == 1:
+                key_id = user_keys[0]["id"]
+            if key_id is None and user_keys:
+                logger.warning(
+                    "Skipping saved payment method for user %d: checkout has no unique subscription binding",
+                    user_id,
+                )
 
             if is_trial:
                 # Intro trial succeeded: mark trial as used, clean pending link
@@ -816,7 +853,7 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                     logger.warning("Trial bookkeeping failed for user %d: %s", user_id, e)
 
                 pm = payment.get("payment_method") or {}
-                if pm.get("saved") and pm.get("id"):
+                if pm.get("saved") and pm.get("id") and key_id is not None:
                     await save_auto_renew_subscription(
                         user_id=user_id,
                         key_id=key_id,
