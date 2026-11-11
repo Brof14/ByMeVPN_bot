@@ -278,6 +278,11 @@ def themed_button(*args, **kwargs) -> TelegramInlineKeyboardButton:
             # Avoid displaying the same icon twice in clients supporting
             # button custom emoji. When disabled we preserve old labels.
             clean = label
+            if callback.startswith(("tariff_3_", "tariff_6_", "tariff_12_")):
+                # Telegram premium icons can only precede a button label.
+                # Keep the inline gift after the duration as fallback, but
+                # avoid two gifts when the custom premium gift icon is enabled.
+                clean = clean.replace(" мес. 🎁 —", " мес. —", 1)
             for prefix in _LEGACY_PREFIXES:
                 if clean.startswith(prefix):
                     clean = clean[len(prefix):]
