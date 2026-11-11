@@ -10,6 +10,7 @@ from aiogram.types import Message, InlineKeyboardMarkup
 
 from async_utils import monitor_performance
 from bot_style import themed_button as InlineKeyboardButton
+from keyboards import support_url
 
 router = Router()
 
@@ -18,12 +19,12 @@ async def _show_menu_hint(message: Message, *, unknown_command: bool = False) ->
     caption = "Команда не найдена. Откройте меню." if unknown_command else (
         "Не удалось распознать сообщение. Откройте меню."
     )
-    await message.answer(
-        caption,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="Открыть меню", callback_data="back_to_menu")
-        ]]),
-    )
+    needs_help = not unknown_command and any(phrase in (message.text or "").lower() for phrase in ("не подключ", "не работает vpn", "ошибка vpn", "vpn отключ"))
+    buttons = [[InlineKeyboardButton(text="Открыть меню", callback_data="back_to_menu")]]
+    if needs_help:
+        caption = "Похоже, нужна помощь с подключением. Откройте поддержку или меню."
+        buttons.insert(0, [InlineKeyboardButton(text="Поддержка", url=support_url())])
+    await message.answer(caption, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 
 @router.message(F.command, StateFilter(None))
