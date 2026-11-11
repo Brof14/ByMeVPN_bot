@@ -154,9 +154,9 @@ def tariff_selection_kb(
         selected = "✓ " if count == devices else ""
         if count == 10:
             ten_device_tier = InlineKeyboardButton(
-                text=f"{selected}🔟 10 устройств",
+                text=f"{selected}10 устройств",
                 callback_data=f"devtier_{count}",
-                icon_custom_emoji_id=None,
+                icon_custom_emoji_id="5967591100532134862",
             )
         else:
             label = f"{selected}{count} устройства" if count == 2 else f"{selected}{count} устройств"
