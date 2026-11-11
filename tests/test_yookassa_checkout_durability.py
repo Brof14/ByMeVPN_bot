@@ -81,6 +81,22 @@ class YooKassaCheckoutDurabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("https://yookassa.example.test/", result["payment_url"])
         pending.assert_awaited_once_with("yk-test", 7, 30, 2, 89)
 
+    def test_payment_keyboard_separates_recurring_from_one_time(self):
+        from keyboards import payment_kb
+
+        buttons = [
+            button
+            for row in payment_kb(89, 30).inline_keyboard
+            for button in row
+        ]
+        callbacks = {button.callback_data for button in buttons}
+        self.assertIn("pay_yookassa", callbacks)
+        self.assertIn("pay_yookassa_autorenew", callbacks)
+        recurring = next(button for button in buttons if button.callback_data == "pay_yookassa_autorenew")
+        one_time = next(button for button in buttons if button.callback_data == "pay_yookassa")
+        self.assertIn("с автопродлением", recurring.text)
+        self.assertIn("разово", one_time.text)
+
     async def test_saving_payment_method_requires_explicit_opt_in(self):
         client = FakeYooKassa([FakeResponse(), FakeResponse()])
         with (
