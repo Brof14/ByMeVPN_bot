@@ -25,7 +25,7 @@ class ConversionUXTests(unittest.TestCase):
                 self.assertIn("/мес.", text)
                 self.assertIn(f"{rubles} ₽ всего", text)
                 if months > 1:
-                    self.assertIn(f"{months}+{{3: 1, 6: 2, 12: 3}[months]} мес.", text)
+                    self.assertIn(f"{months}+{(1 if months == 3 else 2 if months == 6 else 3)} мес.", text)
                 else:
                     self.assertIn("1 мес.", text)
 
