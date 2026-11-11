@@ -174,7 +174,7 @@ def render_app_open_page(deep_link: str) -> str:
 </html>"""
 
 
-CONNECT_TICKET_TTL_SECONDS = 7 * 24 * 60 * 60
+CONNECT_TICKET_TTL_SECONDS = 60 * 60
 LEGACY_CONNECT_TICKET_TTL_SECONDS = 15 * 60
 
 
