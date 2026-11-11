@@ -49,7 +49,7 @@ class PremiumButtonDesignTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "1"}):
             for title in ("🔙 Главное меню", "🏠 Главное меню", "← Назад", "◀️ Назад"):
                 button = themed_button(text=title, callback_data="admin_menu")
-                self.assertEqual(button.style, "danger")
+                self.assertEqual(button.style, "primary")
                 self.assertEqual(button.icon_custom_emoji_id, "5875082500023258804")
                 self.assertNotIn("Главное менюГлавное меню", button.text)
 
