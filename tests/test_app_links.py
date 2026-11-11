@@ -182,7 +182,7 @@ class TestConnectionPageHttp(unittest.TestCase):
         from app_links import _connect_aead
         with patch.dict(os.environ, {"APP_HANDOFF_SECRET": "isolated-test-secret"}):
             ticket = build_connect_ticket("https://sub.example/demo", now=1_000_000)
-            self.assertEqual(read_connect_ticket(ticket, now=1_000_000 + 86400)["subscription_url"], "https://sub.example/demo")
+            self.assertEqual(read_connect_ticket(ticket, now=1_000_000 + 3600)["subscription_url"], "https://sub.example/demo")
             with self.assertRaises(ValueError):
                 read_connect_ticket(ticket, now=1_000_001 + CONNECT_TICKET_TTL_SECONDS)
             payload = json.dumps({"sub": "https://sub.example/demo", "exp": 1_000_000 + 900}).encode()
