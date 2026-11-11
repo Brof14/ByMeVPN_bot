@@ -854,7 +854,7 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                     logger.warning("Trial bookkeeping failed for user %d: %s", user_id, e)
 
                 pm = payment.get("payment_method") or {}
-                if pm.get("saved") and pm.get("id") and key_id is not None:
+                if pm.get("saved") and pm.get("id") and key_id is not None and metadata.get("auto_renew_consent") == "1":
                     await save_auto_renew_subscription(
                         user_id=user_id,
                         key_id=key_id,
