@@ -546,6 +546,31 @@ async def _quarantine_deleted_account_payment(
     return True
 
 
+def _recurring_terms_for_saved_method(metadata: dict, paid_amount: int, paid_days: int, devices: int) -> tuple[int, int] | None:
+    """Validate the disclosed *future* billing quote, not today's promo amount.
+
+    Legacy invoices without a quote keep the terms that were disclosed at
+    their creation time. A mismatched new quote never becomes a recurring debit.
+    """
+    raw_amount = metadata.get("auto_renew_recurring_price_rub")
+    raw_days = metadata.get("auto_renew_recurring_days")
+    if raw_amount is None and raw_days is None:
+        return (paid_amount, paid_days) if paid_amount > 0 and paid_days > 0 else None
+    if raw_amount is None or raw_days is None:
+        return None
+    from constants import get_price_for_months, VALID_DEVICE_LIMITS
+    try:
+        months = int(metadata.get("months", 0))
+        if months not in (1, 3, 6, 12) or int(devices) not in VALID_DEVICE_LIMITS:
+            return None
+        expected_amount, expected_days = get_price_for_months(months, devices)
+        if int(raw_amount) != expected_amount or int(raw_days) != expected_days:
+            return None
+        return expected_amount, expected_days
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
 async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional[dict] = None) -> None:
     """
     Verify and process a succeeded YooKassa payment.
@@ -924,9 +949,15 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                     logger.debug("Failed to send autorenew notification to user %d: %s", user_id, notify_e)
             else:
                 pm = payment.get("payment_method") or {}
+                recurring_terms = _recurring_terms_for_saved_method(
+                    metadata, amount_rub, days, devices
+                ) if metadata.get("auto_renew_consent") == "1" else None
+                if metadata.get("auto_renew_consent") == "1" and recurring_terms is None:
+                    logger.error("YooKassa payment %s has an invalid renewal quote; refusing recurring enrollment", payment_id)
                 if (
                     pm.get("saved") and pm.get("id") and key_id is not None
                     and metadata.get("auto_renew_consent") == "1"
+                    and recurring_terms is not None
                 ):
                     pm_id = pm["id"]
                     pm_title = pm.get("title", "")
@@ -939,9 +970,9 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                         payment_method_title=pm_title,
                         payment_method_type=pm_type,
                         months=months,
-                        days=days,
+                        days=recurring_terms[1],
                         devices=devices,
-                        amount_rub=amount_rub,
+                        amount_rub=recurring_terms[0],
                     )
                     logger.info("Saved auto-renew subscription for user %d (key=%s)", user_id, key_id)
                     try:
@@ -949,8 +980,8 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                             chat_id=user_id,
                             text=(
                                 f"🔄 <b>Автопродление подключено</b>\n\n"
-                                f"По окончании срока подписки ({days} дн.) с вашей карты "
-                                f"автоматически спишется {amount_rub} ₽ для продления.\n\n"
+                                f"По окончании оплаченного срока с вашего способа оплаты "
+                                f"спишется {recurring_terms[0]} ₽ за следующие {recurring_terms[1]} дней. "\n\n"
                                 f"Вы можете в любой момент отключить автопродление в меню ключа."
                             ),
                             parse_mode="HTML",
