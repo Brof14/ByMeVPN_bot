@@ -221,7 +221,7 @@ def _icon_for(text: str, callback: str, *, copy: bool, destructive: bool, back: 
     if callback.startswith("tariff_1_"):
         return ICON_IDS["tariff_1"]
     if callback.startswith(("tariff_3_", "tariff_6_", "tariff_12_")):
-        return ICON_IDS["tariff_1"]
+        return ICON_IDS["gift"]
     if callback.startswith("autorenew_enable:"):
         return ICON_IDS["notifications_on"]
     if callback.startswith(("autorenew_unbind", "autorenew_cancel")):
