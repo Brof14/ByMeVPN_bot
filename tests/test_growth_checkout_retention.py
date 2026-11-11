@@ -83,6 +83,33 @@ class RetentionQualityTests(unittest.IsolatedAsyncioTestCase):
         buttons = bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard
         self.assertEqual(buttons[0][0].callback_data, "key_renew:4")
 
+    async def test_winback_respects_opt_out(self):
+        from notifications import _send_winback_notification
+        item = {"user_id": 123, "key_id": 4, "expiry": int(time.time()) - 3 * 86400}
+        bot = SimpleNamespace(send_message=AsyncMock())
+        with (
+            patch("notifications.is_promotional_opted_out", new=AsyncMock(return_value=True)),
+            patch("database.get_user_keys", new=AsyncMock()) as lookup,
+        ):
+            self.assertFalse(await _send_winback_notification(bot, item))
+        lookup.assert_not_awaited()
+        bot.send_message.assert_not_awaited()
+
+    async def test_winback_only_for_still_lapsed_customer(self):
+        from notifications import _send_winback_notification
+        item = {"user_id": 123, "key_id": 4, "expiry": int(time.time()) - 3 * 86400}
+        bot = SimpleNamespace(send_message=AsyncMock())
+        with (
+            patch("notifications.is_promotional_opted_out", new=AsyncMock(return_value=False)),
+            patch("database.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("notifications._get_active_autorenew", new=AsyncMock(return_value=None)),
+        ):
+            self.assertTrue(await _send_winback_notification(bot, item))
+        self.assertIn("Вернуться", bot.send_message.await_args.args[1])
+        actions = [b.callback_data for row in bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard for b in row]
+        self.assertIn("marketing_optout", actions)
+        self.assertIn("key_renew:4", actions)
+
     async def test_new_ad_reward_tiers_are_capped(self):
         from database import calculate_bonus_months
         expected = [(1, 1), (49, 1), (50, 2), (99, 2), (100, 3),
