@@ -64,7 +64,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         query = parse_qs(urlsplit(button.url).query)
         self.assertEqual(query["url"], [link])
         share_text = query["text"][0]
-        self.assertEqual(share_text, "Привет! Попробуй ByMeVPN — тебе 3 дня бесплатно, а мне бонус за приглашение.")
+        self.assertEqual(share_text, "Попробуй ByMeVPN — 3 дня бесплатно, без привязки карты. Если зарегистрируешься по моей ссылке, мне начислят бонусные дни.")
         self.assertNotIn("5352436388", share_text)
 
 
@@ -523,6 +523,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         buttons = [b for row in send.call_args.args[3].inline_keyboard for b in row]
         copied = next(b for b in buttons if b.text == "Скопировать ссылку")
         self.assertEqual(copied.copy_text.text, "https://t.me/ByMeVPNbot?start=123")
+        self.assertTrue(any(b.callback_data == "partner_referrals_list" for b in buttons))
         self.assertFalse(any(b.text == "Скопировать текст для канала" for b in buttons))
 
     def test_back_is_full_width_and_support_is_not_mixed_into_navigation(self):
