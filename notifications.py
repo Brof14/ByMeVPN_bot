@@ -234,6 +234,20 @@ async def _send_winback_notification(bot: Bot, item: dict) -> bool:
     if any(int(key.get("expiry") or 0) > int(time.time())
            for key in await get_user_keys(user_id)):
         return False
+    # A panel-only or asynchronously restored subscription must never
+    # receive a false "your VPN expired" notification.
+    from xui_client import get_xui_client_details
+    try:
+        panel = await get_xui_client_details(user_id, strict=True)
+    except Exception:
+        logger.warning("Skipping winback: panel state unavailable for user %s", user_id)
+        return False
+    if panel is not None:
+        try:
+            if int(panel.get("expiry_time") or 0) > int(time.time() * 1000):
+                return False
+        except (TypeError, ValueError):
+            return False
     sub = await _get_active_autorenew(user_id, item.get("key_id"))
     if sub:
         return False
