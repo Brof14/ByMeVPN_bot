@@ -68,6 +68,26 @@ def main_menu_active(key_id: int, subscription_url: str = "") -> InlineKeyboardM
     return kb.as_markup()
 
 
+def main_menu_panel_active(subscription_url: str = "") -> InlineKeyboardMarkup:
+    """Server-only entitlement: do not pretend a missing local key exists."""
+    kb = InlineKeyboardBuilder()
+    if subscription_url:
+        try:
+            from app_links import build_connect_page_url
+            url = build_connect_page_url(subscription_url)
+        except (RuntimeError, ValueError):
+            url = ""
+        if url:
+            kb.row(InlineKeyboardButton(text="Подключить VPN", url=url))
+    kb.row(InlineKeyboardButton(text="Подписка", callback_data="my_keys"))
+    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
+    kb.row(
+        InlineKeyboardButton(text="О сервисе", callback_data="about"),
+        InlineKeyboardButton(text="Поддержка", url=support_url()),
+    )
+    return kb.as_markup()
+
+
 def main_menu_expired(*, key_ids: list[int]) -> InlineKeyboardMarkup:
     """When access has ended, lead with renewal instead of an unused trial.
 
@@ -147,8 +167,11 @@ def tariff_selection_kb(
             monthly_display = str(round(total_price / (months + TARIFF_BONUS_MONTHS[months])))
         else:
             monthly_display = str(get_monthly_display(months, devices))
-        period = {1: "1 мес.", 3: "3 мес. + 1 мес. 🎁", 6: "6 мес. + 2 мес. 🎁", 12: "12 мес. + 3 мес. 🎁"}[months]
-        text = f"{period} — {monthly_display} ₽ / мес."
+        # State the full service period and charge up front. The previous
+        # "gift months" wording implied they were free although billed.
+        total_months = months + TARIFF_BONUS_MONTHS[months]
+        period = f"{total_months} мес."
+        text = f"{period} · {monthly_display} ₽ / мес. · {total_price} ₽ всего"
         if applies:
             text += f" · −{discount_percent}%"
         kb.row(InlineKeyboardButton(text=text, callback_data=f"tariff_{months}_{devices}"))
