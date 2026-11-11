@@ -27,4 +27,4 @@ jobs:
       - name: Compile all Python files
         run: python -m compileall -q .
       - name: Run regression tests
-        run: python -m unittest discover -s tests -p 'test_*.py' -q
+        run: python -c 'import faulthandler,runpy; faulthandler.dump_traceback_later(60, repeat=True); runpy.run_module("unittest", run_name="__main__")' discover -s tests -p 'test_*.py' -q
