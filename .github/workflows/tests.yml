@@ -25,5 +25,17 @@ jobs:
           cache-dependency-path: requirements.txt
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
-      - name: Run unit tests
-        run: python -c 'import faulthandler,runpy; faulthandler.dump_traceback_later(60, repeat=True); runpy.run_module("unittest", run_name="__main__")' discover -s tests -v
+      - name: Run unit tests with worker diagnostics
+        run: |
+          python -c '
+          import faulthandler, runpy, sys, threading
+          faulthandler.dump_traceback_later(60, repeat=False)
+          try:
+              runpy.run_module("unittest", run_name="__main__")
+          except SystemExit:
+              faulthandler.cancel_dump_traceback_later()
+              threads = [t for t in threading.enumerate() if t is not threading.current_thread() and not t.daemon]
+              print("Non-daemon threads after unittest:", [(t.name, t.ident) for t in threads], file=sys.stderr)
+              faulthandler.dump_traceback(file=sys.stderr)
+              raise
+          ' discover -s tests -v
