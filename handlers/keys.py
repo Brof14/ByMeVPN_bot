@@ -201,6 +201,9 @@ async def _key_devices_view(user_id: int, key: dict, page: int = 0) -> tuple[str
     devices = info["devices"]
     for device in devices:
         device["last_seen_label"] = _time_ago(device["last_seen"]) if device["last_seen"] else "давно"
+        if not device.get("model"):
+            agent = str(device.get("user_agent") or "").split(";", 1)[0].strip()
+            device["model"] = agent or str(device.get("os") or "Устройство")
     if info["limit_hwid"]:
         usage_line = f"Занято мест: <b>{len(devices)} из {info['limit_hwid']}</b>"
     else:
@@ -241,7 +244,7 @@ async def cb_key_devices(callback: CallbackQuery, bot: Bot):
         logger.exception("Could not load connection details for user %s", callback.from_user.id)
         await send_or_edit(bot, callback,
                            "<b>Не удалось загрузить устройства</b>\n\nПопробуйте обновить список чуть позже.",
-                           key_devices_kb(key_id), photo=DEVICES)
+                           key_devices_kb(key_id), photo=None)
         return
     await send_or_edit(bot, callback, text, keyboard, photo=DEVICES)
 
@@ -355,7 +358,7 @@ async def cb_key_settings(callback: CallbackQuery, bot: Bot):
         "<b>Управление подпиской</b>\n\n"
         "Обновите ссылку доступа или настройте оплату."
     )
-    await send_or_edit(bot, callback, text, key_settings_kb(key_id), photo=AUTO_RENEWAL)
+    await send_or_edit(bot, callback, text, key_settings_kb(key_id), photo=None)
 
 
 @router.callback_query(F.data.startswith("key_reissue_confirm:"))
