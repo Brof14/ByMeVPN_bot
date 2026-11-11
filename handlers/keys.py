@@ -361,6 +361,57 @@ async def cb_key_settings(callback: CallbackQuery, bot: Bot):
     await send_or_edit(bot, callback, text, key_settings_kb(key_id), photo=None)
 
 
+@router.callback_query(F.data.startswith("key_diagnostics:"))
+async def cb_key_diagnostics(callback: CallbackQuery, bot: Bot):
+    try:
+        key_id = int(callback.data.split(":", 1)[1])
+    except (IndexError, ValueError):
+        await safe_answer(callback, "Не удалось запустить проверку.", alert=True)
+        return
+    key = await get_key_by_id(key_id)
+    if not key or key["user_id"] != callback.from_user.id:
+        await safe_answer(callback, "Подписка не найдена.", alert=True)
+        return
+
+    await safe_answer(callback)
+    now = int(time.time())
+    local_active = int(key.get("expiry") or 0) > now
+    panel_ok = False
+    device_line = "Состояние устройств проверить не удалось."
+    try:
+        from xui_client import get_xui_client_details
+        panel = await get_xui_client_details(callback.from_user.id, strict=True)
+        panel_ok = bool(
+            panel and panel.get("enable")
+            and int(panel.get("expiry_time") or 0) > now * 1000
+        )
+        devices = await get_xui_devices(callback.from_user.id)
+        if isinstance(devices, dict):
+            registered = len(devices.get("devices") or [])
+            limit = int(devices.get("limit_hwid") or 0)
+            device_line = f"Устройства: <b>{registered} из {limit}</b>." if limit else f"Сохранено устройств: <b>{registered}</b>."
+    except Exception as exc:
+        logger.warning("Connection diagnostics failed (%s)", type(exc).__name__)
+
+    local_text = "активна" if local_active else "завершена"
+    panel_text = "активен" if panel_ok else "не подтверждён"
+    text = (
+        "<b>Проверка подключения</b>\n\n"
+        f"Подписка в ByMeVPN: <b>{local_text}</b>.\n"
+        f"Доступ на сервере: <b>{panel_text}</b>.\n"
+        f"{device_line}\n\n"
+        "Проверка не запускает VPN-туннель и не отправляет ключи. "
+        "Если VPN не подключается, откройте инструкцию или поддержку."
+    )
+    from aiogram.types import InlineKeyboardMarkup
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Инструкция по подключению", callback_data=f"key_instructions:{key_id}")],
+        [InlineKeyboardButton(text="Поддержка", url="https://t.me/ByMeVPNSupportBot")],
+        [InlineKeyboardButton(text="← К подписке", callback_data=f"key_info:{key_id}")],
+    ])
+    await send_or_edit(bot, callback, text, kb, photo=None)
+
+
 @router.callback_query(F.data.startswith("key_reissue_confirm:"))
 async def cb_key_reissue_confirm(callback: CallbackQuery, bot: Bot, state: FSMContext):
     try:
