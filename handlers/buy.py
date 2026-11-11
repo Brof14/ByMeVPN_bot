@@ -560,8 +560,9 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
     if not claim_yookassa_checkout(user_id):
         await callback.message.answer("Запрос на оплату уже выполняется. Подождите немного.")
         return
+    recurring_checkout = save_payment_method
     try:
-        url = await create_yookassa_payment(
+        created = await create_yookassa_payment(
             price_rub, f"ByMeVPN {days} дней ({devices} устр.)", user_id, days, devices,
             promo_code=promo_code, months=months,
             extra_metadata={
@@ -569,7 +570,14 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
                 **({"auto_renew_consent": "1"} if save_payment_method else {}),
             },
             save_payment_method=save_payment_method,
+            return_payment_details=True,
         )
+        if isinstance(created, dict):
+            url = created.get("payment_url")
+            recurring_checkout = bool(created.get("recurring_requested", save_payment_method))
+        else:
+            # Backward compatibility for adapters returning the URL string.
+            url = created
     except Exception as exc:
         # A provider timeout is ambiguous. Never leak internal error details to customers.
         logger.error("YooKassa checkout failed for user %d (%s)", user_id, type(exc).__name__)
@@ -611,9 +619,11 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
         f"Сумма: <b>{price_rub} ₽</b>\n"
         f"Срок: {days} дней\n"
         f"Устройств: до {devices} одновременно\n\n"
-        f"Автопродление: <b>{'включено' if save_payment_method else 'выключено'}</b>. "
+        f"Автопродление: <b>{'включено' if recurring_checkout else 'выключено'}</b>. "
         + (f"Следующее списание {price_rub} ₽ за {days} дней — по окончании срока. "
-           "Отключить можно в настройках.\n\n" if save_payment_method else "\n\n")
+           "Отключить можно в настройках.\n\n" if recurring_checkout else
+           "Если вы выбирали автопродление, сохранить способ оплаты не удалось: "
+           "этот платёж будет разовым.\n\n" if save_payment_method else "\n\n")
         + "Подписка активируется после подтверждения оплаты.",
         kb,
         photo=PAYMENT,
