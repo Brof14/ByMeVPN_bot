@@ -321,6 +321,7 @@ def key_settings_kb(key_id: int) -> InlineKeyboardMarkup:
         text="Перевыпустить подписку",
         callback_data=f"key_reissue_confirm:{key_id}",
     ))
+    kb.row(InlineKeyboardButton(text="Проверить подключение", callback_data=f"key_diagnostics:{key_id}"))
     kb.row(InlineKeyboardButton(text="Оплата и автопродление", callback_data=f"manage_payment_methods:{key_id}"))
     # Deliberately do not expose destructive subscription deletion in the customer UI.
     kb.row(InlineKeyboardButton(text="← К подписке", callback_data=f"key_info:{key_id}"))
