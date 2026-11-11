@@ -18,8 +18,10 @@ router = Router()
 
 def partner_main_kb(link: str) -> InlineKeyboardMarkup:
     share_text = quote_plus(
-        "Попробуй ByMeVPN — 3 дня бесплатно, без привязки карты. "
-        "Если зарегистрируешься по моей ссылке, мне начислят бонусные дни."
+        "Попробуй ByMeVPN — VPN для телефона и компьютера.\n\n"
+        "3 дня бесплатно, без карты. Подключение за пару нажатий.\n\n"
+        "Это моя ссылка-приглашение: если зарегистрируешься по ней, "
+        "мне начислят бонусные дни."
     )
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Пригласить друга", url=f"https://t.me/share/url?url={quote_plus(link)}&text={share_text}")],
@@ -47,14 +49,15 @@ async def cb_partner(callback: CallbackQuery, bot: Bot):
         if pending_rewards else ""
     )
     text = (
-        "<b>Приглашайте друзей. Получайте больше.</b>\n\n"
-        "<b>+15 дней</b> — когда друг зарегистрируется.\n"
-        "<b>+30 дней</b> — после его первой подходящей оплаты.\n\n"
+        "<b>Пригласите друга — получите до 45 дней</b>\n\n"
+        "<b>+15 дней</b> — за его регистрацию по вашей ссылке.\n"
+        "<b>+30 дней</b> — за первую успешную оплату любого тарифа (включая пробную за 1 ₽).\n\n"
         "<b>Ваши результаты</b>\n"
         f"Приглашено: <b>{registrations}</b>\n"
         f"Оплатили: <b>{paid_referrals}</b>\n"
         f"Получено: <b>{bonus_days} дней</b>\n\n"
-        "Поделитесь ссылкой — бонусы начисляются автоматически после выполнения условий."
+        "Отправьте ссылку другу — бонусы начисляются автоматически. "
+        "Каждый друг может принести до 45 дней доступа."
         f"{pending_note}"
     )
     await send_with_photo(bot, callback, text, partner_main_kb(link), photo=REFERRALS)
@@ -65,16 +68,16 @@ async def cb_partner_referrals_list(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     referred_users = await get_referred_users_list(callback.from_user.id)
     if not referred_users:
-        text = "<b>Мои приглашения</b>\n\nПока нет приглашённых."
+        text = "<b>Мои приглашения</b>\n\nПока пусто. Отправьте свою ссылку другу, чтобы получить +15 дней."
     else:
         lines = ["<b>Мои приглашения</b>"]
         for i, user in enumerate(referred_users[:20], 1):
             status = "Активен" if user["is_active"] else "Нет активной подписки"
-            payment = "Оплатил" if user["has_paid"] else "Не оплатил"
+            payment = "Первая оплата получена" if user["has_paid"] else "Ожидается первая оплата"
             lines.append(
                 f"\n{i}. {format_timestamp(user['registration_date'])}\n"
                 f"   {status} · {payment}\n"
-                f"   Начислено или ожидает начисления: <b>+{user['bonus_days_awarded']} дней</b>"
+                f"   Бонусы за друга: <b>+{user['bonus_days_awarded']} дней</b>"
             )
         if len(referred_users) > 20:
             lines.append(f"\nПоказаны последние 20 из {len(referred_users)}.")
