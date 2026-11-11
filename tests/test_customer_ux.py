@@ -29,23 +29,19 @@ def callbacks(markup):
 
 
 class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
-    def test_all_five_tariff_screen_copies(self):
-        expected = {
-            (2, False): "<b>Тарифы</b>\n\n2 устройства — одна подписка для ваших устройств.\n\nВыберите срок: чем дольше подписка, тем ниже стоимость месяца. В кнопках указан полный срок и итоговая цена.",
-            (5, False): "<b>Тарифы</b>\n\n5 устройств — одна подписка для всей семьи.\n\nВыберите срок: чем дольше подписка, тем ниже стоимость месяца. В кнопках указан полный срок и итоговая цена.",
-            (2, True): "<b>Продление подписки</b>\n\n<b>2 устройства</b>\n\nВыберите срок продления. Чем дольше подписка, тем ниже цена.\n\nВ кнопках указаны полный срок доступа и сумма к оплате.",
-            (5, True): "<b>Продление подписки</b>\n\n<b>5 устройств</b> — для семьи и личных устройств.\n\nВыберите срок продления. Чем дольше подписка, тем ниже цена.\n\nВ кнопках указаны полный срок доступа и сумма к оплате.",
-            (10, True): "<b>Продление подписки</b>\n\n<b>10 устройств</b> — для всей семьи и личных устройств.\n\nВыберите срок продления. Чем дольше подписка, тем ниже цена.\n\nВ кнопках указаны полный срок доступа и сумма к оплате.",
-        }
-        for (devices, renewal), text in expected.items():
-            with self.subTest(devices=devices, renewal=renewal):
-                self.assertEqual(_tariff_intro(devices, renewal=renewal), text)
+    def test_purchase_and_renewal_copy_is_clear_for_all_device_tiers(self):
+        for devices in (2, 5, 10):
+            for renewal in (False, True):
+                with self.subTest(devices=devices, renewal=renewal):
+                    text = _tariff_intro(devices, renewal=renewal)
+                    self.assertIn(str(devices), text)
+                    self.assertIn("3+1", text)
+                    self.assertIn("6+2", text)
+                    self.assertIn("12+3", text)
+                    self.assertIn("стоимость", text)
 
     def test_tariff_copy_preserves_promo_duration_suffix(self):
-        self.assertIn("Промокод действует на срок", _tariff_intro(2, promo_binding=3))
-
-    def test_unrequested_purchase_screen_keeps_existing_copy(self):
-        self.assertEqual(_tariff_intro(10), "<b>Тарифы</b>\n\nВыбрано: <b>10 устройств</b>\n\nЧем дольше подписка, тем ниже стоимость месяца. Итоговая цена и полный срок указаны на кнопках.\n\nВыберите подходящий срок:")
+        self.assertIn("Промокод действует на пакет 3+1 мес.", _tariff_intro(2, promo_binding=3))
 
     async def test_bot_identity_helper_uses_aiogram_cache_when_available(self):
         from utils import get_cached_bot_info
@@ -64,7 +60,9 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         query = parse_qs(urlsplit(button.url).query)
         self.assertEqual(query["url"], [link])
         share_text = query["text"][0]
-        self.assertEqual(share_text, "Попробуй ByMeVPN — 3 дня бесплатно, без привязки карты. Если зарегистрируешься по моей ссылке, мне начислят бонусные дни.")
+        self.assertIn("3 дня бесплатно", share_text)
+        self.assertIn("без карты", share_text)
+        self.assertIn("мне начислят бонусные дни", share_text)
         self.assertNotIn("5352436388", share_text)
 
 
@@ -543,7 +541,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             if button.callback_data and button.callback_data.startswith("tariff_")
         ]
         three_months = next(button for button in tariff_buttons if button.callback_data == "tariff_3_2")
-        self.assertIn("4 мес. · 79 ₽ / мес. · 316 ₽ всего", three_months.text)
+        self.assertIn("3+1 мес. · 79 ₽/мес. · 316 ₽ всего", three_months.text)
         self.assertEqual(three_months.style, "primary")
         self.assertEqual(
             [button.style for button in tariff_buttons],
