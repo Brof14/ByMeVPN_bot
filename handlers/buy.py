@@ -63,7 +63,7 @@ def _tariff_intro(devices: int, *, renewal: bool = False, promo_binding: int | N
             "<b>Продление подписки</b>\n\n"
             f"{device_line}\n\n"
             "Выберите срок продления. Чем дольше подписка, тем ниже цена.\n\n"
-            "Бонусные месяцы уже включены в предложения."
+            "В кнопках указаны полный срок доступа и сумма к оплате."
         )
     elif devices in (2, 5):
         device_line = {
@@ -73,15 +73,15 @@ def _tariff_intro(devices: int, *, renewal: bool = False, promo_binding: int | N
         text = (
             "<b>Тарифы</b>\n\n"
             f"{device_line}\n\n"
-            "Выберите срок: чем дольше подписка, тем ниже цена. При покупке на 3, 6 или 12 месяцев — "
-            "дополнительные месяцы в подарок."
+            "Выберите срок: чем дольше подписка, тем ниже стоимость месяца. "
+            "В кнопках указан полный срок и итоговая цена."
         )
     else:
         text = (
             "<b>Тарифы</b>\n\n"
             f"Выбрано: <b>{devices} устройств</b>\n\n"
-            "Чем дольше подписка, тем выгоднее условия. При выборе тарифа на 3, 6 или 12 месяцев "
-            "вы получаете <b>дополнительные месяцы в подарок</b>.\n\n"
+            "Чем дольше подписка, тем ниже стоимость месяца. "
+            "Итоговая цена и полный срок указаны на кнопках.\n\n"
             "Выберите подходящий срок:"
         )
     if promo_binding in (1, 3, 6, 12):
@@ -210,28 +210,66 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
         promo_text = ""
 
     if price_rub <= 0:
-        payload = f"freepromo_{callback.from_user.id}_{promo_code}_{months}_{devices}"
-        delivered = await deliver_key(
-            bot=bot, user_id=callback.from_user.id, chat_id=callback.from_user.id,
-            config_name=f"ByMeVPN_{callback.from_user.id}", days=days, limit_ip=devices,
-            is_paid=False, amount=0, method="promo", payload=payload, extend_existing=True,
-        )
-        if not delivered:
-            await send_with_photo(bot, callback,
-                "<b>Не удалось активировать промокод</b>\\n\\nПромокод не отмечен использованным. Попробуйте позже или обратитесь в поддержку.",
+        # An unpaid order has no payment-provider idempotency key. Reserve the
+        # code and exact entitlement before provisioning, across all workers.
+        from database import reserve_free_promo_order, complete_free_promo_order
+        user_id = callback.from_user.id
+        if not await reserve_free_promo_order(user_id, promo_code, months, devices, days):
+            await send_with_photo(
+                bot, callback,
+                "<b>Промокод уже применён или недоступен для этого тарифа.</b>\n\n"
+                "Если активация ранее прервалась, выберите исходный тариф "
+                "или обратитесь в поддержку.",
                 InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="Поддержка", url=support_url())],
                     [InlineKeyboardButton(text="← К тарифам", callback_data=f"devtier_{devices}")],
-                ]), photo=PLANS)
+                ]), photo=PLANS,
+            )
             return
-        await record_fulfilled_promo(bot, promo_code, callback.from_user.id, "free_promo", payload)
+        payload = f"freepromo_{user_id}_{promo_code.strip().upper()}"
+        delivered = await deliver_key(
+            bot=bot, user_id=user_id, chat_id=user_id,
+            config_name=f"ByMeVPN_{user_id}", days=days, limit_ip=devices,
+            is_paid=False, amount=0, method="promo", payload=payload, extend_existing=True,
+        )
+        if not delivered:
+            await send_with_photo(
+                bot, callback,
+                "<b>Активация не подтверждена</b>\n\n"
+                "Платёж не требуется. Попробуйте применить тот же промокод "
+                "к исходному тарифу позже или обратитесь в поддержку.",
+                InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Поддержка", url=support_url())],
+                    [InlineKeyboardButton(text="← К тарифам", callback_data=f"devtier_{devices}")],
+                ]), photo=PLANS,
+            )
+            return
+        recorded = await record_fulfilled_promo(bot, promo_code, user_id, "free_promo", payload)
+        if not recorded:
+            # VPN access might be live. Preserve the reservation for
+            # reconciliation and never instruct the user to repeat purchases.
+            await send_with_photo(
+                bot, callback,
+                "<b>Доступ выдан, но учёт промокода проверяется.</b>\n\n"
+                "Не применяйте его повторно. При необходимости обратитесь в поддержку.",
+                InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Подписка", callback_data="my_keys")],
+                    [InlineKeyboardButton(text="Поддержка", url=support_url())],
+                ]), photo=PLANS,
+            )
+            return
+        finalized = await complete_free_promo_order(user_id, promo_code)
+        if not finalized:
+            logger.warning("Free promo order completion unconfirmed for user %d", user_id)
         await state.clear()
-        await send_with_photo(bot, callback,
-            f"<b>Доступ активирован</b>\\n\\nНачислено {days} дней ByMeVPN по промокоду.",
+        await send_with_photo(
+            bot, callback,
+            f"<b>Доступ активирован</b>\n\nНачислено {days} дней ByMeVPN по промокоду.",
             InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Подключить VPN", callback_data="my_keys")],
+                [InlineKeyboardButton(text="Подключить VPN", callback_data="connection_guide")],
                 [InlineKeyboardButton(text="Главное меню", callback_data="back_to_menu")],
-            ]), photo=PLANS)
+            ]), photo=PLANS,
+        )
         return
 
     await state.update_data(
