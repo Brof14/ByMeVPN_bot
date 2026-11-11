@@ -367,21 +367,6 @@ async def _send_main_menu(
         else:
             kb = main_menu_with_keys(trial_used=True)
 
-    # A saved checkout is a recovery opportunity, not a new marketing broadcast.
-    # Only show it to customers without an active subscription and never charge
-    # from a stored draft: the payment page recalculates the amount.
-    if state in {"new", "existing", "expired"}:
-        try:
-            from database import get_checkout_draft
-            draft = await get_checkout_draft(user_id)
-        except Exception:
-            draft = None
-        if draft:
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Продолжить оформление", callback_data="checkout_resume")],
-                *kb.inline_keyboard,
-            ])
-
     await send_with_photo(bot, target, text, kb, photo=MENU)
 
 
@@ -839,8 +824,37 @@ async def cb_back_to_menu(callback: CallbackQuery, bot: Bot, state: FSMContext):
 @router.callback_query(F.data == "about")
 async def cb_about(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
+    user_id = callback.from_user.id
+    state = await _user_state(user_id)
+    now = int(time.time())
+    subscription_line = "Подписка сейчас не активна."
+    try:
+        keys = await get_user_keys(user_id)
+        active_keys = [key for key in keys if int(key.get("expiry") or 0) > now]
+        if state == "active" and active_keys:
+            from constants import format_timestamp
+            expiry = max(int(key["expiry"]) for key in active_keys)
+            subscription_line = f"Подписка активна до <b>{format_timestamp(expiry)[:10]}</b>."
+        elif state == "active":
+            from xui_client import get_xui_client_details
+            panel_client = await get_xui_client_details(user_id, strict=True)
+            if _panel_client_is_active(panel_client):
+                from constants import format_timestamp
+                expiry = int(panel_client["expiry_time"]) // 1000
+                subscription_line = f"Подписка активна до <b>{format_timestamp(expiry)[:10]}</b>."
+        elif state == "expired" and keys:
+            from constants import format_timestamp
+            expiry = max(int(key.get("expiry") or 0) for key in keys)
+            if expiry:
+                subscription_line = f"Подписка неактивна · закончилась <b>{format_timestamp(expiry)[:10]}</b>."
+        elif state == "unknown":
+            subscription_line = "Статус подписки сейчас не удалось проверить."
+    except Exception as exc:
+        logger.warning("Could not show subscription status in about screen (%s)", type(exc).__name__)
+        subscription_line = "Статус подписки сейчас не удалось проверить."
     text = (
         "<b>ByMeVPN — VPN-подписка для телефона и компьютера.</b>\n\n"
+        f"{subscription_line}\n\n"
         "Подключите приложение, добавьте подписку и включите VPN в нём. "
         "Поддерживаются планы на 2, 5 и 10 устройств.\n\n"
         "Новые пользователи могут попробовать сервис 3 дня бесплатно. "
@@ -869,22 +883,27 @@ async def cb_free_vpn(callback: CallbackQuery, bot: Bot):
     except Exception:
         logger.exception("Could not read channel reward state for user %d", callback.from_user.id)
         channel_status = None
-    reward_rows = (
-        [[InlineKeyboardButton(text="+10 дней уже начислены · подписка", callback_data="my_keys")]]
-        if channel_status == "awarded" else
-        [[InlineKeyboardButton(text="Подписаться на канал · +10 дней", url=CHANNEL_BONUS_URL)],
-         [InlineKeyboardButton(text="Проверить подписку · получить +10 дней", callback_data="channel_bonus_check", style="success")]]
-    )
+    if channel_status == "awarded":
+        reward_rows = [[InlineKeyboardButton(text="Бонус +10 дней получен ✓", callback_data="my_keys")]]
+    else:
+        reward_rows = [[InlineKeyboardButton(text="Получить +10 дней", callback_data="channel_bonus_check", style="success")]]
+    bot_info = await get_cached_bot_info(bot)
+    referral_link = f"https://t.me/{bot_info.username}?start={callback.from_user.id}"
+    from handlers.partner import referral_share_url
     text = (
-        "<b>Больше доступа — без оплаты.</b>\n\n"
-        "Получайте дни за приглашения друзей, подписку на канал или размещение "
-        "рекламы в своём Telegram-канале. За канал начисляется +10 дней один раз.\n\n"
-        + ("Бонус за канал уже получен.\n\n" if channel_status == "awarded" else "")
-        + "Выберите удобный способ:"
+        "<b>Бесплатные дни ByMeVPN</b>\n\n"
+        "<b>Приглашения:</b> +15 дней за регистрацию друга по вашей ссылке и ещё +30 дней за его первую оплату — до +45 дней за друга.\n\n"
+        "<b>Подписка на канал:</b> +10 дней один раз. Нажмите «Получить +10 дней» — отправлю ссылку на канал; после подписки нажмите эту кнопку ещё раз.\n\n"
+        "<b>Реклама:</b> бонусные дни за размещение поста в своём Telegram-канале."
+        if channel_status != "awarded" else
+        "<b>Бесплатные дни ByMeVPN</b>\n\n"
+        "<b>Приглашения:</b> +15 дней за регистрацию друга по вашей ссылке и ещё +30 дней за его первую оплату — до +45 дней за друга.\n\n"
+        "Бонус +10 дней за подписку на канал уже начислен.\n\n"
+        "<b>Реклама:</b> бонусные дни за размещение поста в своём Telegram-канале."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         *reward_rows,
-        [InlineKeyboardButton(text="Пригласить друзей", callback_data="partner")],
+        [InlineKeyboardButton(text="Пригласить", url=referral_share_url(referral_link))],
         [InlineKeyboardButton(text="VPN за рекламу", callback_data="ad_program")],
         [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu")],
     ])
@@ -913,7 +932,18 @@ async def cb_channel_bonus_check(callback: CallbackQuery, bot: Bot):
     if member.status == "restricted":
         is_member = bool(getattr(member, "is_member", False))
     if not is_member:
-        await safe_answer(callback, "Сначала подпишитесь на канал, затем нажмите «Проверить подписку».", alert=True)
+        await safe_answer(callback, "Отправил ссылку на канал в чат.")
+        channel_url = CHANNEL_BONUS_URL
+        try:
+            await bot.send_message(
+                user_id,
+                f"Чтобы получить +10 дней, подпишитесь на <a href=\"{escape(channel_url, quote=True)}\">канал ByMeVPN</a>. "
+                "Затем вернитесь к сообщению «Бесплатные дни» и снова нажмите «Получить +10 дней».",
+                parse_mode="HTML", disable_web_page_preview=True,
+            )
+        except Exception:
+            logger.exception("Could not send channel link for bonus to user %d", user_id)
+            await safe_answer(callback, f"Не удалось отправить ссылку. Откройте канал: {channel_url}", alert=True)
         return
 
     from database import (

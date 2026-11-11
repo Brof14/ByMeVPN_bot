@@ -20,9 +20,8 @@ def referral_share_url(link: str) -> str:
     """One consistent, editable friend-to-friend invitation everywhere."""
     text = (
         "Попробуй ByMeVPN — VPN для телефона и компьютера.\n\n"
-        "3 дня бесплатно, без карты. Подключение за пару нажатий.\n\n"
-        "Это моя ссылка-приглашение: если зарегистрируешься по ней, "
-        "мне начислят бонусные дни."
+        "3 дня бесплатно. По моей ссылке я получу +15 дней за твою регистрацию "
+        "и ещё +30 дней за твою первую оплату."
     )
     return f"https://t.me/share/url?url={quote_plus(link)}&text={quote_plus(text)}"
 
@@ -38,34 +37,20 @@ def partner_main_kb(link: str) -> InlineKeyboardMarkup:
 
 @router.callback_query(F.data == "partner")
 async def cb_partner(callback: CallbackQuery, bot: Bot):
+    """Send the personal referral link and reward terms without another menu."""
     await safe_answer(callback)
     user_id = callback.from_user.id
     bot_info = await get_cached_bot_info(bot)
     link = f"https://t.me/{bot_info.username}?start={user_id}"
-    from referral_system_new import retry_pending_signup_bonuses
-    pending_rewards = await retry_pending_signup_bonuses(bot, user_id)
-    stats = await get_referral_stats_enhanced(user_id)
-    registrations = int(stats.get("total_registrations", 0))
-    paid_referrals = int(stats.get("paid_clients", 0))
-    bonus_days = int(stats.get("total_bonus_days", 0))
-    pending_note = (
-        f"\n\nБонус за {pending_rewards} приглашённого пока не начислен. "
-        "Начисление сохранено — откройте этот раздел позже, и мы повторим попытку."
-        if pending_rewards else ""
-    )
     text = (
-        "<b>Пригласите друга — получите до 45 дней</b>\n\n"
-        "<b>+15 дней</b> — за его регистрацию по вашей ссылке.\n"
-        "<b>+30 дней</b> — за первую успешную оплату любого тарифа (включая пробную за 1 ₽).\n\n"
-        "<b>Ваши результаты</b>\n"
-        f"Приглашено: <b>{registrations}</b>\n"
-        f"Оплатили: <b>{paid_referrals}</b>\n"
-        f"Получено: <b>{bonus_days} дней</b>\n\n"
-        "Отправьте ссылку другу — бонусы начисляются автоматически. "
-        "Каждый друг может принести до 45 дней доступа."
-        f"{pending_note}"
+        "<b>Приглашайте друзей — получайте до 45 дней за каждого</b>\n\n"
+        "+15 дней — за регистрацию друга по вашей ссылке.\n"
+        "+30 дней — за его первую оплату.\n\n"
+        "Ваша ссылка:\n"
+        f"<code>{link}</code>\n\n"
+        "Скопируйте её и отправьте другу."
     )
-    await send_with_photo(bot, callback, text, partner_main_kb(link), photo=REFERRALS)
+    await send_with_photo(bot, callback, text, photo=REFERRALS)
 
 
 @router.callback_query(F.data == "partner_referrals_list")
