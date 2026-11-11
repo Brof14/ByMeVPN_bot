@@ -32,7 +32,7 @@ from database import (
     has_ever_had_key, get_user_keys,
 )
 from app_links import build_app_login_url, build_app_redirect_url
-from config import CHANNEL_BONUS_CHAT_ID
+from config import CHANNEL_BONUS_CHAT_ID, CHANNEL_BONUS_URL
 from keyboards import (
     main_menu_new_user, main_menu_existing, main_menu_with_keys, main_menu_active, main_menu_expired,
     back_to_menu, cancel_kb, support_url, app_open_kb,
@@ -847,7 +847,7 @@ async def cb_free_vpn(callback: CallbackQuery, bot: Bot):
         "Выберите удобный способ:"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Подписаться на канал · +10 дней", url="https://t.me/ByMeVPN")],
+        [InlineKeyboardButton(text="Подписаться на канал · +10 дней", url=CHANNEL_BONUS_URL)],
         [InlineKeyboardButton(text="Проверить подписку · получить +10 дней", callback_data="channel_bonus_check", style="success")],
         [InlineKeyboardButton(text="Пригласить друзей", callback_data="partner")],
         [InlineKeyboardButton(text="VPN за рекламу", callback_data="ad_program")],
