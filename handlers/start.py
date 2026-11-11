@@ -258,6 +258,7 @@ async def _send_main_menu(
             "ваш доступ и платежи не изменены. Попробуйте немного позже."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn")],
             [InlineKeyboardButton(text="Поддержка", url=support_url())],
             [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
         ])
@@ -904,8 +905,18 @@ async def cb_channel_bonus_check(callback: CallbackQuery, bot: Bot):
         reserve_channel_subscription_bonus, complete_channel_subscription_bonus,
         get_channel_subscription_bonus_status, log_analytics_event,
     )
-    if not await reserve_channel_subscription_bonus(user_id):
-        status = await get_channel_subscription_bonus_status(user_id)
+    try:
+        reserved = await reserve_channel_subscription_bonus(user_id)
+    except Exception:
+        logger.exception("Could not reserve channel reward for user %d", user_id)
+        await safe_answer(callback, "Не удалось проверить выдачу бонуса. Попробуйте позже.", alert=True)
+        return
+    if not reserved:
+        try:
+            status = await get_channel_subscription_bonus_status(user_id)
+        except Exception:
+            logger.exception("Could not read channel reward state for user %d", user_id)
+            status = None
         message = (
             "Бонус +10 дней уже начислен."
             if status == "awarded" else
