@@ -1,0 +1,11 @@
+services:
+  bymevpn-newbot:
+    image: bymevpn_bot-vpnbot:audit-rootless-20261111
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=64m
