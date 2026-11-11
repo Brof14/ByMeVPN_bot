@@ -61,7 +61,9 @@ from the host key obtained through the provider console; compare its
 ED25519 SHA-256 fingerprint before saving it. Never use `ssh-keyscan` output
 as a trust decision by itself.
 
-The public page reads version and download URL from this validated manifest. Include `published_at` (YYYY-MM-DD), `apk_size_bytes`, `min_android_version`, and `signing_certificate_sha256` alongside the required `version_name`, `version_code`, `download_url`, `sha256`, and `release_notes`. The API checks that the reported size and SHA-256 match the APK. Obtain the signing certificate fingerprint from the signed APK with the Android release tooling; never guess or copy it from a different signing key. These fields are optional for backward compatibility, but the page only displays metadata supplied by the current release manifest.\n\nThe publishing job writes a versioned APK first, then writes a temporary
+The public page reads version and download URL from this validated manifest. Include `published_at` (YYYY-MM-DD), `apk_size_bytes`, `min_android_version`, and `signing_certificate_sha256` alongside the required `version_name`, `version_code`, `download_url`, `sha256`, and `release_notes`. The API checks that the reported size and SHA-256 match the APK. Obtain the signing certificate fingerprint from the signed APK with the Android release tooling; never guess or copy it from a different signing key. These fields are optional for backward compatibility, but the page only displays metadata supplied by the current release manifest.
+
+The publishing job writes a versioned APK first, then writes a temporary
 manifest and renames it into place. Do not enable the deployment variable
 until a real signed release has passed checksum verification and an upgrade
 from an installed release has been tested. The API-side integration tests use
