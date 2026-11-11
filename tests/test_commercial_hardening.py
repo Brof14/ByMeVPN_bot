@@ -143,6 +143,50 @@ class FreeRewardAtomicityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ad_program", actions)
         self.assertIn("my_keys", actions)
 
+    async def test_panel_recovery_is_read_only_and_duplicate_safe(self):
+        from panel_recovery import restore_panel_only_subscription
+        user_id = 2101
+        expiry = int(time.time()) + 86400 * 20
+        panel = {
+            "email": str(user_id),
+            "enable": True,
+            "uuid": "11111111-1111-4111-8111-111111111111",
+            "subscription_url": "https://vpn.example.test/subscription/example-id",
+            "expiry_time": expiry * 1000,
+            "limit_hwid": 5,
+        }
+        first = await restore_panel_only_subscription(user_id, panel)
+        self.assertIsInstance(first, int)
+        again = await restore_panel_only_subscription(user_id, panel)
+        self.assertEqual(first, again)
+        keys = await database.get_user_keys(user_id)
+        self.assertEqual(len(keys), 1)
+        self.assertEqual(keys[0]["expiry"], expiry)
+        self.assertEqual(keys[0]["limit_ip"], 5)
+        self.assertEqual(keys[0]["uuid"], panel["uuid"])
+
+    async def test_panel_recovery_rejects_wrong_user_expiry_and_limit(self):
+        from panel_recovery import restore_panel_only_subscription
+        user_id = 2102
+        base = {
+            "email": str(user_id), "enable": True,
+            "uuid": "11111111-1111-4111-8111-111111111111",
+            "subscription_url": "https://vpn.example.test/subscription/example-id",
+            "expiry_time": (int(time.time()) + 86400) * 1000,
+            "limit_hwid": 2,
+        }
+        for override in (
+            {"email": "2103"},
+            {"expiry_time": (int(time.time()) - 10) * 1000},
+            {"limit_hwid": 0},
+            {"subscription_url": "http://vpn.example.test/subscription/key"},
+            {"enable": False},
+            {"uuid": "not-a-uuid"},
+        ):
+            with self.subTest(case=override):
+                self.assertIsNone(await restore_panel_only_subscription(user_id, {**base, **override}))
+        self.assertEqual(await database.get_user_keys(user_id), [])
+
     async def test_panel_only_subscription_is_visible_without_local_key(self):
         from handlers.keys import cb_my_keys
         now = int(time.time())
