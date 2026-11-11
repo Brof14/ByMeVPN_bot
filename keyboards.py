@@ -147,13 +147,26 @@ def tariff_selection_kb(
     devices = validate_device_limit(devices)
     kb = InlineKeyboardBuilder()
 
-    # Each device tier is its own row, readable on narrow Telegram screens.
+    # Put the two shorter tiers together and give the ten-device tier its own row.
+    common_tiers = []
+    ten_device_tier = None
     for count in VALID_DEVICE_LIMITS:
         selected = "✓ " if count == devices else ""
-        kb.row(InlineKeyboardButton(
-            text=f"{selected}{count} устройства" if count == 2 else f"{selected}{count} устройств",
-            callback_data=f"devtier_{count}",
-        ))
+        if count == 10:
+            ten_device_tier = InlineKeyboardButton(
+                text=f"{selected}🔟 10 устройств",
+                callback_data=f"devtier_{count}",
+                icon_custom_emoji_id=None,
+            )
+        else:
+            label = f"{selected}{count} устройства" if count == 2 else f"{selected}{count} устройств"
+            common_tiers.append(InlineKeyboardButton(
+                text=label, callback_data=f"devtier_{count}",
+            ))
+    if common_tiers:
+        kb.row(*common_tiers)
+    if ten_device_tier:
+        kb.row(ten_device_tier)
 
     # The monthly rate applies to the complete 1 / 4 / 8 / 15-month package,
     # including its advertised bonus months. Never hide the total to pay.
@@ -293,6 +306,12 @@ def key_detail_kb(
     )
     if is_active:
         kb.row(connect_button)
+        if subscription_url:
+            kb.row(InlineKeyboardButton(
+                text="Копировать ссылку",
+                copy_text={"text": subscription_url},
+                icon_custom_emoji_id=None,
+            ))
         kb.row(
             InlineKeyboardButton(text="Продлить", callback_data=f"key_renew:{key_id}"),
             InlineKeyboardButton(text="Устройства", callback_data=f"key_devices:{key_id}"),
@@ -300,6 +319,12 @@ def key_detail_kb(
     else:
         # An expired entitlement must not suggest that the tunnel is usable.
         kb.row(InlineKeyboardButton(text="Продлить VPN", callback_data=f"key_renew:{key_id}"))
+        if subscription_url:
+            kb.row(InlineKeyboardButton(
+                text="Копировать ссылку",
+                copy_text={"text": subscription_url},
+                icon_custom_emoji_id=None,
+            ))
         kb.row(InlineKeyboardButton(text="Устройства", callback_data=f"key_devices:{key_id}"))
     kb.row(InlineKeyboardButton(text="Управление подпиской", callback_data=f"key_settings:{key_id}"))
     if has_history:
