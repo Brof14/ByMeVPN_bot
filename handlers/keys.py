@@ -103,6 +103,20 @@ async def cb_my_keys(callback: CallbackQuery, bot: Bot):
             enabled = str(panel.get("enable")).strip().lower() in {"true", "1", "yes", "on"}
             expires = int(panel.get("expiry_time") or 0) // 1000
             if enabled and expires > int(time.time()):
+                # Automatic, read-only panel import: no new VPN user, no
+                # expiry extension, no billing, and no device-limit changes.
+                try:
+                    from panel_recovery import restore_panel_only_subscription
+                    restored_key_id = await restore_panel_only_subscription(user_id, panel)
+                except Exception:
+                    logger.exception("Panel-only subscription import failed for user %d", user_id)
+                    restored_key_id = None
+                if restored_key_id is not None:
+                    restored = await get_key_by_id(restored_key_id)
+                    if restored and restored.get("user_id") == user_id:
+                        content, keyboard = await _key_info_content(user_id, restored)
+                        await send_or_edit(bot, callback, content, keyboard, photo=KEY)
+                        return
                 from app_links import build_connect_page_url
                 from constants import format_timestamp
                 buttons = []
