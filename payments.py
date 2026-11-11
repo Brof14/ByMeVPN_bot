@@ -170,7 +170,7 @@ async def create_yookassa_payment(
                 return None
             logger.info("YooKassa payment created for user %d: %s", user_id, data.get("id"))
             if return_payment_details:
-                return {"payment_url": url, "payment_id": str(data.get("id") or ""), "status": data.get("status")}
+                return {"payment_url": url, "payment_id": str(data.get("id") or ""), "status": data.get("status"), "recurring_requested": should_save_method}
             return url
             
     except httpx.HTTPStatusError as e:
@@ -195,7 +195,7 @@ async def create_yookassa_payment(
                         return None
                     logger.info("YooKassa fallback standard payment created for user %d: %s", user_id, data.get("id"))
                     if return_payment_details:
-                        return {"payment_url": url, "payment_id": str(data.get("id") or ""), "status": data.get("status")}
+                        return {"payment_url": url, "payment_id": str(data.get("id") or ""), "status": data.get("status"), "recurring_requested": False}
                     return url
             except Exception as retry_e:
                 logger.error("YooKassa fallback payment error for user %d (%s): %r", user_id, type(retry_e).__name__, retry_e)
