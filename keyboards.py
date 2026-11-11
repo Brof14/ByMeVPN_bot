@@ -147,13 +147,15 @@ def tariff_selection_kb(
     devices = validate_device_limit(devices)
     kb = InlineKeyboardBuilder()
 
-    # Each device tier is its own row, readable on narrow Telegram screens.
+    # Keep device choices together so users can compare tiers at a glance.
+    device_buttons = []
     for count in VALID_DEVICE_LIMITS:
         selected = "✓ " if count == devices else ""
-        kb.row(InlineKeyboardButton(
+        device_buttons.append(InlineKeyboardButton(
             text=f"{selected}{count} устройства" if count == 2 else f"{selected}{count} устройств",
             callback_data=f"devtier_{count}",
         ))
+    kb.row(*device_buttons)
 
     # The monthly rate applies to the complete 1 / 4 / 8 / 15-month package,
     # including its advertised bonus months. Never hide the total to pay.
