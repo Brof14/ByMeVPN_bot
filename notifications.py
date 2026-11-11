@@ -26,7 +26,7 @@ from aiogram.types import BufferedInputFile
 
 from config import ADMIN_ID, DB_FILE
 from database import (
-    get_keys_nearing_expiry, create_promo_code, validate_promo_code,
+    get_keys_nearing_expiry, get_recently_expired_keys, create_promo_code, validate_promo_code,
     update_key_last_notification, is_promotional_opted_out,
     get_due_connection_reminders, update_connection_reminder,
     retry_connection_reminder,
@@ -224,6 +224,34 @@ async def _send_early_notification(bot: Bot, item: dict) -> bool:
     return False
 
 
+async def _send_winback_notification(bot: Bot, item: dict) -> bool:
+    """One opt-out-respecting recovery offer after access has actually expired."""
+    user_id = item["user_id"]
+    if await is_promotional_opted_out(user_id):
+        return False
+    # A customer can renew after the daily candidate query but before send.
+    from database import get_user_keys
+    if any(int(key.get("expiry") or 0) > int(time.time())
+           for key in await get_user_keys(user_id)):
+        return False
+    sub = await _get_active_autorenew(user_id, item.get("key_id"))
+    if sub:
+        return False
+    text = (
+        "<b>Вернуться в ByMeVPN?</b>\n\n"
+        "Срок действия подписки закончился. Если VPN снова понадобится, "
+        "можно продлить доступ без повторной настройки.\n\n"
+        "Это единичное напоминание. От рекламных предложений можно отказаться."
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Вернуть доступ", callback_data=_renewal_callback(item))],
+        [InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn")],
+        [InlineKeyboardButton(text="Не присылать предложения", callback_data="marketing_optout")],
+    ])
+    await bot.send_message(user_id, text, parse_mode="HTML", reply_markup=kb)
+    return True
+
+
 async def _send_expiry_notifications(bot: Bot) -> None:
     """Send expiry reminders with bounded concurrency and durable deduplication."""
     import time as _time
@@ -238,15 +266,17 @@ async def _send_expiry_notifications(bot: Bot) -> None:
     # No 21-30 day reminder immediately after a monthly purchase
     URGENT_INTERVAL = 2 * 86400      # 2 days
     WARNING_INTERVAL = 10 * 86400    # 10 days
+    WINBACK_INTERVAL = 2 * 86400    # never resend under same expiry
 
     
     batches = [
         ("urgent", URGENT_INTERVAL, await get_keys_nearing_expiry(days_min=0, days_max=3), _send_urgent_notification),
         ("warning", WARNING_INTERVAL, await get_keys_nearing_expiry(days_min=7, days_max=10), _send_warning_notification),
+        ("winback", WINBACK_INTERVAL, await get_recently_expired_keys(), _send_winback_notification),
     ]
     # One reminder per user per daily pass; the nearest expiry / highest urgency wins.
     candidates = {}
-    priority = {"urgent": 0, "warning": 1, "early": 2}
+    priority = {"urgent": 0, "warning": 1, "winback": 2}
     for bucket, interval, rows, sender in batches:
         for item in rows:
             prior = candidates.get(item["user_id"])
