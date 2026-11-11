@@ -443,9 +443,24 @@ async def _referral_nudge_pass(bot: Bot) -> None:
         if not await log_analytics_event_once(user_id, "referral_nudge_attempted"):
             continue
         try:
+            # A direct Telegram share link removes a whole step for real clients.
+            # Fall back to the referral page if bot identity is unavailable.
+            share_button = InlineKeyboardButton(text="Пригласить друга", callback_data="partner")
+            try:
+                from utils import get_cached_bot_info
+                from handlers.partner import referral_share_url
+                info = await get_cached_bot_info(bot)
+                username = str(getattr(info, "username", "") or "")
+                if username:
+                    link = f"https://t.me/{username}?start={user_id}"
+                    share_button = InlineKeyboardButton(
+                        text="Отправить другу", url=referral_share_url(link),
+                    )
+            except Exception:
+                logger.debug("Direct share unavailable, using referral page")
             await bot.send_message(
                 user_id,
-                "<b>Если ByMeVPN оказался полезен</b>\n\n"
+                "<b>Бонусные дни за друзей</b>\n\n"
                 "Получайте +15 дней за регистрацию друга и ещё +30 за его "
                 "первую успешную оплату (включая пробную за 1 ₽). "
                 "Также можно получить VPN за рекламу "
@@ -453,10 +468,9 @@ async def _referral_nudge_pass(bot: Bot) -> None:
                 "Это необязательно. Мы отправляем такое предложение только один раз.",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [
-                        InlineKeyboardButton(text="Пригласить друга", callback_data="partner"),
-                        InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"),
-                    ],
+                    [share_button],
+                    [InlineKeyboardButton(text="Мои приглашения", callback_data="partner"),
+                     InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn")],
                     [InlineKeyboardButton(text="Отключить предложения", callback_data="marketing_optout")],
                 ]),
             )
