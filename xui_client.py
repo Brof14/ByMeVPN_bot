@@ -319,7 +319,7 @@ async def _find_client_uuid(api: AsyncApi, email: str) -> Optional[str]:
                 logger.info("Found panel client for user %s", email)
                 return client.uuid
         except Exception as e:
-            logger.debug("get_by_email failed for %s: %s", email, e)
+            logger.debug("get_by_email failed for %s (%s)", email, type(e).__name__)
         return None
     
     # Method 2: search only configured inbounds. A hard-coded inbound can
@@ -333,7 +333,7 @@ async def _find_client_uuid(api: AsyncApi, email: str) -> Optional[str]:
                         logger.info("Found client %s in configured inbound %d", email, inbound_id)
                         return c.uuid
             except Exception as e:
-                logger.debug("Failed to search configured inbound %d for %s: %s", inbound_id, email, e)
+                logger.debug("Failed to search configured inbound %d for %s (%s)", inbound_id, email, type(e).__name__)
         return None
     
     tasks = [method1(), method2()]
@@ -361,7 +361,7 @@ async def _find_client_sub_id(api: AsyncApi, email: str) -> Optional[str]:
                 logger.info("Found panel subscription identifier for user %s", email)
                 return client.sub_id
         except Exception as e:
-            logger.debug("get_by_email failed for %s: %s", email, e)
+            logger.debug("get_by_email failed for %s (%s)", email, type(e).__name__)
         return None
     
     async def method2():
@@ -373,7 +373,7 @@ async def _find_client_sub_id(api: AsyncApi, email: str) -> Optional[str]:
                         logger.info("Found client %s sub_id in configured inbound %d", email, inbound_id)
                         return c.sub_id
             except Exception as e:
-                logger.debug("Failed to search configured inbound %d for %s: %s", inbound_id, email, e)
+                logger.debug("Failed to search configured inbound %d for %s (%s)", inbound_id, email, type(e).__name__)
         return None
     
     tasks = [method1(), method2()]
@@ -393,7 +393,7 @@ async def _find_client_sub_id(api: AsyncApi, email: str) -> Optional[str]:
             logger.info("Recovered legacy panel subscription identifier for user %s", email)
             return generated_sub_id
     except Exception as e:
-        logger.debug("Failed to generate sub_id from uuid for %s: %s", email, e)
+        logger.debug("Failed to generate legacy subscription ID for user %s (%s)", email, type(e).__name__)
     
     logger.warning("Client %s sub_id not found anywhere", email)
     return None
@@ -1126,7 +1126,7 @@ async def get_user_subscription_links(user_id: int) -> Optional[List[str]]:
             if client:
                 sub_id = client.sub_id
         except Exception as e:
-            logger.debug("get_user_subscription_links: get_by_email failed for %s: %s", email, e)
+            logger.debug("get_user_subscription_links: get_by_email failed for %s (%s)", email, type(e).__name__)
 
         if not sub_id:
             # Fallback across exactly the inbounds used to build subscriptions.
@@ -1138,7 +1138,7 @@ async def get_user_subscription_links(user_id: int) -> Optional[List[str]]:
                             sub_id = c.sub_id
                             break
                 except Exception as e:
-                    logger.debug("get_user_subscription_links: configured inbound %d failed for %s: %s", inbound_id, email, e)
+                    logger.debug("get_user_subscription_links: inbound %d failed for %s (%s)", inbound_id, email, type(e).__name__)
                 if sub_id:
                     break
 
@@ -1151,7 +1151,7 @@ async def get_user_subscription_links(user_id: int) -> Optional[List[str]]:
         return [url]
 
     except Exception as e:
-        logger.exception("get_user_subscription_links FAILED for user=%d: %s", user_id, e)
+        logger.error("get_user_subscription_links FAILED for user=%d (%s)", user_id, type(e).__name__)
         return None
 
 
