@@ -3058,7 +3058,7 @@ async def cb_grant_key(callback: CallbackQuery, state: FSMContext):
         "Введите количество дней для ключа:\n"
         "• Например: <code>30</code> — ключ на 30 дней\n"
         "• Например: <code>365</code> — ключ на год\n\n"
-        "Ключ будет создан автоматически с названием 🇺🇸 Admin-Key-{user_id}",
+        f"Ключ будет создан автоматически с названием 🇺🇸 Admin-Key-{user_id}",
         parse_mode="HTML", reply_markup=_back_kb()
     )
 
@@ -3107,7 +3107,7 @@ async def receive_grant_key_days(message: Message, bot: Bot, state: FSMContext):
             f"✅ <b>Ключ выдан!</b>\n\n"
             f"👤 Пользователь: <code>{uid}</code>\n"
             f"📅 Срок: {days} дней\n"
-            f"📱 Устройств: до 10\n"
+            f"📱 Устройств: до 2\n"
             f"🏷️ Название: <b>{config_name}</b>\n\n"
             f"Ключ отправлен пользователю в личные сообщения!",
             parse_mode="HTML", reply_markup=_back_kb()
