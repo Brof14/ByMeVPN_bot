@@ -448,78 +448,21 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
     # Test 10: Guide navigation and content verification
     # ------------------------------------------------------------------------
     async def test_10_guide_navigation_and_content(self):
-        """
-        Verify device navigation and ensure application downloads are buttons.
-        """
-        from keyboards import (
-            connection_guide_kb, linux_distro_kb,
-            linux_guide_back_kb, guide_back_kb, additional_platforms_kb,
-        )
-        from handlers.guide import (
-            _GUIDES, HAPP_ANDROID_APK, HAPP_SITE,
-            HAPP_LINUX_ARCH, HAPP_LINUX_DEB, HAPP_LINUX_RPM,
-            _send_platform_guide,
-        )
-
-        # 1. Connection guide keyboard has Linux button
-        conn_kb = connection_guide_kb()
-        conn_cbs = [btn.callback_data for row in conn_kb.inline_keyboard for btn in row if btn.callback_data]
-        self.assertIn("guide_linux", conn_cbs)
-        self.assertIn("guide_ios", conn_cbs)
-        self.assertIn("guide_more", conn_cbs)
-        self.assertIn("back_to_menu", conn_cbs)
-        extra_cbs = [btn.callback_data for row in additional_platforms_kb().inline_keyboard for btn in row if btn.callback_data]
-        self.assertIn("guide_macos", extra_cbs)
-        self.assertIn("guide_android_tv", extra_cbs)
-
-        # 2. Linux distro keyboard has 4 distros and back to connection_guide
-        linux_kb = linux_distro_kb()
-        linux_cbs = [btn.callback_data for row in linux_kb.inline_keyboard for btn in row if btn.callback_data]
-        self.assertIn("guide_linux_ubuntu", linux_cbs)
-        self.assertIn("guide_linux_arch", linux_cbs)
-        self.assertIn("guide_linux_fedora", linux_cbs)
-        self.assertIn("guide_linux_other", linux_cbs)
-        self.assertIn("connection_guide", linux_cbs, "Back button from Linux distro menu must go to connection_guide")
-
-        # 3. Linux distro back keyboard must go back to guide_linux
-        distro_back = linux_guide_back_kb()
-        distro_back_cbs = [btn.callback_data for row in distro_back.inline_keyboard for btn in row if btn.callback_data]
-        self.assertIn("guide_linux", distro_back_cbs, "Back button from specific distro must go to guide_linux")
-
-        # 4. Guide back keyboard must go back to connection_guide
-        gen_back = guide_back_kb()
-        gen_back_cbs = [btn.callback_data for row in gen_back.inline_keyboard for btn in row if btn.callback_data]
-        self.assertIn("connection_guide", gen_back_cbs, "Back button from general guide must go to connection_guide")
-
-        # 5. iOS guide avoids a Russia-specific listing that can move or disappear.
-        ios_text = _GUIDES["ios"]
-        self.assertIn("Happ", ios_text)
-        self.assertNotIn("<a href", ios_text)
-        self.assertNotIn("Streisand", ios_text, "Streisand must be removed from iOS guide")
-
-        # 6. Device downloads are exposed as labeled Telegram buttons.
-        bot = MagicMock()
-        callback = SimpleNamespace(from_user=SimpleNamespace(id=42))
-        with (
-            patch("handlers.guide._track_guide_event", new=AsyncMock()),
-            patch("handlers.guide.send_or_edit", new=AsyncMock()) as send_or_edit_mock,
-        ):
-            await _send_platform_guide(callback, bot, "ios")
-            ios_markup = send_or_edit_mock.call_args.args[3]
-            ios_urls = {button.url for row in ios_markup.inline_keyboard for button in row if button.url}
-            self.assertIn(HAPP_SITE, ios_urls)
-            self.assertIn("https://apps.apple.com/us/app/happ-proxy-utility/id6504287215", ios_urls)
-
-            await _send_platform_guide(callback, bot, "linux")
-            linux_markup = send_or_edit_mock.call_args.args[3]
-            linux_urls = {button.url for row in linux_markup.inline_keyboard for button in row if button.url}
-            self.assertEqual(linux_urls, {HAPP_LINUX_DEB, HAPP_LINUX_RPM, HAPP_LINUX_ARCH})
-
-            await _send_platform_guide(callback, bot, "android")
-            android_markup = send_or_edit_mock.call_args.args[3]
-            android_urls = {button.url for row in android_markup.inline_keyboard for button in row if button.url}
-            self.assertIn("https://bymevpn.duckdns.org/app/", android_urls)
-        self.assertIn("https://play.google.com/store/apps/details?id=com.happproxy", android_urls)
+        """Current connection website is the supported platform chooser."""
+        from urllib.parse import parse_qs, urlsplit
+        from app_links import build_connect_page_url, read_connect_ticket, render_connection_choice_page
+        subscription = "https://panel.example/sub/private-customer"
+        with (patch("app_links.APP_CONNECT_PAGE_URL", "https://example.test"),
+              patch("app_links.BOT_TOKEN", "test-bot-secret")):
+            handoff = build_connect_page_url(subscription)
+            self.assertNotIn(subscription, handoff)
+            ticket = parse_qs(urlsplit(handoff).query)["ticket"][0]
+            self.assertEqual(read_connect_ticket(ticket)["subscription_url"], subscription)
+        page = render_connection_choice_page(subscription)
+        for platform in ("android", "ios", "windows", "linux", "macos"):
+            self.assertIn(platform, page)
+        self.assertIn("v2rayNG", page)
+        self.assertIn("Happ", page)
 
     # ------------------------------------------------------------------------
     # Test 11: Switching between text and photo screens uses the right edit path
