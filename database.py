@@ -2137,6 +2137,34 @@ async def update_key_uuid(key_id: int, new_uuid: str) -> bool:
         return False
 
 
+async def update_key_subscription_url(key_id: int, user_id: int, new_url: str) -> bool:
+    """Persist a refreshed HTTPS subscription link without replacing VPN UUID.
+
+    A subscription URL and an Xray UUID are different credentials. Writing the
+    URL into keys.uuid makes later renewal and device checks inconsistent.
+    """
+    from urllib.parse import urlsplit
+
+    parsed = urlsplit(str(new_url).strip())
+    if (parsed.scheme != "https" or not parsed.hostname or
+            parsed.username or parsed.password or parsed.fragment or
+            len(str(new_url)) > 2048):
+        raise ValueError("invalid subscription URL")
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+        await db.execute("PRAGMA busy_timeout=30000")
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await db.execute(
+                "UPDATE keys SET key=? WHERE id=? AND user_id=?",
+                (str(new_url).strip(), int(key_id), int(user_id)),
+            )
+            await db.commit()
+            return cur.rowcount == 1
+        except Exception:
+            await db.rollback()
+            raise
+
+
 async def update_user_key_credentials(user_id: int, new_uuid: str, new_subscription_url: str) -> bool:
     """Update every saved link for this user's shared panel client atomically."""
     try:
