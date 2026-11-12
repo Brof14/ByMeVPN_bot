@@ -1539,16 +1539,16 @@ async def resend_verification(req: EmailActionRequest, request: Request):
     await require_auth_quota(request, "email_resend_ip", limit=8, window_seconds=3600)
     email = req.email.strip().lower()
     await require_auth_quota(request, "email_resend_account", limit=3, window_seconds=3600, subject=email)
-    email_identity._mail_settings("verify")
-    await _ensure_auth_db()
-    db = await database.get_db()
-    row = await (await db.execute("SELECT user_id FROM app_users WHERE email=?", (email,))).fetchone()
-    if row and await email_identity.is_email_pending(int(row[0])):
-        try:
+    try:
+        email_identity._mail_settings("verify")
+        await _ensure_auth_db()
+        db = await database.get_db()
+        row = await (await db.execute("SELECT user_id FROM app_users WHERE email=?", (email,))).fetchone()
+        if row and await email_identity.is_email_pending(int(row[0])):
             token = await email_identity.issue_action(int(row[0]), "verify")
             await email_identity.send_action(email, "verify", token)
-        except Exception as exc:
-            raise _email_action_failure(exc) from None
+    except Exception as exc:
+        raise _email_action_failure(exc) from None
     return {"status": "accepted"}
 
 
@@ -1584,7 +1584,7 @@ async def request_password_reset(req: EmailActionRequest, request: Request):
         await _ensure_auth_db()
         db = await database.get_db()
         row = await (await db.execute(
-            "SELECT user_id FROM app_users WHERE email=? AND password_hash LIKE 'scrypt:%'",
+            "SELECT user_id FROM app_users WHERE email=?",
             (email,),
         )).fetchone()
         if row:
@@ -1626,6 +1626,11 @@ async def register(req: RegisterRequest, request: Request):
     await _ensure_auth_db()
     email = req.email.strip().lower()
     validate_registration_credentials(email, req.password)
+    if email_identity.verification_enabled():
+        try:
+            email_identity._mail_settings("verify")
+        except Exception as exc:
+            raise _email_action_failure(exc) from None
 
     db = await database.get_db()
     cur = await db.execute("SELECT user_id FROM app_users WHERE email = ?", (email,))
