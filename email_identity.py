@@ -235,8 +235,7 @@ async def minimum_new_session_iat(user_id: int) -> int:
 def _send_email(address: str, purpose: str, token: str) -> None:
     host, port, sender, username, password, base = _mail_settings(purpose)
     parsed = urlsplit(base)
-    query = urlencode([*parse_qsl(parsed.query, keep_blank_values=True), ("token", token)])
-    link = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, query, ""))
+    link = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, parsed.query, urlencode({"token": token})))
     message = EmailMessage()
     message["From"] = sender
     message["To"] = address
