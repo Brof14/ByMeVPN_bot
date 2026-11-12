@@ -24,7 +24,7 @@ import secrets
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
@@ -36,6 +36,7 @@ from entitlements import EntitlementSigningError, create_entitlement, device_bin
 from config import XUI_SUB_PATH, XUI_URL
 from telegram_post_compat import TelegramSessionTokenBody, register_telegram_check_post
 from telegram_auth_storage_compat import install_telegram_auth_storage_compat
+from mobile_refresh_compat import install_mobile_refresh_storage_compat
 from google_signin import GoogleIdTokenError, verify_google_id_token
 from desktop_vpn_capabilities import windows_vpn_compatible
 
@@ -129,6 +130,20 @@ async def _ensure_auth_db():
     await db.commit()
 
 
+def validate_registration_credentials(email: str, password: str) -> None:
+    """Reject malformed and excessively weak new identities without touching legacy logins."""
+    if (
+        len(email) > 254
+        or not re.fullmatch(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,63}", email)
+        or ".." in email
+        or email.startswith(".")
+        or email.split("@", 1)[1].startswith("-")
+    ):
+        raise HTTPException(status_code=400, detail="Некорректный формат email")
+    if not 10 <= len(password) <= 128 or "\x00" in password:
+        raise HTTPException(status_code=400, detail="Пароль должен содержать от 10 до 128 символов")
+
+
 def hash_password(password: str, salt: str) -> str:
     """Generate salted PBKDF2-HMAC-SHA256 hash."""
     return hashlib.pbkdf2_hmac(
@@ -137,6 +152,50 @@ def hash_password(password: str, salt: str) -> str:
         salt.encode("utf-8"),
         100_000,
     ).hex()
+
+
+REFRESH_TOKEN_DAYS = 90
+
+
+async def issue_session_tokens(user_id: int, email: str = "") -> dict[str, str]:
+    """Issue independently expiring access and one-time opaque refresh tokens."""
+    issued_at = int(time.time())
+    expires_at = issued_at + 30 * 86400
+    jti = secrets.token_urlsafe(18)
+    access = create_simple_jwt(
+        user_id, email, issued_at=issued_at, expires_at=expires_at, jwt_id=jti,
+    )
+    # Production can use an older bind-mounted database adapter; its missing
+    # refresh methods are installed against the same DB connection and lock.
+    install_mobile_refresh_storage_compat(database)
+    refresh = "rf2_" + secrets.token_urlsafe(40)
+    await database.create_mobile_refresh_session(
+        hashlib.sha256(refresh.encode("ascii")).hexdigest(),
+        user_id, email, jti, expires_at,
+        issued_at + REFRESH_TOKEN_DAYS * 86400,
+    )
+    return {"access": access, "refresh": refresh}
+
+
+def hash_password_scrypt(password: str, salt: str) -> str:
+    """Memory-hard password hash for *new* email accounts.
+
+    Existing PBKDF2 hashes are still accepted on sign-in to avoid locking out
+    clients with old passwords. No password or key material is logged.
+    """
+    derived = hashlib.scrypt(
+        password.encode("utf-8"), salt=bytes.fromhex(salt),
+        n=2**14, r=8, p=1, dklen=32,
+    )
+    return "scrypt$v1$" + derived.hex()
+
+
+def verify_stored_password(password: str, stored_hash: str, salt: str) -> bool:
+    if stored_hash.startswith("scrypt$v1$"):
+        actual = hash_password_scrypt(password, salt)
+    else:
+        actual = hash_password(password, salt)
+    return hmac.compare_digest(actual, stored_hash)
 
 
 async def confirm_telegram_session(token: str, user_id: int, username: str = "", full_name: str = "") -> bool:
@@ -760,10 +819,26 @@ async def get_user_real_subscription(
         }
 
     # Fetch and parse real nodes from 3x-ui
+    # A subscription link alone must not manufacture a month of paid access.
+    if not expiry_ts:
+        return None, [], {
+            "status": "unknown",
+            "plan_code": None,
+            "plan_name": "Срок подписки не подтверждён",
+            "trial_available": False,
+            "trial_unavailable_reason": "subscription_verification_required",
+            "access_ready": False,
+            "config_status": "unverified",
+            "max_devices": device_limit,
+            "active_devices": 0,
+            "server_time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "subscription_url": None,
+        }
+
     servers = await fetch_and_parse_real_nodes(sub_url, sub_uuid, request_headers)
 
-    seconds_remaining = max(0, expiry_ts - now) if expiry_ts else 30 * 86400
-    expires_at = time.strftime("%Y-%m-%d %H:%M", time.localtime(expiry_ts)) if expiry_ts else None
+    seconds_remaining = max(0, expiry_ts - now)
+    expires_at = time.strftime("%Y-%m-%d %H:%M", time.localtime(expiry_ts))
 
     period_code = {30: "1m", 120: "3m", 240: "6m", 450: "12m"}.get(days_count)
     plan_code = f"{period_code}_d{device_limit}" if period_code else None
@@ -791,6 +866,9 @@ async def get_user_real_subscription(
         "max_devices": device_limit,
         "trial_available": False,
         "subscription_url": sub_url,
+        # Entitlement and ability to obtain a usable VPN configuration differ.
+        "config_status": "ready" if servers else "unavailable",
+        "access_ready": bool(servers),
     }
     if active_devices is not None:
         sub_dict["active_devices"] = active_devices
@@ -1359,7 +1437,7 @@ async def check_telegram_session(
         ) from None
 
     try:
-        jwt_token = create_simple_jwt(user_id, f"{user_id}@telegram.bymevpn")
+        session_tokens = await issue_session_tokens(user_id, f"{user_id}@telegram.bymevpn")
     except Exception as exc:
         logger.error(
             "Telegram session exchange stage=jwt_issue code=%s correlation_id=%s",
@@ -1401,8 +1479,8 @@ async def check_telegram_session(
 
     return TelegramCheckResponse(
         status="authenticated",
-        access_token=jwt_token,
-        refresh_token=f"ref_{jwt_token}",
+        access_token=session_tokens["access"],
+        refresh_token=session_tokens["refresh"],
         user={
             "id": str(user_id),
             "email": f"{username}@telegram",
@@ -1438,10 +1516,7 @@ async def cancel_telegram_session(req: TelegramSessionCancelRequest):
 async def register(req: RegisterRequest, request: Request):
     await _ensure_auth_db()
     email = req.email.strip().lower()
-    if not email or "@" not in email:
-        raise HTTPException(status_code=400, detail="Некорректный формат email")
-    if len(req.password) < 6:
-        raise HTTPException(status_code=400, detail="Пароль должен содержать не менее 6 символов")
+    validate_registration_credentials(email, req.password)
 
     db = await database.get_db()
     cur = await db.execute("SELECT user_id FROM app_users WHERE email = ?", (email,))
@@ -1449,27 +1524,24 @@ async def register(req: RegisterRequest, request: Request):
         raise HTTPException(status_code=400, detail="Пользователь с таким email уже зарегистрирован")
 
     salt = secrets.token_hex(16)
-    pw_hash = hash_password(req.password, salt)
-    user_id = int(hashlib.md5(email.encode()).hexdigest()[:8], 16)
-    if await _is_removed_account(user_id):
-        raise HTTPException(status_code=403, detail="Этот аккаунт удалён. Обратитесь в поддержку")
-    now = int(time.time())
+    pw_hash = hash_password_scrypt(req.password, salt)
+    # Do not derive the internal identity from a 32-bit email hash.
+    # Allocate and persist an unpredictable ID atomically in the same DB.
+    try:
+        user_id = await database.create_email_account(
+            email, pw_hash, salt, req.name or email.split("@")[0],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    await db.execute(
-        "INSERT INTO app_users (user_id, email, password_hash, salt, name, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (user_id, email, pw_hash, salt, req.name or email.split("@")[0], now),
-    )
-    await db.commit()
-    await database.ensure_user(user_id, email.split("@")[0])
-
-    jwt_token = create_simple_jwt(user_id, email)
+    session_tokens = await issue_session_tokens(user_id, email)
     sub_url, servers, sub_dict = await _auth_subscription_snapshot(
         user_id, _subscription_headers_from_request(request)
     )
 
     return {
-        "access": jwt_token,
-        "refresh": f"ref_{jwt_token}",
+        "access": session_tokens["access"],
+        "refresh": session_tokens["refresh"],
         "user": {
             "id": str(user_id),
             "email": email,
@@ -1498,18 +1570,17 @@ async def login(req: LoginRequest, request: Request):
         raise HTTPException(status_code=401, detail="Неверный email или пароль")
 
     user_id, stored_hash, salt, name = row
-    computed_hash = hash_password(req.password, salt)
-    if not hmac.compare_digest(computed_hash, stored_hash):
+    if not verify_stored_password(req.password, stored_hash, salt):
         raise HTTPException(status_code=401, detail="Неверный email или пароль")
 
-    jwt_token = create_simple_jwt(user_id, email)
+    session_tokens = await issue_session_tokens(user_id, email)
     sub_url, servers, sub_dict = await _auth_subscription_snapshot(
         user_id, _subscription_headers_from_request(request)
     )
 
     return {
-        "access": jwt_token,
-        "refresh": f"ref_{jwt_token}",
+        "access": session_tokens["access"],
+        "refresh": session_tokens["refresh"],
         "user": {
             "id": str(user_id),
             "email": email,
@@ -1692,13 +1763,13 @@ async def login_google(req: GoogleLoginRequest, request: Request):
                "Не удалось открыть аккаунт")
 
     user_id = int(identity["user_id"])
-    jwt_token = create_simple_jwt(user_id, identity["email"])
+    session_tokens = await issue_session_tokens(user_id, identity["email"])
     _, servers, sub_dict = await _auth_subscription_snapshot(
         user_id, _subscription_headers_from_request(request)
     )
     return {
-        "access": jwt_token,
-        "refresh": f"ref_{jwt_token}",
+        "access": session_tokens["access"],
+        "refresh": session_tokens["refresh"],
         "user": {
             "id": str(user_id),
             "email": identity["email"],
@@ -1712,30 +1783,68 @@ async def login_google(req: GoogleLoginRequest, request: Request):
 
 @auth_api.post("/refresh")
 async def refresh_token(req: RefreshRequest):
-    token = req.refresh.removeprefix("ref_")
-    claims = _verified_token_claims(token)
+    install_mobile_refresh_storage_compat(database)
+    # V2 refresh credentials are opaque, single-use and independent of JWT expiry.
+    if req.refresh.startswith("rf2_") and len(req.refresh) <= 128:
+        new_refresh = "rf2_" + secrets.token_urlsafe(40)
+        new_jti = secrets.token_urlsafe(18)
+        now = int(time.time())
+        try:
+            session = await database.rotate_mobile_refresh_session(
+                hashlib.sha256(req.refresh.encode("ascii")).hexdigest(),
+                hashlib.sha256(new_refresh.encode("ascii")).hexdigest(),
+                new_jti, now + 30 * 86400, now + REFRESH_TOKEN_DAYS * 86400,
+            )
+            if not session:
+                raise HTTPException(status_code=401, detail="Сессия истекла")
+            if await _is_removed_account(session["user_id"]):
+                raise HTTPException(status_code=401, detail="Аккаунт удалён")
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error("Refresh token rotation unavailable (%s)", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="Сессия временно недоступна") from None
+        return {
+            "access": create_simple_jwt(
+                session["user_id"], session["email"],
+                issued_at=now, expires_at=now + 30 * 86400, jwt_id=new_jti,
+            ),
+            "refresh": new_refresh,
+        }
+
+    # Existing app releases may still hold ref_<access JWT>. Upgrade those
+    # sessions to independently refreshable credentials until their JWT expires.
+    if not req.refresh.startswith("ref_"):
+        raise HTTPException(status_code=401, detail="Сессия истекла")
+    claims = _verified_token_claims(req.refresh.removeprefix("ref_"))
     if not claims:
         raise HTTPException(status_code=401, detail="Сессия истекла")
     try:
-        if await database.is_mobile_jwt_revoked(claims["jti"]):
+        # The tombstone check belongs INSIDE the atomic upgrade transaction:
+        # independent DB reads on the shared SQLite connection can interleave
+        # with concurrent BEGIN IMMEDIATE and produce false 503 errors.
+        now = int(time.time())
+        new_expiry = now + 30 * 86400
+        new_jti = secrets.token_urlsafe(18)
+        new_refresh = "rf2_" + secrets.token_urlsafe(40)
+        new_access = create_simple_jwt(
+            claims["user_id"], claims["email"],
+            issued_at=now, expires_at=new_expiry, jwt_id=new_jti,
+        )
+        upgraded = await database.upgrade_legacy_mobile_refresh(
+            claims["jti"], claims["expires_at"],
+            claims["user_id"], claims["email"],
+            hashlib.sha256(new_refresh.encode("ascii")).hexdigest(),
+            new_jti, new_expiry, now + REFRESH_TOKEN_DAYS * 86400,
+        )
+        if not upgraded:
             raise HTTPException(status_code=401, detail="Сессия завершена")
-        if await _is_removed_account(claims["user_id"]):
-            raise HTTPException(status_code=401, detail="Аккаунт удалён")
+        return {"access": new_access, "refresh": new_refresh}
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error("JWT revocation check unavailable (%s)", type(exc).__name__)
+        logger.error("Legacy refresh upgrade unavailable (%s)", type(exc).__name__)
         raise HTTPException(status_code=503, detail="Сессия временно недоступна") from None
-    # Refresh preserves the same revocable session and its absolute expiry.
-    new_access = create_simple_jwt(
-        claims["user_id"], claims["email"],
-        issued_at=claims["issued_at"], expires_at=claims["expires_at"],
-        jwt_id=claims["jti"],
-    )
-    return {
-        "access": new_access,
-        "refresh": f"ref_{new_access}",
-    }
 
 
 @auth_api.post("/logout")
@@ -1748,6 +1857,8 @@ async def logout(
     if not claims or claims["user_id"] != user_id:
         raise HTTPException(status_code=401, detail="Invalid or expired session token")
     try:
+        install_mobile_refresh_storage_compat(database)
+        await database.revoke_mobile_refresh_for_access(claims["jti"])
         await database.revoke_mobile_jwt(claims["jti"], claims["expires_at"])
     except Exception as exc:
         logger.error("JWT revocation failed (%s)", type(exc).__name__)
@@ -1784,6 +1895,36 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
             "is_google": is_google,
         }
     }
+
+
+class ClientDiagnosticReport(BaseModel):
+    platform: Literal["android", "ios", "windows", "linux", "macos"]
+    stage: Literal["auth", "subscription", "import", "connect", "dns", "routing", "other"]
+    error_code: str
+    app_version: str = ""
+
+
+@account_api.post("/diagnostics/report")
+async def submit_client_diagnostic(
+    report: ClientDiagnosticReport,
+    user_id: int = Depends(get_current_user_id),
+):
+    """Accept only non-secret, bounded error codes supplied by an authenticated app.
+
+    A report does NOT constitute server-side proof that a VPN tunnel connected.
+    """
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,47}", report.error_code):
+        raise HTTPException(status_code=422, detail="Некорректный код ошибки")
+    if report.app_version and not re.fullmatch(r"[A-Za-z0-9._+\-]{1,32}", report.app_version):
+        raise HTTPException(status_code=422, detail="Некорректная версия приложения")
+    from database import save_client_diagnostic
+    record_id = await save_client_diagnostic(
+        user_id, report.platform, report.stage, report.error_code,
+        report.app_version,
+    )
+    if record_id is None:
+        raise HTTPException(status_code=429, detail="Слишком много диагностических отчётов")
+    return {"status": "received", "report_id": record_id}
 
 
 @account_api.delete("/me")
@@ -2316,24 +2457,27 @@ async def activate_trial(
 @billing_api.get("/plans")
 async def get_plans(devices: int = 2):
     """Server-owned tariff catalog with legacy and desktop plan identifiers."""
-    from constants import get_price_for_months, VALID_DEVICE_LIMITS
+    from constants import get_price_for_months, VALID_DEVICE_LIMITS, TARIFF_DAYS
     if devices not in VALID_DEVICE_LIMITS:
         raise HTTPException(status_code=400, detail="Выберите 2, 5 или 10 устройств")
 
     plan_catalog = [
-        ("1m", "month", 1, "1 месяц", 0, False),
-        ("3m", "quarter", 3, "4 месяца (3+1)", 11, True),
-        ("6m", "half_year", 6, "8 месяцев (6+2)", 22, False),
-        ("12m", "year", 12, "15 месяцев (12+3)", 34, False),
+        ("1m", "month", 1, "1 месяц", False),
+        ("3m", "quarter", 3, "4 месяца (3+1)", True),
+        ("6m", "half_year", 6, "8 месяцев (6+2)", False),
+        ("12m", "year", 12, "15 месяцев (12+3)", False),
     ]
     plans = []
-    for code, desktop_code, months, label, discount, popular in plan_catalog:
+    base_month_price = get_price_for_months(1, devices)[0]
+    for code, desktop_code, months, label, popular in plan_catalog:
         options = [
             {"devices": limit, "price_rub": get_price_for_months(months, limit)[0],
              "days": get_price_for_months(months, limit)[1]}
             for limit in VALID_DEVICE_LIMITS
         ]
         selected = next(option for option in options if option["devices"] == devices)
+        included_months = TARIFF_DAYS[months] // 30
+        discount = round(100 * (1 - selected["price_rub"] / (base_month_price * included_months)))
         plans.append({
             "code": code, "desktop_code": desktop_code, "name": label,
             "price": f"{selected['price_rub']} ₽", "price_rub": selected["price_rub"],
@@ -2774,6 +2918,11 @@ async def get_servers(
         raise _correlated_http_error(
             503, "Не удалось обновить список серверов", correlation_id, "subscription_lookup_failed",
         ) from None
+    if not servers:
+        raise _correlated_http_error(
+            503, "Не удалось получить конфигурацию серверов. Подписка сохранена",
+            correlation_id, "subscription_configuration_unavailable",
+        )
     payload = {
         "servers": servers,
         "subscription_url": sub_url,

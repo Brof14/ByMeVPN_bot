@@ -84,12 +84,42 @@ CREATE TABLE IF NOT EXISTS checkout_drafts (
     FOREIGN KEY(user_id) REFERENCES users(user_id)
 );
 
+-- A checkout lease serializes provider invoice creation even across bot processes.
+-- The attempt key is reused for short retries of the exact same confirmed order.
+CREATE TABLE IF NOT EXISTS churn_feedback (
+    user_id INTEGER PRIMARY KEY,
+    reason TEXT NOT NULL,
+    recorded_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_churn_feedback_time ON churn_feedback(recorded_at);
+
+CREATE TABLE IF NOT EXISTS yookassa_checkout_attempts (
+    user_id INTEGER PRIMARY KEY,
+    order_fingerprint TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    lease_token TEXT,
+    lease_expires_at INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS revoked_mobile_jwt_sessions (
     jti TEXT PRIMARY KEY,
     expires_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_revoked_mobile_jwt_expiry
     ON revoked_mobile_jwt_sessions(expires_at);
+
+CREATE TABLE IF NOT EXISTS mobile_refresh_sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    email TEXT NOT NULL DEFAULT '',
+    access_jti TEXT NOT NULL UNIQUE,
+    access_expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mobile_refresh_sessions_user ON mobile_refresh_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_mobile_refresh_sessions_expiry ON mobile_refresh_sessions(expires_at);
 
 CREATE TABLE IF NOT EXISTS mobile_auth_sessions (
     state_hash TEXT PRIMARY KEY,
@@ -102,6 +132,20 @@ CREATE TABLE IF NOT EXISTS mobile_auth_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_mobile_auth_sessions_expiry
     ON mobile_auth_sessions(expires_at);
+
+-- Client-submitted diagnostics (not authoritative VPN connection evidence).
+-- Store only allowlisted categories, never logs, URLs, UUID or client IP.
+CREATE TABLE IF NOT EXISTS client_diagnostics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    platform TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    error_code TEXT NOT NULL,
+    app_version TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_client_diagnostics_user
+    ON client_diagnostics(user_id,created_at);
 
 CREATE TABLE IF NOT EXISTS known_hwid_devices (
     user_id INTEGER NOT NULL,
@@ -200,6 +244,18 @@ CREATE TABLE IF NOT EXISTS yookassa_processed (
     payment_id  TEXT PRIMARY KEY,
     processed   INTEGER DEFAULT (strftime('%s','now'))
 );
+
+-- Provider notifications are acknowledged only after their IDs have been
+-- persisted. The monitor retries interrupted processing after restarts.
+CREATE TABLE IF NOT EXISTS yookassa_webhook_inbox (
+    payment_id TEXT PRIMARY KEY,
+    received_at INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_check INTEGER NOT NULL DEFAULT 0,
+    last_status TEXT NOT NULL DEFAULT 'received'
+);
+CREATE INDEX IF NOT EXISTS idx_yookassa_webhook_inbox_due
+    ON yookassa_webhook_inbox(next_check,received_at);
 
 -- Unsettled YooKassa checkout IDs. These durable IDs let the monitor recover
 -- paid orders after outages that exceed its short provider query window.
@@ -1193,6 +1249,153 @@ async def ensure_user(user_id: int, username: Optional[str] = None) -> None:
     await db.commit()
 
 
+async def claim_yookassa_checkout_attempt(user_id: int, order_fingerprint: str) -> Optional[dict]:
+    """Atomically claim invoice creation and reuse the provider key on retries.
+
+    At most one process may create an invoice for this user concurrently.
+    A repeated click on the same order for five minutes opens the same invoice.
+    After that interval a deliberate new purchase receives a new key.
+    """
+    if not re.fullmatch(r"[0-9a-f]{64}", str(order_fingerprint)):
+        raise ValueError("order fingerprint must be a SHA256 hex digest")
+    token = secrets.token_urlsafe(24)
+    now = int(time.time())
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+        await db.execute("PRAGMA busy_timeout=30000")
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            deleted = await db.execute(
+                "SELECT 1 FROM account_tombstones WHERE user_id=? LIMIT 1",
+                (int(user_id),),
+            )
+            if await deleted.fetchone():
+                raise ValueError("Account was deleted; checkout creation forbidden")
+            cur = await db.execute(
+                "SELECT order_fingerprint,idempotency_key,created_at,lease_expires_at "
+                "FROM yookassa_checkout_attempts WHERE user_id=?",
+                (int(user_id),),
+            )
+            existing = await cur.fetchone()
+            if existing and int(existing[3]) > now:
+                await db.rollback()
+                return None
+            if existing and existing[0] == order_fingerprint and now - int(existing[2]) < 300:
+                idempotency_key = str(existing[1])
+                created_at = int(existing[2])
+            else:
+                idempotency_key = secrets.token_hex(32)
+                created_at = now
+            await db.execute(
+                """INSERT INTO yookassa_checkout_attempts
+                   (user_id,order_fingerprint,idempotency_key,created_at,lease_token,lease_expires_at)
+                   VALUES(?,?,?,?,?,?)
+                   ON CONFLICT(user_id) DO UPDATE SET
+                   order_fingerprint=excluded.order_fingerprint,
+                   idempotency_key=excluded.idempotency_key,
+                   created_at=excluded.created_at,
+                   lease_token=excluded.lease_token,
+                   lease_expires_at=excluded.lease_expires_at""",
+                (int(user_id), order_fingerprint, idempotency_key, created_at, token, now + 90),
+            )
+            await db.commit()
+            return {"token": token, "idempotency_key": idempotency_key}
+        except Exception:
+            await db.rollback()
+            raise
+
+
+async def release_yookassa_checkout_attempt(user_id: int, token: str) -> None:
+    """Never release a lease acquired by a later checkout operation."""
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+        await db.execute("PRAGMA busy_timeout=30000")
+        await db.execute(
+            "UPDATE yookassa_checkout_attempts SET lease_token=NULL, lease_expires_at=0 "
+            "WHERE user_id=? AND lease_token=?",
+            (int(user_id), token),
+        )
+        await db.commit()
+
+
+async def save_client_diagnostic(
+    user_id: int, platform: str, stage: str, error_code: str, app_version: str,
+) -> int | None:
+    """Save bounded client-reported error codes, no secrets or raw log uploads.
+
+    One report per minute and at most 30 reports per day limit write spam.
+    """
+    now = int(time.time())
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+        await db.execute("PRAGMA busy_timeout=30000")
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            await db.execute("DELETE FROM client_diagnostics WHERE created_at<?",
+                             (now - 30 * 86400,))
+            cur = await db.execute(
+                "SELECT MAX(created_at),COUNT(*) FROM client_diagnostics "
+                "WHERE user_id=? AND created_at>=?",
+                (int(user_id), now - 86400),
+            )
+            last, count = await cur.fetchone()
+            if count >= 30 or (last is not None and now - int(last) < 60):
+                await db.rollback()
+                return None
+            cursor = await db.execute(
+                "INSERT INTO client_diagnostics(user_id,platform,stage,error_code,app_version,created_at) "
+                "VALUES(?,?,?,?,?,?)",
+                (int(user_id), platform, stage, error_code, app_version, now),
+            )
+            await db.commit()
+            return int(cursor.lastrowid)
+        except Exception:
+            await db.rollback()
+            raise
+
+
+async def get_recent_client_diagnostics(user_id: int, limit: int = 10) -> list[dict]:
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT id,platform,stage,error_code,app_version,created_at "
+        "FROM client_diagnostics WHERE user_id=? ORDER BY created_at DESC LIMIT ?",
+        (int(user_id), max(1, min(int(limit), 20))),
+    )
+    return [
+        dict(zip(("id", "platform", "stage", "error_code", "app_version", "created_at"), row))
+        for row in await cur.fetchall()
+    ]
+
+
+VALID_CHURN_REASONS = frozenset({
+    "connection", "price", "not_needed", "payment", "other",
+})
+
+
+async def save_churn_feedback(user_id: int, reason: str) -> bool:
+    """Optional one-response customer survey; no free-text or sensitive logs."""
+    if reason not in VALID_CHURN_REASONS:
+        raise ValueError("Unsupported churn feedback reason")
+    if await is_account_tombstoned(user_id):
+        return False
+    db = await get_db()
+    async with _db_semaphore:
+        cursor = await db.execute(
+            "INSERT OR IGNORE INTO churn_feedback(user_id,reason,recorded_at) VALUES(?,?,?)",
+            (int(user_id), reason, int(time.time())),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def get_churn_feedback_summary(days: int = 90) -> dict[str, int]:
+    if not 1 <= int(days) <= 365:
+        raise ValueError("Unsupported feedback window")
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT reason, COUNT(*) FROM churn_feedback WHERE recorded_at>=? GROUP BY reason",
+        (int(time.time()) - days * 86400,),
+    )
+    return {str(reason): int(count) for reason, count in await cur.fetchall()}
+
+
 async def create_mobile_google_nonce(nonce_hash: str, expires_at: int) -> None:
     """Persist only a hash of a short-lived Google sign-in challenge."""
     db = await get_db()
@@ -1362,6 +1565,51 @@ async def delete_mobile_device_bootstrap(user_id: int, device_hash: str) -> None
             (int(user_id), str(device_hash)),
         )
         await db.commit()
+
+
+async def create_email_account(email: str, password_hash: str, salt: str, name: str) -> int:
+    """Create an email identity without collisions with Telegram or deleted users.
+
+    Existing identity IDs remain unchanged; they require a separately reviewed
+    migration which reconciles all subscriptions and payment history.
+    """
+    normalized_name = str(name or email.split("@")[0]).strip()[:160]
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+        await db.execute("PRAGMA busy_timeout=30000")
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await db.execute("SELECT 1 FROM app_users WHERE email=?", (email,))
+            if await cur.fetchone():
+                raise ValueError("Пользователь с таким email уже зарегистрирован")
+            user_id = 0
+            for _ in range(32):
+                candidate = secrets.randbelow(2**62 - 1) + 1
+                cur = await db.execute(
+                    "SELECT 1 FROM users WHERE user_id=? "
+                    "UNION ALL SELECT 1 FROM app_users WHERE user_id=? "
+                    "UNION ALL SELECT 1 FROM account_tombstones WHERE user_id=? LIMIT 1",
+                    (candidate, candidate, candidate),
+                )
+                if not await cur.fetchone():
+                    user_id = candidate
+                    break
+            if not user_id:
+                raise RuntimeError("Could not allocate a unique account ID")
+            now = int(time.time())
+            await db.execute(
+                "INSERT INTO users(user_id,username) VALUES(?,?)",
+                (user_id, normalized_name),
+            )
+            await db.execute(
+                "INSERT INTO app_users(user_id,email,password_hash,salt,name,created_at) "
+                "VALUES(?,?,?,?,?,?)",
+                (user_id, email, password_hash, salt, normalized_name, now),
+            )
+            await db.commit()
+            return user_id
+        except Exception:
+            await db.rollback()
+            raise
 
 
 async def get_or_create_google_account(google_sub: str, email: str, name: str) -> dict:
@@ -2310,6 +2558,141 @@ async def revoke_mobile_jwt(jti: str, expires_at: int) -> None:
         await db.commit()
 
 
+async def upgrade_legacy_mobile_refresh(
+    old_jti: str, old_access_expiry: int, user_id: int, email: str,
+    new_token_hash: str, new_access_jti: str,
+    new_access_expiry: int, new_refresh_expiry: int,
+) -> bool:
+    """Atomically exchange a legacy JWT and invalidate replay across processes.
+
+    Do not run BEGIN on the shared aiosqlite pool: it is used by other tasks
+    under a 20-slot semaphore, which is not a transaction mutex.
+    """
+    now = int(time.time())
+    if int(old_access_expiry) <= now:
+        return False
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+        await db.execute("PRAGMA busy_timeout=30000")
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            await db.execute(
+                "DELETE FROM revoked_mobile_jwt_sessions WHERE expires_at<=?", (now,)
+            )
+            removed = await db.execute(
+                "SELECT 1 FROM account_tombstones WHERE user_id=?", (int(user_id),)
+            )
+            if await removed.fetchone():
+                await db.rollback()
+                return False
+            inserted = await db.execute(
+                "INSERT OR IGNORE INTO revoked_mobile_jwt_sessions(jti,expires_at) "
+                "VALUES(?,?)", (old_jti, int(old_access_expiry)),
+            )
+            if inserted.rowcount != 1:
+                await db.rollback()
+                return False
+            await db.execute(
+                "INSERT INTO mobile_refresh_sessions "
+                "(token_hash,user_id,email,access_jti,access_expires_at,created_at,expires_at) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (new_token_hash, int(user_id), email, new_access_jti,
+                 int(new_access_expiry), now, int(new_refresh_expiry)),
+            )
+            await db.commit()
+            return True
+        except Exception:
+            await db.rollback()
+            raise
+
+async def create_mobile_refresh_session(
+    token_hash: str, user_id: int, email: str,
+    access_jti: str, access_expires_at: int, expires_at: int,
+) -> None:
+    """Durably create one refresh session without sharing a live transaction."""
+    now = int(time.time())
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+        await db.execute("PRAGMA busy_timeout=30000")
+        await db.executescript("""
+            CREATE TABLE IF NOT EXISTS mobile_refresh_sessions (
+                token_hash TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                email TEXT NOT NULL DEFAULT '',
+                access_jti TEXT NOT NULL UNIQUE,
+                access_expires_at INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_mobile_refresh_sessions_user
+                ON mobile_refresh_sessions(user_id);
+            CREATE INDEX IF NOT EXISTS idx_mobile_refresh_sessions_expiry
+                ON mobile_refresh_sessions(expires_at);
+        """)
+        await db.execute(
+            """INSERT INTO mobile_refresh_sessions
+               (token_hash,user_id,email,access_jti,access_expires_at,created_at,expires_at)
+               VALUES(?,?,?,?,?,?,?)""",
+            (token_hash, int(user_id), email, access_jti,
+             int(access_expires_at), now, int(expires_at)),
+        )
+        await db.commit()
+
+async def rotate_mobile_refresh_session(
+    old_token_hash: str, new_token_hash: str, new_access_jti: str,
+    new_access_expiry: int, new_refresh_expiry: int,
+) -> Optional[dict]:
+    """Rotate a one-use refresh secret in a separate write transaction.
+
+    SQLite BEGIN IMMEDIATE serializes workers and processes without relying
+    on the shared pool's concurrency limit.
+    """
+    now = int(time.time())
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+        await db.execute("PRAGMA busy_timeout=30000")
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await db.execute(
+                """SELECT user_id,email,access_jti,access_expires_at
+                   FROM mobile_refresh_sessions WHERE token_hash=? AND expires_at>?""",
+                (old_token_hash, now),
+            )
+            row = await cur.fetchone()
+            if not row:
+                await db.rollback()
+                return None
+            user_id, email, old_jti, old_access_expiry = row
+            removed = await db.execute(
+                "SELECT 1 FROM account_tombstones WHERE user_id=?", (int(user_id),)
+            )
+            if await removed.fetchone():
+                await db.rollback()
+                return None
+            await db.execute(
+                """UPDATE mobile_refresh_sessions
+                   SET token_hash=?,access_jti=?,access_expires_at=?,
+                       created_at=?,expires_at=? WHERE token_hash=?""",
+                (new_token_hash, new_access_jti, int(new_access_expiry), now,
+                 int(new_refresh_expiry), old_token_hash),
+            )
+            await db.execute(
+                "INSERT OR REPLACE INTO revoked_mobile_jwt_sessions(jti,expires_at) VALUES(?,?)",
+                (str(old_jti), int(old_access_expiry)),
+            )
+            await db.commit()
+            return {"user_id": int(user_id), "email": str(email)}
+        except Exception:
+            await db.rollback()
+            raise
+
+async def revoke_mobile_refresh_for_access(access_jti: str) -> None:
+    """Remove the refresh credential bound to the session being logged out."""
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+        await db.execute("PRAGMA busy_timeout=30000")
+        await db.execute(
+            "DELETE FROM mobile_refresh_sessions WHERE access_jti=?",
+            (str(access_jti),),
+        )
+        await db.commit()
+
 async def mark_hwid_device_notified(user_id: int, device_id: int) -> None:
     db = await get_db()
     async with _db_semaphore:
@@ -2758,6 +3141,67 @@ async def mark_yookassa_processed(payment_id: str) -> None:
     await db.commit()
 
 
+async def record_yookassa_webhook(payment_id: str) -> None:
+    """Write-ahead durable inbox; duplicates cannot create duplicate jobs."""
+    db = await get_db()
+    async with _db_semaphore:
+        await db.execute(
+            "INSERT OR IGNORE INTO yookassa_webhook_inbox(payment_id,received_at) VALUES(?,?)",
+            (str(payment_id), int(time.time())),
+        )
+        await db.commit()
+
+
+async def get_due_yookassa_webhooks(limit: int = 100) -> list[str]:
+    """Read only notifications eligible for a bounded recovery attempt."""
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT payment_id FROM yookassa_webhook_inbox WHERE next_check<=? "
+        "ORDER BY received_at ASC LIMIT ?",
+        (int(time.time()), max(1, min(int(limit), 500))),
+    )
+    return [str(row[0]) for row in await cur.fetchall()]
+
+
+async def resolve_yookassa_webhook(payment_id: str) -> None:
+    db = await get_db()
+    async with _db_semaphore:
+        await db.execute(
+            "DELETE FROM yookassa_webhook_inbox WHERE payment_id=?", (payment_id,),
+        )
+        await db.commit()
+
+
+async def defer_yookassa_webhook(payment_id: str, reason: str = "unavailable") -> None:
+    db = await get_db()
+    async with _db_semaphore:
+        cur = await db.execute(
+            "SELECT attempts FROM yookassa_webhook_inbox WHERE payment_id=?",
+            (payment_id,),
+        )
+        row = await cur.fetchone()
+        if row:
+            attempts = int(row[0])
+            delay = min(600, 30 * (2 ** min(attempts, 4)))
+            await db.execute(
+                "UPDATE yookassa_webhook_inbox SET attempts=attempts+1, "
+                "next_check=?, last_status=? WHERE payment_id=?",
+                (int(time.time()) + delay, reason[:48], payment_id),
+            )
+            await db.commit()
+
+
+async def is_yookassa_fulfilled(payment_id: str) -> bool:
+    """The payment ledger's success state, not a legacy marker, proves delivery."""
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT 1 FROM payments WHERE provider='yookassa' "
+        "AND provider_payment_id=? AND status='success' LIMIT 1",
+        (payment_id,),
+    )
+    return await cur.fetchone() is not None
+
+
 async def add_yookassa_pending(
     payment_id: str,
     user_id: int,
@@ -3197,6 +3641,16 @@ async def has_recent_unsettled_checkout(
         )
         if await cursor.fetchone():
             return True
+
+    # A Telegram YooKassa checkout may still be contacting the provider before
+    # the durable pending invoice has been recorded. Do not delete this user.
+    cursor = await db.execute(
+        "SELECT 1 FROM yookassa_checkout_attempts "
+        "WHERE user_id=? AND lease_expires_at>? LIMIT 1",
+        (user_id, int(time.time())),
+    )
+    if await cursor.fetchone():
+        return True
 
     # A mobile checkout can be in the external provider's creation phase
     # before it has an invoice ID or a row in either pending ledger.
@@ -4661,6 +5115,10 @@ async def delete_user_and_keys(user_id: int, *, source: str = "admin") -> list[s
                     ("mobile_device_bootstraps", "user_id"),
                     ("trial_claim_reservations", "user_id"),
                     ("mobile_auth_sessions", "user_id"),
+                    ("mobile_refresh_sessions", "user_id"),
+                    ("client_diagnostics", "user_id"),
+                    ("churn_feedback", "user_id"),
+                    ("yookassa_checkout_attempts", "user_id"),
                     ("marketing_preferences", "user_id"),
                     ("analytics_events", "user_id"),
                     ("key_errors", "user_id"),

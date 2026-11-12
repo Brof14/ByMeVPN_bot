@@ -112,9 +112,112 @@ def _finances_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="Платежи", callback_data="admin_payments"),
          InlineKeyboardButton(text="Возвраты", callback_data="admin_refunds")],
         [InlineKeyboardButton(text="Финансовый отчёт", callback_data="admin_finance")],
+        [InlineKeyboardButton(text="Проблемные платежи", callback_data="admin_payment_incidents")],
         [InlineKeyboardButton(text="Экспорт данных", callback_data="admin_export_csv")],
         [InlineKeyboardButton(text="← Главное меню", callback_data="admin_menu")],
     ])
+
+
+@router.callback_query(F.data == "admin_churn_feedback")
+async def cb_admin_churn_feedback(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    from database import get_churn_feedback_summary
+    try:
+        summary = await get_churn_feedback_summary(90)
+    except Exception as exc:
+        logger.warning("Churn feedback report unavailable (%s)", type(exc).__name__)
+        await callback.message.answer("Отчёт пока недоступен.")
+        return
+    labels = {
+        "connection": "Не подключается",
+        "price": "Цена",
+        "not_needed": "Нет потребности",
+        "payment": "Проблемы оплаты",
+        "other": "Другое",
+    }
+    lines = ["<b>Причины ухода · 90 дней</b>", "",
+             "Добровольные ответы, не репрезентативны для всех клиентов."]
+    for key, count in sorted(summary.items(), key=lambda item: -item[1]):
+        lines.append(f"{labels.get(key, 'Другое')}: {count}")
+    if not summary:
+        lines.append("Нет ответов.")
+    await callback.message.edit_text(
+        "\n".join(lines), parse_mode="HTML", reply_markup=_growth_kb(),
+    )
+
+
+@router.callback_query(F.data == "admin_source_revenue")
+async def cb_admin_source_revenue(callback: CallbackQuery):
+    """Show measured revenue without pretending it is profit or ROAS."""
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    from acquisition_revenue import source_revenue_snapshot
+    try:
+        cohorts = await source_revenue_snapshot(days=30)
+    except Exception as exc:
+        logger.warning("Source revenue report unavailable (%s)", type(exc).__name__)
+        await callback.message.answer("Не удалось получить статистику источников.")
+        return
+    lines = ["<b>Источники привлечения · 30 дней</b>", "",
+             "Выручка валовая, без комиссий, возвратов, VPS и рекламных затрат.",
+             "Telegram Stars не пересчитываются в рубли."]
+    for name, row in list(cohorts["by_source"].items())[:15]:
+        gross = row["gross_by_currency"]
+        money = ", ".join(
+            f"{amount} {escape(currency)}" for currency, amount in sorted(gross.items())
+        ) or "0"
+        lines.append(
+            f"\n<b>{escape(name)}</b>: пользователей {row['started']}; "
+            f"подключились {row['connected']}; оплатили {row['paid']}; "
+            f"валовая выручка {money}"
+        )
+    if not cohorts["by_source"]:
+        lines.append("\nНет событий за выбранный период.")
+    await callback.message.edit_text(
+        "\n".join(lines), parse_mode="HTML",
+        reply_markup=_growth_kb(),
+    )
+
+
+@router.callback_query(F.data == "admin_payment_incidents")
+async def cb_admin_payment_incidents(callback: CallbackQuery):
+    """Read-only reconciliation queue; never silently grant/refund twice."""
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    from billing_incidents import read_billing_incidents
+    try:
+        incidents = await read_billing_incidents()
+    except Exception as exc:
+        logger.error("Billing incident query failed (%s)", type(exc).__name__)
+        await callback.message.answer("Не удалось получить список платежей для сверки.")
+        return
+    lines = ["<b>Проблемные платежи</b>", "",
+             "Данные для сверки; повторная выдача и возврат не выполняются автоматически."]
+    buttons = []
+    for entry in incidents:
+        reason = escape(str(entry["status"]))
+        provider = escape(str(entry["provider"]))
+        invoice_id = escape(str(entry["invoice_id"]))
+        lines.append(f"\n{provider} · <code>{invoice_id}</code> · {reason}")
+        uid = entry.get("user_id")
+        if uid:
+            buttons.append([InlineKeyboardButton(
+                text=f"Клиент {int(uid)}", callback_data=f"admin_user:{int(uid)}"
+            )])
+    if not incidents:
+        lines.append("\nВ журнале не найдено операций, ожидающих сверки.")
+    buttons.append([InlineKeyboardButton(text="← К финансам", callback_data="admin_finance_menu")])
+    await callback.message.edit_text(
+        "\n".join(lines), parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
 
 
 def _growth_kb() -> InlineKeyboardMarkup:
@@ -126,6 +229,8 @@ def _growth_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="Воронка", callback_data="admin_funnel"),
          InlineKeyboardButton(text="Оплаты / конверсия", callback_data="admin_checkout_funnel")],
         [InlineKeyboardButton(text="Органический рост", callback_data="admin_referral_funnel")],
+        [InlineKeyboardButton(text="Выручка по источникам", callback_data="admin_source_revenue")],
+        [InlineKeyboardButton(text="Причины ухода", callback_data="admin_churn_feedback")],
         [InlineKeyboardButton(text="Проверка рефералов", callback_data="admin_referral_risk")],
         [InlineKeyboardButton(text="Рассылки", callback_data="admin_broadcast")],
         [InlineKeyboardButton(text="← Главное меню", callback_data="admin_menu")],
@@ -412,6 +517,7 @@ def _user_kb(user_id: int, is_banned: bool = False) -> InlineKeyboardMarkup:
         # Row 3: Access and support
         [InlineKeyboardButton(text="🎁 Пробник", callback_data=f"admin_grant_trial:{user_id}"),
          InlineKeyboardButton(text="🆕 Выдать ключ", callback_data=f"admin_grant_key:{user_id}")],
+        [InlineKeyboardButton(text="Диагностика", callback_data=f"admin_client_diagnostics:{user_id}")],
         [InlineKeyboardButton(text="✉️ Написать", callback_data=f"admin_pm:{user_id}"),
          InlineKeyboardButton(text="🔄 Сброс пробника", callback_data=f"admin_reset_trial:{user_id}")],
         # Finance and moderation
@@ -1203,6 +1309,39 @@ async def cb_user_card(callback: CallbackQuery):
     uid = int(callback.data.split(":")[1])
     logger.info("Admin %d viewed user %d card", callback.from_user.id, uid)
     await _show_user(callback, uid)
+
+
+@router.callback_query(F.data.startswith("admin_client_diagnostics:"))
+async def cb_admin_client_diagnostics(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    try:
+        uid = int(callback.data.split(":", 1)[1])
+        from database import get_recent_client_diagnostics
+        events = await get_recent_client_diagnostics(uid)
+    except Exception as exc:
+        logger.warning("Client diagnostics lookup failed (%s)", type(exc).__name__)
+        await callback.message.answer("Не удалось загрузить диагностику.")
+        return
+    lines = [f"<b>Диагностика приложения · {uid}</b>", "",
+             "Коды сообщены приложением, без логов, VPN-ключей и IP-адресов.",
+             "Это не проверка действительного VPN-туннеля."]
+    for entry in events:
+        lines.append(
+            f"\n{escape(entry['platform'])} · {escape(entry['stage'])} · "
+            f"<code>{escape(entry['error_code'])}</code> · "
+            f"{escape(entry['app_version'] or 'версия неизвестна')}"
+        )
+    if not events:
+        lines.append("\nОтчётов нет.")
+    await callback.message.edit_text(
+        "\n".join(lines), parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="← К пользователю", callback_data=f"admin_user:{uid}")
+        ]]),
+    )
 
 
 # ── User keys (admin view) ─────────────────────────────────────────────────
@@ -2700,6 +2839,7 @@ async def cb_system_status(callback: CallbackQuery, bot: Bot):
     import time
     import sqlite3
     from config import DB_FILE, XUI_URL, XUI_USERNAME
+    from release_info import release_identity
     from cache import get_cache_stats
     
     # Database stats
@@ -2740,8 +2880,12 @@ async def cb_system_status(callback: CallbackQuery, bot: Bot):
     ]
     history_text = "\n".join(history_lines) or "  История появится после первой минуты работы"
     
+    release = release_identity()
     text = (
         f"⚙️ <b>Состояние системы ByMeVPN</b>\n\n"
+        f"📦 <b>Релиз:</b> <code>{escape(release['sha'])}</code>\n"
+        f"  Сборка: {escape(release['built_at'])}\n"
+        f"  Образ: <code>{escape(release['image_digest'])}</code>\n\n"
         f"📊 <b>База данных:</b>\n"
         f"  Размер: {db_size:.2f} MB\n"
         f"  Пользователей: {total_users}\n\n"
@@ -3016,7 +3160,7 @@ async def cb_grant_key(callback: CallbackQuery, state: FSMContext):
         "Введите количество дней для ключа:\n"
         "• Например: <code>30</code> — ключ на 30 дней\n"
         "• Например: <code>365</code> — ключ на год\n\n"
-        "Ключ будет создан автоматически с названием 🇺🇸 Admin-Key-{user_id}",
+        f"Ключ будет создан автоматически с названием 🇺🇸 Admin-Key-{user_id}",
         parse_mode="HTML", reply_markup=_back_kb()
     )
 
@@ -3065,7 +3209,7 @@ async def receive_grant_key_days(message: Message, bot: Bot, state: FSMContext):
             f"✅ <b>Ключ выдан!</b>\n\n"
             f"👤 Пользователь: <code>{uid}</code>\n"
             f"📅 Срок: {days} дней\n"
-            f"📱 Устройств: до 10\n"
+            f"📱 Устройств: до 2\n"
             f"🏷️ Название: <b>{config_name}</b>\n\n"
             f"Ключ отправлен пользователю в личные сообщения!",
             parse_mode="HTML", reply_markup=_back_kb()

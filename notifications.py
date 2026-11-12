@@ -81,12 +81,17 @@ async def _send_autorenew_upcoming(bot: Bot, item: dict, sub: dict) -> None:
         f"Сумма: <b>{amount} ₽</b> за следующие {sub.get('days') or 30} дней ({devices} устр.)\n"
         f"Способ оплаты: {pm_title}\n\n"
         f"Ничего делать не нужно — доступ продлится автоматически.\n"
-        f"Если продление не нужно, отключите его в настройках ключа — "
-        f"доступ сохранится до конца оплаченного периода."
+        "Автопродление можно отключить кнопкой ниже. "
+        "Оплаченный доступ сохранится до конца периода."
     )
+    key_id = int(sub.get("key_id") or item.get("key_id") or 0)
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="Отключить автопродление",
+            callback_data=f"autorenew_unbind_prompt:{key_id}",
+        )],
         [InlineKeyboardButton(text="Подписка", callback_data="my_keys")],
-        [InlineKeyboardButton(text="🆘 Поддержка", url="https://t.me/ByMeVPNSupportBot")],
+        [InlineKeyboardButton(text="Поддержка", url="https://t.me/ByMeVPNSupportBot")],
     ])
     await bot.send_message(item["user_id"], text, parse_mode="HTML", reply_markup=kb)
     return True
@@ -193,6 +198,7 @@ async def _send_winback_notification(bot: Bot, item: dict) -> bool:
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Вернуть доступ", callback_data=_renewal_callback(item))],
         [InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn")],
+        [InlineKeyboardButton(text="Сообщить причину ухода", callback_data="winback_feedback")],
         [InlineKeyboardButton(text="Не присылать предложения", callback_data="marketing_optout")],
     ])
     await bot.send_message(user_id, text, parse_mode="HTML", reply_markup=kb)
@@ -304,12 +310,17 @@ async def _backup_database(bot: Bot) -> None:
             return
         # SQLite backup is synchronous. Keep database snapshot and ZIP work
         # outside the bot's event loop so Telegram callbacks remain responsive.
+        from encrypted_backup import encrypt_backup, require_backup_passphrase
+        # Telegram bot chats are NOT end-to-end encrypted. Do not transmit
+        # bare SQLite archives containing users, keys and billing records.
+        passphrase = require_backup_passphrase()
         archive_bytes = await asyncio.to_thread(_verified_sqlite_backup_zip, db_path)
+        ciphertext = await asyncio.to_thread(encrypt_backup, archive_bytes, passphrase)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         await bot.send_document(
             ADMIN_ID,
-            BufferedInputFile(archive_bytes, filename=f"vpnbot_backup_{stamp}.zip"),
-            caption=f"📦 <b>Database Backup</b>\n\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            BufferedInputFile(ciphertext, filename=f"vpnbot_backup_{stamp}.bmbackup"),
+            caption=f"🔐 <b>Encrypted Database Backup</b>\n\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             parse_mode="HTML",
         )
         logger.info("Verified SQLite backup sent to admin")

@@ -535,12 +535,14 @@ class PaymentProviderFailures(unittest.IsolatedAsyncioTestCase):
         callback = self.callback()
         with (
             patch("handlers.buy.safe_answer", new=AsyncMock()),
-            patch("handlers.buy.claim_yookassa_checkout", return_value=True),
-            patch("handlers.buy.release_yookassa_checkout") as release,
+            patch("database.claim_yookassa_checkout_attempt", new=AsyncMock(
+                return_value={"token": "test-lease", "idempotency_key": "a" * 64},
+            )),
+            patch("database.release_yookassa_checkout_attempt", new=AsyncMock()) as release,
             patch("handlers.buy.create_yookassa_payment", new=AsyncMock(side_effect=RuntimeError("network"))),
         ):
             await cb_pay_yookassa(callback, object(), self.state())
-        release.assert_called_once_with(123)
+        release.assert_awaited_once_with(123, "test-lease")
         self.assertIn("Не удалось открыть оплату", callback.message.answer.await_args.args[0])
 
     async def test_crypto_invoice_never_shown_if_persistence_failed(self):

@@ -273,13 +273,15 @@ async def _send_main_menu(
             text = (
                 "<b>Добро пожаловать!</b>\n\n"
                 "Приглашение учтено.\n\n"
-                "Начните с пробного доступа или выберите тариф."
+                "Начните с пробного доступа или выберите тариф.\n"
+                "Затем установите приложение и включите VPN в нём."
             )
         else:
             text = (
                 "<b>ByMeVPN</b>\n\n"
                 "Защитите интернет-соединение на телефоне и компьютере.\n\n"
-                "Попробуйте VPN 3 дня бесплатно, без карты, или сразу выберите тариф."
+                "Попробуйте VPN 3 дня бесплатно, без карты, или сразу выберите тариф.\n\n"
+                "Как подключиться: получите доступ → установите приложение → включите VPN."
             )
         kb = main_menu_new_user()
     elif state == "existing":
@@ -853,6 +855,49 @@ async def cb_about(callback: CallbackQuery, bot: Bot):
         [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu")],
     ])
     await send_with_photo(bot, callback, text, kb, photo=ABOUT)
+
+
+@router.callback_query(F.data == "winback_feedback")
+async def cb_winback_feedback(callback: CallbackQuery):
+    await safe_answer(callback)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Не подключается", callback_data="winback_reason:connection")],
+        [InlineKeyboardButton(text="Не устраивает цена", callback_data="winback_reason:price")],
+        [InlineKeyboardButton(text="VPN больше не нужен", callback_data="winback_reason:not_needed")],
+        [InlineKeyboardButton(text="Проблема с оплатой", callback_data="winback_reason:payment")],
+        [InlineKeyboardButton(text="Другая причина", callback_data="winback_reason:other")],
+        [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+    ])
+    await callback.message.answer(
+        "Почему вы перестали пользоваться ByMeVPN? Ответ необязателен, "
+        "достаточно выбрать один вариант.", reply_markup=keyboard,
+    )
+
+
+@router.callback_query(F.data.startswith("winback_reason:"))
+async def cb_winback_reason(callback: CallbackQuery):
+    from database import VALID_CHURN_REASONS, save_churn_feedback
+    reason = callback.data.split(":", 1)[1]
+    if reason not in VALID_CHURN_REASONS:
+        await safe_answer(callback, "Неизвестный вариант.", alert=True)
+        return
+    await safe_answer(callback)
+    try:
+        saved = await save_churn_feedback(callback.from_user.id, reason)
+    except Exception as exc:
+        logger.error("Churn feedback storage failed (%s)", type(exc).__name__)
+        await callback.message.answer("Не удалось сохранить ответ. Попробуйте позже.")
+        return
+    if not saved:
+        await callback.message.answer("Ваш ответ уже учтён.")
+        return
+    if reason in {"connection", "payment"}:
+        await callback.message.answer(
+            "Спасибо за ответ. Если хотите восстановить доступ или решить проблему, "
+            "откройте поддержку: @ByMeVPNSupportBot."
+        )
+    else:
+        await callback.message.answer("Спасибо за ответ. Больше ничего делать не нужно.")
 
 
 @router.callback_query(F.data == "free_vpn")

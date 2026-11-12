@@ -197,6 +197,13 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
             "status": "active", "plan_code": "1m_d2", "seconds_remaining": 86_400,
             "max_devices": 2, "active_devices": 0, "subscription_url": "https://example.invalid/sub",
         }
+        # Subscription/entitlement integration tests do not exercise refresh
+        # storage. Mock token issuance independently from JWT token formatting.
+        self.session_tokens_patch = patch.object(
+            api_router, "issue_session_tokens",
+            new=AsyncMock(return_value={"access": "test-access-token", "refresh": "test-refresh-token"}),
+        )
+        self.session_tokens_patch.start()
         self.subscription_patch = patch.object(
             api_router, "get_user_real_subscription",
             new=AsyncMock(return_value=("https://example.invalid/sub", [], dict(self.active))),
@@ -261,6 +268,7 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
         self.trial_pending_patch.start()
 
     def tearDown(self):
+        self.session_tokens_patch.stop()
         self.env_patch.stop()
         self.api_key_loader_patch.stop()
         self.bootstrap_delete_patch.stop()

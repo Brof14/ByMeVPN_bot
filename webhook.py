@@ -387,12 +387,54 @@ async def yookassa_webhook(request: Request) -> Response:
         logger.info("Webhook: skipping - not payment.succeeded or no payment_id")
         return Response(status_code=200)
 
-    # Schedule async processing — respond immediately to YooKassa
-    bot: Bot = app.state.bot
-    logger.info("Webhook: scheduling payment processing for %s", payment_id)
-    asyncio.create_task(_process_payment(bot, payment_id))
+    # Never acknowledge an event which is only in an in-memory task.
+    # A terminated worker must be able to replay this event after a restart.
+    from database import record_yookassa_webhook
+    try:
+        await record_yookassa_webhook(payment_id)
+    except Exception as exc:
+        logger.error("YooKassa inbox persistence failed (%s)", type(exc).__name__)
+        return Response(status_code=503)
 
+    bot: Bot = app.state.bot
+    asyncio.create_task(_process_recorded_yookassa_webhook(bot, payment_id))
     return Response(status_code=200)
+
+
+async def _process_recorded_yookassa_webhook(
+    bot: Bot, payment_id: str, verified_payment: Optional[dict] = None,
+) -> None:
+    """Process a persisted notification; only discard after verified resolution."""
+    from database import (
+        defer_yookassa_webhook, is_yookassa_fulfilled, resolve_yookassa_webhook,
+    )
+    try:
+        if await is_yookassa_fulfilled(payment_id):
+            await resolve_yookassa_webhook(payment_id)
+            return
+        payment = verified_payment or await _fetch_yookassa_payment(payment_id)
+        if not payment:
+            await defer_yookassa_webhook(payment_id, "provider_unavailable")
+            return
+        status = payment.get("status")
+        if status == "canceled":
+            await resolve_yookassa_webhook(payment_id)
+            return
+        if status != "succeeded":
+            await defer_yookassa_webhook(payment_id, str(status or "unknown"))
+            return
+        await _process_payment(bot, payment_id, verified_payment=payment)
+        if await is_yookassa_fulfilled(payment_id):
+            await resolve_yookassa_webhook(payment_id)
+        else:
+            # Keep quarantined/uncertain settlements visible to operators.
+            await defer_yookassa_webhook(payment_id, "fulfillment_pending")
+    except Exception as exc:
+        logger.error("Durable webhook processing failed (%s)", type(exc).__name__)
+        try:
+            await defer_yookassa_webhook(payment_id, "processing_error")
+        except Exception:
+            logger.exception("Failed to defer persisted YooKassa event %s", payment_id)
 
 
 async def _mobile_yookassa_order_matches(

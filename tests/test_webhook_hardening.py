@@ -75,6 +75,23 @@ class TestYooKassaWebhookHardening(unittest.IsolatedAsyncioTestCase):
         response = await webhook.yookassa_webhook(_Request("185.71.76.12", body))
         self.assertEqual(response.status_code, 200)
 
+    async def test_succeeded_event_rejects_when_inbox_cannot_persist(self):
+        body = json.dumps({"event": "payment.succeeded", "object": {"id": "payment_123"}}).encode()
+        with patch("database.record_yookassa_webhook", new=AsyncMock(side_effect=OSError("offline"))):
+            response = await webhook.yookassa_webhook(_Request("185.71.76.12", body))
+        self.assertEqual(response.status_code, 503)
+
+    async def test_succeeded_event_acknowledges_only_after_durable_record(self):
+        body = json.dumps({"event": "payment.succeeded", "object": {"id": "payment_123"}}).encode()
+        webhook.app.state.bot = object()
+        with patch("database.record_yookassa_webhook", new=AsyncMock()) as record, \
+             patch.object(webhook, "_process_recorded_yookassa_webhook", new=AsyncMock()) as handle:
+            response = await webhook.yookassa_webhook(_Request("185.71.76.12", body))
+            await __import__("asyncio").sleep(0)
+        self.assertEqual(response.status_code, 200)
+        record.assert_awaited_once_with("payment_123")
+        handle.assert_awaited_once_with(webhook.app.state.bot, "payment_123")
+
     async def test_malformed_payment_id_is_rejected(self):
         body = json.dumps({"event": "payment.succeeded", "object": {"id": "../../bad"}}).encode()
         response = await webhook.yookassa_webhook(_Request("185.71.76.12", body))

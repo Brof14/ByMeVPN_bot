@@ -62,10 +62,14 @@ class PaymentMonitor:
 
             # The provider time window is only a fast path. Persistent checkout
             # IDs cover payments older than the window and failed deliveries.
-            from database import get_all_yookassa_pending
+            from database import get_all_yookassa_pending, get_due_yookassa_webhooks
             pending_ids = await get_all_yookassa_pending()
+            webhook_ids = await get_due_yookassa_webhooks()
             known_ids = {payment.get("id") for payment in payments}
-            payments.extend({"id": payment_id} for payment_id in pending_ids if payment_id not in known_ids)
+            for payment_id in [*pending_ids, *webhook_ids]:
+                if payment_id not in known_ids:
+                    payments.append({"id": payment_id})
+                    known_ids.add(payment_id)
             
             if not payments:
                 return
@@ -73,6 +77,7 @@ class PaymentMonitor:
             logger.info("Checking %d recent or locally tracked YooKassa payment(s)", len(payments))
             
             pending_set = set(pending_ids)
+            webhook_set = set(webhook_ids)
             for payment in payments:
                 payment_id = payment.get('id')
                 if not payment_id:
@@ -97,10 +102,21 @@ class PaymentMonitor:
                             from database import defer_yookassa_pending_check
                             await defer_yookassa_pending_check(payment_id, status or "unknown")
                         continue
-                    await _process_payment(self.bot, payment_id, verified_payment=verified)
+                    if payment_id in webhook_set:
+                        from webhook import _process_recorded_yookassa_webhook
+                        await _process_recorded_yookassa_webhook(
+                            self.bot, payment_id, verified_payment=verified,
+                        )
+                    else:
+                        await _process_payment(self.bot, payment_id, verified_payment=verified)
                 else:
-                    # The provider list contains successful payments only.
-                    await _process_payment(self.bot, payment_id)
+                    # Provider listing / durable webhook inbox may contain
+                    # a recovered event which needs a fresh provider check.
+                    if payment_id in webhook_set:
+                        from webhook import _process_recorded_yookassa_webhook
+                        await _process_recorded_yookassa_webhook(self.bot, payment_id)
+                    else:
+                        await _process_payment(self.bot, payment_id)
                 
                 logger.info("YooKassa payment check finished: %s", payment_id)
                 

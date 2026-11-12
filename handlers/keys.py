@@ -444,11 +444,13 @@ async def cb_key_diagnostics(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     now = int(time.time())
     local_active = int(key.get("expiry") or 0) > now
+    panel_checked = False
     panel_ok = False
     device_line = "Состояние устройств проверить не удалось."
     try:
         from xui_client import get_xui_client_details
         panel = await get_xui_client_details(callback.from_user.id, strict=True)
+        panel_checked = True
         panel_ok = bool(
             panel and panel.get("enable")
             and int(panel.get("expiry_time") or 0) > now * 1000
@@ -462,7 +464,11 @@ async def cb_key_diagnostics(callback: CallbackQuery, bot: Bot):
         logger.warning("Connection diagnostics failed (%s)", type(exc).__name__)
 
     local_text = "активна" if local_active else "завершена"
-    panel_text = "активен" if panel_ok else "не подтверждён"
+    panel_text = (
+        "активен" if panel_ok else
+        "не подтверждён" if panel_checked else
+        "проверка временно недоступна"
+    )
     text = (
         "<b>Проверка подключения</b>\n\n"
         f"Подписка в ByMeVPN: <b>{local_text}</b>.\n"

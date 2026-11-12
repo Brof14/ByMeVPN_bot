@@ -39,6 +39,18 @@ class TestPlansHttpContract(unittest.TestCase):
                         {2, 5, 10},
                     )
 
+    def test_discount_is_computed_for_each_device_tier(self):
+        from constants import TARIFF_DAYS
+        for devices in (2, 5, 10):
+            response = self.client.get(f"/api/v1/plans?devices={devices}")
+            self.assertEqual(response.status_code, 200)
+            baseline = get_price_for_months(1, devices)[0]
+            for plan, months in zip(response.json()["plans"], (1, 3, 6, 12)):
+                expected = round(
+                    100 * (1 - plan["price_rub"] / (baseline * (TARIFF_DAYS[months] // 30)))
+                )
+                self.assertEqual(plan["discount_percent"], expected)
+
     def test_unsupported_device_tier_is_rejected_over_http(self):
         response = self.client.get("/api/v1/plans?devices=3")
         self.assertEqual(response.status_code, 400)

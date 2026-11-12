@@ -5,6 +5,8 @@ VPN purchase flow:
 import asyncio
 import time
 import logging
+import hashlib
+import json
 import weakref
 
 from aiogram import Bot, F, Router
@@ -26,7 +28,7 @@ from constants import (
 from config import PRICE_1_MONTH, DAYS_1M
 from states import BuyFlow, PromoFlow
 from keyboards import tariff_selection_kb, payment_kb, support_url
-from payments import create_yookassa_payment, create_crypto_payment, claim_yookassa_checkout, release_yookassa_checkout, crypto_invoice_payload, record_fulfilled_promo
+from payments import create_yookassa_payment, create_crypto_payment, crypto_invoice_payload, record_fulfilled_promo
 from subscription import deliver_key
 from database import (
     ensure_user,
@@ -549,8 +551,22 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
     save_payment_method = callback.data == "pay_yookassa_autorenew" or params["autorenew_enabled"]
     next_charge_rub, next_charge_days = get_price_for_months(months, devices)
 
-    if not claim_yookassa_checkout(user_id):
-        await callback.message.answer("Запрос на оплату уже выполняется. Подождите немного.")
+    # The fingerprint binds retries to the *exact* confirmed order. A
+    # per-process set is not enough when multiple bot workers are running.
+    from database import claim_yookassa_checkout_attempt, release_yookassa_checkout_attempt
+    fingerprint = hashlib.sha256(json.dumps(
+        [price_rub, days, months, devices, promo_code,
+         params.get("renew_key_id") or 0, bool(save_payment_method)],
+        separators=(",", ":"), ensure_ascii=False,
+    ).encode("utf-8")).hexdigest()
+    try:
+        lease = await claim_yookassa_checkout_attempt(user_id, fingerprint)
+    except Exception as exc:
+        logger.error("Checkout claim unavailable for user %s (%s)", user_id, type(exc).__name__)
+        await callback.message.answer("Не удалось сохранить оформление. Попробуйте немного позже.")
+        return
+    if not lease:
+        await callback.message.answer("Запрос на оплату уже выполняется. Повторите через несколько секунд.")
         return
     recurring_checkout = save_payment_method
     try:
@@ -567,6 +583,7 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
             },
             save_payment_method=save_payment_method,
             return_payment_details=True,
+            idempotency_key=lease["idempotency_key"],
         )
         if isinstance(created, dict):
             url = created.get("payment_url")
@@ -579,7 +596,7 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
         logger.error("YooKassa checkout failed for user %d (%s)", user_id, type(exc).__name__)
         url = None
     finally:
-        release_yookassa_checkout(user_id)
+        await release_yookassa_checkout_attempt(user_id, lease["token"])
 
     if not url:
         await safe_answer(callback)
