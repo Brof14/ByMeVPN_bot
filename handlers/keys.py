@@ -221,7 +221,12 @@ async def _key_info_content(user_id: int, k: dict) -> tuple[str, object]:
 
     devices_info = ""
     try:
-        device_state = await get_xui_devices(user_id)
+        # The subscription screen must remain usable when the panel is slow.
+        # Detailed device management can still fetch the complete list on demand.
+        device_state = await asyncio.wait_for(get_xui_devices(user_id), timeout=0.35)
+    except asyncio.TimeoutError:
+        device_state = None
+        logger.info("Device count timed out for user %s", user_id)
     except Exception:
         device_state = None
         logger.warning("Failed to get device count for user %s", user_id, exc_info=True)
