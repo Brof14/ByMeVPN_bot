@@ -1617,7 +1617,6 @@ async def get_google_desktop_client():
     """Public OAuth client ID only: desktop PKCE never ships a client secret."""
     if not _google_signin_configured():
         raise HTTPException(status_code=503, detail="Вход через Google временно недоступен")
-    await require_auth_quota(request, "google_desktop_ip", limit=30, window_seconds=600)
     client_id = os.getenv("GOOGLE_DESKTOP_CLIENT_ID", "").strip()
     if (not client_id.endswith(".apps.googleusercontent.com")
             or not re.fullmatch(r"[A-Za-z0-9_-]+\.apps\.googleusercontent\.com", client_id)):
@@ -1652,6 +1651,7 @@ async def exchange_google_desktop_code(req: GoogleDesktopCodeRequest, request: R
     """
     if not _google_signin_configured():
         raise HTTPException(status_code=503, detail="Вход через Google временно недоступен")
+    await require_auth_quota(request, "google_desktop_ip", limit=30, window_seconds=600)
     client_id = os.getenv("GOOGLE_DESKTOP_CLIENT_ID", "").strip()
     client_secret = os.getenv("GOOGLE_DESKTOP_CLIENT_SECRET", "").strip()
     if not client_secret or not re.fullmatch(r"[A-Za-z0-9_-]+\.apps\.googleusercontent\.com", client_id):
