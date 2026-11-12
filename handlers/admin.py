@@ -2700,6 +2700,7 @@ async def cb_system_status(callback: CallbackQuery, bot: Bot):
     import time
     import sqlite3
     from config import DB_FILE, XUI_URL, XUI_USERNAME
+    from release_info import release_identity
     from cache import get_cache_stats
     
     # Database stats
@@ -2740,8 +2741,12 @@ async def cb_system_status(callback: CallbackQuery, bot: Bot):
     ]
     history_text = "\n".join(history_lines) or "  История появится после первой минуты работы"
     
+    release = release_identity()
     text = (
         f"⚙️ <b>Состояние системы ByMeVPN</b>\n\n"
+        f"📦 <b>Релиз:</b> <code>{escape(release['sha'])}</code>\n"
+        f"  Сборка: {escape(release['built_at'])}\n"
+        f"  Образ: <code>{escape(release['image_digest'])}</code>\n\n"
         f"📊 <b>База данных:</b>\n"
         f"  Размер: {db_size:.2f} MB\n"
         f"  Пользователей: {total_users}\n\n"

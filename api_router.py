@@ -130,6 +130,20 @@ async def _ensure_auth_db():
     await db.commit()
 
 
+def validate_registration_credentials(email: str, password: str) -> None:
+    """Reject malformed and excessively weak new identities without touching legacy logins."""
+    if (
+        len(email) > 254
+        or not re.fullmatch(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,63}", email)
+        or ".." in email
+        or email.startswith(".")
+        or email.split("@", 1)[1].startswith("-")
+    ):
+        raise HTTPException(status_code=400, detail="Некорректный формат email")
+    if not 10 <= len(password) <= 128 or "\x00" in password:
+        raise HTTPException(status_code=400, detail="Пароль должен содержать от 10 до 128 символов")
+
+
 def hash_password(password: str, salt: str) -> str:
     """Generate salted PBKDF2-HMAC-SHA256 hash."""
     return hashlib.pbkdf2_hmac(
@@ -1481,10 +1495,7 @@ async def cancel_telegram_session(req: TelegramSessionCancelRequest):
 async def register(req: RegisterRequest, request: Request):
     await _ensure_auth_db()
     email = req.email.strip().lower()
-    if not email or "@" not in email:
-        raise HTTPException(status_code=400, detail="Некорректный формат email")
-    if len(req.password) < 6:
-        raise HTTPException(status_code=400, detail="Пароль должен содержать не менее 6 символов")
+    validate_registration_credentials(email, req.password)
 
     db = await database.get_db()
     cur = await db.execute("SELECT user_id FROM app_users WHERE email = ?", (email,))
