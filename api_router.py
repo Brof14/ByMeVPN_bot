@@ -1820,11 +1820,25 @@ async def refresh_token(req: RefreshRequest):
     if not claims:
         raise HTTPException(status_code=401, detail="Сессия истекла")
     try:
-        if await database.is_mobile_jwt_revoked(claims["jti"]):
-            raise HTTPException(status_code=401, detail="Сессия завершена")
         if await _is_removed_account(claims["user_id"]):
             raise HTTPException(status_code=401, detail="Аккаунт удалён")
-        return await issue_session_tokens(claims["user_id"], claims["email"])
+        now = int(time.time())
+        new_expiry = now + 30 * 86400
+        new_jti = secrets.token_urlsafe(18)
+        new_refresh = "rf2_" + secrets.token_urlsafe(40)
+        new_access = create_simple_jwt(
+            claims["user_id"], claims["email"],
+            issued_at=now, expires_at=new_expiry, jwt_id=new_jti,
+        )
+        upgraded = await database.upgrade_legacy_mobile_refresh(
+            claims["jti"], claims["expires_at"],
+            claims["user_id"], claims["email"],
+            hashlib.sha256(new_refresh.encode("ascii")).hexdigest(),
+            new_jti, new_expiry, now + REFRESH_TOKEN_DAYS * 86400,
+        )
+        if not upgraded:
+            raise HTTPException(status_code=401, detail="Сессия завершена")
+        return {"access": new_access, "refresh": new_refresh}
     except HTTPException:
         raise
     except Exception as exc:

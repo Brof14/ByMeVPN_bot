@@ -26,6 +26,7 @@ def install_mobile_refresh_storage_compat(adapter) -> None:
     if all(callable(getattr(adapter, name, None)) for name in (
         "create_mobile_refresh_session", "rotate_mobile_refresh_session",
         "revoke_mobile_refresh_for_access",
+        "upgrade_legacy_mobile_refresh",
     )):
         return
 
@@ -81,6 +82,47 @@ def install_mobile_refresh_storage_compat(adapter) -> None:
                 await db.rollback()
                 raise
 
+    async def upgrade_legacy_mobile_refresh(
+        old_jti, old_access_expiry, user_id, email, new_token_hash,
+        new_access_jti, new_access_expiry, new_refresh_expiry,
+    ):
+        """Atomic single-use legacy token exchange on the bound DB."""
+        db = await adapter.get_db()
+        now = int(time.time())
+        if int(old_access_expiry) <= now:
+            return False
+        async with adapter._db_semaphore:
+            await db.executescript(SCHEMA)
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS revoked_mobile_jwt_sessions "
+                "(jti TEXT PRIMARY KEY, expires_at INTEGER NOT NULL)"
+            )
+            await db.commit()
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                await db.execute(
+                    "DELETE FROM revoked_mobile_jwt_sessions WHERE expires_at<=?", (now,)
+                )
+                cur = await db.execute(
+                    "INSERT OR IGNORE INTO revoked_mobile_jwt_sessions(jti,expires_at) "
+                    "VALUES(?,?)", (old_jti, int(old_access_expiry)),
+                )
+                if cur.rowcount != 1:
+                    await db.rollback()
+                    return False
+                await db.execute(
+                    "INSERT INTO mobile_refresh_sessions "
+                    "(token_hash,user_id,email,access_jti,access_expires_at,created_at,expires_at) "
+                    "VALUES(?,?,?,?,?,?,?)",
+                    (new_token_hash, int(user_id), email, new_access_jti,
+                     int(new_access_expiry), now, int(new_refresh_expiry)),
+                )
+                await db.commit()
+                return True
+            except Exception:
+                await db.rollback()
+                raise
+
     async def revoke_mobile_refresh_for_access(access_jti):
         db = await adapter.get_db()
         async with adapter._db_semaphore:
@@ -97,3 +139,5 @@ def install_mobile_refresh_storage_compat(adapter) -> None:
         adapter.rotate_mobile_refresh_session = rotate_mobile_refresh_session
     if not callable(getattr(adapter, "revoke_mobile_refresh_for_access", None)):
         adapter.revoke_mobile_refresh_for_access = revoke_mobile_refresh_for_access
+    if not callable(getattr(adapter, "upgrade_legacy_mobile_refresh", None)):
+        adapter.upgrade_legacy_mobile_refresh = upgrade_legacy_mobile_refresh

@@ -2558,6 +2558,53 @@ async def revoke_mobile_jwt(jti: str, expires_at: int) -> None:
         await db.commit()
 
 
+async def upgrade_legacy_mobile_refresh(
+    old_jti: str, old_access_expiry: int, user_id: int, email: str,
+    new_token_hash: str, new_access_jti: str,
+    new_access_expiry: int, new_refresh_expiry: int,
+) -> bool:
+    """Atomically consume one legacy refresh JWT and issue its replacement.
+
+    A network retry must never mint a second independent session. An INSERT
+    failure rolls back revocation, so valid customers can retry safely.
+    """
+    db = await get_db()
+    now = int(time.time())
+    if int(old_access_expiry) <= now:
+        return False
+    async with _db_semaphore:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            await db.execute(
+                "DELETE FROM revoked_mobile_jwt_sessions WHERE expires_at<=?", (now,)
+            )
+            removed = await db.execute(
+                "SELECT 1 FROM account_tombstones WHERE user_id=?", (int(user_id),)
+            )
+            if await removed.fetchone():
+                await db.rollback()
+                return False
+            inserted = await db.execute(
+                "INSERT OR IGNORE INTO revoked_mobile_jwt_sessions(jti,expires_at) "
+                "VALUES(?,?)", (old_jti, int(old_access_expiry)),
+            )
+            if inserted.rowcount != 1:
+                await db.rollback()
+                return False
+            await db.execute(
+                "INSERT INTO mobile_refresh_sessions "
+                "(token_hash,user_id,email,access_jti,access_expires_at,created_at,expires_at) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (new_token_hash, int(user_id), email, new_access_jti,
+                 int(new_access_expiry), now, int(new_refresh_expiry)),
+            )
+            await db.commit()
+            return True
+        except Exception:
+            await db.rollback()
+            raise
+
+
 async def create_mobile_refresh_session(
     token_hash: str, user_id: int, email: str,
     access_jti: str, access_expires_at: int, expires_at: int,
