@@ -327,7 +327,7 @@ async def _deliver_key_unlocked(
                     else:
                         key_to_show = existing_key
                 except Exception as e:
-                    logger.exception("Failed to get fresh subscription URL for user %d: %s", user_id, e)
+                    logger.error("Failed to get fresh subscription URL for user %d (%s)", user_id, type(e).__name__)
                     key_to_show = existing_key
 
                 title = (
@@ -572,14 +572,14 @@ async def _deliver_key_unlocked(
         # Ключ создан в 3x-ui, но не может быть доставлен
         return False
     except Exception as e:
-        logger.exception("deliver_key FAILED for user=%d name='%s': %s", user_id, config_name, e)
+        logger.error("deliver_key FAILED for user=%d (%s)", user_id, type(e).__name__)
 
         # Логируем ошибку в БД для отслеживания в админ-панели
         try:
             await log_key_error(
                 user_id=user_id,
                 error_type="subscription_creation_failed",
-                error_message=str(e),
+                error_message=type(e).__name__,
                 context={
                     "config_name": config_name,
                     "days": days,
@@ -587,11 +587,10 @@ async def _deliver_key_unlocked(
                     "is_paid": is_paid,
                     "amount": amount,
                     "method": method,
-                    "payload": payload
                 }
             )
         except Exception as log_error:
-            logger.error("Failed to log key error: %s", log_error)
+            logger.error("Failed to log key error (%s)", type(log_error).__name__)
 
         # Для платных платежей уведомляем админа об ошибке
         if is_paid:
@@ -604,8 +603,7 @@ async def _deliver_key_unlocked(
                     f"⏳ Дней: {days}\n"
                     f"💰 Сумма: {amount} {currency}\n"
                     f"🔧 Метод: {method}\n"
-                    f"🎫 Payload: {payload}\n"
-                    f"❌ <code>{str(e)[:300]}</code>\n\n"
+                    f"❌ <code>{type(e).__name__}</code>\n\n"
                     f"⚠️ Необходимо вернуть деньги или выдать подписку вручную!",
                     parse_mode="HTML",
                 )
