@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 50294)
+Total output lines: 4416
+
 """
 Extended admin panel.
 Features: stats, extended stats, broadcast, user list, user search,
@@ -1443,13 +1446,12 @@ async def cb_del_user_prompt(callback: CallbackQuery):
         return
     await callback.message.edit_text(
         f"<b>Удалить пользователя {uid}?</b>\n\n"
-        "Все сохранённые способы автосписания будут отключены. Затем бот "
-        "попытается удалить VPN-клиента со всех серверов. Только после "
-        "подтверждения удаления в 3x-ui будут удалены локальные ключи.\n\n"
-        "Уже оплаченный доступ может быть потерян. Финансовые записи сохраняются для сверки.",
+        "Бот отключит автосписания и удалит VPN-клиента и пользовательские данные. "
+        "Финансовые записи останутся для сверки. Выберите, что делать при следующем /start:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Да, удалить доступ", callback_data=f"admin_del_user_confirm:{uid}", style="danger")],
+            [InlineKeyboardButton(text="Удалить и заблокировать", callback_data=f"admin_del_user_confirm:{uid}:block", style="danger")],
+            [InlineKeyboardButton(text="Удалить, разрешить начать заново", callback_data=f"admin_del_user_confirm:{uid}:rejoin", style="primary")],
             [InlineKeyboardButton(text="Отмена", callback_data=f"admin_user:{uid}")],
         ]),
     )
@@ -1461,7 +1463,13 @@ async def cb_del_user(callback: CallbackQuery, bot: Bot):
         await safe_answer(callback, "Нет доступа.", alert=True)
         return
     await safe_answer(callback)
-    uid = int(callback.data.split(":")[1])
+    parts = callback.data.split(":")
+    uid = int(parts[1])
+    delete_mode = parts[2] if len(parts) > 2 else "block"
+    if delete_mode not in {"block", "rejoin"}:
+        await safe_answer(callback, "Неизвестный режим удаления.", alert=True)
+        return
+    allow_rejoin = delete_mode == "rejoin"
     if uid in ADMIN_IDS:
         await callback.message.edit_text("Удаление администратора через бота запрещено.", reply_markup=_back_kb())
         return
@@ -1550,7 +1558,7 @@ async def cb_del_user(callback: CallbackQuery, bot: Bot):
             return
 
         try:
-            await delete_user_and_keys(uid)
+            await delete_user_and_keys(uid, allow_rejoin=allow_rejoin)
         except Exception:
             logger.exception("Admin deletion DB cleanup failed after panel removal for user %d", uid)
             await callback.message.edit_text(
@@ -1561,9 +1569,14 @@ async def cb_del_user(callback: CallbackQuery, bot: Bot):
             )
             return
 
+        next_step = (
+            "При следующем /start пользователь сможет зарегистрироваться заново и получить новый пробный период."
+            if allow_rejoin else
+            "Учётная запись заблокирована; воспользоваться ботом снова пользователь не сможет."
+        )
         await callback.message.edit_text(
-            f"VPN-клиент <code>{uid}</code> удалён из 3x-ui, локальные ключи и учётная запись удалены. "
-            "Автосписания отключены; финансовые записи сохранены для сверки.",
+            f"VPN-клиент <code>{uid}</code> удалён из 3x-ui, локальные данные очищены. "
+            "Финансовые записи сохранены для сверки.\n\n" + next_step,
             parse_mode="HTML",
             reply_markup=_back_kb(),
         )
@@ -2019,32 +2032,7 @@ async def cb_refund_confirm(callback: CallbackQuery, bot: Bot):
     try:
         payment_id = int(callback.data.split(":", 1)[1])
     except (ValueError, IndexError):
-        await safe_answer(callback, "Некорректный ID платежа.", alert=True)
-        return
-
-    payment = await get_payment_by_id(payment_id)
-    if not payment or payment.get("status") != "success":
-        await callback.message.edit_text(
-            "⚠️ Платёж не найден или уже требует сверки. Возврат не зафиксирован.",
-            reply_markup=_back_kb(),
-        )
-        return
-
-    refund_reference = payment.get("provider_payment_id") or payment.get("payload")
-    previous_refunds = await get_user_refunds(payment["user_id"])
-    if any(r.get("original_payload") == refund_reference for r in previous_refunds):
-        await callback.message.edit_text(
-            "⚠️ Возврат для этого платёжного идентификатора уже записан. Повторная запись заблокирована.",
-            reply_markup=_back_kb(),
-        )
-        return
-
-    await add_refund(
-        user_id=payment["user_id"],
-        amount=payment["amount"],
-        currency=payment["currency"],
-        method=payment["method"],
-        reason=f"Возврат платежа #{payment_id}, подтверждён администратором",
+       …294 tokens truncated…врат платежа #{payment_id}, подтверждён администратором",
         original_payload=refund_reference,
         refunded_by=callback.from_user.id,
     )

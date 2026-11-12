@@ -156,7 +156,7 @@ def tariff_selection_kb(
             ten_device_tier = InlineKeyboardButton(
                 text="10 устройств",
                 callback_data=f"devtier_{count}",
-                style="success" if count == devices else "primary",
+                style="primary",
                 icon_custom_emoji_id="5967591100532134862",
             )
         else:
@@ -193,7 +193,10 @@ def tariff_selection_kb(
             )
         if applies:
             label += f" · −{discount_percent}%"
-        kb.row(InlineKeyboardButton(text=label, callback_data=f"tariff_{months}_{devices}"))
+        kb.row(InlineKeyboardButton(
+            text=label, callback_data=f"tariff_{months}_{devices}",
+            icon_custom_emoji_id=None,
+        ))
 
     kb.row(InlineKeyboardButton(text="← Назад", callback_data="back_to_menu"))
     return kb.as_markup()
