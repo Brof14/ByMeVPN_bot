@@ -84,6 +84,17 @@ CREATE TABLE IF NOT EXISTS checkout_drafts (
     FOREIGN KEY(user_id) REFERENCES users(user_id)
 );
 
+-- A checkout lease serializes provider invoice creation even across bot processes.
+-- The attempt key is reused for short retries of the exact same confirmed order.
+CREATE TABLE IF NOT EXISTS yookassa_checkout_attempts (
+    user_id INTEGER PRIMARY KEY,
+    order_fingerprint TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    lease_token TEXT,
+    lease_expires_at INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS revoked_mobile_jwt_sessions (
     jti TEXT PRIMARY KEY,
     expires_at INTEGER NOT NULL
@@ -1215,6 +1226,67 @@ async def ensure_user(user_id: int, username: Optional[str] = None) -> None:
         (user_id, username, user_id),
     )
     await db.commit()
+
+
+async def claim_yookassa_checkout_attempt(user_id: int, order_fingerprint: str) -> Optional[dict]:
+    """Atomically claim invoice creation and reuse the provider key on retries.
+
+    At most one process may create an invoice for this user concurrently.
+    A repeated click on the same order for five minutes opens the same invoice.
+    After that interval a deliberate new purchase receives a new key.
+    """
+    if not re.fullmatch(r"[0-9a-f]{64}", str(order_fingerprint)):
+        raise ValueError("order fingerprint must be a SHA256 hex digest")
+    db = await get_db()
+    token = secrets.token_urlsafe(24)
+    now = int(time.time())
+    async with _db_semaphore:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await db.execute(
+                "SELECT order_fingerprint,idempotency_key,created_at,lease_expires_at "
+                "FROM yookassa_checkout_attempts WHERE user_id=?",
+                (int(user_id),),
+            )
+            existing = await cur.fetchone()
+            if existing and int(existing[3]) > now:
+                await db.rollback()
+                return None
+            if existing and existing[0] == order_fingerprint and now - int(existing[2]) < 300:
+                idempotency_key = str(existing[1])
+                created_at = int(existing[2])
+            else:
+                idempotency_key = secrets.token_hex(32)
+                created_at = now
+            await db.execute(
+                """INSERT INTO yookassa_checkout_attempts
+                   (user_id,order_fingerprint,idempotency_key,created_at,lease_token,lease_expires_at)
+                   VALUES(?,?,?,?,?,?)
+                   ON CONFLICT(user_id) DO UPDATE SET
+                   order_fingerprint=excluded.order_fingerprint,
+                   idempotency_key=excluded.idempotency_key,
+                   created_at=excluded.created_at,
+                   lease_token=excluded.lease_token,
+                   lease_expires_at=excluded.lease_expires_at""",
+                (int(user_id), order_fingerprint, idempotency_key, created_at, token, now + 90),
+            )
+            await db.commit()
+            return {"token": token, "idempotency_key": idempotency_key}
+        except Exception:
+            await db.rollback()
+            raise
+
+
+async def release_yookassa_checkout_attempt(user_id: int, token: str) -> None:
+    """Never release a lease acquired by a later checkout operation."""
+    db = await get_db()
+    async with _db_semaphore:
+        await db.execute(
+            "UPDATE yookassa_checkout_attempts SET lease_token=NULL, lease_expires_at=0 "
+            "WHERE user_id=? AND lease_token=?",
+            (int(user_id), token),
+        )
+        await db.commit()
 
 
 async def create_mobile_google_nonce(nonce_hash: str, expires_at: int) -> None:
