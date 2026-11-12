@@ -1537,7 +1537,7 @@ def _email_action_failure(exc: Exception) -> HTTPException:
 @auth_api.get("/email/verify-page")
 async def email_verify_page(token: str = ""):
     from email_account_pages import render_email_action_page
-    if not 32 <= len(token) <= 128:
+    if token and not 32 <= len(token) <= 128:
         raise HTTPException(status_code=400, detail="Ссылка недействительна")
     return render_email_action_page(token, "verify")
 
@@ -1545,7 +1545,7 @@ async def email_verify_page(token: str = ""):
 @auth_api.get("/password-reset/page")
 async def email_password_reset_page(token: str = ""):
     from email_account_pages import render_email_action_page
-    if not 32 <= len(token) <= 128:
+    if token and not 32 <= len(token) <= 128:
         raise HTTPException(status_code=400, detail="Ссылка недействительна")
     return render_email_action_page(token, "reset")
 
