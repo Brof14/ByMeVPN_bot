@@ -118,6 +118,37 @@ def _finances_kb() -> InlineKeyboardMarkup:
     ])
 
 
+@router.callback_query(F.data == "admin_churn_feedback")
+async def cb_admin_churn_feedback(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    from database import get_churn_feedback_summary
+    try:
+        summary = await get_churn_feedback_summary(90)
+    except Exception as exc:
+        logger.warning("Churn feedback report unavailable (%s)", type(exc).__name__)
+        await callback.message.answer("Отчёт пока недоступен.")
+        return
+    labels = {
+        "connection": "Не подключается",
+        "price": "Цена",
+        "not_needed": "Нет потребности",
+        "payment": "Проблемы оплаты",
+        "other": "Другое",
+    }
+    lines = ["<b>Причины ухода · 90 дней</b>", "",
+             "Добровольные ответы, не репрезентативны для всех клиентов."]
+    for key, count in sorted(summary.items(), key=lambda item: -item[1]):
+        lines.append(f"{labels.get(key, 'Другое')}: {count}")
+    if not summary:
+        lines.append("Нет ответов.")
+    await callback.message.edit_text(
+        "\n".join(lines), parse_mode="HTML", reply_markup=_growth_kb(),
+    )
+
+
 @router.callback_query(F.data == "admin_source_revenue")
 async def cb_admin_source_revenue(callback: CallbackQuery):
     """Show measured revenue without pretending it is profit or ROAS."""
@@ -199,6 +230,7 @@ def _growth_kb() -> InlineKeyboardMarkup:
          InlineKeyboardButton(text="Оплаты / конверсия", callback_data="admin_checkout_funnel")],
         [InlineKeyboardButton(text="Органический рост", callback_data="admin_referral_funnel")],
         [InlineKeyboardButton(text="Выручка по источникам", callback_data="admin_source_revenue")],
+        [InlineKeyboardButton(text="Причины ухода", callback_data="admin_churn_feedback")],
         [InlineKeyboardButton(text="Проверка рефералов", callback_data="admin_referral_risk")],
         [InlineKeyboardButton(text="Рассылки", callback_data="admin_broadcast")],
         [InlineKeyboardButton(text="← Главное меню", callback_data="admin_menu")],

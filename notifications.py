@@ -198,6 +198,7 @@ async def _send_winback_notification(bot: Bot, item: dict) -> bool:
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Вернуть доступ", callback_data=_renewal_callback(item))],
         [InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn")],
+        [InlineKeyboardButton(text="Сообщить причину ухода", callback_data="winback_feedback")],
         [InlineKeyboardButton(text="Не присылать предложения", callback_data="marketing_optout")],
     ])
     await bot.send_message(user_id, text, parse_mode="HTML", reply_markup=kb)

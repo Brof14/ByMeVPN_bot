@@ -86,6 +86,13 @@ CREATE TABLE IF NOT EXISTS checkout_drafts (
 
 -- A checkout lease serializes provider invoice creation even across bot processes.
 -- The attempt key is reused for short retries of the exact same confirmed order.
+CREATE TABLE IF NOT EXISTS churn_feedback (
+    user_id INTEGER PRIMARY KEY,
+    reason TEXT NOT NULL,
+    recorded_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_churn_feedback_time ON churn_feedback(recorded_at);
+
 CREATE TABLE IF NOT EXISTS yookassa_checkout_attempts (
     user_id INTEGER PRIMARY KEY,
     order_fingerprint TEXT NOT NULL,
@@ -1349,6 +1356,36 @@ async def get_recent_client_diagnostics(user_id: int, limit: int = 10) -> list[d
         dict(zip(("id", "platform", "stage", "error_code", "app_version", "created_at"), row))
         for row in await cur.fetchall()
     ]
+
+
+VALID_CHURN_REASONS = frozenset({
+    "connection", "price", "not_needed", "payment", "other",
+})
+
+
+async def save_churn_feedback(user_id: int, reason: str) -> bool:
+    """Optional one-response customer survey; no free-text or sensitive logs."""
+    if reason not in VALID_CHURN_REASONS:
+        raise ValueError("Unsupported churn feedback reason")
+    db = await get_db()
+    async with _db_semaphore:
+        cursor = await db.execute(
+            "INSERT OR IGNORE INTO churn_feedback(user_id,reason,recorded_at) VALUES(?,?,?)",
+            (int(user_id), reason, int(time.time())),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def get_churn_feedback_summary(days: int = 90) -> dict[str, int]:
+    if not 1 <= int(days) <= 365:
+        raise ValueError("Unsupported feedback window")
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT reason, COUNT(*) FROM churn_feedback WHERE recorded_at>=? GROUP BY reason",
+        (int(time.time()) - days * 86400,),
+    )
+    return {str(reason): int(count) for reason, count in await cur.fetchall()}
 
 
 async def create_mobile_google_nonce(nonce_hash: str, expires_at: int) -> None:
@@ -5027,6 +5064,7 @@ async def delete_user_and_keys(user_id: int, *, source: str = "admin") -> list[s
                     ("mobile_auth_sessions", "user_id"),
                     ("mobile_refresh_sessions", "user_id"),
                     ("client_diagnostics", "user_id"),
+                    ("churn_feedback", "user_id"),
                     ("yookassa_checkout_attempts", "user_id"),
                     ("marketing_preferences", "user_id"),
                     ("analytics_events", "user_id"),
