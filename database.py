@@ -213,6 +213,18 @@ CREATE TABLE IF NOT EXISTS yookassa_processed (
     processed   INTEGER DEFAULT (strftime('%s','now'))
 );
 
+-- Provider notifications are acknowledged only after their IDs have been
+-- persisted. The monitor retries interrupted processing after restarts.
+CREATE TABLE IF NOT EXISTS yookassa_webhook_inbox (
+    payment_id TEXT PRIMARY KEY,
+    received_at INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_check INTEGER NOT NULL DEFAULT 0,
+    last_status TEXT NOT NULL DEFAULT 'received'
+);
+CREATE INDEX IF NOT EXISTS idx_yookassa_webhook_inbox_due
+    ON yookassa_webhook_inbox(next_check,received_at);
+
 -- Unsettled YooKassa checkout IDs. These durable IDs let the monitor recover
 -- paid orders after outages that exceed its short provider query window.
 CREATE TABLE IF NOT EXISTS yookassa_pending (
@@ -2903,6 +2915,67 @@ async def mark_yookassa_processed(payment_id: str) -> None:
         (payment_id,),
     )
     await db.commit()
+
+
+async def record_yookassa_webhook(payment_id: str) -> None:
+    """Write-ahead durable inbox; duplicates cannot create duplicate jobs."""
+    db = await get_db()
+    async with _db_semaphore:
+        await db.execute(
+            "INSERT OR IGNORE INTO yookassa_webhook_inbox(payment_id,received_at) VALUES(?,?)",
+            (str(payment_id), int(time.time())),
+        )
+        await db.commit()
+
+
+async def get_due_yookassa_webhooks(limit: int = 100) -> list[str]:
+    """Read only notifications eligible for a bounded recovery attempt."""
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT payment_id FROM yookassa_webhook_inbox WHERE next_check<=? "
+        "ORDER BY received_at ASC LIMIT ?",
+        (int(time.time()), max(1, min(int(limit), 500))),
+    )
+    return [str(row[0]) for row in await cur.fetchall()]
+
+
+async def resolve_yookassa_webhook(payment_id: str) -> None:
+    db = await get_db()
+    async with _db_semaphore:
+        await db.execute(
+            "DELETE FROM yookassa_webhook_inbox WHERE payment_id=?", (payment_id,),
+        )
+        await db.commit()
+
+
+async def defer_yookassa_webhook(payment_id: str, reason: str = "unavailable") -> None:
+    db = await get_db()
+    async with _db_semaphore:
+        cur = await db.execute(
+            "SELECT attempts FROM yookassa_webhook_inbox WHERE payment_id=?",
+            (payment_id,),
+        )
+        row = await cur.fetchone()
+        if row:
+            attempts = int(row[0])
+            delay = min(600, 30 * (2 ** min(attempts, 4)))
+            await db.execute(
+                "UPDATE yookassa_webhook_inbox SET attempts=attempts+1, "
+                "next_check=?, last_status=? WHERE payment_id=?",
+                (int(time.time()) + delay, reason[:48], payment_id),
+            )
+            await db.commit()
+
+
+async def is_yookassa_fulfilled(payment_id: str) -> bool:
+    """The payment ledger's success state, not a legacy marker, proves delivery."""
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT 1 FROM payments WHERE provider='yookassa' "
+        "AND provider_payment_id=? AND status='success' LIMIT 1",
+        (payment_id,),
+    )
+    return await cur.fetchone() is not None
 
 
 async def add_yookassa_pending(

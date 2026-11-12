@@ -63,6 +63,7 @@ class TestPaymentMonitorRecovery(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(monitor, "get_successful_payments", new=AsyncMock(return_value=[{"id": "legacy-marked-payment"}])),
             patch("database.get_all_yookassa_pending", new=AsyncMock(return_value=[])),
+            patch("database.get_due_yookassa_webhooks", new=AsyncMock(return_value=[])),
             patch("payment_monitor._process_payment", new=AsyncMock()) as process_payment,
         ):
             await monitor.check_and_process_payments()
