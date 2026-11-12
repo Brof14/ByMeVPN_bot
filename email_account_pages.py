@@ -50,7 +50,9 @@ padding:15px;font:600 16px system-ui;cursor:pointer}button:disabled{opacity:.6}
 <p id="status" role="status" aria-live="polite"></p>
 <p><a href="https://t.me/ByMeVPNSupportBot">Поддержка ByMeVPN</a></p>
 </main><script>
-const ticket=__TOKEN__,purpose=__PURPOSE__,endpoint=__ENDPOINT__;
+const ticket=__TOKEN__||new URLSearchParams(window.location.hash.slice(1)).get('token')||'';
+const purpose=__PURPOSE__,endpoint=__ENDPOINT__;
+if(window.location.hash)window.history.replaceState(null,'',window.location.pathname+window.location.search);
 const form=document.getElementById('form'),status=document.getElementById('status');
 form.addEventListener('submit',async(e)=>{
  e.preventDefault();const button=document.getElementById('confirm');button.disabled=true;
