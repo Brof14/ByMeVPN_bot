@@ -760,10 +760,26 @@ async def get_user_real_subscription(
         }
 
     # Fetch and parse real nodes from 3x-ui
+    # A subscription link alone must not manufacture a month of paid access.
+    if not expiry_ts:
+        return None, [], {
+            "status": "unknown",
+            "plan_code": None,
+            "plan_name": "Срок подписки не подтверждён",
+            "trial_available": False,
+            "trial_unavailable_reason": "subscription_verification_required",
+            "access_ready": False,
+            "config_status": "unverified",
+            "max_devices": device_limit,
+            "active_devices": 0,
+            "server_time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "subscription_url": None,
+        }
+
     servers = await fetch_and_parse_real_nodes(sub_url, sub_uuid, request_headers)
 
-    seconds_remaining = max(0, expiry_ts - now) if expiry_ts else 30 * 86400
-    expires_at = time.strftime("%Y-%m-%d %H:%M", time.localtime(expiry_ts)) if expiry_ts else None
+    seconds_remaining = max(0, expiry_ts - now)
+    expires_at = time.strftime("%Y-%m-%d %H:%M", time.localtime(expiry_ts))
 
     period_code = {30: "1m", 120: "3m", 240: "6m", 450: "12m"}.get(days_count)
     plan_code = f"{period_code}_d{device_limit}" if period_code else None
@@ -791,6 +807,9 @@ async def get_user_real_subscription(
         "max_devices": device_limit,
         "trial_available": False,
         "subscription_url": sub_url,
+        # Entitlement and ability to obtain a usable VPN configuration differ.
+        "config_status": "ready" if servers else "unavailable",
+        "access_ready": bool(servers),
     }
     if active_devices is not None:
         sub_dict["active_devices"] = active_devices
@@ -1450,17 +1469,14 @@ async def register(req: RegisterRequest, request: Request):
 
     salt = secrets.token_hex(16)
     pw_hash = hash_password(req.password, salt)
-    user_id = int(hashlib.md5(email.encode()).hexdigest()[:8], 16)
-    if await _is_removed_account(user_id):
-        raise HTTPException(status_code=403, detail="Этот аккаунт удалён. Обратитесь в поддержку")
-    now = int(time.time())
-
-    await db.execute(
-        "INSERT INTO app_users (user_id, email, password_hash, salt, name, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (user_id, email, pw_hash, salt, req.name or email.split("@")[0], now),
-    )
-    await db.commit()
-    await database.ensure_user(user_id, email.split("@")[0])
+    # Do not derive the internal identity from a 32-bit email hash.
+    # Allocate and persist an unpredictable ID atomically in the same DB.
+    try:
+        user_id = await database.create_email_account(
+            email, pw_hash, salt, req.name or email.split("@")[0],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     jwt_token = create_simple_jwt(user_id, email)
     sub_url, servers, sub_dict = await _auth_subscription_snapshot(
@@ -2316,24 +2332,27 @@ async def activate_trial(
 @billing_api.get("/plans")
 async def get_plans(devices: int = 2):
     """Server-owned tariff catalog with legacy and desktop plan identifiers."""
-    from constants import get_price_for_months, VALID_DEVICE_LIMITS
+    from constants import get_price_for_months, VALID_DEVICE_LIMITS, TARIFF_DAYS
     if devices not in VALID_DEVICE_LIMITS:
         raise HTTPException(status_code=400, detail="Выберите 2, 5 или 10 устройств")
 
     plan_catalog = [
-        ("1m", "month", 1, "1 месяц", 0, False),
-        ("3m", "quarter", 3, "4 месяца (3+1)", 11, True),
-        ("6m", "half_year", 6, "8 месяцев (6+2)", 22, False),
-        ("12m", "year", 12, "15 месяцев (12+3)", 34, False),
+        ("1m", "month", 1, "1 месяц", False),
+        ("3m", "quarter", 3, "4 месяца (3+1)", True),
+        ("6m", "half_year", 6, "8 месяцев (6+2)", False),
+        ("12m", "year", 12, "15 месяцев (12+3)", False),
     ]
     plans = []
-    for code, desktop_code, months, label, discount, popular in plan_catalog:
+    base_month_price = get_price_for_months(1, devices)[0]
+    for code, desktop_code, months, label, popular in plan_catalog:
         options = [
             {"devices": limit, "price_rub": get_price_for_months(months, limit)[0],
              "days": get_price_for_months(months, limit)[1]}
             for limit in VALID_DEVICE_LIMITS
         ]
         selected = next(option for option in options if option["devices"] == devices)
+        included_months = TARIFF_DAYS[months] // 30
+        discount = round(100 * (1 - selected["price_rub"] / (base_month_price * included_months)))
         plans.append({
             "code": code, "desktop_code": desktop_code, "name": label,
             "price": f"{selected['price_rub']} ₽", "price_rub": selected["price_rub"],
@@ -2774,6 +2793,11 @@ async def get_servers(
         raise _correlated_http_error(
             503, "Не удалось обновить список серверов", correlation_id, "subscription_lookup_failed",
         ) from None
+    if not servers:
+        raise _correlated_http_error(
+            503, "Не удалось получить конфигурацию серверов. Подписка сохранена",
+            correlation_id, "subscription_configuration_unavailable",
+        )
     payload = {
         "servers": servers,
         "subscription_url": sub_url,

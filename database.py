@@ -1364,6 +1364,51 @@ async def delete_mobile_device_bootstrap(user_id: int, device_hash: str) -> None
         await db.commit()
 
 
+async def create_email_account(email: str, password_hash: str, salt: str, name: str) -> int:
+    """Create an email identity without collisions with Telegram or deleted users.
+
+    Existing identity IDs remain unchanged; they require a separately reviewed
+    migration which reconciles all subscriptions and payment history.
+    """
+    db = await get_db()
+    normalized_name = str(name or email.split("@")[0]).strip()[:160]
+    async with _db_semaphore:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await db.execute("SELECT 1 FROM app_users WHERE email=?", (email,))
+            if await cur.fetchone():
+                raise ValueError("Пользователь с таким email уже зарегистрирован")
+            user_id = 0
+            for _ in range(32):
+                candidate = secrets.randbelow(2**62 - 1) + 1
+                cur = await db.execute(
+                    "SELECT 1 FROM users WHERE user_id=? "
+                    "UNION ALL SELECT 1 FROM app_users WHERE user_id=? "
+                    "UNION ALL SELECT 1 FROM account_tombstones WHERE user_id=? LIMIT 1",
+                    (candidate, candidate, candidate),
+                )
+                if not await cur.fetchone():
+                    user_id = candidate
+                    break
+            if not user_id:
+                raise RuntimeError("Could not allocate a unique account ID")
+            now = int(time.time())
+            await db.execute(
+                "INSERT INTO users(user_id,username) VALUES(?,?)",
+                (user_id, normalized_name),
+            )
+            await db.execute(
+                "INSERT INTO app_users(user_id,email,password_hash,salt,name,created_at) "
+                "VALUES(?,?,?,?,?,?)",
+                (user_id, email, password_hash, salt, normalized_name, now),
+            )
+            await db.commit()
+            return user_id
+        except Exception:
+            await db.rollback()
+            raise
+
+
 async def get_or_create_google_account(google_sub: str, email: str, name: str) -> dict:
     """Resolve Google identities only by `sub`; never link by email."""
     import secrets
