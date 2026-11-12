@@ -44,6 +44,8 @@ class EmailIdentityAllocationTests(unittest.IsolatedAsyncioTestCase):
         await database.close_db()
         database.DB_FILE = os.path.join(self.tmp.name, "email-identity.db")
         await database.init_db()
+        # app_users is initialized by the API auth bootstrap, not the bot core schema.
+        await api_router._ensure_auth_db()
 
     async def asyncTearDown(self):
         await self.database.close_db()
