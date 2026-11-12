@@ -118,6 +118,41 @@ def _finances_kb() -> InlineKeyboardMarkup:
     ])
 
 
+@router.callback_query(F.data == "admin_source_revenue")
+async def cb_admin_source_revenue(callback: CallbackQuery):
+    """Show measured revenue without pretending it is profit or ROAS."""
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    from acquisition_revenue import source_revenue_snapshot
+    try:
+        cohorts = await source_revenue_snapshot(days=30)
+    except Exception as exc:
+        logger.warning("Source revenue report unavailable (%s)", type(exc).__name__)
+        await callback.message.answer("Не удалось получить статистику источников.")
+        return
+    lines = ["<b>Источники привлечения · 30 дней</b>", "",
+             "Выручка валовая, без комиссий, возвратов, VPS и рекламных затрат.",
+             "Telegram Stars не пересчитываются в рубли."]
+    for name, row in list(cohorts["by_source"].items())[:15]:
+        gross = row["gross_by_currency"]
+        money = ", ".join(
+            f"{amount} {escape(currency)}" for currency, amount in sorted(gross.items())
+        ) or "0"
+        lines.append(
+            f"\n<b>{escape(name)}</b>: пользователей {row['started']}; "
+            f"подключились {row['connected']}; оплатили {row['paid']}; "
+            f"валовая выручка {money}"
+        )
+    if not cohorts["by_source"]:
+        lines.append("\nНет событий за выбранный период.")
+    await callback.message.edit_text(
+        "\n".join(lines), parse_mode="HTML",
+        reply_markup=_growth_kb(),
+    )
+
+
 @router.callback_query(F.data == "admin_payment_incidents")
 async def cb_admin_payment_incidents(callback: CallbackQuery):
     """Read-only reconciliation queue; never silently grant/refund twice."""
@@ -163,6 +198,7 @@ def _growth_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="Воронка", callback_data="admin_funnel"),
          InlineKeyboardButton(text="Оплаты / конверсия", callback_data="admin_checkout_funnel")],
         [InlineKeyboardButton(text="Органический рост", callback_data="admin_referral_funnel")],
+        [InlineKeyboardButton(text="Выручка по источникам", callback_data="admin_source_revenue")],
         [InlineKeyboardButton(text="Проверка рефералов", callback_data="admin_referral_risk")],
         [InlineKeyboardButton(text="Рассылки", callback_data="admin_broadcast")],
         [InlineKeyboardButton(text="← Главное меню", callback_data="admin_menu")],
