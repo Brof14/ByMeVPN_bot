@@ -35,8 +35,10 @@ class CheckoutUxTests(unittest.IsolatedAsyncioTestCase):
             for row in kb.inline_keyboard for button in row
         ]
         self.assertEqual(actual, expected)
-        self.assertEqual(len(kb.inline_keyboard[0]), 3)
-        self.assertTrue(all(len(row) == 1 for row in kb.inline_keyboard[1:]))
+        self.assertEqual(
+            [button.callback_data for row in kb.inline_keyboard[:2] for button in row],
+            ["devtier_2", "devtier_5", "devtier_10"],
+        )
         self.assertEqual(
             _tariff_intro(10, renewal=True),
             "<b>Продление подписки</b>\n\n"
