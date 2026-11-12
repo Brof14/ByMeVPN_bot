@@ -97,9 +97,19 @@ def install_mobile_refresh_storage_compat(adapter) -> None:
                 "CREATE TABLE IF NOT EXISTS revoked_mobile_jwt_sessions "
                 "(jti TEXT PRIMARY KEY, expires_at INTEGER NOT NULL)"
             )
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS account_tombstones "
+                "(user_id INTEGER PRIMARY KEY,deleted_at INTEGER NOT NULL,source TEXT NOT NULL)"
+            )
             await db.commit()
             await db.execute("BEGIN IMMEDIATE")
             try:
+                cursor = await db.execute(
+                    "SELECT 1 FROM account_tombstones WHERE user_id=?", (int(user_id),)
+                )
+                if await cursor.fetchone():
+                    await db.rollback()
+                    return False
                 await db.execute(
                     "DELETE FROM revoked_mobile_jwt_sessions WHERE expires_at<=?", (now,)
                 )

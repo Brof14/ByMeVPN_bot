@@ -1820,8 +1820,9 @@ async def refresh_token(req: RefreshRequest):
     if not claims:
         raise HTTPException(status_code=401, detail="Сессия истекла")
     try:
-        if await _is_removed_account(claims["user_id"]):
-            raise HTTPException(status_code=401, detail="Аккаунт удалён")
+        # The tombstone check belongs INSIDE the atomic upgrade transaction:
+        # independent DB reads on the shared SQLite connection can interleave
+        # with concurrent BEGIN IMMEDIATE and produce false 503 errors.
         now = int(time.time())
         new_expiry = now + 30 * 86400
         new_jti = secrets.token_urlsafe(18)
