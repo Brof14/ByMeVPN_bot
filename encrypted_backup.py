@@ -10,7 +10,7 @@ import secrets
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-MAGIC = b"BYMEVPN-BACKUP-V1\\x00".replace(b"\\x00", b"\x00")
+MAGIC = b"BYMEVPN-BACKUP-V1\x00"
 SALT_LEN = 16
 NONCE_LEN = 12
 AAD = b"ByMeVPN SQLite backup v1"
