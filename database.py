@@ -126,6 +126,20 @@ CREATE TABLE IF NOT EXISTS mobile_auth_sessions (
 CREATE INDEX IF NOT EXISTS idx_mobile_auth_sessions_expiry
     ON mobile_auth_sessions(expires_at);
 
+-- Client-submitted diagnostics (not authoritative VPN connection evidence).
+-- Store only allowlisted categories, never logs, URLs, UUID or client IP.
+CREATE TABLE IF NOT EXISTS client_diagnostics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    platform TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    error_code TEXT NOT NULL,
+    app_version TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_client_diagnostics_user
+    ON client_diagnostics(user_id,created_at);
+
 CREATE TABLE IF NOT EXISTS known_hwid_devices (
     user_id INTEGER NOT NULL,
     device_id INTEGER NOT NULL,
@@ -1287,6 +1301,54 @@ async def release_yookassa_checkout_attempt(user_id: int, token: str) -> None:
             (int(user_id), token),
         )
         await db.commit()
+
+
+async def save_client_diagnostic(
+    user_id: int, platform: str, stage: str, error_code: str, app_version: str,
+) -> int | None:
+    """Save bounded client-reported error codes, no secrets or raw log uploads.
+
+    One report per minute and at most 30 reports per day limit write spam.
+    """
+    now = int(time.time())
+    db = await get_db()
+    async with _db_semaphore:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            await db.execute("DELETE FROM client_diagnostics WHERE created_at<?",
+                             (now - 30 * 86400,))
+            cur = await db.execute(
+                "SELECT MAX(created_at),COUNT(*) FROM client_diagnostics "
+                "WHERE user_id=? AND created_at>=?",
+                (int(user_id), now - 86400),
+            )
+            last, count = await cur.fetchone()
+            if count >= 30 or (last is not None and now - int(last) < 60):
+                await db.rollback()
+                return None
+            cursor = await db.execute(
+                "INSERT INTO client_diagnostics(user_id,platform,stage,error_code,app_version,created_at) "
+                "VALUES(?,?,?,?,?,?)",
+                (int(user_id), platform, stage, error_code, app_version, now),
+            )
+            await db.commit()
+            return int(cursor.lastrowid)
+        except Exception:
+            await db.rollback()
+            raise
+
+
+async def get_recent_client_diagnostics(user_id: int, limit: int = 10) -> list[dict]:
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT id,platform,stage,error_code,app_version,created_at "
+        "FROM client_diagnostics WHERE user_id=? ORDER BY created_at DESC LIMIT ?",
+        (int(user_id), max(1, min(int(limit), 20))),
+    )
+    return [
+        dict(zip(("id", "platform", "stage", "error_code", "app_version", "created_at"), row))
+        for row in await cur.fetchall()
+    ]
 
 
 async def create_mobile_google_nonce(nonce_hash: str, expires_at: int) -> None:

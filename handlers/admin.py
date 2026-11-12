@@ -485,6 +485,7 @@ def _user_kb(user_id: int, is_banned: bool = False) -> InlineKeyboardMarkup:
         # Row 3: Access and support
         [InlineKeyboardButton(text="🎁 Пробник", callback_data=f"admin_grant_trial:{user_id}"),
          InlineKeyboardButton(text="🆕 Выдать ключ", callback_data=f"admin_grant_key:{user_id}")],
+        [InlineKeyboardButton(text="Диагностика", callback_data=f"admin_client_diagnostics:{user_id}")],
         [InlineKeyboardButton(text="✉️ Написать", callback_data=f"admin_pm:{user_id}"),
          InlineKeyboardButton(text="🔄 Сброс пробника", callback_data=f"admin_reset_trial:{user_id}")],
         # Finance and moderation
@@ -1276,6 +1277,39 @@ async def cb_user_card(callback: CallbackQuery):
     uid = int(callback.data.split(":")[1])
     logger.info("Admin %d viewed user %d card", callback.from_user.id, uid)
     await _show_user(callback, uid)
+
+
+@router.callback_query(F.data.startswith("admin_client_diagnostics:"))
+async def cb_admin_client_diagnostics(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    try:
+        uid = int(callback.data.split(":", 1)[1])
+        from database import get_recent_client_diagnostics
+        events = await get_recent_client_diagnostics(uid)
+    except Exception as exc:
+        logger.warning("Client diagnostics lookup failed (%s)", type(exc).__name__)
+        await callback.message.answer("Не удалось загрузить диагностику.")
+        return
+    lines = [f"<b>Диагностика приложения · {uid}</b>", "",
+             "Коды сообщены приложением, без логов, VPN-ключей и IP-адресов.",
+             "Это не проверка действительного VPN-туннеля."]
+    for entry in events:
+        lines.append(
+            f"\n{escape(entry['platform'])} · {escape(entry['stage'])} · "
+            f"<code>{escape(entry['error_code'])}</code> · "
+            f"{escape(entry['app_version'] or 'версия неизвестна')}"
+        )
+    if not events:
+        lines.append("\nОтчётов нет.")
+    await callback.message.edit_text(
+        "\n".join(lines), parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="← К пользователю", callback_data=f"admin_user:{uid}")
+        ]]),
+    )
 
 
 # ── User keys (admin view) ─────────────────────────────────────────────────

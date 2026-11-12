@@ -24,7 +24,7 @@ import secrets
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
@@ -1860,6 +1860,36 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
             "is_google": is_google,
         }
     }
+
+
+class ClientDiagnosticReport(BaseModel):
+    platform: Literal["android", "ios", "windows", "linux", "macos"]
+    stage: Literal["auth", "subscription", "import", "connect", "dns", "routing", "other"]
+    error_code: str
+    app_version: str = ""
+
+
+@account_api.post("/diagnostics/report")
+async def submit_client_diagnostic(
+    report: ClientDiagnosticReport,
+    user_id: int = Depends(get_current_user_id),
+):
+    """Accept only non-secret, bounded error codes supplied by an authenticated app.
+
+    A report does NOT constitute server-side proof that a VPN tunnel connected.
+    """
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,47}", report.error_code):
+        raise HTTPException(status_code=422, detail="Некорректный код ошибки")
+    if report.app_version and not re.fullmatch(r"[A-Za-z0-9._+\-]{1,32}", report.app_version):
+        raise HTTPException(status_code=422, detail="Некорректная версия приложения")
+    from database import save_client_diagnostic
+    record_id = await save_client_diagnostic(
+        user_id, report.platform, report.stage, report.error_code,
+        report.app_version,
+    )
+    if record_id is None:
+        raise HTTPException(status_code=429, detail="Слишком много диагностических отчётов")
+    return {"status": "received", "report_id": record_id}
 
 
 @account_api.delete("/me")
