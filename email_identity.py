@@ -217,6 +217,21 @@ async def session_invalidated_by_reset(user_id: int, issued_at: int) -> bool:
         return bool(row and int(issued_at) <= int(row[0]))
 
 
+async def minimum_new_session_iat(user_id: int) -> int:
+    """Prevent same-second JWT issuance from inheriting a reset-revoked epoch."""
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+        table = await (await db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='email_auth_reset_epoch'"
+        )).fetchone()
+        if not table:
+            return 0
+        row = await (await db.execute(
+            "SELECT revoked_before FROM email_auth_reset_epoch WHERE user_id=?",
+            (int(user_id),),
+        )).fetchone()
+        return int(row[0]) + 1 if row else 0
+
+
 def _send_email(address: str, purpose: str, token: str) -> None:
     host, port, sender, username, password, base = _mail_settings(purpose)
     parsed = urlsplit(base)
