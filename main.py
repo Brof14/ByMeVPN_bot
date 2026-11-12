@@ -37,7 +37,7 @@ from background_tasks import spawn_supervised, cancel_background_tasks
 
 from handlers import (
     start_router, buy_router, keys_router, partner_router,
-    guide_router, legal_router, admin_router, auth_router, fallback_router, ad_program_router
+    legal_router, admin_router, auth_router, fallback_router, ad_program_router
 )
 from subscription import router as subscription_router
 from webhook import start_webhook_server, start_connection_tls_server
@@ -246,7 +246,7 @@ async def main() -> None:
     # Register all routers (message handlers)
     routers = [
         start_router, buy_router, subscription_router, keys_router,
-        partner_router, guide_router, legal_router,
+        partner_router, legal_router,
         admin_router, auth_router, ad_program_router, marketing_router, fallback_router
     ]
 

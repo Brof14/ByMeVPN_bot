@@ -760,23 +760,6 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
             payment_id, user_id, days, devices, amount_rub,
         )
 
-        # Intro trial marker: metadata.trial == "1" → 1 ₽ for 3 days,
-        # then 89 ₽/мес recurring. Trial payments must NOT trigger referral
-        # rewards and must save renewal terms (89 ₽ / 30 days), not 1 ₽ / 3 days.
-        is_trial = metadata.get("trial") == "1"
-        if is_trial:
-            from constants import INTRO_TRIAL_PRICE_RUB
-            if amount_rub != INTRO_TRIAL_PRICE_RUB:
-                logger.error(
-                    "Webhook: trial payment %s amount=%s does not match intro price",
-                    payment_id, amount_str,
-                )
-                await _notify_admin(
-                    bot,
-                    f"⚠️ Пробный платёж {payment_id}: сумма {amount_str} ₽ (ожидалось {INTRO_TRIAL_PRICE_RUB} ₽), user {user_id}. Автоматическая выдача остановлена.",
-                )
-                return
-
         if await _quarantine_deleted_account_payment(
             bot, provider="yookassa", payment_id=payment_id,
             user_id=user_id, amount_rub=amount_rub, days=days, devices=devices,
@@ -789,10 +772,7 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
         )
 
         # Idempotent DB record
-        if is_trial:
-            tariff_name = "Пробный период 3 дня (2 устр.)"
-        else:
-            tariff_name = f"Подписка {days} дней ({devices} устр.)"
+        tariff_name = f"Подписка {days} дней ({devices} устр.)"
         is_new, pay_db_id = await record_payment_idempotent(
             user_id=user_id,
             amount=amount_rub,
@@ -868,7 +848,6 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
             method="yookassa",
             payload=payment_id,
             extend_existing=True,
-            skip_referral_bonus=is_trial,
             target_key_id=target_key_id,
         )
 
@@ -884,7 +863,7 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
             except Exception:
                 pass
             promo_code = metadata.get("promo_code")
-            if promo_code and not is_trial:
+            if promo_code:
                 from payments import record_fulfilled_promo
                 await record_fulfilled_promo(bot, promo_code, user_id, "yookassa", payment_id)
             logger.info("YooKassa payment %s successfully fulfilled for user %d", payment_id, user_id)
@@ -905,76 +884,7 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                     user_id,
                 )
 
-            if is_trial:
-                # Intro trial succeeded: mark trial as used, clean pending link
-                # and store RENEWAL terms (89 ₽ / 30 days), so the autorenew
-                # worker charges the real price after 3 days — not 1 ₽.
-                from database import set_trial_used, delete_yookassa_trial_pending
-                from constants import (
-                    RECURRING_MONTHLY_PRICE, RECURRING_MONTHS, RECURRING_DAYS,
-                    INTRO_TRIAL_DEVICES, INTRO_TRIAL_DAYS,
-                )
-                try:
-                    await set_trial_used(user_id)
-                    await delete_yookassa_trial_pending(user_id)
-                except Exception as e:
-                    logger.warning("Trial bookkeeping failed for user %d: %s", user_id, e)
-
-                pm = payment.get("payment_method") or {}
-                if pm.get("saved") and pm.get("id") and key_id is not None and metadata.get("auto_renew_consent") == "1":
-                    await save_auto_renew_subscription(
-                        user_id=user_id,
-                        key_id=key_id,
-                        payment_method_id=pm["id"],
-                        payment_method_title=pm.get("title", ""),
-                        payment_method_type=pm.get("type", "bank_card"),
-                        months=RECURRING_MONTHS,
-                        days=RECURRING_DAYS,
-                        devices=INTRO_TRIAL_DEVICES,
-                        amount_rub=RECURRING_MONTHLY_PRICE,
-                    )
-                    logger.info(
-                        "Intro trial completed for user %d: ARS saved (89₽/%dd, pm_id=%s)",
-                        user_id, RECURRING_DAYS, pm["id"],
-                    )
-                    try:
-                        await bot.send_message(
-                            chat_id=user_id,
-                            text=(
-                                f"🎁 <b>Пробный период активирован!</b>\n\n"
-                                f"✅ Сегодня списано <b>1 ₽</b>, доступ — <b>{INTRO_TRIAL_DAYS} дня</b>.\n\n"
-                                f"🔁 <b>Дальше автоматически:</b>\n"
-                                f"Через {INTRO_TRIAL_DAYS} дня спишется <b>{RECURRING_MONTHLY_PRICE} ₽</b> — "
-                                f"и подписка продолжится на 30 дней.\n"
-                                f"Затем каждые 30 дней по {RECURRING_MONTHLY_PRICE} ₽, "
-                                f"пока автопродление не отключено.\n\n"
-                                f"🔓 Отключить автопродление можно в любой момент "
-                                f"в меню ключа — доступ сохранится до конца оплаченного периода."
-                            ),
-                            parse_mode="HTML",
-                        )
-                    except Exception as notify_e:
-                        logger.debug("Failed to send trial recurring notice to user %d: %s", user_id, notify_e)
-                else:
-                    logger.info(
-                        "Intro trial for user %d completed without saved payment method "
-                        "(recurring unavailable) — manual renewal only", user_id,
-                    )
-                    try:
-                        await bot.send_message(
-                            chat_id=user_id,
-                            text=(
-                                f"🎁 <b>Пробный период активирован!</b>\n\n"
-                                f"✅ Сегодня списано <b>1 ₽</b>, доступ — <b>{INTRO_TRIAL_DAYS} дня</b>.\n\n"
-                                f"Автопродление не подключено.\n"
-                                f"Продлить после окончания можно вручную — пришлём напоминание."
-                            ),
-                            parse_mode="HTML",
-                        )
-                    except Exception as notify_e:
-                        logger.debug("Failed to send trial notice to user %d: %s", user_id, notify_e)
-
-            elif is_autorenew:
+            if is_autorenew:
                 await update_auto_renew_charge_success_by_user_key(user_id, key_id, days, amount_rub)
                 try:
                     await bot.send_message(
@@ -1042,11 +952,10 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                     except Exception as notify_e:
                         logger.debug("Failed to send one-time renewal fallback to user %d: %s", user_id, notify_e)
 
-            # A successful first payment of ANY amount, including the paid
-            # 1 ₽ introductory trial, earns exactly one referral bonus.
+            # A successful first payment earns at most one referral bonus.
             from referral_system_new import award_referral_for_payment
             await award_referral_for_payment(
-                user_id, payment_id, amount=amount_rub, is_trial=is_trial, bot=bot,
+                user_id, payment_id, amount=amount_rub, bot=bot,
             )
         else:
             await update_payment_status(pay_db_id, "failed")

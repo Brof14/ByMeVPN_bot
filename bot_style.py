@@ -85,7 +85,7 @@ _DESTRUCTIVE_PREFIXES = (
 # Contextual help and informational navigation are not competing blue CTAs.
 _SECONDARY_CALLBACKS = frozenset({
     "about", "trouble", "legal", "partner_referrals_list",
-    "ad_my_applications", "guide_more", "key_history",
+    "ad_my_applications", "key_history",
 })
 
 _ACTION_ICONS = {
@@ -111,7 +111,6 @@ _ACTION_ICONS = {
     "legal": "legal",
     "marketing_optin": "notifications_on",
     "marketing_optout": "notifications_off",
-    "guide_more": "more",
     "manage_payment_methods": "card",
 }
 
@@ -127,7 +126,6 @@ _PREFIX_ICONS = (
     ("key_settings:", "settings"),
     ("manage_payment_methods", "card"),
     ("autorenew_", "settings"),
-    ("guide_", "more"),
     ("support_topic:", "support"),
     ("ad_get_post:", "share"),
     ("ad_submit_post:", "share"),
@@ -181,31 +179,16 @@ def _is_navigation(text: str, callback: str) -> bool:
     )
 
 
-# Precisely scoped callbacks; avoid generic guide_* mapping hiding the OS.
-_PLATFORM_ICONS = {
-    "ios": "ios", "ios_mac": "ipad", "android": "android",
-    "windows": "windows", "linux": "linux", "macos": "macos",
-    "android_tv": "android_tv",
-}
 _PRIMARY_CALLBACKS = frozenset({
     "my_keys", "buy_vpn", "partner", "ad_check_channel",
     "connection_guide", "trial_free",
 })
 _PRIMARY_PREFIXES = ("key_instructions:", "key_renew:", "ad_get_post:")
 _SECONDARY_PREFIXES = (
-    "devtier_", "guide_", "support_topic:", "key_devices:",
+    "devtier_", "support_topic:", "key_devices:",
     "key_device:", "key_settings:", "manage_payment_methods",
     "autorenew_", "ad_my_", "admin_", "pay_", "tariff_",
 )
-
-
-def _platform_for_callback(callback: str) -> str | None:
-    if not callback.startswith("guide_"):
-        return None
-    action = callback.split(":", 1)[0].removeprefix("guide_")
-    if action.startswith("linux_"):
-        return "linux"
-    return _PLATFORM_ICONS.get(action)
 
 
 def _icon_for(text: str, callback: str, *, copy: bool, destructive: bool, back: bool) -> str | None:
@@ -215,9 +198,6 @@ def _icon_for(text: str, callback: str, *, copy: bool, destructive: bool, back: 
         return ICON_IDS["back"]
     if copy:
         return ICON_IDS["copy"]
-    platform = _platform_for_callback(callback)
-    if platform:
-        return ICON_IDS[platform]
     if callback.startswith("tariff_1_"):
         return ICON_IDS["tariff_1"]
     if callback.startswith(("tariff_3_", "tariff_6_", "tariff_12_")):

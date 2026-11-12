@@ -107,8 +107,7 @@ async def _handle_app_login(message: Message, user_id: int, user_name: str) -> N
                         if len(app_url) <= 256 else
                         [InlineKeyboardButton(text="Подписка",
                                               callback_data="my_keys")],
-                        [InlineKeyboardButton(text="Инструкция по подключению",
-                                              callback_data="connection_guide")],
+                        [InlineKeyboardButton(text="Подключить VPN", callback_data="connection_guide")],
                     ]),
                 )
                 return
@@ -790,12 +789,6 @@ async def cb_trial_free(callback: CallbackQuery, bot: Bot):
     await _start_free_trial(bot, callback)
 
 
-@router.callback_query(F.data == "trial_1r")
-async def cb_trial_legacy_paid_offer(callback: CallbackQuery, bot: Bot):
-    """Legacy button callback now starts the free trial; no new paid checkout is created."""
-    await _start_free_trial(bot, callback)
-
-
 @router.callback_query(F.data == "trial")
 async def cb_trial(callback: CallbackQuery, bot: Bot):
     await _start_free_trial(bot, callback)
@@ -846,11 +839,13 @@ async def cb_about(callback: CallbackQuery, bot: Bot):
         "Подключите приложение, добавьте подписку и включите VPN в нём. "
         "Поддерживаются планы на 2, 5 и 10 устройств.\n\n"
         "Новые пользователи могут попробовать сервис 3 дня бесплатно. "
+        "\nСобственные приложения для Android, Windows и Linux уже почти готовы к выходу.\n\n"
         "Если подключение не получается, откройте поддержку из меню."
     )
     # Keep this screen informative and minimal; primary actions live in the menu.
     from aiogram.types import InlineKeyboardMarkup
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Новости", url="https://t.me/ByMeVPN")],
         [InlineKeyboardButton(text="Документы", callback_data="legal")],
         [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu")],
     ])

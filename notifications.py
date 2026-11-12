@@ -420,7 +420,7 @@ async def _referral_nudge_pass(bot: Bot) -> None:
                 user_id,
                 "<b>Бонусные дни за друзей</b>\n\n"
                 "Получайте +15 дней за регистрацию друга и ещё +30 за его "
-                "первую успешную оплату (включая пробную за 1 ₽). "
+                "первую успешную оплату подписки. "
                 "Также можно получить VPN за рекламу "
                 "в собственном Telegram-канале.\n\n"
                 "Это необязательно. Мы отправляем такое предложение только один раз.",
@@ -476,7 +476,7 @@ async def _connection_reminder_pass(bot: Bot) -> None:
             await bot.send_message(
                 item["user_id"],
                 "<b>Помочь подключить VPN?</b>\n\n"
-                "Похоже, VPN ещё не подключён. Откройте инструкцию — поможем добавить подписку в приложение.",
+                "Похоже, VPN ещё не подключён. Откройте страницу подключения, чтобы добавить подписку в приложение.",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="Подключить VPN", callback_data=f"key_instructions:{key_id}")],

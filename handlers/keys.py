@@ -18,7 +18,7 @@ from xui_client import (
 )
 from keyboards import (
     my_keys_kb, my_keys_list_kb, key_detail_kb, confirm_delete_kb,
-    payment_kb, back_to_menu, connection_guide_kb, tariff_selection_kb,
+    payment_kb, back_to_menu, tariff_selection_kb,
     autorenew_cancel_confirm_kb, manage_payment_methods_kb, key_settings_kb,
     key_devices_kb, key_device_detail_kb, confirm_delete_device_kb, key_history_kb,
     confirm_reissue_kb, support_url,
@@ -26,7 +26,7 @@ from keyboards import (
 from utils import send_with_photo, send_or_edit, safe_answer
 from constants import format_timestamp as fmt_date, format_days_left as fmt_days_left
 from states import BuyFlow
-from bot_assets import KEY, DEVICES, RENEWAL, CONNECTION, AUTO_RENEWAL
+from bot_assets import KEY, DEVICES, RENEWAL, AUTO_RENEWAL
 from bot_style import themed_button as InlineKeyboardButton
 
 logger = logging.getLogger(__name__)
@@ -475,11 +475,16 @@ async def cb_key_diagnostics(callback: CallbackQuery, bot: Bot):
         f"Доступ на сервере: <b>{panel_text}</b>.\n"
         f"{device_line}\n\n"
         "Проверка не запускает VPN-туннель и не отправляет ключи. "
-        "Если VPN не подключается, откройте инструкцию или поддержку."
+        "Если VPN не подключается, откройте страницу подключения или поддержку."
     )
     from aiogram.types import InlineKeyboardMarkup
+    try:
+        from app_links import build_connect_page_url
+        connect_url = build_connect_page_url(str(key.get("key") or ""), callback.from_user.first_name or "")
+    except (RuntimeError, ValueError):
+        connect_url = ""
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Инструкция по подключению", callback_data=f"key_instructions:{key_id}")],
+        *([[InlineKeyboardButton(text="Подключить VPN", url=connect_url)]] if connect_url else []),
         [InlineKeyboardButton(text="Поддержка", url="https://t.me/ByMeVPNSupportBot")],
         [InlineKeyboardButton(text="← К подписке", callback_data=f"key_info:{key_id}")],
     ])
@@ -899,34 +904,47 @@ async def cmd_unsubscribe(message: Message, bot: Bot):
 
 
 # ---------------------------------------------------------------------------
-# Key instructions (tap on remark label — show the key string)
+# Legacy connection buttons now open the website connection page.
 # ---------------------------------------------------------------------------
 
-@router.callback_query(F.data.startswith("key_instructions:"))
-async def cb_key_instructions(callback: CallbackQuery, bot: Bot):
-    """Show connection instructions with device selection."""
-    await safe_answer(callback)
+async def _open_connect_page(callback: CallbackQuery, key_id: int | None = None) -> None:
     user_id = callback.from_user.id
+    if key_id is not None:
+        key = await get_key_by_id(key_id)
+        if not key or key.get("user_id") != user_id:
+            await callback.answer("Подписка не найдена.", show_alert=True)
+            return
+    else:
+        keys = await get_user_keys(user_id)
+        active = [key for key in keys if int(key.get("expiry") or 0) > int(time.time()) and key.get("key")]
+        key = max(active, key=lambda item: int(item.get("expiry") or 0)) if active else None
+    subscription_url = str((key or {}).get("key") or "")
+    if not subscription_url:
+        await callback.answer("Активная подписка не найдена. Откройте раздел «Подписка».", show_alert=True)
+        return
+    try:
+        from app_links import build_connect_page_url
+        url = build_connect_page_url(subscription_url, callback.from_user.first_name or "")
+    except (RuntimeError, ValueError):
+        logger.exception("Connection page could not be built for user %d", user_id)
+        await callback.answer("Страница подключения временно недоступна. Напишите в поддержку.", show_alert=True)
+        return
+    await callback.answer(url=url)
+
+
+@router.callback_query(F.data == "connection_guide")
+async def cb_open_connect_page(callback: CallbackQuery):
+    await _open_connect_page(callback)
+
+
+@router.callback_query(F.data.startswith("key_instructions:"))
+async def cb_legacy_connect_button(callback: CallbackQuery):
     try:
         key_id = int(callback.data.split(":", 1)[1])
     except (IndexError, ValueError):
-        await safe_answer(callback, "Ключ не найден.", alert=True)
+        await callback.answer("Подписка не найдена.", show_alert=True)
         return
-
-    key = await get_key_by_id(key_id)
-    if not key or key["user_id"] != user_id:
-        await safe_answer(callback, "Ключ не найден.", alert=True)
-        return
-
-    subscription_url = key.get("key", "")
-
-    # Show device selection guide
-    from keyboards import connection_guide_kb
-
-    text = (
-        "<b>Подключение</b>\n\nВыберите устройство."
-    )
-    await send_or_edit(bot, callback, text, connection_guide_kb(key_id, subscription_url), photo=CONNECTION)
+    await _open_connect_page(callback, key_id)
 
 
 # ---------------------------------------------------------------------------

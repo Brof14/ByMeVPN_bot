@@ -102,14 +102,13 @@ async def award_referral_for_payment(
     user_id: int,
     payment_ref: str,
     amount: int = 0,
-    is_trial: bool = False,
     bot=None,
 ) -> bool:
     """
     The ONE place where a payment may award a referral reward.
 
     Guarantees:
-    - any first verified successful subscription payment (>0), including 1 ₽ trial,
+    - any first verified successful subscription payment (>0)
       creates at most one reward per referred customer;
     - duplicate webhooks / retries / renewals → no second reward.
     - callers must supply the settled positive provider amount.

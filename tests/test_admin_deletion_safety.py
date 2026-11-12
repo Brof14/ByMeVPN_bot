@@ -173,7 +173,7 @@ class CancelAllMethodsTests(unittest.IsolatedAsyncioTestCase):
         await database.release_yookassa_checkout_attempt(123, attempt["token"])
         self.assertFalse(await database.has_recent_unsettled_checkout(123))
 
-    async def test_pending_mobile_or_trial_checkout_blocks_erasure(self):
+    async def test_pending_mobile_checkout_blocks_erasure(self):
         import time
         db = await database.get_db()
         now = int(time.time())
@@ -192,14 +192,6 @@ class CancelAllMethodsTests(unittest.IsolatedAsyncioTestCase):
         )
         await db.commit()
         self.assertFalse(await database.has_recent_unsettled_checkout(123))
-        await db.execute(
-            "INSERT INTO yookassa_trial_pending(user_id,payment_id,confirmation_url,created) "
-            "VALUES(123,'trial-one','https://example.invalid',?)",
-            (now,),
-        )
-        await db.commit()
-        self.assertTrue(await database.has_recent_unsettled_checkout(123))
-        await db.execute("DELETE FROM yookassa_trial_pending WHERE user_id=123")
         await db.execute(
             "UPDATE mobile_payment_requests SET payment_id='invoice-one' "
             "WHERE request_id='req-one'",

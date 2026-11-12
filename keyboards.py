@@ -147,13 +147,16 @@ def tariff_selection_kb(
     devices = validate_device_limit(devices)
     kb = InlineKeyboardBuilder()
 
-    # Each device tier is its own row, readable on narrow Telegram screens.
-    for count in VALID_DEVICE_LIMITS:
-        selected = "✓ " if count == devices else ""
-        kb.row(InlineKeyboardButton(
-            text=f"{selected}{count} устройства" if count == 2 else f"{selected}{count} устройств",
-            callback_data=f"devtier_{count}",
-        ))
+    # Show the two smaller options side by side, with 10 devices below.
+    for pair in ((2, 5), (10,)):
+        buttons = []
+        for count in pair:
+            selected = "✓ " if count == devices else ""
+            buttons.append(InlineKeyboardButton(
+                text=f"{selected}{count} устройства" if count == 2 else f"{selected}{count} устройств",
+                callback_data=f"devtier_{count}",
+            ))
+        kb.row(*buttons)
 
     # The monthly rate applies to the complete 1 / 4 / 8 / 15-month package,
     # including its advertised bonus months. Never hide the total to pay.
@@ -187,7 +190,7 @@ def tariff_selection_kb(
 
 def payment_kb(
     price_rub: int, days: int, devices: int = DEFAULT_DEVICE_LIMIT,
-    yookassa_url: str = "", *, autorenew_enabled: bool = True,
+    yookassa_url: str = "",
 ) -> InlineKeyboardMarkup:
     """Stars = rubles (1:1, intentional — covers Telegram commission)."""
     kb = InlineKeyboardBuilder()
@@ -198,10 +201,6 @@ def payment_kb(
     kb.row(InlineKeyboardButton(
         text=f"ЮKassa · {price_rub} ₽",
         callback_data="pay_yookassa",
-    ))
-    kb.row(InlineKeyboardButton(
-        text=("Автопродление: включено" if autorenew_enabled else "Автопродление: выключено"),
-        callback_data="autorenew_checkout_toggle",
     ))
     kb.row(InlineKeyboardButton(
         text=f"CryptoBot · {price_rub} ₽",
@@ -434,7 +433,16 @@ def confirm_delete_kb(key_id: int) -> InlineKeyboardMarkup:
 
 def after_key_kb(subscription_url: str = "") -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="Подключить VPN", callback_data="connection_guide"))
+    connect_url = None
+    if subscription_url:
+        try:
+            from app_links import build_connect_page_url
+            connect_url = build_connect_page_url(subscription_url)
+        except (RuntimeError, ValueError):
+            connect_url = None
+    kb.row(InlineKeyboardButton(
+        text="Подключить VPN", url=connect_url,
+    ) if connect_url else InlineKeyboardButton(text="Подключить VPN", callback_data="connection_guide"))
     kb.row(
         InlineKeyboardButton(text="Подписка", callback_data="my_keys"),
         InlineKeyboardButton(text="Пригласить друга", callback_data="partner"),
@@ -462,82 +470,6 @@ def app_open_kb(redirect_url: str, deep_link: str = "") -> InlineKeyboardMarkup:
             kb.row(InlineKeyboardButton(
                 text="Моя подписка", callback_data="my_keys",
             ))
-    return kb.as_markup()
-
-
-# ---------------------------------------------------------------------------
-# Partner / referral
-# ---------------------------------------------------------------------------
-
-def connection_guide_kb(
-    key_id: int | None = None, subscription_url: str = "", connect_url: str = "",
-) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    def platform_callback(name: str) -> str:
-        return f"guide_{name}:{key_id}" if key_id else f"guide_{name}"
-
-    if connect_url:
-        kb.row(InlineKeyboardButton(text="Выбрать устройство и приложение", url=connect_url))
-    else:
-        kb.row(
-            InlineKeyboardButton(text="iPhone / iPad", callback_data=platform_callback("ios")),
-            InlineKeyboardButton(text="Android", callback_data=platform_callback("android")),
-        )
-        kb.row(
-            InlineKeyboardButton(text="Windows", callback_data=platform_callback("windows")),
-            InlineKeyboardButton(text="Linux", callback_data=platform_callback("linux")),
-        )
-        kb.row(InlineKeyboardButton(text="Другие устройства", callback_data=f"guide_more:{key_id}" if key_id else "guide_more"))
-    if subscription_url:
-        kb.row(InlineKeyboardButton(
-            text="Скопировать ссылку",
-            copy_text={"text": subscription_url},
-            # Telegram's CopyTextButton already renders its own copy glyph.
-            # Avoid adding a second custom icon to the same button.
-            icon_custom_emoji_id=None,
-        ))
-    back_callback = f"key_info:{key_id}" if key_id else "back_to_menu"
-    back_text = "← Назад" if key_id else "← Назад в меню"
-    kb.row(InlineKeyboardButton(text=back_text, callback_data=back_callback))
-    return kb.as_markup()
-
-
-def additional_platforms_kb(key_id: int | None = None) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    def platform_callback(name: str) -> str:
-        return f"guide_{name}:{key_id}" if key_id else f"guide_{name}"
-    kb.row(InlineKeyboardButton(text="Mac", callback_data=platform_callback("macos")))
-    kb.row(InlineKeyboardButton(text="Android TV", callback_data=platform_callback("android_tv")))
-    back = f"connection_guide:{key_id}" if key_id else "connection_guide"
-    kb.row(InlineKeyboardButton(text="← К устройствам", callback_data=back))
-    return kb.as_markup()
-
-
-def linux_distro_kb() -> InlineKeyboardMarkup:
-    """Linux distro selection keyboard."""
-    kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="Ubuntu / Debian / Mint", callback_data="guide_linux_ubuntu"))
-    kb.row(InlineKeyboardButton(text="Arch / EndeavourOS / Manjaro", callback_data="guide_linux_arch"))
-    kb.row(InlineKeyboardButton(text="Fedora / RHEL", callback_data="guide_linux_fedora"))
-    kb.row(InlineKeyboardButton(text="Другой Linux", callback_data="guide_linux_other"))
-    kb.row(InlineKeyboardButton(text="← Назад", callback_data="connection_guide"))
-    return kb.as_markup()
-
-
-def linux_guide_back_kb() -> InlineKeyboardMarkup:
-    """Back button from specific Linux distro guide to Linux distro selection."""
-    kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="◀️ К выбору Linux", callback_data="guide_linux"))
-    kb.row(InlineKeyboardButton(text="Поддержка", url=support_url()))
-    kb.row(InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu"))
-    return kb.as_markup()
-
-
-def guide_back_kb() -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="◀️ Назад к платформам", callback_data="connection_guide"))
-    kb.row(InlineKeyboardButton(text="Поддержка", url=support_url()))
-    kb.row(InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu"))
     return kb.as_markup()
 
 

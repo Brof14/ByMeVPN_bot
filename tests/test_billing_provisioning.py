@@ -823,68 +823,6 @@ class TestBillingProvisioning(unittest.IsolatedAsyncioTestCase):
 
 
     # ------------------------------------------------------------------------
-    # Test 14: Intro trial (1 ₽) webhook flow → trial_used, ARS 89₽/30d, no referral
-    # ------------------------------------------------------------------------
-    def test_14_intro_trial_webhook_flow(self):
-        """
-        A succeeded 1 ₽ trial payment must:
-        1. Deliver a 3-day key (days from metadata).
-        2. Set users.trial_used and clear the pending trial checkout.
-        3. Save auto-renew renewal terms 89 ₽ / 30 days (NOT 1 ₽ / 3 days).
-        4. Trigger the first-payment referral milestone once, including a 1 ₽ trial.
-        5. Mark the payment processed and idempotently recorded.
-        """
-        import webhook
-        from database import (
-            init_db, ensure_user, has_trial_used, get_auto_renew_subscription,
-            is_yookassa_processed, get_yookassa_trial_pending,
-        )
-
-        async def run_test():
-            await init_db()
-            user_id = 887001
-            await ensure_user(user_id)
-
-            trial_payment = {
-                "id": "yk_trial_payment_1",
-                "status": "succeeded",
-                "amount": {"value": "1.00", "currency": "RUB"},
-                "payment_method": {"saved": True, "id": "pm_trial_1", "title": "*4242", "type": "bank_card"},
-                "metadata": {"user_id": str(user_id), "days": "3", "devices": "2", "months": "1", "trial": "1"},
-            }
-
-            # Referral rewards moved to the canonical single path
-            # (referral_system_new.award_referral_for_payment) — patch it there.
-            import referral_system_new
-            with patch.object(webhook, "_fetch_yookassa_payment", new_callable=AsyncMock, return_value=trial_payment), \
-                 patch.object(webhook, "deliver_key", new_callable=AsyncMock, return_value=True) as mock_deliver, \
-                 patch.object(referral_system_new, "award_referral_for_payment", new_callable=AsyncMock, return_value=True) as mock_referral:
-                bot = MagicMock()
-                bot.send_message = AsyncMock()
-                await webhook._process_payment(bot, "yk_trial_payment_1")
-
-                mock_deliver.assert_awaited_once()
-                kwargs = mock_deliver.await_args.kwargs
-                self.assertEqual(kwargs["days"], 3)
-                self.assertEqual(kwargs["amount"], 1)
-                self.assertTrue(kwargs["skip_referral_bonus"])
-
-                # A successful paid trial qualifies as the first payment.
-                mock_referral.assert_awaited_once_with(
-                    user_id, "yk_trial_payment_1", amount=1, is_trial=True, bot=bot
-                )
-
-            self.assertTrue(await has_trial_used(user_id))
-            self.assertIsNone(await get_yookassa_trial_pending(user_id))
-            self.assertTrue(await is_yookassa_processed("yk_trial_payment_1"))
-
-            # The provider returning a saved method is not customer consent.
-            # This legacy trial metadata has no explicit recurring opt-in.
-            self.assertIsNone(await get_auto_renew_subscription(user_id))
-
-        asyncio.run(run_test())
-
-    # ------------------------------------------------------------------------
     # Test 15: Duplicate webhook for the same payment is a no-op
     # ------------------------------------------------------------------------
     def test_15_duplicate_webhook_no_double_delivery(self):

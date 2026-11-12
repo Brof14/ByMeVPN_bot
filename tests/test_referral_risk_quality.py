@@ -29,20 +29,8 @@ class ReferralRiskContract(unittest.IsolatedAsyncioTestCase):
             await db.set_referrer(uid, 100)
         report = await referral_risk_snapshot(days=1, min_invites=5)
         self.assertEqual(report["suspicious_accounts"], [
-            {"referrer_id": 100, "invitations": 5, "one_rub_trials": 0}
+            {"referrer_id": 100, "invitations": 5}
         ])
-        self.assertEqual(report["promised_days_from_one_rub"], 0)
-        await db.record_payment_idempotent(
-            user_id=200, amount=1, currency="RUB", method="yookassa",
-            days=3, payload="paid-trial-200", status="success",
-            tariff="trial", devices=2, provider="yookassa",
-            provider_payment_id="paid-trial-200",
-        )
-        await db.record_referral_payment_reward(100, 200, "paid-trial-200")
-        report = await referral_risk_snapshot(days=1, min_invites=5)
-        self.assertEqual(report["suspicious_accounts"][0]["one_rub_trials"], 1)
-        self.assertEqual(report["one_rub_referral_rewards"], 1)
-        self.assertEqual(report["promised_days_from_one_rub"], 30)
 
     async def test_report_is_admin_only(self):
         from handlers.admin import cb_admin_referral_risk

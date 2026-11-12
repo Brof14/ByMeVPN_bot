@@ -10,7 +10,7 @@ from aiogram.types import (
 from database import get_referral_stats_enhanced, get_referred_users_list
 from utils import send_with_photo, safe_answer, get_cached_bot_info
 from bot_assets import REFERRALS, MY_INVITATIONS
-from constants import format_timestamp, INTRO_TRIAL_DAYS, INTRO_TRIAL_PRICE_RUB, RECURRING_MONTHLY_PRICE, RECURRING_DAYS
+from constants import format_timestamp
 from bot_style import themed_button as InlineKeyboardButton
 
 router = Router()
@@ -19,10 +19,14 @@ router = Router()
 def referral_share_url(link: str) -> str:
     """One consistent, editable friend-to-friend invitation everywhere."""
     text = (
-        "Попробуй ByMeVPN — VPN для телефона и компьютера.\n\n"
-        "3 дня бесплатно, без карты. Подключение за пару нажатий.\n\n"
-        "Это моя ссылка-приглашение: если зарегистрируешься по ней, "
-        "мне начислят бонусные дни."
+        "🚀 Попробуй ByMeVPN — VPN, который просто работает.\n"
+        "YouTube, Instagram и любимые сайты — без лишних сложностей.\n"
+        "🎁 3 дня бесплатно — без карты и обязательств.\n"
+        "⚡ Подключение за пару нажатий.\n"
+        "📱 Для телефона и компьютера.\n\n"
+        "👇 Забирай бесплатный доступ:\n"
+        f"{link}\n\n"
+        "Это моя пригласительная ссылка — за твою регистрацию мне начислят бонусные дни."
     )
     return f"https://t.me/share/url?url={quote_plus(link)}&text={quote_plus(text)}"
 
@@ -56,7 +60,7 @@ async def cb_partner(callback: CallbackQuery, bot: Bot):
     text = (
         "<b>Пригласите друга — получите до 45 дней</b>\n\n"
         "<b>+15 дней</b> — за его регистрацию по вашей ссылке.\n"
-        "<b>+30 дней</b> — за первую успешную оплату любого тарифа (включая пробную за 1 ₽).\n\n"
+        "<b>+30 дней</b> — за первую успешную оплату любого тарифа.\n\n"
         "<b>Ваши результаты</b>\n"
         f"Приглашено: <b>{registrations}</b>\n"
         f"Оплатили: <b>{paid_referrals}</b>\n"

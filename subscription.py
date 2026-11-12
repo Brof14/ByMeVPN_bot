@@ -367,7 +367,7 @@ async def _deliver_key_unlocked(
 
                 # NOTE: no referral reward here — centralized at the payment
                 # processing level (see award_referral_for_payment). The
-                # skip_referral_bonus flag (intro trial) is honoured there.
+                # skip_referral_bonus flag (free trial) is honoured there.
 
                 return True
 

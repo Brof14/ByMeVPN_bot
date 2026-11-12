@@ -80,7 +80,7 @@ def _checkout_confirmation_text(data: dict) -> str:
     price_rub = int(data["price_rub"])
     bonus = TARIFF_BONUS_MONTHS[months]
     term = f"{months}+{bonus} мес." if bonus else "1 месяц"
-    recurring = bool(data.get("checkout_autorenew_disclosed")) and bool(data.get("autorenew_enabled"))
+    recurring = True
     recurring_price, recurring_days = get_price_for_months(months, devices)
     dev_name = DEVICE_CONFIG.get(devices, {}).get("name", f"{devices} устройств")
     lines = [
@@ -103,12 +103,12 @@ def _checkout_confirmation_text(data: dict) -> str:
         lines.append(
             f"При оплате через ЮKassa вы соглашаетесь на повторное списание "
             f"{recurring_price} ₽ за следующие {recurring_days} дней по окончании оплаченного срока. "
-            "До оплаты можно отключить автопродление кнопкой ниже."
+            "Отключить автопродление можно в разделе «О сервисе» → «Документы» → «Оплата и автопродление»."
         )
     else:
         lines.append("Оплата ЮKassa будет разовой. Автоматических списаний не будет.")
     lines.extend([
-        "Отключить автопродление позже можно в настройках подписки; оплаченные дни сохранятся.",
+        "Автопродление включено по умолчанию. Отключить его можно в разделе «О сервисе» → «Документы» → «Оплата и автопродление»; оплаченные дни сохранятся.",
         "Telegram Stars и CryptoBot — разовые платежи.",
         "",
         "Доступ откроется после подтверждения оплаты.",
@@ -129,7 +129,6 @@ async def _show_checkout(
         bot, callback, _checkout_confirmation_text(data),
         payment_kb(
             int(data["price_rub"]), int(data["days"]), devices=int(data["devices"]),
-            autorenew_enabled=bool(data.get("checkout_autorenew_disclosed")) and bool(data.get("autorenew_enabled")),
         ),
         photo=PAYMENT,
     )
@@ -325,7 +324,7 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
         promo_discount=promo_info.get("discount_value", 0) if promo_info.get("promo_type") == "percent" else 0,
         promo_mismatch=promo_mismatch,
         checkout_autorenew_disclosed=True,
-        autorenew_enabled=bool(data.get("autorenew_enabled", True)),
+        autorenew_enabled=True,
     )
     # A restart can erase MemoryStorage. Save only the choice, never its
     # computed price, so recovering cannot silently charge an old amount.
@@ -350,7 +349,7 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
         "days": days, "original_price": original_price,
         "promo_mismatch": promo_mismatch,
         "checkout_autorenew_disclosed": True,
-        "autorenew_enabled": bool(data.get("autorenew_enabled", True)),
+        "autorenew_enabled": True,
     }
     await _show_checkout(bot, callback, state, checkout_display)
 
@@ -396,8 +395,8 @@ async def _get_checkout_params(state: FSMContext, user_id: int) -> dict | None:
         "devices": validate_device_limit(data.get("devices", DEFAULT_DEVICE_LIMIT)),
         "promo_code": data.get("promo_code", ""),
         "renew_key_id": int(data["renew_key_id"]) if data.get("renew_key_id") else None,
-        "autorenew_enabled": bool(data.get("checkout_autorenew_disclosed")) and bool(data.get("autorenew_enabled")),
-        "checkout_autorenew_disclosed": bool(data.get("checkout_autorenew_disclosed")),
+        "autorenew_enabled": True,
+        "checkout_autorenew_disclosed": True,
     }
 
 
@@ -521,18 +520,6 @@ async def cb_pay_stars(callback: CallbackQuery, bot: Bot, state: FSMContext):
 # Payment: YooKassa
 # ---------------------------------------------------------------------------
 
-@router.callback_query(F.data == "autorenew_checkout_toggle")
-async def cb_autorenew_checkout_toggle(callback: CallbackQuery, bot: Bot, state: FSMContext):
-    """Explicit visible checkout choice, never a hidden recurring debit."""
-    await safe_answer(callback)
-    params = await _get_checkout_params(state, callback.from_user.id)
-    if not params or not params["checkout_autorenew_disclosed"]:
-        await _ask_tariff_again(bot, callback)
-        return
-    await state.update_data(autorenew_enabled=not params["autorenew_enabled"])
-    await _show_checkout(bot, callback, state)
-
-
 @router.callback_query(F.data.in_({"pay_yookassa", "pay_yookassa_autorenew"}))
 async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await safe_answer(callback)
@@ -546,9 +533,7 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
     devices: int = params["devices"]
     promo_code: str = params["promo_code"]
     user_id = callback.from_user.id
-    # Old "pay_yookassa" buttons had one-time semantics. Only a checkout
-    # freshly shown with explicit recurring disclosure may opt in by default.
-    save_payment_method = callback.data == "pay_yookassa_autorenew" or params["autorenew_enabled"]
+    save_payment_method = True
     next_charge_rub, next_charge_days = get_price_for_months(months, devices)
 
     # The fingerprint binds retries to the *exact* confirmed order. A

@@ -4,7 +4,6 @@ Referral integrity regression tests.
 Invariant under test: ONE qualifying payment → AT MOST ONE referral day reward.
   - legacy duplicate add_referral_earning remains idempotent;
   - award_referral_for_payment creates one days-only reward record;
-  - the first settled 1 ₽ introductory payment qualifies once;
   - renewals (second payment of the same referred user) produce no second reward;
   - duplicate provider payments (same provider_payment_id) are recorded once.
 
@@ -85,16 +84,6 @@ class TestReferralIntegrity(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self._earnings_count(), 0, "new referral rewards must not create a cash ledger")
         events = await database.get_referral_events(111)
         self.assertTrue(any(event["event_type"] == "payment_bonus" and event["days_awarded"] == 30 for event in events))
-
-    async def test_03_first_paid_trial_awards_once(self):
-        """A settled 1 ₽ introductory charge counts as the first payment."""
-        await self._seed_pair()
-        result = await award_referral_for_payment(222, "trial-payment-id", is_trial=True, amount=1, bot=None)
-        self.assertTrue(result)
-        self.assertEqual(await self._payment_rewards_count(), 1)
-        later = await award_referral_for_payment(222, "later-payment-id", amount=89, bot=None)
-        self.assertFalse(later)
-        self.assertEqual(await self._payment_rewards_count(), 1)
 
     async def test_04_renewal_yields_no_second_reward(self):
         """Second (renewal) payment of the same referred user → no second reward."""
