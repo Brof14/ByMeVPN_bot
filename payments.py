@@ -155,8 +155,8 @@ async def create_yookassa_payment(
     if should_save_method:
         payload["save_payment_method"] = True
 
-    logger.info("create_yookassa_payment: user_id=%d days=%d devices=%d months=%d amount=%d promo=%s recurring=%s",
-                user_id, days, devices, months, amount_rub, promo_code, payload.get("save_payment_method", False))
+    logger.info("create_yookassa_payment: user_id=%d days=%d devices=%d months=%d amount=%d recurring=%s",
+                user_id, days, devices, months, amount_rub, payload.get("save_payment_method", False))
 
     try:
         async with yookassa_client(timeout=15.0) as client:
@@ -202,17 +202,17 @@ async def create_yookassa_payment(
                         return {"payment_url": url, "payment_id": str(data.get("id") or ""), "status": data.get("status"), "recurring_requested": False}
                     return url
             except Exception as retry_e:
-                logger.error("YooKassa fallback payment error for user %d (%s): %r", user_id, type(retry_e).__name__, retry_e)
+                logger.error("YooKassa fallback payment error for user %d (%s)", user_id, type(retry_e).__name__)
                 return None
 
-        error_msg = f"HTTP {e.response.status_code}: {error_text[:200]}"
+        error_msg = f"HTTP {e.response.status_code}"
         logger.error("YooKassa HTTP error for user %d: %s", user_id, error_msg)
         return None
     except httpx.RequestError as e:
-        logger.error("YooKassa request error for user %d (%s): %r", user_id, type(e).__name__, e)
+        logger.error("YooKassa request error for user %d (%s)", user_id, type(e).__name__)
         return None
     except Exception as e:
-        logger.exception("YooKassa payment creation failed for user %d (%s)", user_id, type(e).__name__)
+        logger.error("YooKassa payment creation failed for user %d (%s)", user_id, type(e).__name__)
         return None
 
 
@@ -303,11 +303,11 @@ async def charge_yookassa_recurrent(
                         user_id, data.get("id"), data.get("status"))
             return data
     except httpx.HTTPStatusError as e:
-        error_msg = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
+        error_msg = f"HTTP {e.response.status_code}"
         logger.error("YooKassa recurrent HTTP error for user %d: %s", user_id, error_msg)
         return None
     except Exception as e:
-        logger.error("YooKassa recurrent payment error for user %d: %s", user_id, e)
+        logger.error("YooKassa recurrent payment error for user %d (%s)", user_id, type(e).__name__)
         return None
 
 
