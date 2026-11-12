@@ -1493,12 +1493,12 @@ async def reserve_mobile_device_bootstrap(
     expiry. Once that grant expires, the same device may retry if capacity is
     still available; expired grants never count as occupied slots.
     """
-    db = await get_db()
     now = int(time.time())
     if (int(subscription_expiry) <= now or int(expires_at) <= now
             or int(active_devices) < 0 or int(device_limit) not in (2, 5, 10)):
         return None
-    async with _db_semaphore:
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+        await db.execute("PRAGMA busy_timeout=30000")
         await db.execute("BEGIN IMMEDIATE")
         try:
             # Old subscription reservations can no longer authorize access.
@@ -1608,11 +1608,11 @@ async def get_or_create_google_account(google_sub: str, email: str, name: str) -
     """Resolve Google identities only by `sub`; never link by email."""
     import secrets
 
-    db = await get_db()
     sub_hash = hashlib.sha256(google_sub.encode("utf-8")).hexdigest()
     internal_email = f"google-{sub_hash[:40]}@identity.bymevpn.invalid"
     normalized_name = str(name or "Google user").strip()[:160] or "Google user"
-    async with _db_semaphore:
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+        await db.execute("PRAGMA busy_timeout=30000")
         await db.execute("BEGIN IMMEDIATE")
         try:
             cursor = await db.execute(
@@ -2139,20 +2139,22 @@ async def update_key_uuid(key_id: int, new_uuid: str) -> bool:
 
 async def update_user_key_credentials(user_id: int, new_uuid: str, new_subscription_url: str) -> bool:
     """Update every saved link for this user's shared panel client atomically."""
-    db = await get_db()
     try:
-        async with _db_semaphore:
+        async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+            await db.execute("PRAGMA busy_timeout=30000")
             await db.execute("BEGIN IMMEDIATE")
-            cur = await db.execute(
-                "UPDATE keys SET uuid=?, key=? WHERE user_id=?",
-                (new_uuid, new_subscription_url, user_id),
-            )
-            await db.commit()
-        return cur.rowcount > 0
-    except Exception as e:
-        async with _db_semaphore:
-            await db.rollback()
-        logger.error("Failed to rotate saved VPN credentials for user %s: %s", user_id, e)
+            try:
+                cur = await db.execute(
+                    "UPDATE keys SET uuid=?, key=? WHERE user_id=?",
+                    (new_uuid, new_subscription_url, user_id),
+                )
+                await db.commit()
+                return cur.rowcount > 0
+            except Exception:
+                await db.rollback()
+                raise
+    except Exception as exc:
+        logger.error("Failed to rotate saved VPN credentials for user %s (%s)", user_id, type(exc).__name__)
         return False
 
 
@@ -2303,8 +2305,8 @@ async def save_mobile_crypto_checkout(
     confirmation_url: str, days: int, amount_rub: int, payload: str,
 ) -> bool:
     """Atomically bind a Crypto Pay invoice to its owner and durable fulfillment intent."""
-    db = await get_db()
-    async with _db_semaphore:
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+        await db.execute("PRAGMA busy_timeout=30000")
         await db.execute("BEGIN IMMEDIATE")
         try:
             cur = await db.execute(
