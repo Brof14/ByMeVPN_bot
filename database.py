@@ -1258,7 +1258,7 @@ async def claim_yookassa_checkout_attempt(user_id: int, order_fingerprint: str) 
     """
     if not re.fullmatch(r"[0-9a-f]{64}", str(order_fingerprint)):
         raise ValueError("order fingerprint must be a SHA256 hex digest")
-        token = secrets.token_urlsafe(24)
+    token = secrets.token_urlsafe(24)
     now = int(time.time())
     async with aiosqlite.connect(DB_FILE, timeout=30) as db:
         await db.execute("PRAGMA busy_timeout=30000")
@@ -1306,7 +1306,7 @@ async def claim_yookassa_checkout_attempt(user_id: int, order_fingerprint: str) 
 
 async def release_yookassa_checkout_attempt(user_id: int, token: str) -> None:
     """Never release a lease acquired by a later checkout operation."""
-        async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
         await db.execute("PRAGMA busy_timeout=30000")
         await db.execute(
             "UPDATE yookassa_checkout_attempts SET lease_token=NULL, lease_expires_at=0 "
@@ -1324,7 +1324,7 @@ async def save_client_diagnostic(
     One report per minute and at most 30 reports per day limit write spam.
     """
     now = int(time.time())
-        async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
         await db.execute("PRAGMA busy_timeout=30000")
         await db.execute("BEGIN IMMEDIATE")
         try:
@@ -1573,7 +1573,7 @@ async def create_email_account(email: str, password_hash: str, salt: str, name: 
     Existing identity IDs remain unchanged; they require a separately reviewed
     migration which reconciles all subscriptions and payment history.
     """
-        normalized_name = str(name or email.split("@")[0]).strip()[:160]
+    normalized_name = str(name or email.split("@")[0]).strip()[:160]
     async with aiosqlite.connect(DB_FILE, timeout=30) as db:
         await db.execute("PRAGMA busy_timeout=30000")
         await db.execute("BEGIN IMMEDIATE")
