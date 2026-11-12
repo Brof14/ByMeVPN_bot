@@ -1534,6 +1534,22 @@ def _email_action_failure(exc: Exception) -> HTTPException:
     return HTTPException(status_code=503, detail="Отправка письма временно недоступна")
 
 
+@auth_api.get("/email/verify-page")
+async def email_verify_page(token: str = ""):
+    from email_account_pages import render_email_action_page
+    if not 32 <= len(token) <= 128:
+        raise HTTPException(status_code=400, detail="Ссылка недействительна")
+    return render_email_action_page(token, "verify")
+
+
+@auth_api.get("/password-reset/page")
+async def email_password_reset_page(token: str = ""):
+    from email_account_pages import render_email_action_page
+    if not 32 <= len(token) <= 128:
+        raise HTTPException(status_code=400, detail="Ссылка недействительна")
+    return render_email_action_page(token, "reset")
+
+
 @auth_api.post("/email/resend")
 async def resend_verification(req: EmailActionRequest, request: Request):
     await require_auth_quota(request, "email_resend_ip", limit=8, window_seconds=3600)
