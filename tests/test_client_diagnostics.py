@@ -1,4 +1,5 @@
 """App diagnostics provide bounded, authenticated, non-secret support context."""
+import asyncio
 import os
 import tempfile
 import unittest
@@ -22,6 +23,13 @@ class ClientDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         await database.close_db()
         database.DB_FILE = self.old
         self.tmp.cleanup()
+
+    async def test_parallel_identical_reports_have_one_saved_result(self):
+        result = await asyncio.gather(
+            database.save_client_diagnostic(552211, "android", "connect", "TIMEOUT", "1.0"),
+            database.save_client_diagnostic(552211, "android", "connect", "TIMEOUT", "1.0"),
+        )
+        self.assertEqual(sum(item is not None for item in result), 1)
 
     async def test_reports_limit_frequency_and_capture_no_secrets(self):
         self.assertIsNotNone(await database.save_client_diagnostic(

@@ -31,5 +31,41 @@ class EmailPasswordHashingTests(unittest.TestCase):
         api_router.validate_registration_credentials("valid@example.com", "sufficiently-long-password")
 
 
+
+
+class EmailIdentityAllocationTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        import database
+        import os
+        import tempfile
+        self.database = database
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old_path = database.DB_FILE
+        await database.close_db()
+        database.DB_FILE = os.path.join(self.tmp.name, "email-identity.db")
+        await database.init_db()
+
+    async def asyncTearDown(self):
+        await self.database.close_db()
+        self.database.DB_FILE = self.old_path
+        self.tmp.cleanup()
+
+    async def test_concurrent_registrations_allocate_distinct_ids(self):
+        import asyncio
+        a, b = await asyncio.gather(
+            self.database.create_email_account("a@example.invalid", "hash", "salt", "Alice"),
+            self.database.create_email_account("b@example.invalid", "hash", "salt", "Bob"),
+        )
+        self.assertNotEqual(a, b)
+        db = await self.database.get_db()
+        count = (await (await db.execute("SELECT COUNT(*) FROM app_users")).fetchone())[0]
+        self.assertEqual(count, 2)
+
+    async def test_same_email_is_cannot_be_created_twice(self):
+        await self.database.create_email_account("only@example.invalid", "hash", "salt", "Only")
+        with self.assertRaises(ValueError):
+            await self.database.create_email_account("only@example.invalid", "hash", "salt", "Again")
+
+
 if __name__ == "__main__":
     unittest.main()

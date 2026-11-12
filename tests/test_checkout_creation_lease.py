@@ -1,4 +1,5 @@
 """YooKassa checkout creation is serialized and idempotent across workers."""
+import asyncio
 import os
 import tempfile
 import unittest
@@ -40,6 +41,15 @@ class CheckoutLeaseTest(unittest.IsolatedAsyncioTestCase):
         second = await database.claim_yookassa_checkout_attempt(445566, "b" * 64)
         self.assertNotEqual(first["idempotency_key"], second["idempotency_key"])
         await database.release_yookassa_checkout_attempt(445566, second["token"])
+
+    async def test_parallel_claims_only_one_gets_the_lease(self):
+        results = await asyncio.gather(
+            database.claim_yookassa_checkout_attempt(445566, "e" * 64),
+            database.claim_yookassa_checkout_attempt(445566, "e" * 64),
+        )
+        self.assertEqual(sum(result is not None for result in results), 1)
+        lease = next(item for item in results if item is not None)
+        await database.release_yookassa_checkout_attempt(445566, lease["token"])
 
     async def test_deleted_account_cannot_start_checkout(self):
         db = await database.get_db()
