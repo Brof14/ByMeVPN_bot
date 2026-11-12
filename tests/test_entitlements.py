@@ -330,7 +330,7 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
         self.assertIsNone(body["entitlement"])
         self.assertIsNone(body["subscription_url"])
 
-    def test_telegram_login_does_not_hide_active_status_when_panel_confirmation_is_pending(self):
+    def test_telegram_login_defers_panel_status_to_subscription_endpoint(self):
         with patch.object(api_router.database, "get_mobile_auth_session", new=AsyncMock(return_value={
             "status": "authenticated", "user_id": 7654321,
             "username": "test_user", "full_name": "Test User",
@@ -344,11 +344,17 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["status"], "authenticated")
         self.assertTrue(body["access_token"])
-        self.assertEqual(body["subscription"]["status"], "active")
-        self.assertTrue(body["subscription"]["device_confirmation_required"])
-        self.assertIsNone(body["subscription"].get("entitlement"))
-        self.assertIsNone(body["subscription"].get("subscription_url"))
+        self.assertEqual(body["subscription"]["status"], "unknown")
         self.assertEqual(body["servers"], [])
+        status = self.client.get(
+            "/api/v1/subscription/status",
+            headers={"X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1"},
+        )
+        self.assertEqual(status.status_code, 200, status.text)
+        self.assertEqual(status.json()["status"], "active")
+        self.assertTrue(status.json()["device_confirmation_required"])
+        self.assertIsNone(status.json().get("entitlement"))
+        self.assertIsNone(status.json().get("subscription_url"))
 
     def test_signed_client_cannot_fetch_vpn_config_without_panel_registered_hwid(self):
         headers = {"X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1"}
@@ -527,7 +533,7 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
         self.assertNotIn("entitlement", response.json()["subscription"])
         self.devices_mock.assert_not_awaited()
 
-    def test_new_telegram_login_preserves_active_status_without_credentials_when_device_is_unregistered(self):
+    def test_new_telegram_login_defers_active_status_without_credentials_when_device_is_unregistered(self):
         with patch.object(api_router.database, "get_mobile_auth_session", new=AsyncMock(return_value={
             "status": "authenticated", "user_id": 7654321,
             "username": "test_user", "full_name": "Test User",
@@ -540,11 +546,17 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
         self.assertEqual(body["status"], "authenticated")
-        self.assertEqual(body["subscription"]["status"], "active")
-        self.assertTrue(body["subscription"]["device_confirmation_required"])
-        self.assertIsNone(body["subscription"]["entitlement"])
-        self.assertIsNone(body["subscription"]["subscription_url"])
+        self.assertEqual(body["subscription"]["status"], "unknown")
         self.assertEqual(body["servers"], [])
+        status = self.client.get(
+            "/api/v1/subscription/status",
+            headers={"X-HWID": self.hwid, "X-Entitlement-Version": "es256-v1"},
+        )
+        self.assertEqual(status.status_code, 200, status.text)
+        self.assertEqual(status.json()["status"], "active")
+        self.assertTrue(status.json()["device_confirmation_required"])
+        self.assertIsNone(status.json()["entitlement"])
+        self.assertIsNone(status.json()["subscription_url"])
 
     def test_telegram_check_session_accepts_android_post_json_contract(self):
         # Android PR #25 sends POST /auth/telegram/check-session with {"token": ...}.
