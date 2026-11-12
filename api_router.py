@@ -1238,6 +1238,16 @@ async def _auth_subscription_snapshot(user_id: int, headers: Dict[str, str]):
         }
 
 
+def _login_subscription_pending_snapshot() -> Dict[str, Any]:
+    """A login response must not wait on panel or entitlement signer I/O."""
+    return {
+        "status": "unknown", "plan_name": "Проверяем подписку",
+        "trial_available": False,
+        "trial_unavailable_reason": "subscription_check_unavailable",
+        "max_devices": 0, "active_devices": 0,
+    }
+
+
 def _device_confirmation_status_snapshot(subscription: Dict[str, Any]) -> Dict[str, Any]:
     """Return truthful status metadata without credentials for an unconfirmed device."""
     visible_fields = (
@@ -1406,8 +1416,7 @@ async def check_telegram_session(
         response.headers["X-Correlation-ID"] = correlation_id
     if not state or len(state) > 256:
         return TelegramCheckResponse(status="expired")
-    # Do not burn the single-use Telegram state before JWT and subscription
-    # preparation finishes. A transient panel/signer failure must be retryable.
+    # Do not burn the single-use Telegram state until JWT issuance succeeds.
     try:
         session = await database.get_mobile_auth_session(state_hash)
     except Exception as exc:
@@ -1447,19 +1456,6 @@ async def check_telegram_session(
             503, "Не удалось завершить вход через Telegram", correlation_id,
         ) from None
     try:
-        sub_url, servers, sub_dict = await _auth_subscription_snapshot(
-            user_id, _subscription_headers_from_request(request)
-        )
-    except Exception as exc:
-        logger.error(
-            "Telegram session exchange stage=profile_snapshot code=%s correlation_id=%s",
-            type(exc).__name__, correlation_id,
-        )
-        raise _correlated_http_error(
-            503, "Не удалось загрузить профиль для входа", correlation_id,
-        ) from None
-
-    try:
         consumed = await database.consume_mobile_auth_session(state_hash)
     except Exception as exc:
         logger.error(
@@ -1487,8 +1483,8 @@ async def check_telegram_session(
             "name": full_name,
             "is_telegram": True,
         },
-        subscription=sub_dict,
-        servers=servers,
+        subscription=_login_subscription_pending_snapshot(),
+        servers=[],
     )
 
 
@@ -1764,9 +1760,6 @@ async def login_google(req: GoogleLoginRequest, request: Request):
 
     user_id = int(identity["user_id"])
     session_tokens = await issue_session_tokens(user_id, identity["email"])
-    _, servers, sub_dict = await _auth_subscription_snapshot(
-        user_id, _subscription_headers_from_request(request)
-    )
     return {
         "access": session_tokens["access"],
         "refresh": session_tokens["refresh"],
@@ -1776,8 +1769,8 @@ async def login_google(req: GoogleLoginRequest, request: Request):
             "name": identity["name"],
             "is_google": True,
         },
-        "subscription": sub_dict,
-        "servers": servers,
+        "subscription": _login_subscription_pending_snapshot(),
+        "servers": [],
     }
 
 
