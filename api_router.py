@@ -32,6 +32,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel
 
 import database
+from auth_rate_limits import require_auth_quota
 from entitlements import EntitlementSigningError, create_entitlement, device_binding, load_private_key
 from config import XUI_SUB_PATH, XUI_URL
 from telegram_post_compat import TelegramSessionTokenBody, register_telegram_check_post
@@ -1378,7 +1379,8 @@ class SessionRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 @auth_api.post("/telegram/create-session", response_model=CreateTelegramSessionResponse)
-async def create_telegram_session(response: Response):
+async def create_telegram_session(response: Response, request: Request = None):
+    await require_auth_quota(request, "telegram_create_ip", limit=20, window_seconds=600)
     token = f"auth_{secrets.token_urlsafe(32)}"
     state_hash = hashlib.sha256(token.removeprefix("auth_").encode("utf-8")).hexdigest()
     correlation_id = state_hash[:16]
@@ -1408,6 +1410,8 @@ async def create_telegram_session(response: Response):
 async def check_telegram_session(
     token: str, request: Request, response: Response = None,
 ):
+    # Polling is expected, but one caller must not saturate the session table.
+    await require_auth_quota(request, "telegram_check_ip", limit=300, window_seconds=600)
     state = token.removeprefix("auth_")
     state_hash = hashlib.sha256(state.encode("utf-8")).hexdigest() if state else ""
     correlation_id = state_hash[:16] if state_hash else secrets.token_hex(8)
@@ -1510,6 +1514,7 @@ async def cancel_telegram_session(req: TelegramSessionCancelRequest):
 
 @auth_api.post("/register")
 async def register(req: RegisterRequest, request: Request):
+    await require_auth_quota(request, "register_ip", limit=12, window_seconds=3600)
     await _ensure_auth_db()
     email = req.email.strip().lower()
     validate_registration_credentials(email, req.password)
@@ -1551,8 +1556,10 @@ async def register(req: RegisterRequest, request: Request):
 
 @auth_api.post("/login")
 async def login(req: LoginRequest, request: Request):
+    await require_auth_quota(request, "login_ip", limit=80, window_seconds=600)
     await _ensure_auth_db()
     email = req.email.strip().lower()
+    await require_auth_quota(request, "login_account", limit=12, window_seconds=600, subject=email)
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Введите корректный email")
 
@@ -1610,6 +1617,7 @@ async def get_google_desktop_client():
     """Public OAuth client ID only: desktop PKCE never ships a client secret."""
     if not _google_signin_configured():
         raise HTTPException(status_code=503, detail="Вход через Google временно недоступен")
+    await require_auth_quota(request, "google_desktop_ip", limit=30, window_seconds=600)
     client_id = os.getenv("GOOGLE_DESKTOP_CLIENT_ID", "").strip()
     if (not client_id.endswith(".apps.googleusercontent.com")
             or not re.fullmatch(r"[A-Za-z0-9_-]+\.apps\.googleusercontent\.com", client_id)):
@@ -1621,10 +1629,11 @@ async def get_google_desktop_client():
 
 
 @auth_api.post("/google/nonce")
-async def create_google_nonce():
+async def create_google_nonce(request: Request = None):
     """Issue a short-lived server nonce only when Google login is configured."""
     if not _google_signin_configured():
         raise HTTPException(status_code=503, detail="Вход через Google временно недоступен")
+    await require_auth_quota(request, "google_nonce_ip", limit=40, window_seconds=600)
     nonce = secrets.token_urlsafe(32)
     nonce_hash = hashlib.sha256(nonce.encode("utf-8")).hexdigest()
     try:
@@ -1730,6 +1739,7 @@ async def login_google(req: GoogleLoginRequest, request: Request):
     if not _google_signin_configured():
         reject("configuration", "google_signin_unavailable", 503,
                "Вход через Google временно недоступен")
+    await require_auth_quota(request, "google_login_ip", limit=60, window_seconds=600)
 
     expected_audiences = _configured_google_audiences()
     try:
