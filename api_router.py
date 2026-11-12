@@ -36,6 +36,7 @@ from entitlements import EntitlementSigningError, create_entitlement, device_bin
 from config import XUI_SUB_PATH, XUI_URL
 from telegram_post_compat import TelegramSessionTokenBody, register_telegram_check_post
 from telegram_auth_storage_compat import install_telegram_auth_storage_compat
+from mobile_refresh_compat import install_mobile_refresh_storage_compat
 from google_signin import GoogleIdTokenError, verify_google_id_token
 from desktop_vpn_capabilities import windows_vpn_compatible
 
@@ -150,6 +151,9 @@ async def issue_session_tokens(user_id: int, email: str = "") -> dict[str, str]:
     access = create_simple_jwt(
         user_id, email, issued_at=issued_at, expires_at=expires_at, jwt_id=jti,
     )
+    # Production can use an older bind-mounted database adapter; its missing
+    # refresh methods are installed against the same DB connection and lock.
+    install_mobile_refresh_storage_compat(database)
     refresh = "rf2_" + secrets.token_urlsafe(40)
     await database.create_mobile_refresh_session(
         hashlib.sha256(refresh.encode("ascii")).hexdigest(),
@@ -1748,6 +1752,7 @@ async def login_google(req: GoogleLoginRequest, request: Request):
 
 @auth_api.post("/refresh")
 async def refresh_token(req: RefreshRequest):
+    install_mobile_refresh_storage_compat(database)
     # V2 refresh credentials are opaque, single-use and independent of JWT expiry.
     if req.refresh.startswith("rf2_") and len(req.refresh) <= 128:
         new_refresh = "rf2_" + secrets.token_urlsafe(40)
@@ -1806,6 +1811,7 @@ async def logout(
     if not claims or claims["user_id"] != user_id:
         raise HTTPException(status_code=401, detail="Invalid or expired session token")
     try:
+        install_mobile_refresh_storage_compat(database)
         await database.revoke_mobile_refresh_for_access(claims["jti"])
         await database.revoke_mobile_jwt(claims["jti"], claims["expires_at"])
     except Exception as exc:
