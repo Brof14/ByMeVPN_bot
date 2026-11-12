@@ -19,7 +19,7 @@ import database
 from database import (
     add_key, get_referrer, add_payment, set_trial_used, log_key_error,
     get_user_keys, log_analytics_event, record_payment_idempotent,
-    update_key_uuid, set_key_expiry,
+    update_key_subscription_url, set_key_expiry,
 )
 from xui_client import create_xui_user, get_xui_user, format_traffic
 from keyboards import after_key_kb, cancel_kb
@@ -322,8 +322,15 @@ async def _deliver_key_unlocked(
                     from xui_client import get_user_subscription_links
                     subscription_links = await get_user_subscription_links(user_id)
                     if subscription_links:
-                        key_to_show = subscription_links[0]
-                        await update_key_uuid(key_id, key_to_show)
+                        candidate_url = subscription_links[0]
+                        if await update_key_subscription_url(key_id, user_id, candidate_url):
+                            key_to_show = candidate_url
+                        else:
+                            logger.error(
+                                "Refreshed subscription URL was not persisted for user=%d key=%d",
+                                user_id, key_id,
+                            )
+                            key_to_show = existing_key
                     else:
                         key_to_show = existing_key
                 except Exception as e:
