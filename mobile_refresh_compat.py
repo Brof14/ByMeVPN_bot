@@ -3,6 +3,7 @@
 The canonical database.py methods take precedence. This adapter deliberately
 uses the adapter's own get_db and lock; it never opens a different database.
 """
+import asyncio
 import time
 
 SCHEMA = """
@@ -30,11 +31,15 @@ def install_mobile_refresh_storage_compat(adapter) -> None:
     )):
         return
 
+    # The legacy adapter may also share one connection with concurrent users.
+    # Use a real mutex, not the process-wide twenty-slot DB semaphore.
+    refresh_lock = asyncio.Lock()
+
     async def create_mobile_refresh_session(
         token_hash, user_id, email, access_jti, access_expires_at, expires_at,
     ):
         db = await adapter.get_db()
-        async with adapter._db_semaphore:
+        async with refresh_lock:
             await db.executescript(SCHEMA)
             await db.execute(
                 """INSERT INTO mobile_refresh_sessions
@@ -50,7 +55,7 @@ def install_mobile_refresh_storage_compat(adapter) -> None:
     ):
         db = await adapter.get_db()
         now = int(time.time())
-        async with adapter._db_semaphore:
+        async with refresh_lock:
             await db.executescript(SCHEMA)
             await db.execute("BEGIN IMMEDIATE")
             try:
@@ -91,7 +96,7 @@ def install_mobile_refresh_storage_compat(adapter) -> None:
         now = int(time.time())
         if int(old_access_expiry) <= now:
             return False
-        async with adapter._db_semaphore:
+        async with refresh_lock:
             await db.executescript(SCHEMA)
             await db.execute(
                 "CREATE TABLE IF NOT EXISTS revoked_mobile_jwt_sessions "
@@ -135,7 +140,7 @@ def install_mobile_refresh_storage_compat(adapter) -> None:
 
     async def revoke_mobile_refresh_for_access(access_jti):
         db = await adapter.get_db()
-        async with adapter._db_semaphore:
+        async with refresh_lock:
             await db.executescript(SCHEMA)
             await db.execute(
                 "DELETE FROM mobile_refresh_sessions WHERE access_jti=?",

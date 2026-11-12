@@ -2563,16 +2563,16 @@ async def upgrade_legacy_mobile_refresh(
     new_token_hash: str, new_access_jti: str,
     new_access_expiry: int, new_refresh_expiry: int,
 ) -> bool:
-    """Atomically consume one legacy refresh JWT and issue its replacement.
+    """Atomically exchange a legacy JWT and invalidate replay across processes.
 
-    A network retry must never mint a second independent session. An INSERT
-    failure rolls back revocation, so valid customers can retry safely.
+    Do not run BEGIN on the shared aiosqlite pool: it is used by other tasks
+    under a 20-slot semaphore, which is not a transaction mutex.
     """
-    db = await get_db()
     now = int(time.time())
     if int(old_access_expiry) <= now:
         return False
-    async with _db_semaphore:
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+        await db.execute("PRAGMA busy_timeout=30000")
         await db.execute("BEGIN IMMEDIATE")
         try:
             await db.execute(
@@ -2604,17 +2604,14 @@ async def upgrade_legacy_mobile_refresh(
             await db.rollback()
             raise
 
-
 async def create_mobile_refresh_session(
     token_hash: str, user_id: int, email: str,
     access_jti: str, access_expires_at: int, expires_at: int,
 ) -> None:
-    """Persist only a digest of an independently generated refresh token."""
-    db = await get_db()
+    """Durably create one refresh session without sharing a live transaction."""
     now = int(time.time())
-    async with _db_semaphore:
-        # Existing or bind-mounted production database adapters may have the
-        # old schema. This additive migration is safe before first token issue.
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+        await db.execute("PRAGMA busy_timeout=30000")
         await db.executescript("""
             CREATE TABLE IF NOT EXISTS mobile_refresh_sessions (
                 token_hash TEXT PRIMARY KEY,
@@ -2639,25 +2636,23 @@ async def create_mobile_refresh_session(
         )
         await db.commit()
 
-
 async def rotate_mobile_refresh_session(
     old_token_hash: str, new_token_hash: str, new_access_jti: str,
     new_access_expiry: int, new_refresh_expiry: int,
 ) -> Optional[dict]:
-    """Consume one refresh secret in a write transaction and revoke old access.
+    """Rotate a one-use refresh secret in a separate write transaction.
 
-    Concurrent requests using the same old token cannot mint independent
-    sessions. Tokens are never stored in plaintext.
+    SQLite BEGIN IMMEDIATE serializes workers and processes without relying
+    on the shared pool's concurrency limit.
     """
-    db = await get_db()
     now = int(time.time())
-    async with _db_semaphore:
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+        await db.execute("PRAGMA busy_timeout=30000")
         await db.execute("BEGIN IMMEDIATE")
         try:
             cur = await db.execute(
                 """SELECT user_id,email,access_jti,access_expires_at
-                   FROM mobile_refresh_sessions
-                   WHERE token_hash=? AND expires_at>?""",
+                   FROM mobile_refresh_sessions WHERE token_hash=? AND expires_at>?""",
                 (old_token_hash, now),
             )
             row = await cur.fetchone()
@@ -2665,11 +2660,16 @@ async def rotate_mobile_refresh_session(
                 await db.rollback()
                 return None
             user_id, email, old_jti, old_access_expiry = row
+            removed = await db.execute(
+                "SELECT 1 FROM account_tombstones WHERE user_id=?", (int(user_id),)
+            )
+            if await removed.fetchone():
+                await db.rollback()
+                return None
             await db.execute(
                 """UPDATE mobile_refresh_sessions
-                   SET token_hash=?, access_jti=?, access_expires_at=?,
-                       created_at=?, expires_at=?
-                   WHERE token_hash=?""",
+                   SET token_hash=?,access_jti=?,access_expires_at=?,
+                       created_at=?,expires_at=? WHERE token_hash=?""",
                 (new_token_hash, new_access_jti, int(new_access_expiry), now,
                  int(new_refresh_expiry), old_token_hash),
             )
@@ -2683,17 +2683,15 @@ async def rotate_mobile_refresh_session(
             await db.rollback()
             raise
 
-
 async def revoke_mobile_refresh_for_access(access_jti: str) -> None:
-    """Destroy a refresh credential bound to a logged-out access session."""
-    db = await get_db()
-    async with _db_semaphore:
+    """Remove the refresh credential bound to the session being logged out."""
+    async with aiosqlite.connect(DB_FILE, timeout=30) as db:
+        await db.execute("PRAGMA busy_timeout=30000")
         await db.execute(
             "DELETE FROM mobile_refresh_sessions WHERE access_jti=?",
             (str(access_jti),),
         )
         await db.commit()
-
 
 async def mark_hwid_device_notified(user_id: int, device_id: int) -> None:
     db = await get_db()
