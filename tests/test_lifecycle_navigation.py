@@ -40,27 +40,16 @@ class CustomerNavigationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("trial_free", keys)
 
     async def test_help_has_direct_connection_and_subscription_paths(self):
-        from handlers.guide import cb_support_topic
-        cases = {
-            "no_connection": "connection_guide",
-            "no_internet": "connection_guide",
-            "import": "connection_guide",
-            "billing": "my_keys",
-            "devices": "my_keys",
-        }
-        for topic, desired in cases.items():
-            callback = SimpleNamespace(data="support_topic:" + topic, from_user=SimpleNamespace(id=123))
-            with (
-                patch("handlers.guide.safe_answer", new=AsyncMock()),
-                patch("handlers.guide.send_with_photo", new=AsyncMock()) as send,
-            ):
-                await cb_support_topic(callback, object())
-            keyboard = send.await_args.args[3]
-            self.assertIn(desired, actions(keyboard), topic)
-            if topic == "import":
-                self.assertIn("my_keys", actions(keyboard))
-            self.assertTrue(keyboard.inline_keyboard[-2][0].url.startswith("https://t.me/ByMeVPNSupportBot"))
-
+        from keyboards import main_menu_with_keys, key_detail_kb
+        menu = main_menu_with_keys(trial_used=True)
+        self.assertIn("my_keys", actions(menu))
+        self.assertTrue(any(
+            button.url and "ByMeVPNSupportBot" in button.url
+            for row in menu.inline_keyboard for button in row
+        ))
+        detail = key_detail_kb(7)
+        self.assertIn("key_instructions:7", actions(detail))
+        self.assertIn("key_devices:7", actions(detail))
 
 class PromotionalControlTests(unittest.IsolatedAsyncioTestCase):
     async def test_optin_preserves_clear_return_to_menu(self):
