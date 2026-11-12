@@ -201,6 +201,75 @@ async def app_login_redirect(sub: str = "", name: str = "", ticket: str = ""):
     )
 
 
+def _connect_unlock_page(ticket: str) -> str:
+    """Return a preview-safe interstitial; credentials arrive only after a click."""
+    safe_ticket = json.dumps(ticket).replace("<", "\\u003c")
+    return """<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Подключение VPN — ByMeVPN</title>
+<style>body{min-height:100vh;display:grid;place-items:center;margin:0;
+background:#07111d;color:#f3f7fb;font:16px/1.5 system-ui,sans-serif}
+main{max-width:430px;padding:28px}h1{font-size:26px}
+p{color:#a9b9c8}button{width:100%;padding:15px;border:0;border-radius:10px;
+background:#158fff;color:#fff;font:600 16px system-ui;cursor:pointer}
+button:disabled{opacity:.65}a{color:#80dfff}</style></head>
+<body><main><img src="/app/assets/bymevpn-logo.png" alt="ByMeVPN" width="48" height="48">
+<h1>Подключение ByMeVPN</h1>
+<p>Подтвердите открытие страницы подключения. Ссылка используется один раз,
+чтобы её нельзя было повторно использовать из истории браузера.</p>
+<button id="unlock" type="button">Продолжить подключение</button>
+<p id="status" role="status" aria-live="polite"></p>
+<p><a href="https://t.me/ByMeVPNSupportBot">Поддержка</a></p></main>
+<script>const token=__TICKET__;
+const button=document.getElementById('unlock'),status=document.getElementById('status');
+button.addEventListener('click',async()=>{
+ button.disabled=true;status.textContent='Открываем подключение…';
+ try {
+  const result=await fetch('/connect/redeem',{method:'POST',
+   headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({ticket:token}),credentials:'omit',cache:'no-store',
+   referrerPolicy:'no-referrer'});
+  if(!result.ok)throw new Error('invalid or already used ticket');
+  const page=await result.text();document.open();document.write(page);document.close();
+ }catch(_){status.textContent='Ссылка истекла или уже использована. Запросите новую в боте.';
+  button.disabled=false}
+});</script></body></html>""".replace("__TICKET__", safe_ticket)
+
+
+@app.post("/connect/redeem")
+async def redeem_connection_ticket(request: Request):
+    """Atomically spend the ticket and render the authorized chooser once."""
+    from fastapi.responses import HTMLResponse
+    from app_links import read_connect_ticket, render_connection_choice_page, APP_LOGIN_CONTENT_SECURITY_POLICY
+    from connect_ticket_replay import consume_connect_ticket
+
+    try:
+        raw = await request.body()
+        if len(raw) > 5000:
+            return Response(status_code=413)
+        obj = json.loads(raw)
+        ticket = obj.get("ticket") if isinstance(obj, dict) else None
+        if not isinstance(ticket, str):
+            raise ValueError("invalid ticket")
+        payload = read_connect_ticket(ticket)
+        if not await consume_connect_ticket(ticket):
+            return Response(status_code=410, headers={"Cache-Control": "no-store"})
+        page = render_connection_choice_page(payload["subscription_url"], payload["user_name"])
+    except (ValueError, TypeError, UnicodeDecodeError, RuntimeError):
+        return Response(status_code=400, headers={"Cache-Control": "no-store"})
+    except Exception:
+        logger.exception("Connection ticket redemption unavailable")
+        return Response(status_code=503, headers={"Cache-Control": "no-store"})
+    return HTMLResponse(page, headers={
+        "Cache-Control": "no-store, max-age=0",
+        "Referrer-Policy": "no-referrer",
+        "X-Robots-Tag": "noindex, nofollow",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": APP_LOGIN_CONTENT_SECURITY_POLICY,
+    })
+
+
 @app.get("/connect")
 async def connection_choice_page(ticket: str = ""):
     """Show the small OS/app chooser without exposing the subscription URL in the link."""
@@ -208,8 +277,10 @@ async def connection_choice_page(ticket: str = ""):
     from app_links import APP_LOGIN_CONTENT_SECURITY_POLICY, read_connect_ticket, render_connection_choice_page
 
     try:
-        payload = read_connect_ticket(ticket)
-        page = render_connection_choice_page(payload["subscription_url"], payload["user_name"])
+        # GET only validates the encrypted ticket: crawlers and Telegram link
+        # previews must never spend a single-use credential or receive a VPN URL.
+        read_connect_ticket(ticket)
+        page = _connect_unlock_page(ticket)
     except (ValueError, RuntimeError):
         return HTMLResponse(
             """<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Ссылка недоступна — ByMeVPN</title><style>body{margin:0;background:#07111d;color:#f3f7fb;font:16px/1.5 system-ui,sans-serif}main{max-width:480px;margin:12vh auto;padding:24px}h1{font-size:24px}p{color:#a9b9c8}a{color:#80dfff}</style><main><img src="/app/assets/bymevpn-logo.png" width="44" height="44" alt="ByMeVPN"><h1>Ссылка недоступна</h1><p>Возможно, ссылка устарела или повреждена. Вернитесь в бот и запросите новую ссылку в разделе подписки.</p><p><a href="https://t.me/ByMeVPNSupportBot">Открыть поддержку ByMeVPN</a></p></main></html>""",
