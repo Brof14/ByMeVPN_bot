@@ -309,12 +309,17 @@ async def _backup_database(bot: Bot) -> None:
             return
         # SQLite backup is synchronous. Keep database snapshot and ZIP work
         # outside the bot's event loop so Telegram callbacks remain responsive.
+        from encrypted_backup import encrypt_backup, require_backup_passphrase
+        # Telegram bot chats are NOT end-to-end encrypted. Do not transmit
+        # bare SQLite archives containing users, keys and billing records.
+        passphrase = require_backup_passphrase()
         archive_bytes = await asyncio.to_thread(_verified_sqlite_backup_zip, db_path)
+        ciphertext = await asyncio.to_thread(encrypt_backup, archive_bytes, passphrase)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         await bot.send_document(
             ADMIN_ID,
-            BufferedInputFile(archive_bytes, filename=f"vpnbot_backup_{stamp}.zip"),
-            caption=f"📦 <b>Database Backup</b>\n\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            BufferedInputFile(ciphertext, filename=f"vpnbot_backup_{stamp}.bmbackup"),
+            caption=f"🔐 <b>Encrypted Database Backup</b>\n\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             parse_mode="HTML",
         )
         logger.info("Verified SQLite backup sent to admin")
