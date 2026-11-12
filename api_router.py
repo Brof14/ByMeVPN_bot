@@ -144,15 +144,17 @@ REFRESH_TOKEN_DAYS = 90
 
 async def issue_session_tokens(user_id: int, email: str = "") -> dict[str, str]:
     """Issue independently expiring access and one-time opaque refresh tokens."""
-    access = create_simple_jwt(user_id, email)
-    claims = _verified_token_claims(access)
-    if not claims:
-        raise RuntimeError("Generated access token failed validation")
+    issued_at = int(time.time())
+    expires_at = issued_at + 30 * 86400
+    jti = secrets.token_urlsafe(18)
+    access = create_simple_jwt(
+        user_id, email, issued_at=issued_at, expires_at=expires_at, jwt_id=jti,
+    )
     refresh = "rf2_" + secrets.token_urlsafe(40)
     await database.create_mobile_refresh_session(
         hashlib.sha256(refresh.encode("ascii")).hexdigest(),
-        user_id, email, claims["jti"], claims["expires_at"],
-        int(time.time()) + REFRESH_TOKEN_DAYS * 86400,
+        user_id, email, jti, expires_at,
+        issued_at + REFRESH_TOKEN_DAYS * 86400,
     )
     return {"access": access, "refresh": refresh}
 

@@ -2375,6 +2375,23 @@ async def create_mobile_refresh_session(
     db = await get_db()
     now = int(time.time())
     async with _db_semaphore:
+        # Existing or bind-mounted production database adapters may have the
+        # old schema. This additive migration is safe before first token issue.
+        await db.executescript("""
+            CREATE TABLE IF NOT EXISTS mobile_refresh_sessions (
+                token_hash TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                email TEXT NOT NULL DEFAULT '',
+                access_jti TEXT NOT NULL UNIQUE,
+                access_expires_at INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_mobile_refresh_sessions_user
+                ON mobile_refresh_sessions(user_id);
+            CREATE INDEX IF NOT EXISTS idx_mobile_refresh_sessions_expiry
+                ON mobile_refresh_sessions(expires_at);
+        """)
         await db.execute(
             """INSERT INTO mobile_refresh_sessions
                (token_hash,user_id,email,access_jti,access_expires_at,created_at,expires_at)
