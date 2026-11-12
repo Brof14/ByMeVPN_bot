@@ -264,7 +264,7 @@ class TelegramLegacyStorageHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         return response.json()["session_token"]
 
-    async def test_profile_snapshot_failure_is_correlated_and_state_remains_retryable(self):
+    async def test_profile_snapshot_failure_does_not_block_login_or_consume_twice(self):
         import hashlib
 
         token = await self._create_confirmed_state()
@@ -272,16 +272,20 @@ class TelegramLegacyStorageHttpTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             api_router, "_auth_subscription_snapshot",
             new=AsyncMock(side_effect=RuntimeError("isolated snapshot failure")),
-        ):
+        ) as snapshot:
             response = await self.client.post(
                 "/api/v1/auth/telegram/check-session", json={"token": token},
             )
-        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "authenticated")
+        self.assertTrue(response.json()["access_token"])
+        self.assertEqual(response.json()["subscription"]["status"], "unknown")
         self.assertEqual(response.headers.get("X-Correlation-ID"), state_hash[:16])
         self.assertEqual(
             (await api_router.database.get_mobile_auth_session(state_hash))["status"],
-            "authenticated",
+            "expired",
         )
+        snapshot.assert_not_awaited()
 
 
 if __name__ == "__main__":

@@ -211,10 +211,41 @@ class TestTelegramAuthSessions(unittest.IsolatedAsyncioTestCase):
         database.DB_FILE = TEST_DB_PATH
         database._db_pool = None
         await database.init_db()
+        from fastapi import FastAPI
+        from httpx import ASGITransport, AsyncClient
+        self.app = FastAPI()
+        self.app.include_router(api_router.api_router, prefix="/api/v1")
+        self.client = AsyncClient(
+            transport=ASGITransport(app=self.app), base_url="https://testserver",
+        )
 
     async def asyncTearDown(self):
+        await self.client.aclose()
         await database.close_db()
         _clean_db()
+
+    async def test_post_login_returns_jwt_without_waiting_for_panel(self):
+        state = "auth_" + secrets.token_urlsafe(32)
+        state_hash = hashlib.sha256(state.removeprefix("auth_").encode()).hexdigest()
+        await database.create_mobile_auth_session(state_hash, int(api_router.time.time()) + 60)
+        await database.confirm_mobile_auth_session(state_hash, 98765, "test-user", "Test User")
+        with patch.object(
+            api_router, "_auth_subscription_snapshot",
+            new=AsyncMock(side_effect=RuntimeError("panel unavailable")),
+        ) as snapshot:
+            response = await self.client.post(
+                "/api/v1/auth/telegram/check-session", json={"token": state},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "authenticated")
+        self.assertEqual(api_router.verify_simple_jwt(response.json()["access_token"]), 98765)
+        self.assertEqual(response.json()["subscription"]["status"], "unknown")
+        snapshot.assert_not_awaited()
+        replay = await self.client.post(
+            "/api/v1/auth/telegram/check-session", json={"token": state},
+        )
+        self.assertEqual(replay.status_code, 200)
+        self.assertEqual(replay.json()["status"], "expired")
 
     async def test_body_polling_consumes_telegram_state_without_query_parameter(self):
         from starlette.requests import Request
@@ -245,8 +276,7 @@ class TestTelegramAuthSessions(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(replay.status, "expired")
         self.assertIsNone(replay.access_token)
 
-    async def test_retryable_snapshot_failure_does_not_consume_confirmed_state(self):
-        from fastapi import HTTPException
+    async def test_confirmed_state_is_consumed_without_waiting_for_snapshot(self):
         from starlette.requests import Request
 
         state = "auth_" + secrets.token_urlsafe(32)
@@ -262,16 +292,14 @@ class TestTelegramAuthSessions(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             api_router, "_auth_subscription_snapshot",
             new=AsyncMock(side_effect=RuntimeError("isolated snapshot failure")),
-        ):
-            with self.assertRaises(HTTPException) as result:
-                await api_router.check_telegram_session_body(
-                    api_router.TelegramSessionCheckRequest(token=state), request
-                )
-        self.assertEqual(result.exception.status_code, 503)
-        self.assertEqual(
-            result.exception.headers.get("X-Correlation-ID"), state_hash[:16],
-        )
-        self.assertEqual((await database.get_mobile_auth_session(state_hash))["status"], "authenticated")
+        ) as snapshot:
+            result = await api_router.check_telegram_session_body(
+                api_router.TelegramSessionCheckRequest(token=state), request
+            )
+        self.assertEqual(result.status, "authenticated")
+        self.assertEqual(api_router.verify_simple_jwt(result.access_token), 98765)
+        self.assertEqual((await database.get_mobile_auth_session(state_hash))["status"], "expired")
+        snapshot.assert_not_awaited()
 
     async def test_cancelled_state_cannot_be_confirmed_or_exchanged(self):
         state_hash = hashlib.sha256(secrets.token_urlsafe(32).encode()).hexdigest()

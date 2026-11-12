@@ -1,4 +1,5 @@
 """HTTP and cryptographic coverage for the opt-in Google sign-in contract."""
+import asyncio
 import base64
 import hashlib
 import json
@@ -285,15 +286,37 @@ class TestGoogleSignInHttp(unittest.IsolatedAsyncioTestCase):
             api_router, "verify_google_id_token", return_value=self._claims(nonce=nonce),
         ), patch.object(
             api_router, "_auth_subscription_snapshot", new=AsyncMock(
-                return_value=(None, [], {"status": "inactive"}),
+                side_effect=RuntimeError("panel unavailable"),
             ),
-        ):
+        ) as snapshot:
             body = {"id_token": "opaque", "nonce": nonce, "install_id": "ignored-test-id"}
             response = await self.client.post("/api/v1/auth/google", json=body)
             replay = await self.client.post("/api/v1/auth/google", json=body)
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["user"]["is_google"])
+        self.assertTrue(response.json()["access"])
+        self.assertEqual(response.json()["subscription"]["status"], "unknown")
+        snapshot.assert_not_awaited()
         self.assertEqual(replay.status_code, 401)
+
+    async def test_google_login_does_not_wait_for_slow_panel_snapshot(self):
+        nonce = (await self.client.post("/api/v1/auth/google/nonce", json={})).json()["nonce"]
+
+        async def slow_panel(*_args, **_kwargs):
+            await asyncio.sleep(0.05)
+            raise RuntimeError("panel unavailable")
+
+        with patch.object(
+            api_router, "verify_google_id_token", return_value=self._claims(nonce=nonce),
+        ), patch.object(
+            api_router, "_auth_subscription_snapshot", new=AsyncMock(side_effect=slow_panel),
+        ) as snapshot:
+            response = await self.client.post(
+                "/api/v1/auth/google", json={"id_token": "opaque", "nonce": nonce},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["access"])
+        snapshot.assert_not_awaited()
 
     async def test_google_session_can_claim_the_shared_three_day_two_device_trial(self):
         """A Google-issued JWT uses the same users.trial_used claim as other logins."""
