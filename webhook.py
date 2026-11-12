@@ -248,6 +248,27 @@ async def app_login_logo():
         headers={"Cache-Control": "public, max-age=86400"},
     )
 
+
+@app.get("/app/assets/{asset_name}", include_in_schema=False)
+async def app_brand_asset(asset_name: str):
+    """Serve the connection page's fixed set of public application icons."""
+    from pathlib import Path
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+
+    allowed = {
+        "android.png", "apple.png", "bymevpn-logo.png", "happ.png", "incy.png",
+        "koala.png", "linux.png", "v2raytun.png", "v2rayng.png", "hiddify.png",
+        "singbox.png", "v2rayn.png", "windows.png",
+    }
+    root = (Path(__file__).resolve().parent / "static" / "app" / "assets").resolve()
+    path = (root / asset_name).resolve()
+    if asset_name not in allowed or path.parent != root or not path.is_file():
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    return FileResponse(path, media_type="image/png", headers={
+        "Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff",
+    })
+
 # Global dispatcher for Telegram webhook handling
 dispatcher: Optional[Dispatcher] = None
 

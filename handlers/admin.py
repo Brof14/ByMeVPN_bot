@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 51900)
-Total output lines: 4546
-
 """
 Extended admin panel.
 Features: stats, extended stats, broadcast, user list, user search,
@@ -2034,7 +2031,162 @@ async def receive_refund_reason(message: Message, bot: Bot, state: FSMContext):
     if not _is_admin(message.from_user.id):
         return
 
-    reason = (mess…1900 tokens truncated…рат подтверждён администратором</b>\n\n"
+    reason = (message.text or "").strip() or "Возврат по запросу"
+    data = await state.get_data()
+    uid = data.get("refund_user_id")
+    amount = data.get("refund_amount")
+    if not uid or not amount:
+        await state.clear()
+        await message.answer("❌ Ошибка сессии. Начните заново.")
+        return
+
+    await state.update_data(refund_reason=reason)
+    await state.set_state(AdminFlow.refund_confirm)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Я уже вернул Stars в Telegram", callback_data="admin_refund_custom_confirm")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_refund_custom_cancel")],
+    ])
+    await message.answer(
+        f"⚠️ <b>Подтверждение ручного возврата</b>\n\n"
+        f"Пользователь: <code>{uid}</code>\n"
+        f"Сумма: <b>{amount} Stars</b>\n"
+        f"Причина: {escape(reason)}\n\n"
+        "Этот бот не выполняет перевод. Сначала верните Stars через инструменты Telegram, "
+        "затем нажмите подтверждение. До подтверждения запись о выполненном возврате не создаётся.",
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+
+
+@router.callback_query(F.data == "admin_refund_custom_confirm")
+async def cb_refund_custom_confirm(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    data = await state.get_data()
+    uid = data.get("refund_user_id")
+    amount = data.get("refund_amount")
+    reason = data.get("refund_reason")
+    if not uid or not amount or not reason or await state.get_state() != AdminFlow.refund_confirm.state:
+        await safe_answer(callback, "Сессия возврата истекла. Начните заново.", alert=True)
+        await state.clear()
+        return
+
+    await add_refund(
+        user_id=uid, amount=int(amount), currency="XTR", method="stars",
+        reason=reason, refunded_by=callback.from_user.id,
+    )
+    await state.clear()
+    try:
+        await bot.send_message(
+            uid,
+            f"💰 <b>Возврат Stars подтверждён</b>\n\n"
+            f"Администратор подтвердил возврат <b>{int(amount)} Stars</b>.\n"
+            f"Причина: {escape(str(reason))}",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.warning("Refund recorded, but user %s could not be notified: %s", uid, e)
+    await safe_answer(callback, "Возврат зафиксирован.")
+    await callback.message.edit_text(
+        f"✅ <b>Возврат подтверждён администратором</b>\n\n"
+        f"Пользователь: <code>{uid}</code>\nСумма: <b>{int(amount)} Stars</b>\n"
+        "Запись создана после подтверждения ручной операции.",
+        parse_mode="HTML",
+        reply_markup=_back_kb(),
+    )
+
+
+@router.callback_query(F.data == "admin_refund_custom_cancel")
+async def cb_refund_custom_cancel(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await state.clear()
+    await safe_answer(callback, "Операция отменена.")
+    await callback.message.edit_text("Возврат отменён. Денежная операция не зафиксирована.", reply_markup=_back_kb())
+
+
+@router.callback_query(F.data.startswith("admin_refund_do:"))
+async def cb_refund_do(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    try:
+        payment_id = int(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await safe_answer(callback, "Некорректный ID платежа.", alert=True)
+        return
+
+    payment = await get_payment_by_id(payment_id)
+    if not payment or payment.get("status") != "success":
+        await callback.message.edit_text(
+            "⚠️ Платёж не найден или не имеет подтверждённого статуса success. "
+            "Возврат не оформлен; сначала выполните сверку.",
+            reply_markup=_back_kb(),
+        )
+        return
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Я уже вернул средства у провайдера", callback_data=f"admin_refund_confirm:{payment_id}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_refund_cancel")],
+    ])
+    await callback.message.edit_text(
+        f"⚠️ <b>Ручной возврат — подтверждение</b>\n\n"
+        f"Пользователь: <code>{payment['user_id']}</code>\n"
+        f"Платёж: <code>{payment_id}</code>\n"
+        f"Сумма: <b>{payment['amount']} {escape(str(payment['currency']))}</b>\n"
+        f"Провайдер: <b>{escape(str(payment['method']))}</b>\n\n"
+        "Бот не отправляет деньги автоматически. Сначала выполните возврат в кабинете провайдера, "
+        "затем подтвердите его здесь.",
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+
+
+@router.callback_query(F.data.startswith("admin_refund_confirm:"))
+async def cb_refund_confirm(callback: CallbackQuery, bot: Bot):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    try:
+        payment_id = int(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await safe_answer(callback, "Некорректный ID платежа.", alert=True)
+        return
+
+    payment = await get_payment_by_id(payment_id)
+    if not payment or payment.get("status") != "success":
+        await callback.message.edit_text(
+            "⚠️ Платёж не найден или уже требует сверки. Возврат не зафиксирован.",
+            reply_markup=_back_kb(),
+        )
+        return
+
+    refund_reference = payment.get("provider_payment_id") or payment.get("payload")
+    previous_refunds = await get_user_refunds(payment["user_id"])
+    if any(r.get("original_payload") == refund_reference for r in previous_refunds):
+        await callback.message.edit_text(
+            "⚠️ Возврат для этого платёжного идентификатора уже записан. Повторная запись заблокирована.",
+            reply_markup=_back_kb(),
+        )
+        return
+
+    await add_refund(
+        user_id=payment["user_id"],
+        amount=payment["amount"],
+        currency=payment["currency"],
+        method=payment["method"],
+        reason=f"Возврат платежа #{payment_id}, подтверждён администратором",
+        original_payload=refund_reference,
+        refunded_by=callback.from_user.id,
+    )
+    try:
+        await bot.send_message(
+            payment["user_id"],
+            f"💰 <b>Возврат подтверждён администратором</b>\n\n"
             f"Сумма: <b>{payment['amount']} {escape(str(payment['currency']))}</b>\n"
             "Администратор подтвердил, что возврат выполнен через платёжный сервис.",
             parse_mode="HTML",

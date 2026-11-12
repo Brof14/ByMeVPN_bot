@@ -135,6 +135,11 @@ async def _api_call_with_retry(func, *args, max_retries=3, base_delay=0.5, **kwa
             return result
         except Exception as e:
             failed = True
+            # A missing panel record is a definitive response, not a transient
+            # network failure. Retrying it only delays customer screens.
+            if isinstance(e, ValueError) and "record not found" in str(e).lower():
+                perf_metrics.observe("xui_api_call", time.perf_counter() - started, True)
+                raise
             if _is_authentication_error(e):
                 _invalidate_api_pool()
                 logger.error("3x-ui API authentication failed: %s", e)
