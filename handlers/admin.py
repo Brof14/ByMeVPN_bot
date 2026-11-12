@@ -112,9 +112,46 @@ def _finances_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="Платежи", callback_data="admin_payments"),
          InlineKeyboardButton(text="Возвраты", callback_data="admin_refunds")],
         [InlineKeyboardButton(text="Финансовый отчёт", callback_data="admin_finance")],
+        [InlineKeyboardButton(text="Проблемные платежи", callback_data="admin_payment_incidents")],
         [InlineKeyboardButton(text="Экспорт данных", callback_data="admin_export_csv")],
         [InlineKeyboardButton(text="← Главное меню", callback_data="admin_menu")],
     ])
+
+
+@router.callback_query(F.data == "admin_payment_incidents")
+async def cb_admin_payment_incidents(callback: CallbackQuery):
+    """Read-only reconciliation queue; never silently grant/refund twice."""
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    from billing_incidents import read_billing_incidents
+    try:
+        incidents = await read_billing_incidents()
+    except Exception as exc:
+        logger.error("Billing incident query failed (%s)", type(exc).__name__)
+        await callback.message.answer("Не удалось получить список платежей для сверки.")
+        return
+    lines = ["<b>Проблемные платежи</b>", "",
+             "Данные для сверки; повторная выдача и возврат не выполняются автоматически."]
+    buttons = []
+    for entry in incidents:
+        reason = escape(str(entry["status"]))
+        provider = escape(str(entry["provider"]))
+        invoice_id = escape(str(entry["invoice_id"]))
+        lines.append(f"\n{provider} · <code>{invoice_id}</code> · {reason}")
+        uid = entry.get("user_id")
+        if uid:
+            buttons.append([InlineKeyboardButton(
+                text=f"Клиент {int(uid)}", callback_data=f"admin_user:{int(uid)}"
+            )])
+    if not incidents:
+        lines.append("\nВ журнале не найдено операций, ожидающих сверки.")
+    buttons.append([InlineKeyboardButton(text="← К финансам", callback_data="admin_finance_menu")])
+    await callback.message.edit_text(
+        "\n".join(lines), parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
 
 
 def _growth_kb() -> InlineKeyboardMarkup:
