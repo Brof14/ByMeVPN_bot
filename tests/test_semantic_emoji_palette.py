@@ -34,23 +34,17 @@ class SemanticPremiumEmojiTests(unittest.TestCase):
         self.assertEqual(ICON_IDS["about"], "5879785854284599288")
         self.assertEqual(ICON_IDS["plans"], "5983399041197675256")
 
-    def test_exact_platform_icons_beat_generic_guide_fallback(self):
+    def test_current_connection_actions_have_semantic_icons(self):
         roles = {
-            "guide_ios": "ios",
-            "guide_android": "android",
-            "guide_windows": "windows",
-            "guide_linux": "linux",
-            "guide_macos": "macos",
-            "guide_android_tv": "android_tv",
-            "guide_ios_mac": "ipad",
-            "guide_linux_ubuntu": "linux",
+            "key_instructions:42": "connect",
+            "key_devices:42": "devices",
+            "key_renew:42": "renew",
+            "manage_payment_methods:42": "card",
         }
         with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "1"}):
-            for action, role in roles.items():
-                for callback in (action, action + ":42"):
-                    button = themed_button(text="Устройство", callback_data=callback)
-                    self.assertEqual(button.icon_custom_emoji_id, ICON_IDS[role], callback)
-        # iPhone, Android, Windows, Linux must never get a shared generic icon.
+            for callback, role in roles.items():
+                button = themed_button(text="Действие", callback_data=callback)
+                self.assertEqual(button.icon_custom_emoji_id, ICON_IDS[role], callback)
         self.assertEqual(len({ICON_IDS[x] for x in ("ios", "android", "windows", "linux")}), 4)
 
     def test_customer_platform_keyboard_has_the_right_icons(self):
@@ -115,7 +109,7 @@ class SemanticPremiumEmojiTests(unittest.TestCase):
             markup = app_open_kb("https://example.test/app", "happ://add/safe-short-link")
         copy_button = next(button for button in all_buttons(markup) if button.copy_text)
         self.assertEqual(copy_button.text, "Скопировать ссылку входа")
-        self.assertIsNone(copy_button.icon_custom_emoji_id)
+        self.assertEqual(copy_button.icon_custom_emoji_id, ICON_IDS["copy"])
 
     def test_banners_only_for_key_landmarks(self):
         active = {MENU, PLANS, KEY, CONNECTION, ABOUT, REFERRALS, AD_PROGRAM}
