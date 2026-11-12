@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from encrypted_backup import decrypt_backup
 from notifications import _backup_database, _verified_sqlite_backup_zip
 
 
@@ -49,14 +50,33 @@ class SqliteOnlineBackupTests(unittest.IsolatedAsyncioTestCase):
                 db.execute("INSERT INTO events VALUES ('safe')")
                 db.commit()
             bot = SimpleNamespace(send_document=AsyncMock(), send_message=AsyncMock())
-            with patch("notifications.DB_FILE", str(source)), patch("notifications.ADMIN_ID", 11):
+            password = "correct-test-backup-passphrase-value-12345"
+            with patch("notifications.DB_FILE", str(source)), \
+                 patch("notifications.ADMIN_ID", 11), \
+                 patch.dict("os.environ", {"BYMEVPN_BACKUP_PASSPHRASE": password}):
                 await _backup_database(bot)
             bot.send_document.assert_awaited_once()
             self.assertEqual(bot.send_document.await_args.args[0], 11)
             sent_file = bot.send_document.await_args.args[1]
-            with zipfile.ZipFile(io.BytesIO(sent_file.data)) as archive:
+            self.assertTrue(sent_file.filename.endswith(".bmbackup"))
+            decrypted = decrypt_backup(sent_file.data, password)
+            with zipfile.ZipFile(io.BytesIO(decrypted)) as archive:
                 self.assertIn("online.db", archive.namelist())
             bot.send_message.assert_not_awaited()
+
+    async def test_missing_backup_secret_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "online.db"
+            with sqlite3.connect(source) as db:
+                db.execute("CREATE TABLE events (name TEXT)")
+                db.commit()
+            bot = SimpleNamespace(send_document=AsyncMock(), send_message=AsyncMock())
+            with patch("notifications.DB_FILE", str(source)), \
+                 patch("notifications.ADMIN_ID", 11), \
+                 patch.dict("os.environ", {"BYMEVPN_BACKUP_PASSPHRASE": ""}):
+                await _backup_database(bot)
+            bot.send_document.assert_not_awaited()
+            bot.send_message.assert_awaited_once()
 
 
 if __name__ == "__main__":
