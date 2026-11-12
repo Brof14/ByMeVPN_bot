@@ -9,7 +9,6 @@ from keyboards import (
     main_menu_with_keys,
     manage_payment_methods_kb,
     key_settings_kb,
-    connection_guide_kb,
     back_to_menu,
     tariff_selection_kb,
 )
@@ -452,22 +451,18 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         self.assertIn("сверк", send.await_args.args[2].lower())
 
     def test_guide_device_selector_uses_compact_two_column_rows(self):
-        markup = connection_guide_kb()
-        self.assertEqual([len(row) for row in markup.inline_keyboard[:2]], [2, 2])
-        actions = callbacks(markup)
-        self.assertIn("guide_ios", actions)
-        self.assertIn("guide_android", actions)
-        self.assertIn("guide_linux", actions)
-        self.assertIn("guide_more", actions)
-        labels = [button.text for row in markup.inline_keyboard for button in row]
-        self.assertEqual(labels[:4], ["iPhone / iPad", "Android", "Windows", "Linux"])
+        from app_links import render_connection_choice_page
+        page = render_connection_choice_page("https://panel.example/sub/test")
+        for platform in ("android", "ios", "windows", "linux"):
+            self.assertIn(platform, page)
+        self.assertIn("Рекомендуем", page)
 
     def test_additional_platforms_keep_mac_and_tv_accessible(self):
-        from keyboards import additional_platforms_kb
-        actions = callbacks(additional_platforms_kb(9))
-        self.assertIn("guide_macos:9", actions)
-        self.assertIn("guide_android_tv:9", actions)
-        self.assertIn("connection_guide:9", actions)
+        from app_links import render_connection_choice_page
+        page = render_connection_choice_page("https://panel.example/sub/test")
+        self.assertIn("macos", page)
+        self.assertIn("Hiddify", page)
+        self.assertIn("v2rayN", page)
 
     async def test_referral_start_uses_a_welcome_variant(self):
         from types import SimpleNamespace
@@ -529,7 +524,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(back[0]), 1)
         self.assertEqual(back[0][0].callback_data, "back_to_menu")
 
-        for markup in (tariff_selection_kb(), connection_guide_kb()):
+        for markup in (tariff_selection_kb(),):
             for row in markup.inline_keyboard:
                 self.assertFalse(any(button.url for button in row))
 
