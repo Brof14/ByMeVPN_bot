@@ -177,6 +177,27 @@ async def issue_session_tokens(user_id: int, email: str = "") -> dict[str, str]:
     return {"access": access, "refresh": refresh}
 
 
+def hash_password_scrypt(password: str, salt: str) -> str:
+    """Memory-hard password hash for *new* email accounts.
+
+    Existing PBKDF2 hashes are still accepted on sign-in to avoid locking out
+    clients with old passwords. No password or key material is logged.
+    """
+    derived = hashlib.scrypt(
+        password.encode("utf-8"), salt=bytes.fromhex(salt),
+        n=2**14, r=8, p=1, dklen=32,
+    )
+    return "scrypt$v1$" + derived.hex()
+
+
+def verify_stored_password(password: str, stored_hash: str, salt: str) -> bool:
+    if stored_hash.startswith("scrypt$v1$"):
+        actual = hash_password_scrypt(password, salt)
+    else:
+        actual = hash_password(password, salt)
+    return hmac.compare_digest(actual, stored_hash)
+
+
 async def confirm_telegram_session(token: str, user_id: int, username: str = "", full_name: str = "") -> bool:
     """Confirm a pending single-use login state created by the mobile API."""
     state = token.removeprefix("auth_")
@@ -1503,7 +1524,7 @@ async def register(req: RegisterRequest, request: Request):
         raise HTTPException(status_code=400, detail="Пользователь с таким email уже зарегистрирован")
 
     salt = secrets.token_hex(16)
-    pw_hash = hash_password(req.password, salt)
+    pw_hash = hash_password_scrypt(req.password, salt)
     # Do not derive the internal identity from a 32-bit email hash.
     # Allocate and persist an unpredictable ID atomically in the same DB.
     try:
@@ -1549,8 +1570,7 @@ async def login(req: LoginRequest, request: Request):
         raise HTTPException(status_code=401, detail="Неверный email или пароль")
 
     user_id, stored_hash, salt, name = row
-    computed_hash = hash_password(req.password, salt)
-    if not hmac.compare_digest(computed_hash, stored_hash):
+    if not verify_stored_password(req.password, stored_hash, salt):
         raise HTTPException(status_code=401, detail="Неверный email или пароль")
 
     session_tokens = await issue_session_tokens(user_id, email)
