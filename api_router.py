@@ -32,6 +32,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel
 
 import database
+import email_identity
 from auth_rate_limits import require_auth_quota
 from entitlements import EntitlementSigningError, create_entitlement, device_binding, load_private_key
 from config import XUI_SUB_PATH, XUI_URL
@@ -160,7 +161,7 @@ REFRESH_TOKEN_DAYS = 90
 
 async def issue_session_tokens(user_id: int, email: str = "") -> dict[str, str]:
     """Issue independently expiring access and one-time opaque refresh tokens."""
-    issued_at = int(time.time())
+    issued_at = max(int(time.time()), await email_identity.minimum_new_session_iat(user_id))
     expires_at = issued_at + 30 * 86400
     jti = secrets.token_urlsafe(18)
     access = create_simple_jwt(
@@ -383,6 +384,8 @@ async def get_current_user_id(authorization: Optional[str] = Header(None)) -> in
             headers={"WWW-Authenticate": "Bearer"},
         )
     try:
+        if await email_identity.session_invalidated_by_reset(claims["user_id"], claims["issued_at"]):
+            raise HTTPException(status_code=401, detail="Session invalidated by password reset", headers={"WWW-Authenticate": "Bearer"})
         if await database.is_mobile_jwt_revoked(claims["jti"]):
             raise HTTPException(
                 status_code=401, detail="Session has been logged out",
@@ -1512,6 +1515,111 @@ async def cancel_telegram_session(req: TelegramSessionCancelRequest):
 # 2. SECURE EMAIL REGISTRATION & LOGIN (Strict Password Verification)
 # ---------------------------------------------------------------------------
 
+class EmailActionRequest(BaseModel):
+    email: str
+
+
+class EmailTokenRequest(BaseModel):
+    token: str
+
+
+class EmailResetConfirmRequest(BaseModel):
+    token: str
+    password: str
+
+
+def _email_action_failure(exc: Exception) -> HTTPException:
+    # No email addresses, tokens, or SMTP credentials in client error details.
+    logger.error("Email delivery or storage unavailable (%s)", type(exc).__name__)
+    return HTTPException(status_code=503, detail="Отправка письма временно недоступна")
+
+
+@auth_api.post("/email/resend")
+async def resend_verification(req: EmailActionRequest, request: Request):
+    await require_auth_quota(request, "email_resend_ip", limit=8, window_seconds=3600)
+    email = req.email.strip().lower()
+    await require_auth_quota(request, "email_resend_account", limit=3, window_seconds=3600, subject=email)
+    email_identity._mail_settings("verify")
+    await _ensure_auth_db()
+    db = await database.get_db()
+    row = await (await db.execute("SELECT user_id FROM app_users WHERE email=?", (email,))).fetchone()
+    if row and await email_identity.is_email_pending(int(row[0])):
+        try:
+            token = await email_identity.issue_action(int(row[0]), "verify")
+            await email_identity.send_action(email, "verify", token)
+        except Exception as exc:
+            raise _email_action_failure(exc) from None
+    return {"status": "accepted"}
+
+
+@auth_api.post("/email/verify")
+async def complete_email_verification(req: EmailTokenRequest, request: Request):
+    await require_auth_quota(request, "email_verify_ip", limit=20, window_seconds=3600)
+    try:
+        verified = await email_identity.verify_registration(req.token)
+    except Exception as exc:
+        logger.error("Email verification unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Проверка email временно недоступна") from None
+    if not verified:
+        raise HTTPException(status_code=401, detail="Ссылка подтверждения недействительна или истекла")
+    user_id, email = verified
+    tokens = await issue_session_tokens(user_id, email)
+    return {
+        "verified": True,
+        "access": tokens["access"],
+        "refresh": tokens["refresh"],
+        "user": {"id": str(user_id), "email": email, "is_google": False},
+        "subscription": _login_subscription_pending_snapshot(),
+        "servers": [],
+    }
+
+
+@auth_api.post("/password-reset/request")
+async def request_password_reset(req: EmailActionRequest, request: Request):
+    await require_auth_quota(request, "reset_request_ip", limit=8, window_seconds=3600)
+    email = req.email.strip().lower()
+    await require_auth_quota(request, "reset_request_account", limit=3, window_seconds=3600, subject=email)
+    try:
+        email_identity._mail_settings("reset")
+        await _ensure_auth_db()
+        db = await database.get_db()
+        row = await (await db.execute(
+            "SELECT user_id FROM app_users WHERE email=? AND password_hash LIKE 'scrypt:%'",
+            (email,),
+        )).fetchone()
+        if row:
+            token = await email_identity.issue_action(int(row[0]), "reset")
+            await email_identity.send_action(email, "reset", token)
+    except Exception as exc:
+        raise _email_action_failure(exc) from None
+    # Identical response for unknown, Google-only, and existing identities.
+    return {"status": "accepted"}
+
+
+@auth_api.post("/password-reset/confirm")
+async def confirm_password_reset(req: EmailResetConfirmRequest, request: Request):
+    await require_auth_quota(request, "reset_confirm_ip", limit=20, window_seconds=3600)
+    try:
+        user_id = await email_identity.action_owner(req.token, "reset")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Ссылка недействительна или истекла") from None
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Ссылка недействительна или истекла")
+    await _ensure_auth_db()
+    db = await database.get_db()
+    row = await (await db.execute(
+        "SELECT email FROM app_users WHERE user_id=?", (user_id,),
+    )).fetchone()
+    if not row:
+        raise HTTPException(status_code=401, detail="Ссылка недействительна или истекла")
+    validate_registration_credentials(str(row[0]), req.password)
+    salt = secrets.token_hex(16)
+    encoded = hash_password_scrypt(req.password, salt)
+    if not await email_identity.reset_password(req.token, encoded, salt):
+        raise HTTPException(status_code=401, detail="Ссылка недействительна или истекла")
+    return {"status": "password_updated", "sessions_revoked": True}
+
+
 @auth_api.post("/register")
 async def register(req: RegisterRequest, request: Request):
     await require_auth_quota(request, "register_ip", limit=12, window_seconds=3600)
@@ -1534,6 +1642,15 @@ async def register(req: RegisterRequest, request: Request):
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if email_identity.verification_enabled():
+        try:
+            await email_identity.mark_registration_pending(user_id)
+            token = await email_identity.issue_action(user_id, "verify")
+            await email_identity.send_action(email, "verify", token)
+        except Exception as exc:
+            raise _email_action_failure(exc) from None
+        return {"verification_required": True, "email": email, "expires_in": 1800}
 
     session_tokens = await issue_session_tokens(user_id, email)
     sub_url, servers, sub_dict = await _auth_subscription_snapshot(
@@ -1575,6 +1692,8 @@ async def login(req: LoginRequest, request: Request):
     user_id, stored_hash, salt, name = row
     if not verify_stored_password(req.password, stored_hash, salt):
         raise HTTPException(status_code=401, detail="Неверный email или пароль")
+    if await email_identity.is_email_pending(int(user_id)):
+        raise HTTPException(status_code=403, detail="Подтвердите email, чтобы завершить регистрацию")
 
     session_tokens = await issue_session_tokens(user_id, email)
     sub_url, servers, sub_dict = await _auth_subscription_snapshot(
@@ -1822,6 +1941,8 @@ async def refresh_token(req: RefreshRequest):
     claims = _verified_token_claims(req.refresh.removeprefix("ref_"))
     if not claims:
         raise HTTPException(status_code=401, detail="Сессия истекла")
+    if await email_identity.session_invalidated_by_reset(claims["user_id"], claims["issued_at"]):
+        raise HTTPException(status_code=401, detail="Сессия завершена после изменения пароля")
     try:
         # The tombstone check belongs INSIDE the atomic upgrade transaction:
         # independent DB reads on the shared SQLite connection can interleave
