@@ -141,6 +141,11 @@ class CancelAllMethodsTests(unittest.IsolatedAsyncioTestCase):
         )
         await db.commit()
         await database.add_key(123, "https://sub.test/one", "one", "uuid-1", 30, 2)
+        await database.save_client_diagnostic(123, "android", "connect", "TUNNEL_TIMEOUT", "1.0")
+        await database.create_mobile_refresh_session(
+            "a" * 64, 123, "test@example.invalid", "issued-jti", 2147483000, 2147483500,
+        )
+        await database.claim_yookassa_checkout_attempt(123, "b" * 64)
 
         uuids = await database.delete_user_and_keys(123)
         self.assertEqual(uuids, ["uuid-1"])
@@ -158,6 +163,15 @@ class CancelAllMethodsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await (await db.execute(
             "SELECT amount FROM payments WHERE payload='receipt-1'"
         )).fetchone())[0], 89)
+        for table in ("mobile_refresh_sessions", "client_diagnostics", "yookassa_checkout_attempts"):
+            cursor = await db.execute(f"SELECT COUNT(*) FROM {table} WHERE user_id=123")
+            self.assertEqual((await cursor.fetchone())[0], 0, table)
+
+    async def test_checkout_lease_blocks_account_deletion_during_invoice_creation(self):
+        attempt = await database.claim_yookassa_checkout_attempt(123, "c" * 64)
+        self.assertTrue(await database.has_recent_unsettled_checkout(123))
+        await database.release_yookassa_checkout_attempt(123, attempt["token"])
+        self.assertFalse(await database.has_recent_unsettled_checkout(123))
 
     async def test_pending_mobile_or_trial_checkout_blocks_erasure(self):
         import time

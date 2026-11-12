@@ -3552,6 +3552,16 @@ async def has_recent_unsettled_checkout(
         if await cursor.fetchone():
             return True
 
+    # A Telegram YooKassa checkout may still be contacting the provider before
+    # the durable pending invoice has been recorded. Do not delete this user.
+    cursor = await db.execute(
+        "SELECT 1 FROM yookassa_checkout_attempts "
+        "WHERE user_id=? AND lease_expires_at>? LIMIT 1",
+        (user_id, int(time.time())),
+    )
+    if await cursor.fetchone():
+        return True
+
     # A mobile checkout can be in the external provider's creation phase
     # before it has an invoice ID or a row in either pending ledger.
     cursor = await db.execute(
@@ -5015,6 +5025,9 @@ async def delete_user_and_keys(user_id: int, *, source: str = "admin") -> list[s
                     ("mobile_device_bootstraps", "user_id"),
                     ("trial_claim_reservations", "user_id"),
                     ("mobile_auth_sessions", "user_id"),
+                    ("mobile_refresh_sessions", "user_id"),
+                    ("client_diagnostics", "user_id"),
+                    ("yookassa_checkout_attempts", "user_id"),
                     ("marketing_preferences", "user_id"),
                     ("analytics_events", "user_id"),
                     ("key_errors", "user_id"),
