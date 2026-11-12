@@ -316,7 +316,7 @@ async def _find_client_uuid(api: AsyncApi, email: str) -> Optional[str]:
         try:
             client = await _api_call_with_retry(api.client.get_by_email, email)
             if client and client.uuid:
-                logger.info("Found client %s via get_by_email: uuid=%s", email, client.uuid)
+                logger.info("Found panel client for user %s", email)
                 return client.uuid
         except Exception as e:
             logger.debug("get_by_email failed for %s: %s", email, e)
@@ -358,7 +358,7 @@ async def _find_client_sub_id(api: AsyncApi, email: str) -> Optional[str]:
         try:
             client = await _api_call_with_retry(api.client.get_by_email, email)
             if client and client.sub_id:
-                logger.info("Found client %s sub_id via get_by_email: sub_id=%s", email, client.sub_id)
+                logger.info("Found panel subscription identifier for user %s", email)
                 return client.sub_id
         except Exception as e:
             logger.debug("get_by_email failed for %s: %s", email, e)
@@ -390,7 +390,7 @@ async def _find_client_sub_id(api: AsyncApi, email: str) -> Optional[str]:
         if client_uuid:
             # Генерируем sub_id из uuid (убираем дефисы и берем первые 16 символов)
             generated_sub_id = client_uuid.replace("-", "")[:16]
-            logger.info("Generated sub_id for %s from uuid: %s", email, generated_sub_id)
+            logger.info("Recovered legacy panel subscription identifier for user %s", email)
             return generated_sub_id
     except Exception as e:
         logger.debug("Failed to generate sub_id from uuid for %s: %s", email, e)
@@ -438,7 +438,7 @@ async def create_xui_user(
         existing_uuid = await _find_client_uuid(api, email)
         
         if existing_uuid:
-            logger.info("Client %s already exists in 3x-ui (uuid=%s) - PRESERVING UUID and updating", email, existing_uuid)
+            logger.info("Client %s already exists in 3x-ui; preserving identity and updating", email)
             existing_sub_id = await _find_client_sub_id(api, email) or existing_uuid.replace("-", "")[:16]
             update_res = await update_xui_user(
                 user_id,
@@ -454,8 +454,8 @@ async def create_xui_user(
             # A partial add can leave inbounds with mixed expiry/device limits,
             # while falsely returning a successful subscription to the caller.
             logger.error(
-                "Existing 3x-ui client %s (uuid=%s, sub_id=%s) could not be updated; refusing to create or mutate inbounds",
-                email, existing_uuid, existing_sub_id,
+                "Existing 3x-ui client %s could not be updated; refusing to create or mutate inbounds",
+                email,
             )
             return None
         else:
@@ -510,7 +510,7 @@ async def create_xui_user(
                                             sub_id = c.sub_id
                                         if c.uuid:
                                             client_uuid = c.uuid
-                                        logger.info("Found client in client_stats: uuid=%s, sub_id=%s", client_uuid, sub_id)
+                                        logger.info("Recovered client identity from configured inbound %d", iid)
                                         return True
                         except Exception as get_err:
                             logger.warning("Failed to search client_stats: %s", get_err)
@@ -612,8 +612,10 @@ async def create_xui_user(
             if not all(client_state.values()):
                 logger.warning("⚠️ Some remote inbounds still missing client after monitoring period")
 
-        if success_count == 0:
-            logger.error("Failed to add client %s to any inbound", email)
+        if success_count != len(inbound_ids):
+            logger.error("Incomplete panel provisioning for user %s: %d/%d mandatory inbounds", email, success_count, len(inbound_ids))
+            # Leave the partial panel state for deterministic reconciliation;
+            # never return a paid-access success from an incomplete write.
             return None
 
         if limit_hwid is not None and not await set_xui_client_limits(
@@ -627,73 +629,23 @@ async def create_xui_user(
         try:
             existing_client = await _api_call_with_retry(api.client.get_by_email, email)
             if existing_client and existing_client.uuid:
-                client_uuid = existing_client.uuid
-                logger.info("Using verified uuid from panel: %s", client_uuid)
+                if str(existing_client.uuid) != client_uuid:
+                    logger.error("Panel client identity mismatch for user %s", email)
+                    return None
+                logger.info("Verified new client identity against panel")
             else:
-                logger.warning("Client created but no uuid found, using generated: %s", client_uuid)
-        except Exception as e:
-            logger.warning("Failed to verify client: %s, using generated uuid", e)
-
-        # Генерируем VLESS ссылки для обоих инбаундов с разными названиями (parallel)
-        logger.info("Generating VLESS links for client %s", email)
-        vless_links = []
-        
-        async def generate_link_for_inbound(iid):
-            try:
-                # Получаем inbound конфигурацию
-                inbound = await _api_call_with_retry(api.inbound.get_by_id, iid)
-                if inbound:
-                    if not _is_vless_inbound(inbound):
-                        logger.info(
-                            "Skipping manual VLESS fallback for inbound %d (protocol=%s)",
-                            iid, getattr(inbound, "protocol", "unknown"),
-                        )
-                        return None
-                    
-                    # Генерируем линк для клиента на основе данных inbound
-                    try:
-                        # Получаем адрес и порт из inbound
-                        address = getattr(inbound, 'address', 'bymevpn.duckdns.org')
-                        port = getattr(inbound, 'port', 443)
-                        
-                        # Генерируем VLESS линк с названием для конкретного инбаунда
-                        inbound_name = _inbound_name(iid, inbound)
-                        vless_link = (
-                            f"vless://{client_uuid}@{address}:{port}"
-                            f"?encryption=none"
-                            f"&security=tls"
-                            f"&type=tcp"
-                            f"&flow=xtls-rprx-vision"
-                            f"&sni={address}"
-                            f"&alpn=h3,h2,http/1.1"
-                            f"&fp=chrome"
-                            f"&mux=4"  # Multiplexing for better speed
-                            f"&allowInsecure=0"
-                            f"#{inbound_name}"
-                        )
-                        
-                        logger.info("Generated VLESS link for inbound %d: %s", iid, vless_link[:80] + "...")
-                        return vless_link
-                    except Exception as gen_err:
-                        logger.warning("Failed to generate VLESS link for inbound %d: %s", iid, gen_err)
-                        return None
-            except Exception as e:
-                logger.warning("Failed to get inbound %d: %s", iid, e)
+                logger.error("New client identity could not be verified against panel")
                 return None
-        
-        # Generate all links in parallel
-        link_tasks = [generate_link_for_inbound(iid) for iid in inbound_ids]
-        link_results = await asyncio.gather(*link_tasks, return_exceptions=True)
-        
-        for result in link_results:
-            if isinstance(result, str) and result:
-                vless_links.append(result)
+        except Exception as e:
+            logger.warning("Failed to verify new client identity (%s)", type(e).__name__)
+            return None
 
-        logger.info("Generated %d VLESS links for %s", len(vless_links), email)
-
+        # No hand-crafted VLESS links: TLS/REALITY/port/flow must come from
+        # the authoritative 3x-ui subscription, not guessed defaults.
+        vless_links = []
         # Генерируем ссылку на подписку
         subscription_url = _build_sub_url(sub_id)
-        logger.info("Subscription URL for %s: %s", email, subscription_url)
+        logger.info("Resolved subscription URL for user %s", email)
 
         return {
             "subscription_url": subscription_url,
@@ -1195,7 +1147,7 @@ async def get_user_subscription_links(user_id: int) -> Optional[List[str]]:
             return []
 
         url = _build_sub_url(sub_id)
-        logger.info("get_user_subscription_links: returning URL for %s: %s", email, url)
+        logger.info("get_user_subscription_links: resolved URL for user %s", email)
         return [url]
 
     except Exception as e:
