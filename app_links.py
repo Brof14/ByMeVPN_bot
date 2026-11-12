@@ -270,27 +270,24 @@ def render_connection_choice_page(subscription_url: str, user_name: str = "") ->
     encoded_sub = quote(subscription_url, safe="")
     bymevpn_download = f"{APP_PUBLIC_URL.rstrip('/')}/app"
     tun = {"name": "v2rayTun", "icon": "v2raytun", "deep": "v2raytun://import/" + subscription_url, "download": "https://v2raytun.com/"}
-    hiddify = {"name": "Hiddify", "icon": "hiddify", "deep": "hiddify://install-sub?url=" + encoded_sub + "#ByMeVPN", "download": "https://github.com/hiddify/hiddify-app/releases/latest"}
-    singbox = {"name": "sing-box", "icon": "singbox", "manual": True, "note": "Требуется конфигурация sing-box в формате JSON; обычная ссылка подписки может не подойти.", "download": "https://sing-box.sagernet.org/clients/"}
     apps = {
         "android": [
             {"name": "Happ", "icon": "happ", "deep": "happ://add/" + subscription_url, "download": "https://github.com/Happ-proxy/happ-android/releases/latest"},
             {"name": "INCY", "icon": "incy", "deep": "incy://import/" + subscription_url, "download": "https://play.google.com/store/apps/details?id=llc.itdev.incy"},
             tun,
             {"name": "v2rayNG", "icon": "v2rayng", "deep": "v2rayng://install-sub?url=" + encoded_sub + "#ByMeVPN", "download": "https://github.com/2dust/v2rayNG/releases/latest"},
-            hiddify, singbox,
             {"name": "ByMeVPN", "icon": "bymevpn", "comingSoon": True, "note": "Собственное приложение ByMeVPN — в разработке."},
         ],
         "ios": [
             {"name": "Happ", "icon": "happ", "deep": "happ://add/" + subscription_url, "download": "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215"},
             {"name": "INCY", "icon": "incy", "deep": "incy://import/" + subscription_url, "download": "https://apps.apple.com/us/app/incy/id6756943388"},
-            tun, hiddify, singbox,
+            tun,
         ],
         "windows": [
             {"name": "Happ", "icon": "happ", "deep": "happ://add/" + subscription_url, "download": "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe"},
             {"name": "v2rayN", "icon": "v2rayn", "manual": True, "download": "https://github.com/2dust/v2rayN/releases/latest"},
             {"name": "Koala Clash", "icon": "koala", "manual": True, "download": "https://github.com/coolcoala/koala-clash/releases/latest"},
-            tun, hiddify,
+            tun,
             {"name": "ByMeVPN для Windows", "icon": "windows", "comingSoon": True, "note": "Версия для Windows — в разработке."},
         ],
         "macos": [
@@ -298,13 +295,12 @@ def render_connection_choice_page(subscription_url: str, user_name: str = "") ->
             {"name": "INCY", "icon": "incy", "deep": "incy://import/" + subscription_url, "download": "https://docs.incy.cc/"},
             {"name": "v2rayN", "icon": "v2rayn", "manual": True, "download": "https://github.com/2dust/v2rayN/releases/latest"},
             {"name": "Koala Clash", "icon": "koala", "manual": True, "download": "https://github.com/coolcoala/koala-clash/releases/latest"},
-            tun, hiddify,
+            tun,
         ],
         "linux": [
             {"name": "Happ", "icon": "happ", "deep": "happ://add/" + subscription_url, "download": "https://github.com/Happ-proxy/happ-desktop/releases/latest"},
             {"name": "v2rayN", "icon": "v2rayn", "manual": True, "download": "https://github.com/2dust/v2rayN/releases/latest"},
             {"name": "Koala Clash", "icon": "koala", "manual": True, "download": "https://github.com/coolcoala/koala-clash/releases/latest"},
-            hiddify,
             {"name": "ByMeVPN для Linux", "icon": "linux", "comingSoon": True, "note": "Версия для Linux — в разработке."},
         ],
     }
