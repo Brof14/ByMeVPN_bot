@@ -139,6 +139,24 @@ def hash_password(password: str, salt: str) -> str:
     ).hex()
 
 
+REFRESH_TOKEN_DAYS = 90
+
+
+async def issue_session_tokens(user_id: int, email: str = "") -> dict[str, str]:
+    """Issue independently expiring access and one-time opaque refresh tokens."""
+    access = create_simple_jwt(user_id, email)
+    claims = _verified_token_claims(access)
+    if not claims:
+        raise RuntimeError("Generated access token failed validation")
+    refresh = "rf2_" + secrets.token_urlsafe(40)
+    await database.create_mobile_refresh_session(
+        hashlib.sha256(refresh.encode("ascii")).hexdigest(),
+        user_id, email, claims["jti"], claims["expires_at"],
+        int(time.time()) + REFRESH_TOKEN_DAYS * 86400,
+    )
+    return {"access": access, "refresh": refresh}
+
+
 async def confirm_telegram_session(token: str, user_id: int, username: str = "", full_name: str = "") -> bool:
     """Confirm a pending single-use login state created by the mobile API."""
     state = token.removeprefix("auth_")
@@ -1378,7 +1396,7 @@ async def check_telegram_session(
         ) from None
 
     try:
-        jwt_token = create_simple_jwt(user_id, f"{user_id}@telegram.bymevpn")
+        session_tokens = await issue_session_tokens(user_id, f"{user_id}@telegram.bymevpn")
     except Exception as exc:
         logger.error(
             "Telegram session exchange stage=jwt_issue code=%s correlation_id=%s",
@@ -1420,8 +1438,8 @@ async def check_telegram_session(
 
     return TelegramCheckResponse(
         status="authenticated",
-        access_token=jwt_token,
-        refresh_token=f"ref_{jwt_token}",
+        access_token=session_tokens["access"],
+        refresh_token=session_tokens["refresh"],
         user={
             "id": str(user_id),
             "email": f"{username}@telegram",
@@ -1478,14 +1496,14 @@ async def register(req: RegisterRequest, request: Request):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    jwt_token = create_simple_jwt(user_id, email)
+    session_tokens = await issue_session_tokens(user_id, email)
     sub_url, servers, sub_dict = await _auth_subscription_snapshot(
         user_id, _subscription_headers_from_request(request)
     )
 
     return {
-        "access": jwt_token,
-        "refresh": f"ref_{jwt_token}",
+        "access": session_tokens["access"],
+        "refresh": session_tokens["refresh"],
         "user": {
             "id": str(user_id),
             "email": email,
@@ -1518,14 +1536,14 @@ async def login(req: LoginRequest, request: Request):
     if not hmac.compare_digest(computed_hash, stored_hash):
         raise HTTPException(status_code=401, detail="Неверный email или пароль")
 
-    jwt_token = create_simple_jwt(user_id, email)
+    session_tokens = await issue_session_tokens(user_id, email)
     sub_url, servers, sub_dict = await _auth_subscription_snapshot(
         user_id, _subscription_headers_from_request(request)
     )
 
     return {
-        "access": jwt_token,
-        "refresh": f"ref_{jwt_token}",
+        "access": session_tokens["access"],
+        "refresh": session_tokens["refresh"],
         "user": {
             "id": str(user_id),
             "email": email,
@@ -1708,13 +1726,13 @@ async def login_google(req: GoogleLoginRequest, request: Request):
                "Не удалось открыть аккаунт")
 
     user_id = int(identity["user_id"])
-    jwt_token = create_simple_jwt(user_id, identity["email"])
+    session_tokens = await issue_session_tokens(user_id, identity["email"])
     _, servers, sub_dict = await _auth_subscription_snapshot(
         user_id, _subscription_headers_from_request(request)
     )
     return {
-        "access": jwt_token,
-        "refresh": f"ref_{jwt_token}",
+        "access": session_tokens["access"],
+        "refresh": session_tokens["refresh"],
         "user": {
             "id": str(user_id),
             "email": identity["email"],
@@ -1728,8 +1746,39 @@ async def login_google(req: GoogleLoginRequest, request: Request):
 
 @auth_api.post("/refresh")
 async def refresh_token(req: RefreshRequest):
-    token = req.refresh.removeprefix("ref_")
-    claims = _verified_token_claims(token)
+    # V2 refresh credentials are opaque, single-use and independent of JWT expiry.
+    if req.refresh.startswith("rf2_") and len(req.refresh) <= 128:
+        new_refresh = "rf2_" + secrets.token_urlsafe(40)
+        new_jti = secrets.token_urlsafe(18)
+        now = int(time.time())
+        try:
+            session = await database.rotate_mobile_refresh_session(
+                hashlib.sha256(req.refresh.encode("ascii")).hexdigest(),
+                hashlib.sha256(new_refresh.encode("ascii")).hexdigest(),
+                new_jti, now + 30 * 86400, now + REFRESH_TOKEN_DAYS * 86400,
+            )
+            if not session:
+                raise HTTPException(status_code=401, detail="Сессия истекла")
+            if await _is_removed_account(session["user_id"]):
+                raise HTTPException(status_code=401, detail="Аккаунт удалён")
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error("Refresh token rotation unavailable (%s)", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="Сессия временно недоступна") from None
+        return {
+            "access": create_simple_jwt(
+                session["user_id"], session["email"],
+                issued_at=now, expires_at=now + 30 * 86400, jwt_id=new_jti,
+            ),
+            "refresh": new_refresh,
+        }
+
+    # Existing app releases may still hold ref_<access JWT>. Upgrade those
+    # sessions to independently refreshable credentials until their JWT expires.
+    if not req.refresh.startswith("ref_"):
+        raise HTTPException(status_code=401, detail="Сессия истекла")
+    claims = _verified_token_claims(req.refresh.removeprefix("ref_"))
     if not claims:
         raise HTTPException(status_code=401, detail="Сессия истекла")
     try:
@@ -1737,21 +1786,12 @@ async def refresh_token(req: RefreshRequest):
             raise HTTPException(status_code=401, detail="Сессия завершена")
         if await _is_removed_account(claims["user_id"]):
             raise HTTPException(status_code=401, detail="Аккаунт удалён")
+        return await issue_session_tokens(claims["user_id"], claims["email"])
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error("JWT revocation check unavailable (%s)", type(exc).__name__)
+        logger.error("Legacy refresh upgrade unavailable (%s)", type(exc).__name__)
         raise HTTPException(status_code=503, detail="Сессия временно недоступна") from None
-    # Refresh preserves the same revocable session and its absolute expiry.
-    new_access = create_simple_jwt(
-        claims["user_id"], claims["email"],
-        issued_at=claims["issued_at"], expires_at=claims["expires_at"],
-        jwt_id=claims["jti"],
-    )
-    return {
-        "access": new_access,
-        "refresh": f"ref_{new_access}",
-    }
 
 
 @auth_api.post("/logout")
@@ -1764,6 +1804,7 @@ async def logout(
     if not claims or claims["user_id"] != user_id:
         raise HTTPException(status_code=401, detail="Invalid or expired session token")
     try:
+        await database.revoke_mobile_refresh_for_access(claims["jti"])
         await database.revoke_mobile_jwt(claims["jti"], claims["expires_at"])
     except Exception as exc:
         logger.error("JWT revocation failed (%s)", type(exc).__name__)

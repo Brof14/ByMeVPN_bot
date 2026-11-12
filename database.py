@@ -91,6 +91,18 @@ CREATE TABLE IF NOT EXISTS revoked_mobile_jwt_sessions (
 CREATE INDEX IF NOT EXISTS idx_revoked_mobile_jwt_expiry
     ON revoked_mobile_jwt_sessions(expires_at);
 
+CREATE TABLE IF NOT EXISTS mobile_refresh_sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    email TEXT NOT NULL DEFAULT '',
+    access_jti TEXT NOT NULL UNIQUE,
+    access_expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mobile_refresh_sessions_user ON mobile_refresh_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_mobile_refresh_sessions_expiry ON mobile_refresh_sessions(expires_at);
+
 CREATE TABLE IF NOT EXISTS mobile_auth_sessions (
     state_hash TEXT PRIMARY KEY,
     status TEXT NOT NULL CHECK (status IN ('pending', 'authenticated', 'consumed')),
@@ -2351,6 +2363,79 @@ async def revoke_mobile_jwt(jti: str, expires_at: int) -> None:
         await db.execute(
             "INSERT OR REPLACE INTO revoked_mobile_jwt_sessions(jti,expires_at) VALUES(?,?)",
             (str(jti), int(expires_at)),
+        )
+        await db.commit()
+
+
+async def create_mobile_refresh_session(
+    token_hash: str, user_id: int, email: str,
+    access_jti: str, access_expires_at: int, expires_at: int,
+) -> None:
+    """Persist only a digest of an independently generated refresh token."""
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        await db.execute(
+            """INSERT INTO mobile_refresh_sessions
+               (token_hash,user_id,email,access_jti,access_expires_at,created_at,expires_at)
+               VALUES(?,?,?,?,?,?,?)""",
+            (token_hash, int(user_id), email, access_jti,
+             int(access_expires_at), now, int(expires_at)),
+        )
+        await db.commit()
+
+
+async def rotate_mobile_refresh_session(
+    old_token_hash: str, new_token_hash: str, new_access_jti: str,
+    new_access_expiry: int, new_refresh_expiry: int,
+) -> Optional[dict]:
+    """Consume one refresh secret in a write transaction and revoke old access.
+
+    Concurrent requests using the same old token cannot mint independent
+    sessions. Tokens are never stored in plaintext.
+    """
+    db = await get_db()
+    now = int(time.time())
+    async with _db_semaphore:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await db.execute(
+                """SELECT user_id,email,access_jti,access_expires_at
+                   FROM mobile_refresh_sessions
+                   WHERE token_hash=? AND expires_at>?""",
+                (old_token_hash, now),
+            )
+            row = await cur.fetchone()
+            if not row:
+                await db.rollback()
+                return None
+            user_id, email, old_jti, old_access_expiry = row
+            await db.execute(
+                """UPDATE mobile_refresh_sessions
+                   SET token_hash=?, access_jti=?, access_expires_at=?,
+                       created_at=?, expires_at=?
+                   WHERE token_hash=?""",
+                (new_token_hash, new_access_jti, int(new_access_expiry), now,
+                 int(new_refresh_expiry), old_token_hash),
+            )
+            await db.execute(
+                "INSERT OR REPLACE INTO revoked_mobile_jwt_sessions(jti,expires_at) VALUES(?,?)",
+                (str(old_jti), int(old_access_expiry)),
+            )
+            await db.commit()
+            return {"user_id": int(user_id), "email": str(email)}
+        except Exception:
+            await db.rollback()
+            raise
+
+
+async def revoke_mobile_refresh_for_access(access_jti: str) -> None:
+    """Destroy a refresh credential bound to a logged-out access session."""
+    db = await get_db()
+    async with _db_semaphore:
+        await db.execute(
+            "DELETE FROM mobile_refresh_sessions WHERE access_jti=?",
+            (str(access_jti),),
         )
         await db.commit()
 
