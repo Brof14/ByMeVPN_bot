@@ -1264,6 +1264,12 @@ async def claim_yookassa_checkout_attempt(user_id: int, order_fingerprint: str) 
     async with _db_semaphore:
         await db.execute("BEGIN IMMEDIATE")
         try:
+            deleted = await db.execute(
+                "SELECT 1 FROM account_tombstones WHERE user_id=? LIMIT 1",
+                (int(user_id),),
+            )
+            if await deleted.fetchone():
+                raise ValueError("Account was deleted; checkout creation forbidden")
             cur = await db.execute(
                 "SELECT order_fingerprint,idempotency_key,created_at,lease_expires_at "
                 "FROM yookassa_checkout_attempts WHERE user_id=?",
@@ -1367,6 +1373,8 @@ async def save_churn_feedback(user_id: int, reason: str) -> bool:
     """Optional one-response customer survey; no free-text or sensitive logs."""
     if reason not in VALID_CHURN_REASONS:
         raise ValueError("Unsupported churn feedback reason")
+    if await is_account_tombstoned(user_id):
+        return False
     db = await get_db()
     async with _db_semaphore:
         cursor = await db.execute(

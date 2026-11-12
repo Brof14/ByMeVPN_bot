@@ -20,6 +20,14 @@ class ChurnFeedbackTests(unittest.IsolatedAsyncioTestCase):
         database.DB_FILE = self.old
         self.tmp.cleanup()
 
+    async def test_deleted_account_cannot_recreate_feedback(self):
+        db = await database.get_db()
+        await db.execute(
+            "INSERT INTO account_tombstones(user_id,deleted_at,source) VALUES(9911,123,'admin')"
+        )
+        await db.commit()
+        self.assertFalse(await database.save_churn_feedback(9911, "other"))
+
     async def test_only_known_reason_and_one_response(self):
         self.assertTrue(await database.save_churn_feedback(9911, "connection"))
         self.assertFalse(await database.save_churn_feedback(9911, "connection"))

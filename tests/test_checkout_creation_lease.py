@@ -41,6 +41,15 @@ class CheckoutLeaseTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(first["idempotency_key"], second["idempotency_key"])
         await database.release_yookassa_checkout_attempt(445566, second["token"])
 
+    async def test_deleted_account_cannot_start_checkout(self):
+        db = await database.get_db()
+        await db.execute(
+            "INSERT INTO account_tombstones(user_id,deleted_at,source) VALUES(445566,123,'admin')"
+        )
+        await db.commit()
+        with self.assertRaises(ValueError):
+            await database.claim_yookassa_checkout_attempt(445566, "a" * 64)
+
     async def test_malformed_fingerprint_fails_without_state_change(self):
         with self.assertRaises(ValueError):
             await database.claim_yookassa_checkout_attempt(445566, "wrong")
