@@ -123,7 +123,7 @@ async def cb_my_keys(callback: CallbackQuery, bot: Bot):
                 sub_url = str(panel.get("subscription_url") or "")
                 if sub_url:
                     try:
-                        connect_url = build_connect_page_url(sub_url)
+                        connect_url = build_connect_page_url(sub_url, user_id=user_id)
                     except (RuntimeError, ValueError):
                         connect_url = None
                     if connect_url:
@@ -248,7 +248,7 @@ async def _key_info_content(user_id: int, k: dict) -> tuple[str, object]:
 
     return text, key_detail_kb(
         key_id, subscription_url=subscription_url, has_history=has_history,
-        is_active=k["expiry"] > now,
+        is_active=k["expiry"] > now, user_id=user_id,
     )
 
 
@@ -485,7 +485,7 @@ async def cb_key_diagnostics(callback: CallbackQuery, bot: Bot):
     from aiogram.types import InlineKeyboardMarkup
     try:
         from app_links import build_connect_page_url
-        connect_url = build_connect_page_url(str(key.get("key") or ""), callback.from_user.first_name or "")
+        connect_url = build_connect_page_url(str(key.get("key") or ""), callback.from_user.first_name or "", user_id=callback.from_user.id)
     except (RuntimeError, ValueError):
         connect_url = ""
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -510,7 +510,6 @@ async def cb_key_reissue_confirm(callback: CallbackQuery, bot: Bot, state: FSMCo
     if int(key.get("expiry") or 0) <= int(time.time()):
         await safe_answer(callback, "Срок подписки завершён. Выберите тариф для продления.", alert=True)
         return
-    await safe_answer(callback)
     try:
         from xui_client import get_xui_client_details
         panel_client = await get_xui_client_details(callback.from_user.id, strict=True)
@@ -522,18 +521,9 @@ async def cb_key_reissue_confirm(callback: CallbackQuery, bot: Bot, state: FSMCo
             raise RuntimeError("active panel profile could not be confirmed")
     except Exception as exc:
         logger.warning("Cannot open subscription reissue confirmation (%s)", type(exc).__name__)
-        await send_or_edit(
-            bot, callback,
-            "<b>Не удалось подтвердить профиль на VPN-сервере</b>\n\n"
-            "Перевыпуск не выполнен; срок и сохранённая ссылка не изменены. "
-            "Напишите в поддержку — мы проверим состояние профиля.",
-            InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Поддержка", url=support_url())],
-                [InlineKeyboardButton(text="← К настройкам подписки", callback_data=f"key_settings:{key_id}")],
-            ]),
-            photo=KEY,
-        )
+        await safe_answer(callback, "Не удалось проверить активную подписку. Попробуйте позже.", alert=True)
         return
+    await safe_answer(callback)
     challenge = secrets.token_urlsafe(8)
     await state.update_data(reissue_challenge={
         "key_id": key_id,
@@ -939,7 +929,7 @@ async def _open_connect_page(callback: CallbackQuery, key_id: int | None = None)
         return
     try:
         from app_links import build_connect_page_url
-        url = build_connect_page_url(subscription_url, callback.from_user.first_name or "")
+        url = build_connect_page_url(subscription_url, callback.from_user.first_name or "", user_id=user_id)
     except (RuntimeError, ValueError):
         logger.exception("Connection page could not be built for user %d", user_id)
         await callback.answer("Страница подключения временно недоступна. Напишите в поддержку.", show_alert=True)
