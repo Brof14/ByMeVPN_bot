@@ -16,6 +16,27 @@ from constants import get_price_for_months
 
 
 class TestMobilePaymentContract(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        incident_check = patch("billing_incidents.has_unresolved_access_delivery", new=AsyncMock(return_value=False))
+        incident_check.start()
+        self.addCleanup(incident_check.stop)
+
+    async def test_unresolved_delivery_blocks_repeat_payment(self):
+        with patch("billing_incidents.has_unresolved_access_delivery", new=AsyncMock(return_value=True)):
+            with self.assertRaises(api_router.HTTPException) as error:
+                await api_router.api_create_payment(api_router.PaymentCreateRequest(
+                    plan_code="1m", request_id="request_12345678", devices=2, provider="yookassa"
+                ), user_id=123)
+        self.assertEqual(error.exception.status_code, 409)
+
+    async def test_delivery_check_failure_blocks_payment(self):
+        with patch("billing_incidents.has_unresolved_access_delivery", new=AsyncMock(side_effect=OSError)):
+            with self.assertRaises(api_router.HTTPException) as error:
+                await api_router.api_create_payment(api_router.PaymentCreateRequest(
+                    plan_code="1m", request_id="request_12345678", devices=2, provider="yookassa"
+                ), user_id=123)
+        self.assertEqual(error.exception.status_code, 503)
+
     async def test_plans_use_server_catalog_and_free_trial(self):
         result = await api_router.get_plans()
         self.assertEqual(result["trial"]["price_rub"], 0)

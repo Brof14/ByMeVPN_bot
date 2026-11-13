@@ -77,8 +77,9 @@ class DesktopSessionContract(unittest.IsolatedAsyncioTestCase):
         reserved = {"plan_code": "1m", "provider": "yookassa",
                     "payment_id": "existing", "confirmation_url": "https://example.invalid",
                     "generation": 0, "devices": 2}
-        with patch.object(api_router.database, "ensure_mobile_payment_request",
-                          new=AsyncMock(return_value=reserved)):
+        with (patch.object(api_router.database, "ensure_mobile_payment_request",
+                           new=AsyncMock(return_value=reserved)),
+              patch("billing_incidents.has_unresolved_access_delivery", new=AsyncMock(return_value=False))):
             with self.assertRaises(HTTPException) as caught:
                 await api_router.api_create_payment(
                     api_router.PaymentCreateRequest(

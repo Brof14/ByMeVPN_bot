@@ -122,7 +122,7 @@ class TestNotificationSeparation(unittest.IsolatedAsyncioTestCase):
              patch.object(
                  subscription, "create_xui_user",
                  new=AsyncMock(return_value={
-                     "subscription_url": "https://sub/test-link", "uuid": "uuid-1", "vless_links": [],
+                     "subscription_url": "https://sub/test-link", "uuid": "60cc6968-d901-4d7c-834c-e4557f1e52d8", "vless_links": [],
                  }),
              ):
             success = await subscription.deliver_key(
@@ -161,7 +161,7 @@ class TestNotificationSeparation(unittest.IsolatedAsyncioTestCase):
              patch.object(
                  subscription, "create_xui_user",
                  new=AsyncMock(return_value={
-                     "subscription_url": "https://sub/test-link", "uuid": "uuid-2", "vless_links": [],
+                     "subscription_url": "https://sub/test-link", "uuid": "779b96c6-9199-4c12-bb81-7a05db6a2129", "vless_links": [],
                  }),
              ):
             success = await subscription.deliver_key(

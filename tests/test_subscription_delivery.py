@@ -300,7 +300,7 @@ class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
         xui_result = {
             "subscription_url": "https://panel.example/sub/test-sub-id",
             "vless_links": [],
-            "uuid": "test-client-uuid",
+            "uuid": "00000000-0000-4000-8000-000000000001",
         }
 
         with (
@@ -326,13 +326,28 @@ class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
             5283200584,
             "https://panel.example/sub/test-sub-id",
             "Admin-Key",
-            "test-client-uuid",
+            "00000000-0000-4000-8000-000000000001",
             30,
             5,
             expiry=ANY,
         )
         bot.send_photo.assert_awaited_once()
         bot.send_message.assert_not_awaited()
+
+    async def test_missing_client_uuid_never_saves_subscription_url_as_uuid(self):
+        bot = MagicMock()
+        bot.send_message = AsyncMock()
+        xui_result = {"subscription_url": "https://panel.example/sub/test", "vless_links": []}
+        with (
+            patch("subscription.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value=None)),
+            patch("subscription.create_xui_user", new=AsyncMock(return_value=xui_result)),
+            patch("subscription.add_key", new=AsyncMock()) as add_key,
+            patch("subscription.log_key_error", new=AsyncMock()),
+        ):
+            result = await subscription.deliver_key(bot, 123, 123, "key", 30, method="admin_grant")
+        self.assertFalse(result)
+        add_key.assert_not_awaited()
 
     async def test_paid_renewal_reaches_payment_recording(self):
         """Renewal must not fail when another branch imports the same helper locally."""

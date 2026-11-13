@@ -60,6 +60,7 @@ class TestSectionArtwork(unittest.IsolatedAsyncioTestCase):
         )
         with (
             patch("handlers.buy.safe_answer", new=AsyncMock()),
+            patch("billing_incidents.has_unresolved_access_delivery", new=AsyncMock(return_value=False)),
             # This is a visual contract test, not a real analytics writer.
             # Don't leak an aiosqlite thread from a mocked Telegram callback.
             patch("database.log_analytics_event", new=AsyncMock()),

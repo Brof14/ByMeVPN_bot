@@ -832,14 +832,12 @@ async def get_xui_devices(user_id: int) -> Dict[str, Any]:
             return await _api_call_with_retry(request_json, *args)
         except Exception as exc:
             _device_lookup_failure(stage, exc)
-            if _device_client_not_found(exc):
+            if stage == "client_read" and _device_client_not_found(exc):
                 raise XuiDeviceClientNotFound("Panel client not found") from None
             raise
 
-    client_data, hwid_data = await asyncio.gather(
-        read_panel("client_read", "GET", f"panel/api/clients/get/{email}"),
-        read_panel("device_read", "POST", f"panel/api/clients/hwids/{email}", {}),
-    )
+    client_data = await read_panel("client_read", "GET", f"panel/api/clients/get/{email}")
+    hwid_data = await read_panel("device_read", "POST", f"panel/api/clients/hwids/{email}", {})
     client_obj = client_data.get("obj") or {}
     client_obj = client_obj.get("client") if isinstance(client_obj, dict) else None
     if not isinstance(client_obj, dict):

@@ -909,7 +909,7 @@ async def _attach_signed_entitlement(
     try:
         device_state = await _require_registered_entitlement_device(user_id, headers)
     except HTTPException as exc:
-        if exc.status_code != 403:
+        if isinstance(exc, PanelClientAbsent) or exc.status_code != 403:
             raise
         if subscription.get("status") == "trial":
             trial_bootstrap_expiry = await _validated_trial_bootstrap_expiry(user_id, headers)
@@ -1003,6 +1003,10 @@ def _entitlement_requested(headers: Dict[str, str]) -> bool:
     return True
 
 
+class PanelClientAbsent(HTTPException):
+    """Panel confirmed the account has no client; never bootstrap access."""
+
+
 async def _require_registered_entitlement_device(
     user_id: int, headers: Dict[str, str],
 ) -> Dict[str, Any]:
@@ -1014,10 +1018,22 @@ async def _require_registered_entitlement_device(
         raise HTTPException(status_code=422, detail="Не удалось подтвердить это устройство") from None
 
     try:
-        from xui_client import get_xui_devices, has_xui_client
-        if not await has_xui_client(user_id):
-            raise HTTPException(status_code=403, detail="Устройство не подтверждено для этой подписки")
-        device_state = await get_xui_devices(user_id)
+        from xui_client import (
+            XuiDeviceClientNotFound, _device_client_not_found,
+            get_xui_devices, has_xui_client,
+        )
+        try:
+            client_exists = await has_xui_client(user_id)
+        except Exception as exc:
+            if _device_client_not_found(exc):
+                raise PanelClientAbsent(status_code=403, detail="Устройство не подтверждено для этой подписки") from None
+            raise
+        if not client_exists:
+            raise PanelClientAbsent(status_code=403, detail="Устройство не подтверждено для этой подписки")
+        try:
+            device_state = await get_xui_devices(user_id)
+        except XuiDeviceClientNotFound:
+            raise PanelClientAbsent(status_code=403, detail="Устройство не подтверждено для этой подписки") from None
     except HTTPException:
         raise
     except Exception as exc:
@@ -1179,7 +1195,7 @@ async def _require_opted_in_device_access(user_id: int, request: Request) -> Dic
     try:
         await _require_registered_entitlement_device(user_id, headers)
     except HTTPException as exc:
-        if exc.status_code != 403:
+        if isinstance(exc, PanelClientAbsent) or exc.status_code != 403:
             raise
         _, _, subscription = await get_user_real_subscription(user_id, headers)
         bootstrap_expiry = await _validated_active_device_bootstrap_expiry(
@@ -3248,9 +3264,9 @@ async def get_devices(request: Request, response: Response = None, user_id: int 
     try:
         result = await get_xui_devices(user_id)
     except XuiDeviceClientNotFound:
-        logger.info("Device list unavailable code=panel_client_not_found correlation_id=%s", correlation_id)
+        logger.warning("Device list unavailable code=panel_client_not_found correlation_id=%s", correlation_id)
         raise _correlated_http_error(
-            404, "Учётная запись не найдена в панели VPN", correlation_id, "panel_client_not_found",
+            503, "Не удалось сверить устройства с панелью VPN", correlation_id, "panel_client_not_found",
         ) from None
     except Exception as exc:
         logger.warning("Device list unavailable code=%s correlation_id=%s", type(exc).__name__, correlation_id)
