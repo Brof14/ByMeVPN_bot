@@ -7,6 +7,17 @@ import time
 from database import get_db
 
 
+async def has_unresolved_access_delivery(user_id: int) -> bool:
+    """True while a confirmed payment still lacks verified subscription delivery."""
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT 1 FROM payments WHERE user_id=? "
+        "AND status IN ('processing','recovery_required') LIMIT 1",
+        (int(user_id),),
+    )
+    return await cursor.fetchone() is not None
+
+
 async def read_billing_incidents(limit: int = 15, now: int | None = None) -> list[dict]:
     if not 1 <= limit <= 50:
         raise ValueError("limit out of bounds")
