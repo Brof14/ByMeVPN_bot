@@ -93,8 +93,8 @@ def report_keyboard(report: dict):
 
     rows = [
         [InlineKeyboardButton(
-            text=f"Открыть ключ #{issue['key_id']}",
-            callback_data=f"admin_key_detail:{issue['key_id']}:{issue['user_id']}",
+            text=f"Проверить восстановление · ключ #{issue['key_id']}",
+            callback_data=f"admin_recovery_preview:{issue['key_id']}",
         )]
         for issue in report["discrepancies"][:8]
     ]
