@@ -38,14 +38,17 @@ class ConnectionTicketHttpTests(unittest.TestCase):
         with patch("app_links.BOT_TOKEN", "local-test-secret"):
             return app_links.build_connect_ticket(url)
 
-    def test_get_is_preview_safe_and_post_is_one_time(self):
+    def test_get_is_preview_safe_and_page_auto_redeems_once(self):
         secret = "https://panel.example/sub/private-user-token"
         with patch("app_links.BOT_TOKEN", "local-test-secret"):
             ticket = app_links.build_connect_ticket(secret)
             preview = self.client.get("/connect", params={"ticket": ticket})
             self.assertEqual(preview.status_code, 200)
             self.assertNotIn(secret, preview.text)
-            self.assertIn("Продолжить подключение", preview.text)
+            self.assertNotIn("Подтвердите открытие страницы", preview.text)
+            self.assertNotIn("Продолжить подключение", preview.text)
+            self.assertIn("/connect/redeem", preview.text)
+            self.assertIn("Открываем страницу подключения", preview.text)
             self.assertIn("no-store", preview.headers["cache-control"])
             with patch("connect_ticket_replay.consume_connect_ticket", new=AsyncMock(side_effect=[True, False])):
                 unlocked = self.client.post("/connect/redeem", json={"ticket": ticket})
