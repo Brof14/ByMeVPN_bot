@@ -15,10 +15,11 @@ async def reconcile_subscriptions() -> dict:
 
     db = await database.get_db()
     cur = await db.execute(
-        "SELECT user_id, id, uuid, expiry, limit_ip FROM keys ORDER BY user_id, expiry DESC"
+        "SELECT user_id, id, uuid, expiry, limit_ip FROM keys "
+        "WHERE expiry > ? ORDER BY user_id, expiry DESC",
+        (int(time.time()),),
     )
     rows = await cur.fetchall()
-    now = int(time.time())
     by_user: dict[int, list[dict]] = {}
     for row in rows:
         by_user.setdefault(int(row[0]), []).append({
@@ -39,7 +40,7 @@ async def reconcile_subscriptions() -> dict:
     discrepancies = []
     checked = 0
     for uid, panel, error in states:
-        active = next((key for key in by_user[uid] if key["expiry"] > now), None)
+        active = by_user[uid][0] if by_user[uid] else None
         if error:
             unavailable.append(uid)
             continue
@@ -59,9 +60,7 @@ async def reconcile_subscriptions() -> dict:
                 "expiry_delta": panel_expiry - active["expiry"],
             })
     return {
-        "checked": checked, "db_active": sum(
-            any(key["expiry"] > now for key in keys) for keys in by_user.values()
-        ),
+        "checked": checked, "db_active": len(by_user),
         "discrepancies": discrepancies, "unavailable": unavailable,
         "complete": not unavailable,
     }
