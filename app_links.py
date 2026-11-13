@@ -12,6 +12,7 @@ from functools import lru_cache
 from pathlib import Path
 import base64
 import hashlib
+import hmac
 import json
 import os
 import time
@@ -26,7 +27,7 @@ APP_SCHEME = "bymevpn"
 # default policy; without it browsers hide the logo and show its alt text.
 APP_LOGIN_CONTENT_SECURITY_POLICY = (
     "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; "
-    "script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'"
+    "script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
 )
 
 # Keep the redirect page small and predictable; these limits also protect the
@@ -96,6 +97,7 @@ def render_app_open_page(deep_link: str) -> str:
     js_link = _js_string(deep_link)
     js_intent = _js_string(build_android_intent_url(deep_link))
 
+    install_url = html.escape(APP_PUBLIC_URL.rstrip("/") + "/app", quote=True)
     return f"""<!doctype html>
 <html lang="ru">
 <head>
@@ -158,7 +160,7 @@ def render_app_open_page(deep_link: str) -> str:
   <h1>Открываем приложение…</h1>
   <p>Открываем ByMeVPN. Страница передаёт подписку в приложение; само открытие ещё не подтверждает подключение VPN.</p>
   <a id="open-app" class="button" href="{escaped_link}">Открыть ByMeVPN</a>
-  <p class="hint">Приложения ByMeVPN для Android, Windows и Linux находятся в разработке. <a href="https://t.me/ByMeVPNSupportBot">Поддержка</a></p>
+  <p class="hint">Если приложение не открылось, нажмите кнопку ещё раз. <a href="{install_url}">Скачать ByMeVPN для Android</a> · <a href="https://t.me/ByMeVPNSupportBot">Поддержка</a></p>
 </section></main>
 <script>
 (function () {{
@@ -248,14 +250,29 @@ def read_connect_ticket(ticket: str, *, now: int | None = None) -> dict[str, str
         raise ValueError("invalid or expired connection ticket") from exc
 
 
-def build_connect_page_url(subscription_url: str, user_name: str = "") -> str:
+def build_connect_page_url(subscription_url: str, user_name: str = "", *, user_id: int | None = None) -> str:
     if not APP_CONNECT_PAGE_URL:
         raise RuntimeError("APP_CONNECT_PAGE_URL must be configured for secure connection handover")
     base = urlsplit(APP_CONNECT_PAGE_URL)
     if base.scheme != "https" or not base.hostname or base.path or base.username is not None or base.password is not None:
         raise ValueError("APP_CONNECT_PAGE_URL must be an HTTPS origin")
+    if user_id is not None:
+        secret = os.getenv("APP_HANDOFF_SECRET") or os.getenv("JWT_SECRET") or BOT_TOKEN
+        if not secret or int(user_id) <= 0:
+            raise RuntimeError("connection page secret is not configured")
+        uid = str(int(user_id))
+        mac = hmac.new(hashlib.sha256(secret.encode()).digest(), f"connect-v1:{uid}".encode(), hashlib.sha256).hexdigest()
+        return f"{APP_CONNECT_PAGE_URL}/connect?u={uid}&s={mac}"
     ticket = build_connect_ticket(subscription_url, user_name)
     return f"{APP_CONNECT_PAGE_URL}/connect?ticket={quote(ticket)}"
+
+
+def verify_permanent_connect_token(user_id: int, signature: str) -> bool:
+    secret = os.getenv("APP_HANDOFF_SECRET") or os.getenv("JWT_SECRET") or BOT_TOKEN
+    if not secret or int(user_id) <= 0 or len(signature) != 64:
+        return False
+    expected = hmac.new(hashlib.sha256(secret.encode()).digest(), f"connect-v1:{int(user_id)}".encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
 
 
 @lru_cache(maxsize=1)
@@ -267,38 +284,42 @@ def render_connection_choice_page(subscription_url: str, user_name: str = "") ->
     """Render a responsive branded OS/app chooser with verified import fallbacks."""
     sub = _js_string(subscription_url)
     encoded_sub = quote(subscription_url, safe="")
+    bymevpn_download = f"{APP_PUBLIC_URL.rstrip('/')}/app"
     tun = {"name": "v2rayTun", "icon": "v2raytun", "deep": "v2raytun://import/" + subscription_url, "download": "https://v2raytun.com/"}
+    hiddify = {"name": "Hiddify", "icon": "hiddify", "deep": "hiddify://install-sub?url=" + encoded_sub + "#ByMeVPN", "download": "https://github.com/hiddify/hiddify-app/releases/latest"}
+    singbox = {"name": "sing-box", "icon": "singbox", "manual": True, "note": "Требуется конфигурация sing-box в формате JSON; обычная ссылка подписки может не подойти.", "download": "https://sing-box.sagernet.org/clients/"}
     apps = {
         "android": [
+            {"name": "ByMeVPN", "icon": "bymevpn", "deep": build_app_telegram_auth_url(), "download": bymevpn_download},
             {"name": "Happ", "icon": "happ", "deep": "happ://add/" + subscription_url, "download": "https://github.com/Happ-proxy/happ-android/releases/latest"},
             {"name": "INCY", "icon": "incy", "deep": "incy://import/" + subscription_url, "download": "https://play.google.com/store/apps/details?id=llc.itdev.incy"},
             tun,
             {"name": "v2rayNG", "icon": "v2rayng", "deep": "v2rayng://install-sub?url=" + encoded_sub + "#ByMeVPN", "download": "https://github.com/2dust/v2rayNG/releases/latest"},
-
+            hiddify, singbox,
         ],
         "ios": [
             {"name": "Happ", "icon": "happ", "deep": "happ://add/" + subscription_url, "download": "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215"},
             {"name": "INCY", "icon": "incy", "deep": "incy://import/" + subscription_url, "download": "https://apps.apple.com/us/app/incy/id6756943388"},
-            tun,
+            tun, hiddify, singbox,
         ],
         "windows": [
             {"name": "Happ", "icon": "happ", "deep": "happ://add/" + subscription_url, "download": "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe"},
             {"name": "v2rayN", "icon": "v2rayn", "manual": True, "download": "https://github.com/2dust/v2rayN/releases/latest"},
             {"name": "Koala Clash", "icon": "koala", "manual": True, "download": "https://github.com/coolcoala/koala-clash/releases/latest"},
-            tun,
+            tun, hiddify,
         ],
         "macos": [
             {"name": "Happ", "icon": "happ", "deep": "happ://add/" + subscription_url, "download": "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/Happ.macOS.universal.dmg"},
             {"name": "INCY", "icon": "incy", "deep": "incy://import/" + subscription_url, "download": "https://docs.incy.cc/"},
             {"name": "v2rayN", "icon": "v2rayn", "manual": True, "download": "https://github.com/2dust/v2rayN/releases/latest"},
             {"name": "Koala Clash", "icon": "koala", "manual": True, "download": "https://github.com/coolcoala/koala-clash/releases/latest"},
-            tun,
+            tun, hiddify,
         ],
         "linux": [
             {"name": "Happ", "icon": "happ", "deep": "happ://add/" + subscription_url, "download": "https://github.com/Happ-proxy/happ-desktop/releases/latest"},
             {"name": "v2rayN", "icon": "v2rayn", "manual": True, "download": "https://github.com/2dust/v2rayN/releases/latest"},
             {"name": "Koala Clash", "icon": "koala", "manual": True, "download": "https://github.com/coolcoala/koala-clash/releases/latest"},
-
+            hiddify,
         ],
     }
     apps_json = _js_string(json.dumps(apps, ensure_ascii=False))
