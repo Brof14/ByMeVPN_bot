@@ -864,6 +864,14 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                 return
 
         # Deliver or extend key immediately without blocking on user input
+        try:
+            await bot.send_message(
+                user_id,
+                "<b>Оплата подтверждена</b>\n\nГотовим доступ. Обычно это занимает несколько секунд.\nЕсли активация задержится, повторно платить не нужно — мы проверим заказ.",
+                parse_mode="HTML",
+            )
+        except Exception:
+            logger.debug("Could not send payment processing status to user %d", user_id)
         success = await deliver_key(
             bot=bot,
             user_id=user_id,
@@ -987,9 +995,17 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                 user_id, payment_id, amount=amount_rub, bot=bot,
             )
         else:
-            await update_payment_status(pay_db_id, "failed")
+            await update_payment_status(pay_db_id, "recovery_required")
             logger.error("YooKassa payment %s provisioning failed for user %d", payment_id, user_id)
-            await _notify_admin(bot, f"⚠️ Не удалось выдать VPN по платежу YooKassa {payment_id} (user {user_id}). Статус помечен как failed.")
+            await _notify_admin(bot, f"⚠️ Не удалось выдать доступ по подтверждённой оплате YooKassa {payment_id} (user {user_id}). Платёж оставлен на безопасную ручную сверку.")
+            try:
+                await bot.send_message(
+                    user_id,
+                    "<b>Оплата получена · доступ проверяется</b>\n\nНе оплачивайте повторно. Мы проверяем выдачу и сообщим, когда ключ будет готов. Если вопрос срочный: @ByMeVPNSupportBot",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                logger.debug("Could not send payment recovery status to user %d", user_id)
 
     except Exception as e:
         logger.exception("Webhook: unexpected error processing payment %s: %s", payment_id, e)
@@ -1194,6 +1210,14 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
                 )
                 return
 
+        try:
+            await bot.send_message(
+                user_id,
+                "<b>Оплата подтверждена</b>\n\nГотовим доступ. Обычно это занимает несколько секунд.\nЕсли активация задержится, повторно платить не нужно — мы проверим заказ.",
+                parse_mode="HTML",
+            )
+        except Exception:
+            logger.debug("Could not send Crypto Bot payment status to user %d", user_id)
         success = await deliver_key(
             bot=bot,
             user_id=user_id,
@@ -1226,9 +1250,17 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
             from referral_system_new import award_referral_for_payment
             await award_referral_for_payment(user_id, str(invoice_id), amount=amount_rub, bot=bot)
         else:
-            await update_payment_status(pay_db_id, "failed")
-            logger.error("CryptoBot invoice %s provisioning failed for user %d", invoice_id, user_id)
-            await _notify_admin(bot, f"⚠️ Не удалось выдать VPN по CryptoBot инвойсу {invoice_id} (user {user_id}). Статус помечен как failed.")
+            await update_payment_status(pay_db_id, "recovery_required")
+            logger.error("CryptoBot invoice %s provisioning requires recovery for user %d", invoice_id, user_id)
+            try:
+                await bot.send_message(
+                    user_id,
+                    "<b>Оплата получена · доступ проверяется</b>\n\nНе оплачивайте повторно. Мы проверяем выдачу и сообщим, когда ключ будет готов. Если вопрос срочный: @ByMeVPNSupportBot",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                logger.debug("Could not send Crypto Bot recovery status to user %d", user_id)
+            await _notify_admin(bot, f"⚠️ Не удалось выдать доступ по подтверждённой оплате Crypto Bot {invoice_id} (user {user_id}). Платёж оставлен на безопасную ручную сверку.")
 
     except Exception as e:
         logger.exception("Crypto monitor: unexpected error processing invoice %s: %s", invoice_id, e)
