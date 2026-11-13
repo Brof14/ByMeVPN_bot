@@ -19,7 +19,7 @@ def _customer_menu(*, has_subscription: bool, trial_used: bool) -> InlineKeyboar
     elif not trial_used:
         kb.row(InlineKeyboardButton(text="3 дня бесплатно", callback_data="trial_free"))
     kb.row(InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn", style="primary"))
-    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn", style="primary"))
+    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
         InlineKeyboardButton(text="Поддержка", url=support_url()),
@@ -39,14 +39,14 @@ def main_menu_with_keys(trial_used: bool = False) -> InlineKeyboardMarkup:
     return _customer_menu(has_subscription=True, trial_used=trial_used)
 
 
-def main_menu_active(key_id: int, subscription_url: str = "") -> InlineKeyboardMarkup:
+def main_menu_active(key_id: int, subscription_url: str = "", user_id: int | None = None) -> InlineKeyboardMarkup:
     """Put the active subscriber's connection action first in the home menu."""
     kb = InlineKeyboardBuilder()
     connect_url = None
     if subscription_url:
         try:
             from app_links import build_connect_page_url
-            connect_url = build_connect_page_url(subscription_url)
+            connect_url = build_connect_page_url(subscription_url, user_id=user_id)
         except (RuntimeError, ValueError):
             connect_url = None
     connect_button = (
@@ -56,8 +56,11 @@ def main_menu_active(key_id: int, subscription_url: str = "") -> InlineKeyboardM
     )
     kb.row(connect_button)
     # Device management belongs to the subscription details, not the home hub.
-    kb.row(InlineKeyboardButton(text="Подписка", callback_data="my_keys"))
-    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn", style="primary"))
+    kb.row(
+        InlineKeyboardButton(text="Подписка", callback_data="my_keys"),
+        InlineKeyboardButton(text="Продлить", callback_data=f"key_renew:{key_id}"),
+    )
+    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
         InlineKeyboardButton(text="Поддержка", url=support_url()),
@@ -65,19 +68,19 @@ def main_menu_active(key_id: int, subscription_url: str = "") -> InlineKeyboardM
     return kb.as_markup()
 
 
-def main_menu_panel_active(subscription_url: str = "") -> InlineKeyboardMarkup:
+def main_menu_panel_active(subscription_url: str = "", user_id: int | None = None) -> InlineKeyboardMarkup:
     """Server-only entitlement: do not pretend a missing local key exists."""
     kb = InlineKeyboardBuilder()
     if subscription_url:
         try:
             from app_links import build_connect_page_url
-            url = build_connect_page_url(subscription_url)
+            url = build_connect_page_url(subscription_url, user_id=user_id)
         except (RuntimeError, ValueError):
             url = ""
         if url:
             kb.row(InlineKeyboardButton(text="Подключить VPN", url=url))
     kb.row(InlineKeyboardButton(text="Подписка", callback_data="my_keys"))
-    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn", style="primary"))
+    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
         InlineKeyboardButton(text="Поддержка", url=support_url()),
@@ -100,7 +103,7 @@ def main_menu_expired(*, key_ids: list[int]) -> InlineKeyboardMarkup:
 
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="Продлить VPN", callback_data=renew_action))
-    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn", style="primary"))
+    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
         InlineKeyboardButton(text="Поддержка", url=support_url()),
@@ -128,7 +131,7 @@ def authorized_user_menu() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="Подписка", callback_data="my_keys"))
     kb.row(InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn"))
-    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn", style="primary"))
+    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
         InlineKeyboardButton(text="Поддержка", url=support_url()),
@@ -277,13 +280,14 @@ def key_detail_kb(
     subscription_url: str = "",
     has_history: bool = False,
     is_active: bool = True,
+    user_id: int | None = None,
 ) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     connect_url = None
     if subscription_url:
         try:
             from app_links import build_connect_page_url
-            connect_url = build_connect_page_url(subscription_url)
+            connect_url = build_connect_page_url(subscription_url, user_id=user_id)
         except (RuntimeError, ValueError):
             connect_url = None
     connect_button = (
@@ -428,13 +432,13 @@ def confirm_delete_kb(key_id: int) -> InlineKeyboardMarkup:
 # After key delivery
 # ---------------------------------------------------------------------------
 
-def after_key_kb(subscription_url: str = "") -> InlineKeyboardMarkup:
+def after_key_kb(subscription_url: str = "", user_id: int | None = None) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     connect_url = None
     if subscription_url:
         try:
             from app_links import build_connect_page_url
-            connect_url = build_connect_page_url(subscription_url)
+            connect_url = build_connect_page_url(subscription_url, user_id=user_id)
         except (RuntimeError, ValueError):
             connect_url = None
     kb.row(InlineKeyboardButton(
