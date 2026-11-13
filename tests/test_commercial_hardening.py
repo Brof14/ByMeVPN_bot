@@ -70,7 +70,9 @@ class CommercialNavigationTests(unittest.TestCase):
         chooser = (root / "templates" / "connect.html").read_text("utf-8")
         installer = (root / "static" / "app" / "index.html").read_text("utf-8")
         self.assertNotIn("ByMeVPN-v1.0.14.apk", chooser)
-        self.assertIn('id="release-help"', installer)
+        self.assertNotIn("ByMeVPN-v1.0.14.apk", installer)
+        self.assertIn("в разработке", installer)
+        self.assertIn("https://t.me/ByMeVPNSupportBot", installer)
 
 
 class FreeRewardAtomicityTests(unittest.IsolatedAsyncioTestCase):
