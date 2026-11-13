@@ -461,7 +461,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         from app_links import render_connection_choice_page
         page = render_connection_choice_page("https://panel.example/sub/test")
         self.assertIn("macos", page)
-        self.assertIn("Hiddify", page)
+        self.assertNotIn("Hiddify", page)
         self.assertIn("v2rayN", page)
 
     async def test_referral_start_uses_a_welcome_variant(self):
