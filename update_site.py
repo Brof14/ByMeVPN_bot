@@ -18,7 +18,7 @@ PAGE = Path(__file__).parent / "static" / "app" / "index.html"
 ASSETS = Path(__file__).parent / "static" / "app" / "assets"
 ICON_ASSETS = frozenset({
     "android.png", "apple.png", "bymevpn-logo.png", "happ.png", "incy.png", "koala.png", "linux.png",
-        "v2raytun.png", "v2rayng.png", "hiddify.png", "singbox.png",
+        "v2raytun.png", "v2rayng.png",
     "v2rayn.png", "windows.png",
 })
 ORIGIN = "https://bymevpn.duckdns.org"
