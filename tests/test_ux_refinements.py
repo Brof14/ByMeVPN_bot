@@ -37,8 +37,9 @@ class TariffDesignTests(unittest.TestCase):
         bonus_buttons = [b for b in buttons(premium) if b.callback_data and b.callback_data.startswith("tariff_") and not b.callback_data.startswith("tariff_1_")]
         self.assertEqual(
             [b.icon_custom_emoji_id for b in bonus_buttons],
-            [ICON_IDS["gift"]] * 3,
+            [None] * 3,
         )
+        self.assertTrue(all("🎁" in button.text for button in bonus_buttons))
 
     def test_five_device_selector_is_short_and_three_plus_one_has_no_extra_claim(self):
         keyboard = tariff_selection_kb(devices=5)
