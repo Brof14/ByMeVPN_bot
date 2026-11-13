@@ -510,6 +510,7 @@ async def cb_key_reissue_confirm(callback: CallbackQuery, bot: Bot, state: FSMCo
     if int(key.get("expiry") or 0) <= int(time.time()):
         await safe_answer(callback, "Срок подписки завершён. Выберите тариф для продления.", alert=True)
         return
+    await safe_answer(callback)
     try:
         from xui_client import get_xui_client_details
         panel_client = await get_xui_client_details(callback.from_user.id, strict=True)
@@ -521,9 +522,18 @@ async def cb_key_reissue_confirm(callback: CallbackQuery, bot: Bot, state: FSMCo
             raise RuntimeError("active panel profile could not be confirmed")
     except Exception as exc:
         logger.warning("Cannot open subscription reissue confirmation (%s)", type(exc).__name__)
-        await safe_answer(callback, "Не удалось проверить активную подписку. Попробуйте позже.", alert=True)
+        await send_or_edit(
+            bot, callback,
+            "<b>Не удалось подтвердить профиль на VPN-сервере</b>\n\n"
+            "Перевыпуск не выполнен; срок и сохранённая ссылка не изменены. "
+            "Напишите в поддержку — мы проверим состояние профиля.",
+            InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Поддержка", url=support_url())],
+                [InlineKeyboardButton(text="← К настройкам подписки", callback_data=f"key_settings:{key_id}")],
+            ]),
+            photo=KEY,
+        )
         return
-    await safe_answer(callback)
     challenge = secrets.token_urlsafe(8)
     await state.update_data(reissue_challenge={
         "key_id": key_id,
