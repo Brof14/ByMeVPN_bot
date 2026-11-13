@@ -202,45 +202,46 @@ async def app_login_redirect(sub: str = "", name: str = "", ticket: str = ""):
 
 
 @app.get("/connect")
-async def connection_choice_page(request: Request, ticket: str = ""):
-    """Render the connection chooser directly in the single ticket GET."""
+async def connection_choice_page(ticket: str = "", u: int = 0, s: str = ""):
+    """Show the small OS/app chooser without exposing the subscription URL in the link."""
     from fastapi.responses import HTMLResponse
-    from app_links import (
-        APP_LOGIN_CONTENT_SECURITY_POLICY,
-        read_connect_ticket,
-        render_connection_choice_page,
-    )
-    from connect_ticket_replay import consume_connect_ticket
+    from app_links import APP_LOGIN_CONTENT_SECURITY_POLICY, read_connect_ticket, render_connection_choice_page, verify_permanent_connect_token
 
-    headers = {
-        "Cache-Control": "no-store, max-age=0",
-        "Referrer-Policy": "no-referrer",
-        "X-Robots-Tag": "noindex, nofollow",
-        "X-Content-Type-Options": "nosniff",
-        "Content-Security-Policy": APP_LOGIN_CONTENT_SECURITY_POLICY,
-    }
     try:
-        payload = read_connect_ticket(ticket)
-        if not await consume_connect_ticket(ticket):
-            return HTMLResponse(
-                "<h1>Ссылка уже использована</h1><p>Вернитесь в бот и откройте новую ссылку подключения.</p>",
-                status_code=410, headers=headers,
-            )
-        page = render_connection_choice_page(
-            payload["subscription_url"], payload.get("user_name", ""),
-        )
-        return HTMLResponse(page, headers=headers)
-    except (ValueError, TypeError, UnicodeDecodeError):
+        if u and verify_permanent_connect_token(u, s):
+            import database
+            keys = await database.get_user_keys(u)
+            now = int(time.time())
+            active = [k for k in keys if int(k.get("expiry") or 0) > now]
+            if not active:
+                raise ValueError("no active subscription")
+            key = max(active, key=lambda item: int(item.get("expiry") or 0))
+            payload = {"subscription_url": str(key.get("key") or ""), "user_name": ""}
+        else:
+            payload = read_connect_ticket(ticket)
+        page = render_connection_choice_page(payload["subscription_url"], payload["user_name"])
+    except (ValueError, RuntimeError):
         return HTMLResponse(
-            "<h1>Ссылка недоступна</h1><p>Вернитесь в бот и запросите новую ссылку подключения.</p>",
-            status_code=400, headers=headers,
+            """<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Ссылка недоступна — ByMeVPN</title><style>body{margin:0;background:#07111d;color:#f3f7fb;font:16px/1.5 system-ui,sans-serif}main{max-width:480px;margin:12vh auto;padding:24px}h1{font-size:24px}p{color:#a9b9c8}a{color:#80dfff}</style><main><img src="/app/assets/bymevpn-logo.png" width="44" height="44" alt="ByMeVPN"><h1>Ссылка недоступна</h1><p>Возможно, ссылка устарела или повреждена. Вернитесь в бот и запросите новую ссылку в разделе подписки.</p><p><a href="https://t.me/ByMeVPNSupportBot">Открыть поддержку ByMeVPN</a></p></main></html>""",
+            status_code=400,
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "Referrer-Policy": "no-referrer",
+                "X-Content-Type-Options": "nosniff",
+                "X-Robots-Tag": "noindex, nofollow",
+                "Content-Security-Policy": APP_LOGIN_CONTENT_SECURITY_POLICY,
+            },
         )
-    except Exception:
-        logger.exception("Connection ticket redemption unavailable")
-        return HTMLResponse(
-            "<h1>Страница подключения временно недоступна</h1><p>Запросите новую ссылку в боте.</p>",
-            status_code=503, headers=headers,
-        )
+    return HTMLResponse(
+        page,
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Referrer-Policy": "no-referrer",
+            "X-Robots-Tag": "noindex, nofollow",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": APP_LOGIN_CONTENT_SECURITY_POLICY,
+        },
+    )
 
 
 @app.get("/app/logo")
@@ -267,7 +268,8 @@ async def app_brand_asset(asset_name: str):
 
     allowed = {
         "android.png", "apple.png", "bymevpn-logo.png", "happ.png", "incy.png",
-        "koala.png", "linux.png", "v2raytun.png", "v2rayng.png", "v2rayn.png", "windows.png",
+        "koala.png", "linux.png", "v2raytun.png", "v2rayng.png", "hiddify.png",
+        "singbox.png", "v2rayn.png", "windows.png",
     }
     root = (Path(__file__).resolve().parent / "static" / "app" / "assets").resolve()
     path = (root / asset_name).resolve()
@@ -850,7 +852,6 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                 await update_payment_status(pay_db_id, "processing")
             elif existing_status == "recovery_required":
                 logger.warning("Webhook: payment %s awaits manual reconciliation", payment_id)
-                await delete_yookassa_pending(payment_id)
                 return
             else:
                 logger.error(
@@ -858,7 +859,6 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                     payment_id, existing_status,
                 )
                 await update_payment_status(pay_db_id, "recovery_required")
-                await delete_yookassa_pending(payment_id)
                 await _notify_admin(
                     bot,
                     f"⚠️ Платёж {payment_id} уже записан со статусом {existing_status!r}, но не подтверждена выдача. Автоматически не повторяю, чтобы не продлить подписку дважды; нужна сверка.",
@@ -866,14 +866,6 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                 return
 
         # Deliver or extend key immediately without blocking on user input
-        try:
-            await bot.send_message(
-                user_id,
-                "<b>Оплата подтверждена</b>\n\nГотовим доступ. Обычно это занимает несколько секунд.\nЕсли активация задержится, повторно платить не нужно — мы проверим заказ.",
-                parse_mode="HTML",
-            )
-        except Exception:
-            logger.debug("Could not send payment processing status to user %d", user_id)
         success = await deliver_key(
             bot=bot,
             user_id=user_id,
@@ -997,18 +989,9 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                 user_id, payment_id, amount=amount_rub, bot=bot,
             )
         else:
-            await update_payment_status(pay_db_id, "recovery_required")
-            await delete_yookassa_pending(payment_id)
+            await update_payment_status(pay_db_id, "failed")
             logger.error("YooKassa payment %s provisioning failed for user %d", payment_id, user_id)
-            await _notify_admin(bot, f"⚠️ Не удалось выдать доступ по подтверждённой оплате YooKassa {payment_id} (user {user_id}). Платёж оставлен на безопасную ручную сверку.")
-            try:
-                await bot.send_message(
-                    user_id,
-                    "<b>Оплата получена · доступ проверяется</b>\n\nНе оплачивайте повторно. Мы проверяем выдачу и сообщим, когда ключ будет готов. Если вопрос срочный: @ByMeVPNSupportBot",
-                    parse_mode="HTML",
-                )
-            except Exception:
-                logger.debug("Could not send payment recovery status to user %d", user_id)
+            await _notify_admin(bot, f"⚠️ Не удалось выдать VPN по платежу YooKassa {payment_id} (user {user_id}). Статус помечен как failed.")
 
     except Exception as e:
         logger.exception("Webhook: unexpected error processing payment %s: %s", payment_id, e)
@@ -1093,8 +1076,6 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
             return
         if already_marked_processed and ledger_row and ledger_row[1] == "recovery_required":
             logger.warning("Crypto monitor: invoice %s awaits manual reconciliation", invoice_id)
-            from database import delete_crypto_pending
-            await delete_crypto_pending(invoice_id)
             return
 
         # Look up what we recorded when the invoice was created. Provider status
@@ -1205,26 +1186,16 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
                 await update_payment_status(pay_db_id, "processing")
             elif existing_status == "recovery_required":
                 logger.warning("Crypto monitor: invoice %s awaits manual reconciliation", invoice_id)
-                await delete_crypto_pending(invoice_id)
                 return
             else:
                 logger.error("Crypto monitor: invoice %s has interrupted status %r; requires reconciliation", invoice_id, existing_status)
                 await update_payment_status(pay_db_id, "recovery_required")
-                await delete_crypto_pending(invoice_id)
                 await _notify_admin(
                     bot,
                     f"⚠️ Crypto Bot инвойс {invoice_id} уже записан со статусом {existing_status!r}, но выдача не подтверждена. Нужна сверка.",
                 )
                 return
 
-        try:
-            await bot.send_message(
-                user_id,
-                "<b>Оплата подтверждена</b>\n\nГотовим доступ. Обычно это занимает несколько секунд.\nЕсли активация задержится, повторно платить не нужно — мы проверим заказ.",
-                parse_mode="HTML",
-            )
-        except Exception:
-            logger.debug("Could not send Crypto Bot payment status to user %d", user_id)
         success = await deliver_key(
             bot=bot,
             user_id=user_id,
@@ -1257,18 +1228,9 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
             from referral_system_new import award_referral_for_payment
             await award_referral_for_payment(user_id, str(invoice_id), amount=amount_rub, bot=bot)
         else:
-            await update_payment_status(pay_db_id, "recovery_required")
-            await delete_crypto_pending(invoice_id)
-            logger.error("CryptoBot invoice %s provisioning requires recovery for user %d", invoice_id, user_id)
-            try:
-                await bot.send_message(
-                    user_id,
-                    "<b>Оплата получена · доступ проверяется</b>\n\nНе оплачивайте повторно. Мы проверяем выдачу и сообщим, когда ключ будет готов. Если вопрос срочный: @ByMeVPNSupportBot",
-                    parse_mode="HTML",
-                )
-            except Exception:
-                logger.debug("Could not send Crypto Bot recovery status to user %d", user_id)
-            await _notify_admin(bot, f"⚠️ Не удалось выдать доступ по подтверждённой оплате Crypto Bot {invoice_id} (user {user_id}). Платёж оставлен на безопасную ручную сверку.")
+            await update_payment_status(pay_db_id, "failed")
+            logger.error("CryptoBot invoice %s provisioning failed for user %d", invoice_id, user_id)
+            await _notify_admin(bot, f"⚠️ Не удалось выдать VPN по CryptoBot инвойсу {invoice_id} (user {user_id}). Статус помечен как failed.")
 
     except Exception as e:
         logger.exception("Crypto monitor: unexpected error processing invoice %s: %s", invoice_id, e)
@@ -1337,7 +1299,7 @@ async def start_connection_tls_server() -> None:
     asset_root = Path(__file__).resolve().parent / "static" / "app" / "assets"
     icon_assets = frozenset({
         "android.png", "apple.png", "bymevpn-logo.png", "happ.png", "incy.png", "koala.png", "linux.png",
-        "v2raytun.png", "v2rayng.png",
+        "v2raytun.png", "v2rayng.png", "hiddify.png", "singbox.png",
         "v2rayn.png", "windows.png",
     })
 
