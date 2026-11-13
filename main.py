@@ -260,6 +260,8 @@ async def main() -> None:
         # may share the database and Redis, but must not duplicate billing,
         # notification, device-monitor, webhook, or broadcast workers.
         spawn_supervised("notification_scheduler", lambda: start_notification_scheduler(bot), bot)
+        from subscription_reconciliation import reconciliation_scheduler
+        spawn_supervised("subscription_reconciliation", lambda: reconciliation_scheduler(bot), bot)
         spawn_supervised("device_monitor", lambda: start_device_monitor(bot), bot)
         spawn_supervised("webhook_server", lambda: start_webhook_server(bot, dp), bot)
         from config import APP_CONNECT_TLS_CERT_FILE, APP_CONNECT_TLS_KEY_FILE
