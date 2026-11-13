@@ -34,9 +34,9 @@ class DeviceAuthDiagnosticsHttpTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(xui_client, '_get_api', new=AsyncMock(return_value=panel)), \
                 self.assertLogs(xui_client.logger, level='WARNING') as log:
             result = await self.client.get('/api/v1/devices', headers={'X-Correlation-ID': 'safe-test-1234'})
-        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.status_code, 503)
         self.assertEqual(result.headers['X-Correlation-ID'], 'safe-test-1234')
-        self.assertEqual(result.json(), {'devices': [], 'device_limit': 0, 'devices_used': 0})
+        self.assertEqual(result.headers['X-Error-Code'], 'panel_client_not_found')
         content = '\n'.join(log.output)
         self.assertIn('stage=client_read code=record_not_found correlation_id=safe-test-1234', content)
         self.assertNotIn('123456', content)
@@ -208,8 +208,8 @@ class RealJwtDeviceStatusHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status.status_code, 200)
         self.assertEqual(status.json()['status'], 'active')
         self.assertEqual(status.headers['X-Correlation-ID'], 'isolated-test-id')
-        self.assertEqual(devices.status_code, 200)
-        self.assertEqual(devices.json(), {'devices': [], 'device_limit': 0, 'devices_used': 0})
+        self.assertEqual(devices.status_code, 503)
+        self.assertEqual(devices.headers['X-Error-Code'], 'panel_client_not_found')
         self.assertEqual(servers.status_code, 200)
         self.assertEqual(rejected.status_code, 401)
         self.assertEqual(rejected.headers['X-Error-Code'], 'authentication_required')

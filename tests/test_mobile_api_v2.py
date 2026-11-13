@@ -29,6 +29,9 @@ class TestMobileApiV2(unittest.TestCase):
         cls.client = TestClient(app)
 
     def setUp(self):
+        incident_check = patch("billing_incidents.has_unresolved_access_delivery", new=AsyncMock(return_value=False))
+        incident_check.start()
+        self.addCleanup(incident_check.stop)
         self.payment_guard = patch.dict(os.environ, {"MOBILE_V2_WEBHOOK_GUARD_ENABLED": "1"})
         self.payment_guard.start()
 

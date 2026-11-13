@@ -8,6 +8,11 @@ from unittest.mock import AsyncMock, patch
 
 
 class ExpiryReminderRegression(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        incident_check = patch("billing_incidents.has_unresolved_access_delivery", new=AsyncMock(return_value=False))
+        incident_check.start()
+        self.addCleanup(incident_check.stop)
+
     async def test_tariff_bound_promo_cannot_be_used_on_another_period(self):
         from handlers.buy import cb_select_tariff
         callback = SimpleNamespace(data="tariff_1_2", from_user=SimpleNamespace(id=123))
@@ -511,6 +516,11 @@ class PlatformGuideRegression(unittest.IsolatedAsyncioTestCase):
         callback.answer.assert_awaited_once_with(url="https://example.test/connect?ticket=safe")
 
 class PaymentProviderFailures(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        incident_check = patch("billing_incidents.has_unresolved_access_delivery", new=AsyncMock(return_value=False))
+        incident_check.start()
+        self.addCleanup(incident_check.stop)
+
     def callback(self):
         return SimpleNamespace(data="pay_yookassa", from_user=SimpleNamespace(id=123), message=SimpleNamespace(answer=AsyncMock()))
 

@@ -7,6 +7,7 @@ import secrets
 import time
 import weakref
 from datetime import datetime
+from uuid import UUID
 
 from aiogram import Bot, Router
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
@@ -525,7 +526,10 @@ async def _deliver_key_unlocked(
         # Subscription URLs are access credentials; never write any part to logs.
 
         # Сохраняем ссылку на подписку и настоящий UUID клиента в БД
-        client_uuid = user_result.get("uuid") or subscription_url
+        try:
+            client_uuid = str(UUID(str(user_result.get("uuid") or "")))
+        except (ValueError, TypeError, AttributeError):
+            raise ValueError("Panel returned an invalid client identifier") from None
         key_id = await add_key(
             user_id, subscription_url, config_name, client_uuid, days, limit_ip,
             expiry=target_expiry,
