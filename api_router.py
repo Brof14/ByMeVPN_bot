@@ -2639,6 +2639,21 @@ async def get_plans(devices: int = 2):
 @billing_api.post("/payment/create")
 async def api_create_payment(req: PaymentCreateRequest, user_id: int = Depends(get_current_user_id)):
     """Create an owned, idempotent checkout from the server-owned tariff catalog."""
+    from billing_incidents import has_unresolved_access_delivery
+    try:
+        if await has_unresolved_access_delivery(user_id):
+            raise HTTPException(
+                status_code=409,
+                detail="Предыдущая оплата проверяется. Не оплачивайте повторно; обратитесь в поддержку, если ожидание затянулось.",
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Could not check pending payment delivery for user %d (%s)", user_id, type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="Не удалось проверить предыдущую оплату. Повторно платить не нужно; попробуйте позже.",
+        ) from None
     plan_map = {
         "1m": 1, "month": 1,
         "3m": 3, "quarter": 3,
