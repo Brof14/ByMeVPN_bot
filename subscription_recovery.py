@@ -53,10 +53,16 @@ async def _read_inbounds(user_id: int) -> tuple[list[int], dict[int, list[dict]]
 
 async def _paid_term_coverage(key: dict) -> dict:
     """Project only successful, positive-price orders from this key's lifetime."""
-    from database import get_user_payments
+    from database import get_user_payments, get_user_refunds
 
     key_created = int(key.get("created") or 0)
     payments = await get_user_payments(int(key["user_id"]))
+    refunds = await get_user_refunds(int(key["user_id"]))
+    refunded_payloads = {
+        str(refund.get("original_payload"))
+        for refund in refunds if refund.get("original_payload")
+    }
+    has_unmatched_refund = any(not refund.get("original_payload") for refund in refunds)
     paid = []
     for payment in payments:
         try:
@@ -70,6 +76,7 @@ async def _paid_term_coverage(key: dict) -> dict:
             and amount > 0 and days > 0 and created >= key_created - _DAY
             and created <= int(time.time()) + 300
             and str(payment.get("method") or "").lower() != "trial"
+            and str(payment.get("payload") or "") not in refunded_payloads
         ):
             paid.append({"created": created, "days": days})
     paid.sort(key=lambda row: row["created"])
@@ -87,7 +94,10 @@ async def _paid_term_coverage(key: dict) -> dict:
         "payment_count": len(paid),
         "total_paid_days": total_paid_days,
         "covered_until": covered_until,
-        "covers_db_expiry": bool(paid) and expiry <= covered_until + _EXPIRY_TOLERANCE,
+        "covers_db_expiry": (
+            bool(paid) and not has_unmatched_refund
+            and expiry <= covered_until + _EXPIRY_TOLERANCE
+        ),
     }
 
 
