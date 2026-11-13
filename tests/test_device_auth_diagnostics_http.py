@@ -34,10 +34,9 @@ class DeviceAuthDiagnosticsHttpTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(xui_client, '_get_api', new=AsyncMock(return_value=panel)), \
                 self.assertLogs(xui_client.logger, level='WARNING') as log:
             result = await self.client.get('/api/v1/devices', headers={'X-Correlation-ID': 'safe-test-1234'})
-        self.assertEqual(result.status_code, 404)
+        self.assertEqual(result.status_code, 200)
         self.assertEqual(result.headers['X-Correlation-ID'], 'safe-test-1234')
-        self.assertEqual(result.headers['X-Error-Code'], 'panel_client_not_found')
-        self.assertEqual(result.json(), {'detail': 'Учётная запись не найдена в панели VPN'})
+        self.assertEqual(result.json(), {'devices': [], 'device_limit': 0, 'devices_used': 0})
         content = '\n'.join(log.output)
         self.assertIn('stage=client_read code=record_not_found correlation_id=safe-test-1234', content)
         self.assertNotIn('123456', content)
@@ -105,6 +104,31 @@ class DeviceAuthDiagnosticsHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.headers['X-Correlation-ID'], 'safe-test-1234')
         self.assertIn('reason=invalid_or_expired_token', '\n'.join(log.output))
 
+    async def test_missing_panel_client_status_has_no_entitlement_or_bootstrap(self):
+        snapshot = (None, [], {'status': 'active', 'subscription_url': 'private-url', 'seconds_remaining': 100})
+        missing = ValueError('Response status is not successful, message: Obtain (record not found)')
+        headers = {'X-Entitlement-Version': 'es256-v1', 'X-HWID': 'test-hwid'}
+        with patch.object(api_router, 'get_user_real_subscription', new=AsyncMock(return_value=snapshot)), \
+                patch.object(xui_client, 'has_xui_client', new=AsyncMock(side_effect=missing)), \
+                patch.object(api_router, '_validated_active_device_bootstrap_expiry', new=AsyncMock()) as bootstrap, \
+                patch.object(api_router, 'create_entitlement') as signer:
+            result = await self.client.get('/api/v1/subscription/status', headers=headers)
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json()['status'], 'active')
+        self.assertTrue(result.json()['device_confirmation_required'])
+        self.assertIsNone(result.json().get('entitlement'))
+        self.assertIsNone(result.json()['subscription_url'])
+        bootstrap.assert_not_awaited()
+        signer.assert_not_called()
+
+    async def test_other_value_error_status_remains_503(self):
+        snapshot = (None, [], {'status': 'active'})
+        headers = {'X-Entitlement-Version': 'es256-v1', 'X-HWID': 'test-hwid'}
+        with patch.object(api_router, 'get_user_real_subscription', new=AsyncMock(return_value=snapshot)), \
+                patch.object(xui_client, 'has_xui_client', new=AsyncMock(side_effect=ValueError('different failure'))):
+            result = await self.client.get('/api/v1/subscription/status', headers=headers)
+        self.assertEqual(result.status_code, 503)
+
     async def test_subscription_failure_retains_status_and_correlation(self):
         snapshot = (None, [], {'status': 'active'})
         with patch.object(api_router, 'get_user_real_subscription', new=AsyncMock(return_value=snapshot)), \
@@ -159,8 +183,8 @@ class RealJwtDeviceStatusHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status.status_code, 200)
         self.assertEqual(status.json()['status'], 'active')
         self.assertEqual(status.headers['X-Correlation-ID'], 'isolated-test-id')
-        self.assertEqual(devices.status_code, 404)
-        self.assertEqual(devices.headers['X-Error-Code'], 'panel_client_not_found')
+        self.assertEqual(devices.status_code, 200)
+        self.assertEqual(devices.json(), {'devices': [], 'device_limit': 0, 'devices_used': 0})
         self.assertEqual(servers.status_code, 200)
         self.assertEqual(rejected.status_code, 401)
         self.assertEqual(rejected.headers['X-Error-Code'], 'authentication_required')

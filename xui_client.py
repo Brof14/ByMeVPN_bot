@@ -836,10 +836,11 @@ async def get_xui_devices(user_id: int) -> Dict[str, Any]:
                 raise XuiDeviceClientNotFound("Panel client not found") from None
             raise
 
-    client_data, hwid_data = await asyncio.gather(
-        read_panel("client_read", "GET", f"panel/api/clients/get/{email}"),
-        read_panel("device_read", "POST", f"panel/api/clients/hwids/{email}", {}),
-    )
+    try:
+        client_data = await read_panel("client_read", "GET", f"panel/api/clients/get/{email}")
+    except XuiDeviceClientNotFound:
+        return {"devices": [], "limit_hwid": 0, "limit_ip": 0}
+    hwid_data = await read_panel("device_read", "POST", f"panel/api/clients/hwids/{email}", {})
     client_obj = client_data.get("obj") or {}
     client_obj = client_obj.get("client") if isinstance(client_obj, dict) else None
     if not isinstance(client_obj, dict):

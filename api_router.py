@@ -909,7 +909,7 @@ async def _attach_signed_entitlement(
     try:
         device_state = await _require_registered_entitlement_device(user_id, headers)
     except HTTPException as exc:
-        if exc.status_code != 403:
+        if isinstance(exc, PanelClientAbsent) or exc.status_code != 403:
             raise
         if subscription.get("status") == "trial":
             trial_bootstrap_expiry = await _validated_trial_bootstrap_expiry(user_id, headers)
@@ -1003,6 +1003,10 @@ def _entitlement_requested(headers: Dict[str, str]) -> bool:
     return True
 
 
+class PanelClientAbsent(HTTPException):
+    """Panel confirmed the account has no client; never bootstrap access."""
+
+
 async def _require_registered_entitlement_device(
     user_id: int, headers: Dict[str, str],
 ) -> Dict[str, Any]:
@@ -1021,6 +1025,9 @@ async def _require_registered_entitlement_device(
     except HTTPException:
         raise
     except Exception as exc:
+        from xui_client import _device_client_not_found
+        if _device_client_not_found(exc):
+            raise PanelClientAbsent(status_code=403, detail="Устройство не подтверждено для этой подписки") from None
         logger.warning("Entitlement device check unavailable (%s)", type(exc).__name__)
         raise HTTPException(status_code=503, detail="Не удалось проверить устройство подписки") from None
 
@@ -1179,7 +1186,7 @@ async def _require_opted_in_device_access(user_id: int, request: Request) -> Dic
     try:
         await _require_registered_entitlement_device(user_id, headers)
     except HTTPException as exc:
-        if exc.status_code != 403:
+        if isinstance(exc, PanelClientAbsent) or exc.status_code != 403:
             raise
         _, _, subscription = await get_user_real_subscription(user_id, headers)
         bootstrap_expiry = await _validated_active_device_bootstrap_expiry(
