@@ -251,6 +251,74 @@ def _operations_kb() -> InlineKeyboardMarkup:
     ])
 
 
+def _subscription_recovery_keyboard(item: dict) -> InlineKeyboardMarkup:
+    rows = []
+    if item.get("eligible"):
+        rows.append([InlineKeyboardButton(
+            text="Подтвердить точное восстановление",
+            callback_data=f"admin_recovery_confirm:{int(item['key_id'])}",
+        )])
+    elif item.get("key_id"):
+        rows.append([InlineKeyboardButton(
+            text="Открыть карточку ключа",
+            callback_data=f"admin_key_detail:{int(item['key_id'])}:{int(item['user_id'])}",
+        )])
+    rows.append([InlineKeyboardButton(text="← Система", callback_data="admin_ops_menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.callback_query(F.data.startswith("admin_recovery_preview:"))
+async def cb_subscription_recovery_preview(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    try:
+        key_id = int(callback.data.split(":", 1)[1])
+        from subscription_recovery import assess_key_recovery, format_recovery_preview
+        item = await assess_key_recovery(key_id)
+        await callback.message.answer(
+            format_recovery_preview(item), parse_mode="HTML",
+            reply_markup=_subscription_recovery_keyboard(item),
+        )
+    except (ValueError, IndexError):
+        await callback.message.answer("Некорректный номер ключа. Сверьте подписки заново.")
+    except Exception as exc:
+        logger.warning("Subscription recovery preview failed (%s)", type(exc).__name__)
+        await callback.message.answer("Не удалось подготовить восстановление. Панель не изменялась.")
+
+
+@router.callback_query(F.data.startswith("admin_recovery_confirm:"))
+async def cb_subscription_recovery_confirm(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback, "Повторно проверяю оплату, срок и 3x-ui…")
+    try:
+        key_id = int(callback.data.split(":", 1)[1])
+        from subscription_recovery import execute_key_recovery
+        result = await execute_key_recovery(key_id, callback.from_user.id)
+        markup = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="Открыть ключ" if result.get("ok") else "Проверить ещё раз",
+                callback_data=(
+                    f"admin_key_detail:{key_id}:{result.get('user_id')}"
+                    if result.get("ok")
+                    else f"admin_recovery_preview:{key_id}"
+                ),
+            )
+        ]])
+        await callback.message.answer(
+            f"{'✅' if result.get('ok') else '⚠️'} {result.get('message', 'Операция завершена.')}",
+            reply_markup=markup,
+        )
+    except (ValueError, IndexError):
+        await callback.message.answer("Некорректный номер ключа. Сверьте подписки заново.")
+    except Exception as exc:
+        logger.warning("Subscription recovery action failed (%s)", type(exc).__name__)
+        await callback.message.answer("Восстановление не подтверждено. Проверьте состояние в 3x-ui и журнал администратора.")
+
+
 def _back_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Главное меню", callback_data="admin_menu")]
