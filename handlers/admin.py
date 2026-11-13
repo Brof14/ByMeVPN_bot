@@ -287,10 +287,13 @@ async def cb_subscription_reconcile(callback: CallbackQuery):
         await safe_answer(callback, "Нет доступа.", alert=True)
         return
     await safe_answer(callback, "Проверяю базу и 3x-ui…")
-    from subscription_reconciliation import reconcile_subscriptions, format_report
+    from subscription_reconciliation import reconcile_subscriptions, format_report, report_keyboard
     try:
         report = await reconcile_subscriptions()
-        await callback.message.answer(format_report(report), parse_mode="HTML")
+        await callback.message.answer(
+            format_report(report), parse_mode="HTML",
+            reply_markup=report_keyboard(report),
+        )
     except Exception as exc:
         logger.warning("Admin subscription reconciliation failed (%s)", type(exc).__name__)
         await callback.message.answer("Сверку завершить не удалось. Данные не изменены.")
