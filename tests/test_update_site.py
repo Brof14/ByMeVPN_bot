@@ -57,17 +57,18 @@ class UpdateSiteTests(unittest.TestCase):
         }), encoding="utf-8")
         return name, apk
 
-    def test_first_install_page_supports_get_and_head(self):
+    def test_app_landing_page_says_in_development_and_recommends_happ(self):
         get = self.client.get("/app/")
         self.assertEqual(get.status_code, 200)
         self.assertIn("/app/logo", get.text)
-        self.assertIn("/app/update.json", get.text)
-        self.assertIn("Android 7.0", get.text)
-        self.assertIn('id="download" href="#" hidden', get.text)
+        self.assertIn("ByMeVPN для Android находится в разработке", get.text)
+        self.assertIn("Пока рекомендуем Happ", get.text)
+        self.assertNotIn('id="download"', get.text)
+        self.assertNotIn("Скачать ByMeVPN", get.text)
+        self.assertNotIn("fetch('/app/update.json'", get.text)
         self.assertIn('src="/app/logo"', get.text)
         self.assertIn("@media (max-width: 680px)", get.text)
         self.assertIn("prefers-reduced-motion", get.text)
-        self.assertIn("fetch('/app/update.json'", get.text)
         self.assertEqual(get.headers["cache-control"], "no-cache")
         head = self.client.head("/app/")
         self.assertEqual(head.status_code, 200)
