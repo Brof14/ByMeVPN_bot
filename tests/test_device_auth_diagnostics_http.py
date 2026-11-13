@@ -128,6 +128,32 @@ class DeviceAuthDiagnosticsHttpTests(unittest.IsolatedAsyncioTestCase):
             result = await self.client.get('/api/v1/subscription/status', headers=headers)
         self.assertEqual(result.status_code, 503)
 
+    async def test_missing_hwids_record_status_remains_503(self):
+        snapshot = (None, [], {'status': 'active'})
+        error = ValueError('Response status is not successful, message: Obtain (record not found)')
+        headers = {'X-Entitlement-Version': 'es256-v1', 'X-HWID': 'test-hwid'}
+        with patch.object(api_router, 'get_user_real_subscription', new=AsyncMock(return_value=snapshot)), \
+                patch.object(xui_client, 'has_xui_client', new=AsyncMock(return_value=True)), \
+                patch.object(xui_client, 'get_xui_devices', new=AsyncMock(side_effect=error)):
+            result = await self.client.get('/api/v1/subscription/status', headers=headers)
+        self.assertEqual(result.status_code, 503)
+
+    async def test_client_missing_during_device_lookup_has_no_entitlement(self):
+        snapshot = (None, [], {'status': 'active', 'seconds_remaining': 100})
+        missing = xui_client.XuiDeviceClientNotFound('Panel client not found')
+        headers = {'X-Entitlement-Version': 'es256-v1', 'X-HWID': 'test-hwid'}
+        with patch.object(api_router, 'get_user_real_subscription', new=AsyncMock(return_value=snapshot)), \
+                patch.object(xui_client, 'has_xui_client', new=AsyncMock(return_value=True)), \
+                patch.object(xui_client, 'get_xui_devices', new=AsyncMock(side_effect=missing)), \
+                patch.object(api_router, '_validated_active_device_bootstrap_expiry', new=AsyncMock()) as bootstrap, \
+                patch.object(api_router, 'create_entitlement') as signer:
+            result = await self.client.get('/api/v1/subscription/status', headers=headers)
+        self.assertEqual(result.status_code, 200)
+        self.assertTrue(result.json()['device_confirmation_required'])
+        self.assertIsNone(result.json().get('entitlement'))
+        bootstrap.assert_not_awaited()
+        signer.assert_not_called()
+
     async def test_subscription_failure_retains_status_and_correlation(self):
         snapshot = (None, [], {'status': 'active'})
         with patch.object(api_router, 'get_user_real_subscription', new=AsyncMock(return_value=snapshot)), \

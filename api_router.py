@@ -1018,16 +1018,25 @@ async def _require_registered_entitlement_device(
         raise HTTPException(status_code=422, detail="Не удалось подтвердить это устройство") from None
 
     try:
-        from xui_client import get_xui_devices, has_xui_client
-        if not await has_xui_client(user_id):
+        from xui_client import (
+            XuiDeviceClientNotFound, _device_client_not_found,
+            get_xui_devices, has_xui_client,
+        )
+        try:
+            client_exists = await has_xui_client(user_id)
+        except Exception as exc:
+            if _device_client_not_found(exc):
+                raise PanelClientAbsent(status_code=403, detail="Устройство не подтверждено для этой подписки") from None
+            raise
+        if not client_exists:
             raise HTTPException(status_code=403, detail="Устройство не подтверждено для этой подписки")
-        device_state = await get_xui_devices(user_id)
+        try:
+            device_state = await get_xui_devices(user_id)
+        except XuiDeviceClientNotFound:
+            raise PanelClientAbsent(status_code=403, detail="Устройство не подтверждено для этой подписки") from None
     except HTTPException:
         raise
     except Exception as exc:
-        from xui_client import _device_client_not_found
-        if _device_client_not_found(exc):
-            raise PanelClientAbsent(status_code=403, detail="Устройство не подтверждено для этой подписки") from None
         logger.warning("Entitlement device check unavailable (%s)", type(exc).__name__)
         raise HTTPException(status_code=503, detail="Не удалось проверить устройство подписки") from None
 
