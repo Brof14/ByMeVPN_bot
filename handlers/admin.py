@@ -298,6 +298,18 @@ async def cb_subscription_recovery_confirm(callback: CallbackQuery):
         key_id = int(callback.data.split(":", 1)[1])
         from subscription_recovery import execute_key_recovery
         result = await execute_key_recovery(key_id, callback.from_user.id)
+        if result.get("ok") and result.get("user_id"):
+            try:
+                await callback.bot.send_message(
+                    int(result["user_id"]),
+                    "<b>Доступ восстановлен</b>\\n\\nОткройте «Мои ключи» и подключитесь к VPN. Повторная оплата не нужна.",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                        InlineKeyboardButton(text="Мои ключи", callback_data="my_keys")
+                    ]]),
+                )
+            except Exception as exc:
+                logger.info("Could not send verified recovery notice (%s)", type(exc).__name__)
         markup = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(
                 text="Открыть ключ" if result.get("ok") else "Проверить ещё раз",
