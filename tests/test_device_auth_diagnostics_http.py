@@ -120,6 +120,21 @@ class DeviceAuthDiagnosticsHttpTests(unittest.IsolatedAsyncioTestCase):
         bootstrap.assert_not_awaited()
         signer.assert_not_called()
 
+    async def test_absent_client_boolean_cannot_bootstrap_access(self):
+        snapshot = (None, [], {'status': 'active', 'subscription_url': 'private-url', 'seconds_remaining': 100})
+        headers = {'X-Entitlement-Version': 'es256-v1', 'X-HWID': 'test-hwid'}
+        with patch.object(api_router, 'get_user_real_subscription', new=AsyncMock(return_value=snapshot)), \
+                patch.object(xui_client, 'has_xui_client', new=AsyncMock(return_value=False)), \
+                patch.object(api_router, '_validated_active_device_bootstrap_expiry', new=AsyncMock()) as bootstrap, \
+                patch.object(api_router, 'create_entitlement') as signer:
+            result = await self.client.get('/api/v1/subscription/status', headers=headers)
+        self.assertEqual(result.status_code, 200)
+        self.assertTrue(result.json()['device_confirmation_required'])
+        self.assertIsNone(result.json().get('entitlement'))
+        self.assertIsNone(result.json()['subscription_url'])
+        bootstrap.assert_not_awaited()
+        signer.assert_not_called()
+
     async def test_other_value_error_status_remains_503(self):
         snapshot = (None, [], {'status': 'active'})
         headers = {'X-Entitlement-Version': 'es256-v1', 'X-HWID': 'test-hwid'}
