@@ -86,6 +86,21 @@ def format_report(report: dict) -> str:
     return "\n".join(lines)
 
 
+def report_keyboard(report: dict):
+    """Offer safe navigation to each affected key; actions never mutate data."""
+    from aiogram.types import InlineKeyboardMarkup
+    from bot_style import themed_button as InlineKeyboardButton
+
+    rows = [
+        [InlineKeyboardButton(
+            text=f"Открыть ключ #{issue['key_id']}",
+            callback_data=f"admin_key_detail:{issue['key_id']}:{issue['user_id']}",
+        )]
+        for issue in report["discrepancies"][:8]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
 async def reconciliation_scheduler(bot) -> None:
     """Run a read-only audit every six hours and report changes to admins."""
     from config import ADMIN_IDS
@@ -98,7 +113,10 @@ async def reconciliation_scheduler(bot) -> None:
                                      for item in report["discrepancies"]))
             if (report["discrepancies"] or report["unavailable"]) and signature != previous_signature:
                 for admin_id in ADMIN_IDS:
-                    await bot.send_message(admin_id, format_report(report), parse_mode="HTML")
+                    await bot.send_message(
+                        admin_id, format_report(report), parse_mode="HTML",
+                        reply_markup=report_keyboard(report),
+                    )
             previous_signature = signature
         except Exception as exc:
             logger.warning("Subscription reconciliation failed (%s)", type(exc).__name__)
