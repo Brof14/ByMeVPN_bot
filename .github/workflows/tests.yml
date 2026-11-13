@@ -11,6 +11,23 @@ on:
       - "fix/**"
 
 jobs:
+  signer-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Verify signer and entitlement contracts
+        run: python -m unittest tests.test_signer_service_acl tests.test_entitlements -q
+
   tests:
     runs-on: ubuntu-latest
     timeout-minutes: 10
