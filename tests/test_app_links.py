@@ -125,17 +125,16 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertIn("play.google.com/store/apps/details?id=llc.itdev.incy", page)
         self.assertIn("github.com/Happ-proxy/happ-android/releases/latest", page)
 
-    def test_download_and_platform_mapping_preserves_existing_clients(self):
+    def test_happ_is_default_and_bymevpn_is_not_offered_for_download(self):
         page = render_connection_choice_page("https://sub.example/abc")
         encoded = re.search(r'const apps=JSON.parse\(("(?:\\.|[^"\\])*")\)', page)
         self.assertIsNotNone(encoded)
         apps = json.loads(json.loads(encoded.group(1)))
-        self.assertEqual([a["name"] for a in apps["android"]], ["ByMeVPN", "Happ", "INCY", "v2rayTun", "v2rayNG", "Hiddify", "sing-box"])
-        self.assertEqual(apps["android"][0]["deep"], "bymevpn://login?auth=telegram")
-        self.assertNotIn("sub.example", apps["android"][0]["deep"])
-        self.assertTrue(apps["android"][0]["download"].endswith("/app"))
-        self.assertEqual(urlsplit(apps["android"][0]["download"]).scheme, "https")
+        self.assertEqual([a["name"] for a in apps["android"]], ["Happ", "INCY", "v2rayTun", "v2rayNG", "Hiddify", "sing-box"])
         self.assertEqual([a["name"] for a in apps["ios"]], ["Happ", "INCY", "v2rayTun", "Hiddify", "sing-box"])
+        for platform in ("android", "windows", "linux"):
+            self.assertEqual(apps[platform][0]["name"], "Happ")
+            self.assertTrue(all(a["name"] != "ByMeVPN" for a in apps[platform]))
         for platform in ("windows", "macos", "linux"):
             self.assertIn("v2rayN", [a["name"] for a in apps[platform]])
             self.assertIn("Koala Clash", [a["name"] for a in apps[platform]])
@@ -155,7 +154,8 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertIn('src="/app/assets/bymevpn-logo.png"', page)
         self.assertIn("Выберите своё устройство и приложение", page)
         self.assertIn("Не удалось определить устройство. Выберите платформу вручную ниже.", page)
-        self.assertIn("href=\"/app\">открыть страницу загрузки ByMeVPN", page)
+        self.assertNotIn("href=\"/app\">открыть страницу загрузки ByMeVPN", page)
+        self.assertIn("Собственные приложения ByMeVPN для Android, Windows и Linux находятся в разработке", page)
         self.assertIn("Рекомендуем", page)
         self.assertIn('<details id="alternatives">', page)
         self.assertIn('id="copy-subscription"', page)
@@ -165,8 +165,8 @@ class TestAppOpenPage(unittest.TestCase):
         for symbol in ("android", "apple", "windows", "linux"):
             self.assertIn(f'id="os-{symbol}"', page)
         self.assertIn('id="external-download"', page)
-        self.assertIn('id="account-help"', page)
-        self.assertIn("аккаунт и подписка загрузятся в приложение", page)
+        self.assertNotIn('id="account-help"', page)
+        self.assertIn("Happ", page)
         self.assertIn("viewport-fit=cover", page)
 
     def test_connection_page_escapes_script_endings_and_template_markers(self):
