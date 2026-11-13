@@ -3255,10 +3255,8 @@ async def get_devices(request: Request, response: Response = None, user_id: int 
     try:
         result = await get_xui_devices(user_id)
     except XuiDeviceClientNotFound:
-        logger.info("Device list unavailable code=panel_client_not_found correlation_id=%s", correlation_id)
-        raise _correlated_http_error(
-            404, "Учётная запись не найдена в панели VPN", correlation_id, "panel_client_not_found",
-        ) from None
+        logger.info("Device list empty code=panel_client_not_found correlation_id=%s", correlation_id)
+        return {"devices": [], "device_limit": 0, "devices_used": 0}
     except Exception as exc:
         logger.warning("Device list unavailable code=%s correlation_id=%s", type(exc).__name__, correlation_id)
         raise _correlated_http_error(503, "Список устройств временно недоступен", correlation_id) from None

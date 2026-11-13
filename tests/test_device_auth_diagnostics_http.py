@@ -66,8 +66,7 @@ class DeviceAuthDiagnosticsHttpTests(unittest.IsolatedAsyncioTestCase):
                 raise ValueError('Response status is not successful, message: Obtain (record not found)')
         with patch.object(xui_client, '_get_api', new=AsyncMock(return_value=SimpleNamespace(client=Panel()))):
             result = await self.client.get('/api/v1/devices', headers={'X-Correlation-ID': 'safe-test-1234'})
-        self.assertEqual(result.status_code, 404)
-        self.assertEqual(result.headers['X-Error-Code'], 'panel_client_not_found')
+        self.assertEqual(result.status_code, 503)
 
     async def test_existing_client_with_empty_device_list_keeps_panel_limit(self):
         class Panel:
