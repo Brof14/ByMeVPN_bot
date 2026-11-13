@@ -196,6 +196,9 @@ async def assess_key_recovery(key_id: int) -> dict:
         return result
 
     expiries = [profile["expiry_ms"] // 1000 for profile in profiles]
+    if any(expiry <= 0 for expiry in expiries):
+        result["reason"] = "В панели найден бессрочный или неизвестный срок; автоматическое изменение запрещено."
+        return result
     if any(expiry > result["db_expiry"] + _EXPIRY_TOLERANCE for expiry in expiries):
         result["reason"] = "В панели есть более поздний срок; автоматическое изменение могло бы сократить доступ."
         return result
