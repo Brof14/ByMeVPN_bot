@@ -1,13 +1,18 @@
 """The signer accepts only its own narrowly scoped POSIX ACL."""
 import os
+import base64
 import stat
 import struct
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import entitlements
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 
 
 def acl(entries):
@@ -15,6 +20,25 @@ def acl(entries):
 
 
 class SignerServiceAclTests(unittest.TestCase):
+    def test_service_owned_key_signs_and_verifies_and_group_access_fails(self):
+        with tempfile.TemporaryDirectory(prefix='signer-contract-') as directory:
+            path = Path(directory) / 'test-key.pem'
+            private_key = ec.generate_private_key(ec.SECP256R1())
+            path.write_bytes(private_key.private_bytes(
+                serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            ))
+            path.chmod(0o400)
+            with patch.dict(os.environ, {entitlements.PRIVATE_KEY_FILE_ENV: str(path)}):
+                loaded = entitlements.load_private_key()
+                header, body, signature = entitlements._jwt_from_claims({'test': True}, loaded).split('.')
+                raw = base64.urlsafe_b64decode(signature + '==')
+                der = encode_dss_signature(int.from_bytes(raw[:32], 'big'), int.from_bytes(raw[32:], 'big'))
+                private_key.public_key().verify(der, (header + '.' + body).encode(), ec.ECDSA(hashes.SHA256()))
+                path.chmod(0o440)
+                with self.assertRaises(entitlements.EntitlementSigningError):
+                    entitlements.load_private_key()
+
     def test_named_service_reader_and_strict_rejections(self):
         uid = 10001
         undef = 0xffffffff
