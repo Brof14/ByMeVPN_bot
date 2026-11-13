@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import stat
+import struct
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -50,7 +51,7 @@ def _load_private_key_cached(path_text: str, mtime_ns: int, size: int):
     path = Path(path_text)
     try:
         metadata = path.lstat()
-        _validate_key_file_metadata(metadata)
+        _validate_key_file_metadata(metadata, path)
         key = serialization.load_pem_private_key(path.read_bytes(), password=None)
     except EntitlementSigningError:
         raise
@@ -63,12 +64,29 @@ def _load_private_key_cached(path_text: str, mtime_ns: int, size: int):
     return key
 
 
-def _validate_key_file_metadata(metadata: os.stat_result) -> None:
-    if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != 0
-            or metadata.st_mode & 0o077):
-        raise EntitlementSigningError(
-            "Entitlement key file must be a root-owned regular file with mode 0400 or 0600"
-        )
+def _validate_key_file_metadata(metadata: os.stat_result, path: Path) -> None:
+    mode = stat.S_IMODE(metadata.st_mode)
+    if not stat.S_ISREG(metadata.st_mode):
+        raise EntitlementSigningError("Entitlement key file is not regular")
+    if metadata.st_uid in {0, os.geteuid()} and mode in (0o400, 0o600):
+        return
+    # A POSIX ACL uses the group mode bits as its mask, not as group access.
+    # Accept only root-owned read-only files with exactly one named reader,
+    # the effective service UID, and no permissions for group or other.
+    if metadata.st_uid == 0 and mode == 0o440 and os.geteuid() != 0:
+        try:
+            raw = os.getxattr(path, "system.posix_acl_access", follow_symlinks=False)
+            if len(raw) != 44 or struct.unpack_from("<I", raw)[0] != 2:
+                raise ValueError("unexpected ACL")
+            entries = [struct.unpack_from("<HHI", raw, i) for i in range(4, len(raw), 8)]
+            expected = {(1, 4, 0xffffffff), (2, 4, os.geteuid()),
+                        (4, 0, 0xffffffff), (16, 4, 0xffffffff),
+                        (32, 0, 0xffffffff)}
+            if len(entries) == len(expected) and set(entries) == expected:
+                return
+        except (OSError, ValueError, struct.error):
+            pass
+    raise EntitlementSigningError("Entitlement key file permissions are unsafe")
 
 
 def load_private_key():
@@ -82,7 +100,7 @@ def load_private_key():
         metadata = path.lstat()
     except OSError as exc:
         raise EntitlementSigningError("Entitlement signing key file is unavailable") from exc
-    _validate_key_file_metadata(metadata)
+    _validate_key_file_metadata(metadata, path)
     return _load_private_key_cached(str(path), metadata.st_mtime_ns, metadata.st_size)
 
 
