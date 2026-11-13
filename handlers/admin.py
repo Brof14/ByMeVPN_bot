@@ -1342,6 +1342,44 @@ async def cb_admin_client_diagnostics(callback: CallbackQuery):
 
 # ── User keys (admin view) ─────────────────────────────────────────────────
 
+@router.callback_query(F.data.startswith("admin_extend_sub:"))
+async def cb_admin_extend_subscription(callback: CallbackQuery):
+    """Route an admin to the exact key before any subscription extension."""
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    raw_user_id = callback.data.partition(":")[2]
+    if not raw_user_id.isdecimal() or int(raw_user_id) <= 0:
+        await safe_answer(callback, "Некорректный ID пользователя.", alert=True)
+        return
+    user_id = int(raw_user_id)
+    keys = await get_user_keys(user_id)
+    await safe_answer(callback)
+    if not keys:
+        await callback.message.edit_text(
+            "У пользователя нет подписок для продления.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="← К клиенту", callback_data=f"admin_user:{user_id}"),
+            ]]),
+        )
+        return
+    # Never guess which of several keys should receive the extra paid days.
+    rows = [
+        [InlineKeyboardButton(
+            text=f"Ключ #{key['id']} · до {fmt_date(key['expiry'])[:10]}",
+            callback_data=f"admin_key_detail:{key['id']}:{user_id}",
+        )] for key in sorted(keys, key=lambda item: int(item["expiry"]), reverse=True)[:20]
+    ]
+    rows.append([InlineKeyboardButton(text="← К клиенту", callback_data=f"admin_user:{user_id}")])
+    await callback.message.edit_text(
+        "<b>Продление подписки</b>\n\n"
+        "Выберите ключ. На следующем экране доступны продление на 7/30/90 дней "
+        "и установка точного срока.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
 @router.callback_query(F.data.startswith("admin_user_keys:"))
 async def cb_user_keys(callback: CallbackQuery):
     if not _is_admin(callback.from_user.id):

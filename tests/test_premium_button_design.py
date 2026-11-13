@@ -63,20 +63,12 @@ class PremiumButtonDesignTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(b.icon_custom_emoji_id for b in buttons(on)))
 
     async def test_help_topics_cover_payments_and_devices(self):
-        from handlers.guide import cb_support_topic
-        for topic in ("billing", "devices"):
-            callback = SimpleNamespace(data=f"support_topic:{topic}")
-            with (
-                patch("handlers.guide.safe_answer", new=AsyncMock()),
-                patch("handlers.guide.send_with_photo", new=AsyncMock()) as send,
-            ):
-                await cb_support_topic(callback, object())
-            text = send.await_args.args[2]
-            self.assertIn("подписк", text.lower())
-            actions = [b.callback_data for row in send.await_args.args[3].inline_keyboard for b in row]
-            self.assertIn("my_keys", actions)
-            support = next(b for row in send.await_args.args[3].inline_keyboard for b in row if b.text == "Написать в поддержку")
-            self.assertTrue(support.url.startswith("https://t.me/ByMeVPNSupportBot"))
+        from keyboards import key_detail_kb, key_settings_kb
+        key = [b.callback_data for b in buttons(key_detail_kb(7))]
+        settings = [b.callback_data for b in buttons(key_settings_kb(7))]
+        self.assertIn("key_devices:7", key)
+        self.assertIn("key_renew:7", key)
+        self.assertIn("manage_payment_methods:7", settings)
 
     def test_existing_tariffs_and_key_actions_remain_intact(self):
         tariffs = [b.callback_data for b in buttons(tariff_selection_kb(devices=5))]

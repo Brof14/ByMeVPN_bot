@@ -22,7 +22,8 @@ class MobileDeviceBootstrapStorageTests(unittest.TestCase):
                     await db.commit()
                     subscription_expiry = int(time.time()) + 86400
                     fixed_expiry = int(time.time()) + 600
-                    with patch.object(database, "get_db", new=AsyncMock(return_value=db)):
+                    with (patch.object(database, "get_db", new=AsyncMock(return_value=db)),
+                          patch.object(database, "DB_FILE", tmp.name)):
                         first = await database.reserve_mobile_device_bootstrap(
                             17, "device-a", subscription_expiry, fixed_expiry, 0, 2,
                         )

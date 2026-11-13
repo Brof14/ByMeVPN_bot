@@ -26,7 +26,7 @@ APP_SCHEME = "bymevpn"
 # default policy; without it browsers hide the logo and show its alt text.
 APP_LOGIN_CONTENT_SECURITY_POLICY = (
     "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; "
-    "script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
+    "script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'"
 )
 
 # Keep the redirect page small and predictable; these limits also protect the

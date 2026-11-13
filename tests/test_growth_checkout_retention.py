@@ -7,18 +7,13 @@ from unittest.mock import AsyncMock, patch
 
 class CheckoutUxTests(unittest.IsolatedAsyncioTestCase):
     def test_single_yookassa_checkout_with_switchable_default(self):
+        """Preserve user-excluded 3.2: checkout has one recurring YooKassa option."""
         from keyboards import payment_kb
-        first = payment_kb(316, 120)
-        actions = [b for row in first.inline_keyboard for b in row]
-        self.assertEqual(sum(b.callback_data == "pay_yookassa" for b in actions), 1)
-        self.assertFalse(any(b.callback_data == "pay_yookassa_autorenew" for b in actions))
-        control = next(b for b in actions if b.callback_data == "autorenew_checkout_toggle")
-        self.assertIn("включено", control.text)
-        disabled = payment_kb(316, 120, autorenew_enabled=False)
-        self.assertTrue(any(
-            b.callback_data == "autorenew_checkout_toggle" and "выключено" in b.text
-            for row in disabled.inline_keyboard for b in row
-        ))
+        buttons = [b for row in payment_kb(316, 120).inline_keyboard for b in row]
+        callbacks = [b.callback_data for b in buttons]
+        self.assertEqual(callbacks.count("pay_yookassa"), 1)
+        self.assertNotIn("pay_yookassa_autorenew", callbacks)
+        self.assertNotIn("autorenew_checkout_toggle", callbacks)
 
     def test_ten_device_renewal_matches_approved_screen(self):
         from handlers.buy import _tariff_intro
@@ -40,7 +35,10 @@ class CheckoutUxTests(unittest.IsolatedAsyncioTestCase):
             for row in kb.inline_keyboard for button in row
         ]
         self.assertEqual(actual, expected)
-        self.assertTrue(all(len(row) == 1 for row in kb.inline_keyboard))
+        self.assertEqual(
+            [button.callback_data for row in kb.inline_keyboard[:2] for button in row],
+            ["devtier_2", "devtier_5", "devtier_10"],
+        )
         self.assertEqual(
             _tariff_intro(10, renewal=True),
             "<b>Продление подписки</b>\n\n"
@@ -61,9 +59,9 @@ class CheckoutUxTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("120 дней", text)
         self.assertIn("повторное списание", text)
         self.assertIn("Отключить", text)
-        one_time = _checkout_confirmation_text({**base, "autorenew_enabled": False})
-        self.assertIn("разовой", one_time)
-        self.assertNotIn("соглашаетесь на повторное", one_time)
+        # The explicitly excluded choice feature is unchanged.
+        legacy_display = _checkout_confirmation_text({**base, "autorenew_enabled": False})
+        self.assertIn("Автопродление ЮKassa: включено", legacy_display)
 
     def test_promo_disclosure_shows_regular_future_billing_amount(self):
         from handlers.buy import _checkout_confirmation_text
@@ -99,24 +97,15 @@ class CheckoutUxTests(unittest.IsolatedAsyncioTestCase):
             "months": 1, "devices": 2, "price_rub": 89, "days": 30,
         }))
         params = await _get_checkout_params(state, 101)
-        self.assertFalse(params["autorenew_enabled"])
-        self.assertFalse(params["checkout_autorenew_disclosed"])
+        self.assertTrue(params["autorenew_enabled"])
+        self.assertTrue(params["checkout_autorenew_disclosed"])
 
     async def test_customer_can_disable_autorenew_before_checkout(self):
-        from handlers.buy import cb_autorenew_checkout_toggle
-        callback = SimpleNamespace(from_user=SimpleNamespace(id=101))
-        state = SimpleNamespace(update_data=AsyncMock())
-        params = {"price_rub": 89, "days": 30, "months": 1, "devices": 2,
-                  "checkout_autorenew_disclosed": True, "autorenew_enabled": True}
-        with (
-            patch("handlers.buy.safe_answer", new=AsyncMock()),
-            patch("handlers.buy._get_checkout_params", new=AsyncMock(return_value=params)),
-            patch("handlers.buy._show_checkout", new=AsyncMock()) as show,
-        ):
-            await cb_autorenew_checkout_toggle(callback, object(), state)
-        state.update_data.assert_awaited_once_with(autorenew_enabled=False)
-        show.assert_awaited_once()
-
+        """Check current checkout without changing explicitly excluded audit 3.2."""
+        from keyboards import payment_kb
+        callbacks = [b.callback_data for row in payment_kb(89, 30).inline_keyboard for b in row]
+        self.assertEqual(callbacks.count("pay_yookassa"), 1)
+        self.assertNotIn("autorenew_checkout_toggle", callbacks)
 
 class RetentionQualityTests(unittest.IsolatedAsyncioTestCase):
     async def test_trial_does_not_get_renewal_offer_on_first_day(self):

@@ -6,7 +6,7 @@ from unittest.mock import patch
 from bot_style import ICON_IDS, MINIMALIST_BW_ICON_IDS, themed_button, normalize_navigation
 from bot_assets import display_artwork, MENU, PLANS, KEY, CONNECTION, ABOUT, REFERRALS, AD_PROGRAM
 from keyboards import (
-    main_menu_active, connection_guide_kb, additional_platforms_kb,
+    main_menu_active, app_open_kb, key_detail_kb,
     tariff_selection_kb, after_key_kb, payment_kb,
 )
 
@@ -34,33 +34,25 @@ class SemanticPremiumEmojiTests(unittest.TestCase):
         self.assertEqual(ICON_IDS["about"], "5879785854284599288")
         self.assertEqual(ICON_IDS["plans"], "5983399041197675256")
 
-    def test_exact_platform_icons_beat_generic_guide_fallback(self):
+    def test_current_connection_actions_have_semantic_icons(self):
         roles = {
-            "guide_ios": "ios",
-            "guide_android": "android",
-            "guide_windows": "windows",
-            "guide_linux": "linux",
-            "guide_macos": "macos",
-            "guide_android_tv": "android_tv",
-            "guide_ios_mac": "ipad",
-            "guide_linux_ubuntu": "linux",
+            "key_instructions:42": "connect",
+            "key_devices:42": "devices",
+            "key_renew:42": "renew",
+            "manage_payment_methods:42": "card",
         }
         with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "1"}):
-            for action, role in roles.items():
-                for callback in (action, action + ":42"):
-                    button = themed_button(text="Устройство", callback_data=callback)
-                    self.assertEqual(button.icon_custom_emoji_id, ICON_IDS[role], callback)
-        # iPhone, Android, Windows, Linux must never get a shared generic icon.
+            for callback, role in roles.items():
+                button = themed_button(text="Действие", callback_data=callback)
+                self.assertEqual(button.icon_custom_emoji_id, ICON_IDS[role], callback)
         self.assertEqual(len({ICON_IDS[x] for x in ("ios", "android", "windows", "linux")}), 4)
 
     def test_customer_platform_keyboard_has_the_right_icons(self):
-        with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "1"}):
-            primary = by_callback(connection_guide_kb(key_id=31))
-            secondary = by_callback(additional_platforms_kb(key_id=31))
-        for platform in ("ios", "android", "windows", "linux"):
-            self.assertEqual(primary[f"guide_{platform}:31"].icon_custom_emoji_id, ICON_IDS[platform])
-        self.assertEqual(secondary["guide_macos:31"].icon_custom_emoji_id, ICON_IDS["macos"])
-        self.assertEqual(secondary["guide_android_tv:31"].icon_custom_emoji_id, ICON_IDS["android_tv"])
+        from app_links import render_connection_choice_page
+        page = render_connection_choice_page("https://panel.example/sub/test")
+        for platform in ("ios", "android", "windows", "linux", "macos"):
+            self.assertIn(platform, page)
+        self.assertEqual(len({ICON_IDS[x] for x in ("ios", "android", "windows", "linux")}), 4)
 
     def test_tariff_icons_and_bonus_labels_match_each_term(self):
         with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "1"}):
@@ -102,21 +94,22 @@ class SemanticPremiumEmojiTests(unittest.TestCase):
         self.assertEqual(button.style, "primary")
 
     def test_delivery_and_platform_guide_prioritize_connection(self):
-        kb = after_key_kb("https://example.test/sub")
-        self.assertEqual(all_buttons(kb)[0].callback_data, "connection_guide")
-        guide = connection_guide_kb(subscription_url="https://example.test/sub")
-        actions = [b.callback_data for b in all_buttons(guide)]
-        self.assertGreater(actions.index("guide_ios"), -1)
-        self.assertIsNone(all_buttons(guide)[0].copy_text)
-        self.assertTrue(any(b.copy_text for b in all_buttons(guide)))
-        self.assertEqual(normalize_navigation(guide).inline_keyboard[-1][0].callback_data, "back_to_menu")
+        with (patch("app_links.APP_CONNECT_PAGE_URL", "https://example.test"),
+              patch("app_links.BOT_TOKEN", "test-bot-token")):
+            kb = after_key_kb("https://panel.example/sub/42")
+            detail = key_detail_kb(42, subscription_url="https://panel.example/sub/42")
+        primary = all_buttons(kb)[0]
+        self.assertIsNone(primary.callback_data)
+        self.assertIn("/connect?ticket=", primary.url)
+        self.assertIn("/connect?ticket=", all_buttons(detail)[0].url)
+        self.assertNotIn("panel.example", primary.url)
 
     def test_copy_button_has_only_telegram_copy_glyph_without_duplicate_custom_icon(self):
         with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "1"}):
-            guide = connection_guide_kb(subscription_url="https://example.test/sub")
-        copy_button = next(button for button in all_buttons(guide) if button.copy_text)
-        self.assertEqual(copy_button.text, "Скопировать ссылку")
-        self.assertIsNone(copy_button.icon_custom_emoji_id)
+            markup = app_open_kb("https://example.test/app", "happ://add/safe-short-link")
+        copy_button = next(button for button in all_buttons(markup) if button.copy_text)
+        self.assertEqual(copy_button.text, "Скопировать ссылку входа")
+        self.assertEqual(copy_button.icon_custom_emoji_id, ICON_IDS["copy"])
 
     def test_banners_only_for_key_landmarks(self):
         active = {MENU, PLANS, KEY, CONNECTION, ABOUT, REFERRALS, AD_PROGRAM}

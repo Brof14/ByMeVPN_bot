@@ -375,6 +375,15 @@ async def _get_checkout_params(state: FSMContext, user_id: int) -> dict | None:
         return None
     if price_rub <= 0 or days <= 0:
         return None
+    # Reject stale/corrupt FSM quotes rather than charging a different sum
+    # from the current server-side tariff catalogue. This is checked on every
+    # payment-provider path, including after a price or promotion change.
+    try:
+        months = int(data.get("months", 1))
+        devices = validate_device_limit(data.get("devices", DEFAULT_DEVICE_LIMIT))
+        expected_price, expected_days = get_price_for_months(months, devices)
+    except (TypeError, ValueError, OverflowError, KeyError):
+        return None
     promo_code = data.get("promo_code", "")
     if promo_code:
         snapshot = data.get("promo_info") or {}
@@ -388,6 +397,20 @@ async def _get_checkout_params(state: FSMContext, user_id: int) -> dict | None:
         if not current or used or any(current.get(field) != snapshot.get(field) for field in fields):
             await state.update_data(promo_info={}, promo_code="", promo_discount=0, price_rub=None, days=None)
             return None
+        promo_type = current.get("promo_type")
+        value = int(current.get("discount_value") or 0)
+        if promo_type == "percent":
+            expected_price = round(expected_price * (100 - value) / 100)
+        elif promo_type == "fixed_rub":
+            expected_price = max(0, expected_price - value)
+        elif promo_type == "free_days":
+            expected_days += value
+        else:
+            return None
+    if price_rub != expected_price or days != expected_days:
+        logger.warning("Checkout quote invalidated for user %d; requesting new confirmation", user_id)
+        await state.update_data(price_rub=None, days=None)
+        return None
     return {
         "price_rub": price_rub,
         "days": days,

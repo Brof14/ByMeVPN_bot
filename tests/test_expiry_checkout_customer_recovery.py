@@ -487,39 +487,28 @@ class PromoAccountingAlerts(unittest.IsolatedAsyncioTestCase):
 
 class PlatformGuideRegression(unittest.IsolatedAsyncioTestCase):
     async def test_one_active_key_is_selected_from_general_guide(self):
-        from handlers.guide import cb_guide_menu
-        callback = SimpleNamespace(from_user=SimpleNamespace(id=123))
+        from handlers.keys import _open_connect_page
+        callback = SimpleNamespace(from_user=SimpleNamespace(id=123, first_name="Test"), answer=AsyncMock())
         keys = [
-            {"id": 41, "expiry": int(time.time()) + 86400},
-            {"id": 2, "expiry": int(time.time()) - 86400},
+            {"id": 41, "expiry": int(time.time()) + 86400, "key": "https://panel.example/sub/41"},
+            {"id": 2, "expiry": int(time.time()) - 86400, "key": "https://panel.example/sub/2"},
         ]
-        with (
-            patch("handlers.guide.safe_answer", new=AsyncMock()),
-            patch("handlers.guide._track_guide_event", new=AsyncMock()),
-            patch("database.get_user_keys", new=AsyncMock(return_value=keys)),
-            patch("handlers.guide.send_or_edit", new=AsyncMock()) as send,
-        ):
-            await cb_guide_menu(callback, object())
-        markup = send.await_args.args[3]
-        actions = [b.callback_data for row in markup.inline_keyboard for b in row]
-        self.assertIn("guide_android:41", actions)
-        self.assertIn("guide_ios:41", actions)
+        with (patch("handlers.keys.get_user_keys", new=AsyncMock(return_value=keys)),
+              patch("app_links.build_connect_page_url", return_value="https://example.test/connect?ticket=opaque") as builder):
+            await _open_connect_page(callback)
+        builder.assert_called_once_with("https://panel.example/sub/41", "Test")
+        callback.answer.assert_awaited_once_with(url="https://example.test/connect?ticket=opaque")
 
     async def test_multiple_active_keys_avoid_choosing_wrong_subscription(self):
-        from handlers.guide import cb_guide_menu
-        callback = SimpleNamespace(from_user=SimpleNamespace(id=123))
-        keys = [{"id": i, "expiry": int(time.time()) + 86400} for i in (41, 42)]
-        with (
-            patch("handlers.guide.safe_answer", new=AsyncMock()),
-            patch("handlers.guide._track_guide_event", new=AsyncMock()),
-            patch("database.get_user_keys", new=AsyncMock(return_value=keys)),
-            patch("handlers.guide.send_or_edit", new=AsyncMock()) as send,
-        ):
-            await cb_guide_menu(callback, object())
-        actions = [b.callback_data for row in send.await_args.args[3].inline_keyboard for b in row]
-        self.assertIn("guide_android", actions)
-        self.assertNotIn("guide_android:41", actions)
-
+        from handlers.keys import _open_connect_page
+        callback = SimpleNamespace(from_user=SimpleNamespace(id=123, first_name="Test"), answer=AsyncMock())
+        selected = {"id": 41, "user_id": 123, "expiry": int(time.time()) + 86400,
+                    "key": "https://panel.example/sub/41"}
+        with (patch("handlers.keys.get_key_by_id", new=AsyncMock(return_value=selected)),
+              patch("app_links.build_connect_page_url", return_value="https://example.test/connect?ticket=safe") as builder):
+            await _open_connect_page(callback, 41)
+        builder.assert_called_once_with("https://panel.example/sub/41", "Test")
+        callback.answer.assert_awaited_once_with(url="https://example.test/connect?ticket=safe")
 
 class PaymentProviderFailures(unittest.IsolatedAsyncioTestCase):
     def callback(self):

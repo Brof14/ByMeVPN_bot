@@ -69,25 +69,11 @@ class TestSectionArtwork(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(send.call_args.kwargs["photo"], bot_assets.PLANS)
 
     async def test_platform_guides_use_matching_artwork(self):
-        from handlers.guide import _send_platform_guide
-
-        callback = SimpleNamespace(from_user=SimpleNamespace(id=5))
-        platforms = ("ios", "android", "windows", "linux", "macos")
-        expected = {
-            "ios": bot_assets.IPHONE,
-            "android": bot_assets.ANDROID,
-            "windows": bot_assets.WINDOWS,
-            "linux": bot_assets.LINUX,
-            "macos": bot_assets.IPHONE,
-        }
-        with (
-            patch("handlers.guide.safe_answer", new=AsyncMock()),
-            patch("handlers.guide._track_guide_event", new=AsyncMock()),
-            patch("handlers.guide.send_or_edit", new=AsyncMock()) as send,
-        ):
-            for platform in platforms:
-                await _send_platform_guide(callback, object(), platform)
-                self.assertEqual(send.call_args.kwargs.get("photo"), expected[platform], platform)
+        from app_links import render_connection_choice_page
+        page = render_connection_choice_page("https://panel.example/sub/test")
+        for platform in ("ios", "android", "windows", "linux", "macos"):
+            self.assertIn(platform, page)
+        self.assertIn("/app/assets/", page)
 
     async def test_ad_program_applies_its_artwork_to_all_screens(self):
         from handlers.ad_program import send_with_photo

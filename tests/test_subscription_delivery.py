@@ -362,7 +362,7 @@ class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=["https://panel.example/sub/existing-sub-id"]),
             ),
             patch("subscription.record_payment_idempotent", new=AsyncMock()) as record_payment,
-            patch("subscription.update_key_uuid", new=AsyncMock()),
+            patch("subscription.update_key_subscription_url", new=AsyncMock(return_value=True)),
             patch("subscription.log_analytics_event", new=AsyncMock()),
         ):
             result = await subscription.deliver_key(
