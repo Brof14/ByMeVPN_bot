@@ -125,16 +125,17 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertIn("play.google.com/store/apps/details?id=llc.itdev.incy", page)
         self.assertIn("github.com/Happ-proxy/happ-android/releases/latest", page)
 
-    def test_happ_is_default_and_bymevpn_is_not_offered_for_download(self):
+    def test_download_and_platform_mapping_preserves_existing_clients(self):
         page = render_connection_choice_page("https://sub.example/abc")
         encoded = re.search(r'const apps=JSON.parse\(("(?:\\.|[^"\\])*")\)', page)
         self.assertIsNotNone(encoded)
         apps = json.loads(json.loads(encoded.group(1)))
-        self.assertEqual([a["name"] for a in apps["android"]], ["Happ", "INCY", "v2rayTun", "v2rayNG"])
-        self.assertEqual([a["name"] for a in apps["ios"]], ["Happ", "INCY", "v2rayTun"])
-        for platform in ("android", "windows", "linux"):
-            self.assertEqual(apps[platform][0]["name"], "Happ")
-            self.assertTrue(all(a["name"] != "ByMeVPN" for a in apps[platform]))
+        self.assertEqual([a["name"] for a in apps["android"]], ["ByMeVPN", "Happ", "INCY", "v2rayTun", "v2rayNG", "Hiddify", "sing-box"])
+        self.assertEqual(apps["android"][0]["deep"], "bymevpn://login?auth=telegram")
+        self.assertNotIn("sub.example", apps["android"][0]["deep"])
+        self.assertTrue(apps["android"][0]["download"].endswith("/app"))
+        self.assertEqual(urlsplit(apps["android"][0]["download"]).scheme, "https")
+        self.assertEqual([a["name"] for a in apps["ios"]], ["Happ", "INCY", "v2rayTun", "Hiddify", "sing-box"])
         for platform in ("windows", "macos", "linux"):
             self.assertIn("v2rayN", [a["name"] for a in apps[platform]])
             self.assertIn("Koala Clash", [a["name"] for a in apps[platform]])
@@ -154,8 +155,7 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertIn('src="/app/assets/bymevpn-logo.png"', page)
         self.assertIn("Выберите своё устройство и приложение", page)
         self.assertIn("Не удалось определить устройство. Выберите платформу вручную ниже.", page)
-        self.assertNotIn("href=\"/app\">открыть страницу загрузки ByMeVPN", page)
-        self.assertIn("Собственные приложения ByMeVPN для Android, Windows и Linux находятся в разработке", page)
+        self.assertIn("href=\"/app\">открыть страницу загрузки ByMeVPN", page)
         self.assertIn("Рекомендуем", page)
         self.assertIn('<details id="alternatives">', page)
         self.assertIn('id="copy-subscription"', page)
@@ -165,8 +165,8 @@ class TestAppOpenPage(unittest.TestCase):
         for symbol in ("android", "apple", "windows", "linux"):
             self.assertIn(f'id="os-{symbol}"', page)
         self.assertIn('id="external-download"', page)
-        self.assertNotIn('id="account-help"', page)
-        self.assertIn("Happ", page)
+        self.assertIn('id="account-help"', page)
+        self.assertIn("аккаунт и подписка загрузятся в приложение", page)
         self.assertIn("viewport-fit=cover", page)
 
     def test_connection_page_escapes_script_endings_and_template_markers(self):
@@ -178,20 +178,18 @@ class TestAppOpenPage(unittest.TestCase):
 
 
 class TestConnectionPageHttp(unittest.TestCase):
-    def test_current_and_legacy_tickets_expire_within_one_hour(self):
+    def test_current_and_legacy_tickets_remain_valid_without_expiry(self):
         import base64
         from app_links import _connect_aead
         with patch.dict(os.environ, {"APP_HANDOFF_SECRET": "isolated-test-secret"}):
             ticket = build_connect_ticket("https://sub.example/demo", now=1_000_000)
             self.assertEqual(read_connect_ticket(ticket, now=1_000_000 + 3600)["subscription_url"], "https://sub.example/demo")
-            with self.assertRaises(ValueError):
-                read_connect_ticket(ticket, now=1_000_001 + CONNECT_TICKET_TTL_SECONDS)
+            self.assertEqual(read_connect_ticket(ticket, now=1_000_001 + CONNECT_TICKET_TTL_SECONDS)["subscription_url"], "https://sub.example/demo")
             payload = json.dumps({"sub": "https://sub.example/demo", "exp": 1_000_000 + 900}).encode()
             nonce = os.urandom(12)
             legacy = base64.urlsafe_b64encode(nonce + _connect_aead().encrypt(nonce, payload, b"bymevpn-connect-ticket-v1")).decode().rstrip("=")
             self.assertEqual(read_connect_ticket(legacy, now=1_000_000 + 1800)["subscription_url"], "https://sub.example/demo")
-            with self.assertRaises(ValueError):
-                read_connect_ticket(legacy, now=1_000_001 + CONNECT_TICKET_TTL_SECONDS)
+            self.assertEqual(read_connect_ticket(legacy, now=1_000_001 + CONNECT_TICKET_TTL_SECONDS)["subscription_url"], "https://sub.example/demo")
 
     def test_verified_import_links_escape_query_and_warning(self):
         page = render_connection_choice_page("https://sub.example/abc?x=1&y=2")
@@ -199,7 +197,10 @@ class TestConnectionPageHttp(unittest.TestCase):
         apps = json.loads(json.loads(encoded.group(1)))
         android = {a["name"]: a for a in apps["android"]}
         self.assertEqual(parse_qs(urlsplit(android["v2rayNG"]["deep"]).query)["url"], ["https://sub.example/abc?x=1&y=2"])
+        self.assertEqual(parse_qs(urlsplit(android["Hiddify"]["deep"]).query)["url"], ["https://sub.example/abc?x=1&y=2"])
         self.assertIn("v2raytun://import/https://sub.example/abc?x=1&y=2", android["v2rayTun"]["deep"])
+        self.assertTrue(android["sing-box"]["manual"])
+        self.assertIn("JSON", android["sing-box"]["note"])
 
     def test_valid_and_expired_tickets_keep_existing_security_contract(self):
         from fastapi.testclient import TestClient
@@ -213,8 +214,8 @@ class TestConnectionPageHttp(unittest.TestCase):
             self.assertIn("Подключение VPN", response.text)
             self.assertIn("no-store", response.headers["cache-control"])
             self.assertIn("default-src 'none'", response.headers["content-security-policy"])
-            expired = build_connect_ticket("https://sub.example/preview", now=int(time.time()) - CONNECT_TICKET_TTL_SECONDS - 1)
-            self.assertEqual(client.get("/connect", params={"ticket": expired}).status_code, 400)
+            long_lived = build_connect_ticket("https://sub.example/preview", now=int(time.time()) - CONNECT_TICKET_TTL_SECONDS - 1)
+            self.assertEqual(client.get("/connect", params={"ticket": long_lived}).status_code, 200)
             self.assertEqual(client.get("/connect", params={"ticket": "invalid"}).status_code, 400)
 
 
