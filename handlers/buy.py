@@ -982,7 +982,7 @@ async def _process_successful_stars_payment(
         from referral_system_new import award_referral_for_payment
         await award_referral_for_payment(user_id, charge_id, amount=int(payment.total_amount), bot=bot)
     else:
-        await update_payment_status(pay_db_id, "failed")
+        await update_payment_status(pay_db_id, "recovery_required")
         logger.error("Stars delivery failed for user %d, charge_id %s", user_id, charge_id)
         try:
             from config import ADMIN_ID
@@ -994,6 +994,14 @@ async def _process_successful_stars_payment(
             )
         except Exception:
             pass
+        try:
+            await bot.send_message(
+                user_id,
+                "<b>Оплата получена · доступ проверяется</b>\n\nНе оплачивайте повторно. Мы проверяем выдачу и сообщим, когда ключ будет готов. Если вопрос срочный: @ByMeVPNSupportBot",
+                parse_mode="HTML",
+            )
+        except Exception:
+            logger.debug("Could not send Stars recovery status to user %d", user_id)
 
 
 # ---------------------------------------------------------------------------
