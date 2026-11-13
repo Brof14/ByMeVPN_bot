@@ -46,6 +46,26 @@ router = Router()
 _stars_payment_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
 
+async def _block_unresolved_access_payment(callback: CallbackQuery) -> bool:
+    """Keep a second checkout from being offered while paid access is unresolved."""
+    from billing_incidents import has_unresolved_access_delivery
+    try:
+        unresolved = await has_unresolved_access_delivery(callback.from_user.id)
+    except Exception as exc:
+        logger.warning("Could not verify pending delivery for user %d (%s)", callback.from_user.id, type(exc).__name__)
+        unresolved = True
+    if not unresolved:
+        return False
+    await callback.message.answer(
+        "<b>Предыдущая оплата проверяется</b>\n\nПовторно платить не нужно. Мы проверим выдачу доступа; по срочным вопросам напишите в поддержку.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Поддержка", url=support_url())
+        ]]),
+    )
+    return True
+
+
 def _promo_purchase_keyboard() -> InlineKeyboardMarkup:
     """Return to the tariff chooser after a promotion."""
     return InlineKeyboardMarkup(inline_keyboard=[[
@@ -141,6 +161,8 @@ async def _show_checkout(
 @router.callback_query(F.data == "buy_vpn")
 async def cb_buy_vpn(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await safe_answer(callback)
+    if await _block_unresolved_access_payment(callback):
+        return
     await state.set_state(BuyFlow.choosing_period)
     
     # Check if user has active promo code
@@ -194,6 +216,8 @@ async def cb_select_devtier(callback: CallbackQuery, bot: Bot, state: FSMContext
 @router.callback_query(F.data.startswith("tariff_"))
 async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await safe_answer(callback)
+    if await _block_unresolved_access_payment(callback):
+        return
     parts = callback.data.split("_")
     months = int(parts[1])
     
@@ -497,6 +521,8 @@ async def cb_select_period_legacy(callback: CallbackQuery, bot: Bot, state: FSMC
 @router.callback_query(F.data == "pay_stars")
 async def cb_pay_stars(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await safe_answer(callback)
+    if await _block_unresolved_access_payment(callback):
+        return
     params = await _get_checkout_params(state, callback.from_user.id)
     if not params:
         await _ask_tariff_again(bot, callback)
@@ -546,6 +572,8 @@ async def cb_pay_stars(callback: CallbackQuery, bot: Bot, state: FSMContext):
 @router.callback_query(F.data.in_({"pay_yookassa", "pay_yookassa_autorenew"}))
 async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await safe_answer(callback)
+    if await _block_unresolved_access_payment(callback):
+        return
     params = await _get_checkout_params(state, callback.from_user.id)
     if not params:
         await _ask_tariff_again(bot, callback)
@@ -658,6 +686,8 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
 @router.callback_query(F.data == "pay_crypto")
 async def cb_pay_crypto(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await safe_answer(callback)
+    if await _block_unresolved_access_payment(callback):
+        return
     params = await _get_checkout_params(state, callback.from_user.id)
     if not params:
         await _ask_tariff_again(bot, callback)
