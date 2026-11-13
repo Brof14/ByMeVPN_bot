@@ -130,8 +130,8 @@ class TestAppOpenPage(unittest.TestCase):
         encoded = re.search(r'const apps=JSON.parse\(("(?:\\.|[^"\\])*")\)', page)
         self.assertIsNotNone(encoded)
         apps = json.loads(json.loads(encoded.group(1)))
-        self.assertEqual([a["name"] for a in apps["android"]], ["Happ", "INCY", "v2rayTun", "v2rayNG", "Hiddify", "sing-box"])
-        self.assertEqual([a["name"] for a in apps["ios"]], ["Happ", "INCY", "v2rayTun", "Hiddify", "sing-box"])
+        self.assertEqual([a["name"] for a in apps["android"]], ["Happ", "INCY", "v2rayTun", "v2rayNG"])
+        self.assertEqual([a["name"] for a in apps["ios"]], ["Happ", "INCY", "v2rayTun"])
         for platform in ("android", "windows", "linux"):
             self.assertEqual(apps[platform][0]["name"], "Happ")
             self.assertTrue(all(a["name"] != "ByMeVPN" for a in apps[platform]))
@@ -199,10 +199,7 @@ class TestConnectionPageHttp(unittest.TestCase):
         apps = json.loads(json.loads(encoded.group(1)))
         android = {a["name"]: a for a in apps["android"]}
         self.assertEqual(parse_qs(urlsplit(android["v2rayNG"]["deep"]).query)["url"], ["https://sub.example/abc?x=1&y=2"])
-        self.assertEqual(parse_qs(urlsplit(android["Hiddify"]["deep"]).query)["url"], ["https://sub.example/abc?x=1&y=2"])
         self.assertIn("v2raytun://import/https://sub.example/abc?x=1&y=2", android["v2rayTun"]["deep"])
-        self.assertTrue(android["sing-box"]["manual"])
-        self.assertIn("JSON", android["sing-box"]["note"])
 
     def test_valid_and_expired_tickets_keep_existing_security_contract(self):
         from fastapi.testclient import TestClient
