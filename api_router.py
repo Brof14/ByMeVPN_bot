@@ -108,9 +108,15 @@ async def _servers_user_id(
     except HTTPException as exc:
         correlation_id = _request_correlation_id(request)
         error_code = "authentication_required" if exc.status_code == 401 else "session_verification_unavailable"
+        reason = {
+            "Missing or invalid Authorization header": "missing_or_malformed_header",
+            "Invalid or expired session token": "invalid_or_expired_token",
+            "Session has been logged out": "revoked_session",
+            "Account has been removed": "removed_account",
+        }.get(exc.detail if isinstance(exc.detail, str) else "", "verification_unavailable")
         logger.warning(
-            "Servers failure stage=authentication code=%s status=%s correlation_id=%s",
-            error_code, exc.status_code, correlation_id,
+            "Servers failure stage=authentication code=%s status=%s correlation_id=%s reason=%s",
+            error_code, exc.status_code, correlation_id, reason,
         )
         detail = "Войдите в аккаунт" if exc.status_code == 401 else "Не удалось проверить сессию"
         raise _correlated_http_error(exc.status_code, detail, correlation_id, error_code) from None
@@ -2176,23 +2182,38 @@ async def delete_me(
 # ---------------------------------------------------------------------------
 
 @subscription_api.get("/status")
-async def get_subscription_status(request: Request, user_id: int = Depends(get_current_user_id)):
+async def get_subscription_status(request: Request, response: Response = None, user_id: int = Depends(get_current_user_id)):
+    correlation_id = _request_correlation_id(request)
+    request.state.correlation_id = correlation_id
+    if response is not None:
+        response.headers["X-Correlation-ID"] = correlation_id
+    from xui_client import device_lookup_correlation
+    context_token = device_lookup_correlation.set(correlation_id)
     headers = _subscription_headers_from_request(request)
-    sub_url, servers, sub_dict = await get_user_real_subscription(
-        user_id, headers, include_device_count=False
-    )
     try:
-        sub_dict = await _attach_signed_entitlement(user_id, headers, sub_dict)
-    except EntitlementSigningError as exc:
-        logger.error("Entitlement signing unavailable (%s)", type(exc).__name__)
-        raise HTTPException(status_code=503, detail="Не удалось подтвердить состояние подписки") from None
-    except HTTPException as exc:
-        if exc.status_code != 403:
+        try:
+            sub_url, servers, sub_dict = await get_user_real_subscription(
+                user_id, headers, include_device_count=False
+            )
+        except Exception as exc:
+            logger.warning("Subscription status stage=lookup code=%s correlation_id=%s", type(exc).__name__, correlation_id)
             raise
-        # Preserve the account's real subscription state while withholding the
-        # URL, node credentials, and entitlement until panel HWID confirmation.
-        return _device_confirmation_status_snapshot(sub_dict)
-    return sub_dict
+        try:
+            sub_dict = await _attach_signed_entitlement(user_id, headers, sub_dict)
+        except EntitlementSigningError as exc:
+            logger.error("Entitlement signing unavailable (%s) correlation_id=%s", type(exc).__name__, correlation_id)
+            raise _correlated_http_error(503, "Не удалось подтвердить состояние подписки", correlation_id) from None
+        except HTTPException as exc:
+            if exc.status_code != 403:
+                logger.warning("Subscription status stage=device_access status=%s correlation_id=%s", exc.status_code, correlation_id)
+                error_headers = dict(exc.headers or {})
+                error_headers.setdefault("X-Correlation-ID", correlation_id)
+                raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=error_headers) from None
+            # Preserve real subscription facts, withholding unconfirmed credentials.
+            return _device_confirmation_status_snapshot(sub_dict)
+        return sub_dict
+    finally:
+        device_lookup_correlation.reset(context_token)
 
 
 @subscription_api.post("/trial")
@@ -3217,14 +3238,25 @@ def _device_metadata_matches(item: dict, request: Request) -> bool:
 
 
 @vpn_access_api.get("/devices")
-async def get_devices(request: Request, user_id: int = Depends(get_current_user_id)):
+async def get_devices(request: Request, response: Response = None, user_id: int = Depends(get_current_user_id)):
+    correlation_id = _request_correlation_id(request)
+    request.state.correlation_id = correlation_id
+    if response is not None:
+        response.headers["X-Correlation-ID"] = correlation_id
+    from xui_client import XuiDeviceClientNotFound, device_lookup_correlation, get_xui_devices
+    context_token = device_lookup_correlation.set(correlation_id)
     try:
-        from xui_client import get_xui_devices
-
         result = await get_xui_devices(user_id)
+    except XuiDeviceClientNotFound:
+        logger.info("Device list unavailable code=panel_client_not_found correlation_id=%s", correlation_id)
+        raise _correlated_http_error(
+            404, "Учётная запись не найдена в панели VPN", correlation_id, "panel_client_not_found",
+        ) from None
     except Exception as exc:
-        logger.warning("Device list unavailable (%s)", type(exc).__name__)
-        raise HTTPException(status_code=503, detail="Список устройств временно недоступен") from None
+        logger.warning("Device list unavailable code=%s correlation_id=%s", type(exc).__name__, correlation_id)
+        raise _correlated_http_error(503, "Список устройств временно недоступен", correlation_id) from None
+    finally:
+        device_lookup_correlation.reset(context_token)
 
     raw_devices = result.get("devices", [])
     has_hwid = bool(request.headers.get("x-hwid", "").strip())

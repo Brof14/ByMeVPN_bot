@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse, quote
 from ipaddress import ip_address
 import asyncio
+from contextvars import ContextVar
 
 import httpx
 
@@ -27,6 +28,30 @@ from config import (
 )
 
 logger = logging.getLogger(__name__)
+device_lookup_correlation = ContextVar("device_lookup_correlation", default="")
+
+
+class XuiDeviceClientNotFound(ValueError):
+    """The panel explicitly reports that the requested client does not exist."""
+
+
+def _device_client_not_found(exc: Exception) -> bool:
+    return isinstance(exc, ValueError) and str(exc).strip().casefold() == (
+        "response status is not successful, message: obtain (record not found)"
+    )
+
+
+def _device_lookup_failure(stage: str, exc: Exception) -> None:
+    correlation = device_lookup_correlation.get()
+    if not correlation:
+        return
+    if _device_client_not_found(exc):
+        code = "record_not_found"
+    elif isinstance(exc, (ValueError, TypeError)):
+        code = "invalid_value"
+    else:
+        code = "unavailable"
+    logger.warning("Device lookup stage=%s code=%s correlation_id=%s", stage, code, correlation)
 
 
 def _inbound_name(inbound_id: int, inbound=None) -> str:
@@ -782,7 +807,11 @@ async def clear_xui_client_ips(user_id: int) -> bool:
 
 async def get_xui_devices(user_id: int) -> Dict[str, Any]:
     """Read the registered Happ HWID devices and actual device limits."""
-    api = await _get_api()
+    try:
+        api = await _get_api()
+    except Exception as exc:
+        _device_lookup_failure("panel_connection", exc)
+        raise
     client_api = api.client
     email = quote(str(user_id), safe="")
 
@@ -798,18 +827,33 @@ async def get_xui_devices(user_id: int) -> Dict[str, Any]:
             raise RuntimeError("3x-ui device API returned an unsuccessful response")
         return data
 
+    async def read_panel(stage, *args):
+        try:
+            return await _api_call_with_retry(request_json, *args)
+        except Exception as exc:
+            _device_lookup_failure(stage, exc)
+            if _device_client_not_found(exc):
+                raise XuiDeviceClientNotFound("Panel client not found") from None
+            raise
+
     client_data, hwid_data = await asyncio.gather(
-        _api_call_with_retry(request_json, "GET", f"panel/api/clients/get/{email}"),
-        _api_call_with_retry(request_json, "POST", f"panel/api/clients/hwids/{email}", {}),
+        read_panel("client_read", "GET", f"panel/api/clients/get/{email}"),
+        read_panel("device_read", "POST", f"panel/api/clients/hwids/{email}", {}),
     )
     client_obj = client_data.get("obj") or {}
     client_obj = client_obj.get("client") if isinstance(client_obj, dict) else None
     if not isinstance(client_obj, dict):
-        raise RuntimeError("3x-ui client details are unavailable")
+        exc = RuntimeError("3x-ui client details are unavailable")
+        _device_lookup_failure("client_decode", exc)
+        raise exc
 
     raw_devices = hwid_data.get("obj")
-    if not isinstance(raw_devices, list):
+    if raw_devices is None:
         raw_devices = []
+    elif not isinstance(raw_devices, list):
+        exc = RuntimeError("3x-ui returned invalid device data")
+        _device_lookup_failure("device_decode", exc)
+        raise exc
     devices = []
     for item in raw_devices:
         if not isinstance(item, dict):
@@ -833,11 +877,13 @@ async def get_xui_devices(user_id: int) -> Dict[str, Any]:
             "fingerprint": str(item.get("fingerprint") or "").strip()[:256],
         })
     devices.sort(key=lambda item: item["last_seen"], reverse=True)
-    return {
-        "devices": devices,
-        "limit_hwid": max(0, int(client_obj.get("limitHwid") or 0)),
-        "limit_ip": max(0, int(client_obj.get("limitIp") or 0)),
-    }
+    try:
+        limit_hwid = max(0, int(client_obj.get("limitHwid") or 0))
+        limit_ip = max(0, int(client_obj.get("limitIp") or 0))
+    except (ValueError, TypeError) as exc:
+        _device_lookup_failure("panel_limits", exc)
+        raise
+    return {"devices": devices, "limit_hwid": limit_hwid, "limit_ip": limit_ip}
 
 
 async def has_xui_client(user_id: int) -> bool:
