@@ -212,7 +212,7 @@ def build_connect_ticket(subscription_url: str, user_name: str = "", *, now: int
 
 
 def read_connect_ticket(ticket: str, *, now: int | None = None) -> dict[str, str]:
-    """Decrypt and validate a handover ticket; invalid and expired tickets fail closed."""
+    """Decrypt and validate a handover ticket; signed links do not expire."""
     if not ticket or len(ticket) > 4096:
         raise ValueError("invalid connection ticket")
     try:
@@ -236,8 +236,7 @@ def read_connect_ticket(ticket: str, *, now: int | None = None) -> dict[str, str
         subscription_url = str(value.get("sub", ""))
         parsed = urlsplit(subscription_url)
         if (
-            expiry < current
-            or parsed.scheme != "https" or not parsed.hostname
+            parsed.scheme != "https" or not parsed.hostname
             or parsed.username is not None or parsed.password is not None
             or len(subscription_url) > MAX_SUBSCRIPTION_URL_LENGTH
         ):
