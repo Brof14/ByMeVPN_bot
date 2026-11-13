@@ -1029,7 +1029,7 @@ async def _require_registered_entitlement_device(
                 raise PanelClientAbsent(status_code=403, detail="Устройство не подтверждено для этой подписки") from None
             raise
         if not client_exists:
-            raise HTTPException(status_code=403, detail="Устройство не подтверждено для этой подписки")
+            raise PanelClientAbsent(status_code=403, detail="Устройство не подтверждено для этой подписки")
         try:
             device_state = await get_xui_devices(user_id)
         except XuiDeviceClientNotFound:
