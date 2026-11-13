@@ -1084,7 +1084,34 @@ async def get_xui_client_details(
         api = await _get_api()
         client = await _api_call_with_retry(api.client.get_by_email, email)
         if not client or not client.uuid:
-            return None
+            # The panel's aggregate client endpoint can return no object while
+            # one of the configured inbounds still has the client. Recover
+            # read-only from those inbounds so key management and reissue do
+            # not report a false missing profile.
+            scans = await asyncio.gather(
+                *(_api_call_with_retry(api.inbound.get_by_id, inbound_id)
+                  for inbound_id in XUI_INBOUND_IDS),
+                return_exceptions=True,
+            )
+            candidates = [
+                item
+                for inbound in scans if not isinstance(inbound, Exception)
+                for item in (getattr(inbound, "client_stats", None) or [])
+                if str(getattr(item, "email", "")) == email and getattr(item, "uuid", None)
+            ]
+            identities = {
+                (str(item.uuid), int(item.expiry_time or 0), bool(item.enable))
+                for item in candidates
+            }
+            if len(identities) != 1:
+                return None
+            uuid_value, expiry_value, enabled_value = next(iter(identities))
+            client = candidates[0].model_copy(update={
+                "uuid": uuid_value,
+                "expiry_time": expiry_value,
+                "enable": enabled_value,
+            })
+            logger.info("Recovered client profile from configured inbound data")
         sub_id = client.sub_id or client.uuid.replace("-", "")[:16]
         limit_hwid = 0
         try:
