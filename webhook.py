@@ -850,6 +850,7 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                 await update_payment_status(pay_db_id, "processing")
             elif existing_status == "recovery_required":
                 logger.warning("Webhook: payment %s awaits manual reconciliation", payment_id)
+                await delete_yookassa_pending(payment_id)
                 return
             else:
                 logger.error(
@@ -857,6 +858,7 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                     payment_id, existing_status,
                 )
                 await update_payment_status(pay_db_id, "recovery_required")
+                await delete_yookassa_pending(payment_id)
                 await _notify_admin(
                     bot,
                     f"⚠️ Платёж {payment_id} уже записан со статусом {existing_status!r}, но не подтверждена выдача. Автоматически не повторяю, чтобы не продлить подписку дважды; нужна сверка.",
@@ -996,6 +998,7 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
             )
         else:
             await update_payment_status(pay_db_id, "recovery_required")
+            await delete_yookassa_pending(payment_id)
             logger.error("YooKassa payment %s provisioning failed for user %d", payment_id, user_id)
             await _notify_admin(bot, f"⚠️ Не удалось выдать доступ по подтверждённой оплате YooKassa {payment_id} (user {user_id}). Платёж оставлен на безопасную ручную сверку.")
             try:
@@ -1090,6 +1093,8 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
             return
         if already_marked_processed and ledger_row and ledger_row[1] == "recovery_required":
             logger.warning("Crypto monitor: invoice %s awaits manual reconciliation", invoice_id)
+            from database import delete_crypto_pending
+            await delete_crypto_pending(invoice_id)
             return
 
         # Look up what we recorded when the invoice was created. Provider status
@@ -1200,10 +1205,12 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
                 await update_payment_status(pay_db_id, "processing")
             elif existing_status == "recovery_required":
                 logger.warning("Crypto monitor: invoice %s awaits manual reconciliation", invoice_id)
+                await delete_crypto_pending(invoice_id)
                 return
             else:
                 logger.error("Crypto monitor: invoice %s has interrupted status %r; requires reconciliation", invoice_id, existing_status)
                 await update_payment_status(pay_db_id, "recovery_required")
+                await delete_crypto_pending(invoice_id)
                 await _notify_admin(
                     bot,
                     f"⚠️ Crypto Bot инвойс {invoice_id} уже записан со статусом {existing_status!r}, но выдача не подтверждена. Нужна сверка.",
@@ -1251,6 +1258,7 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
             await award_referral_for_payment(user_id, str(invoice_id), amount=amount_rub, bot=bot)
         else:
             await update_payment_status(pay_db_id, "recovery_required")
+            await delete_crypto_pending(invoice_id)
             logger.error("CryptoBot invoice %s provisioning requires recovery for user %d", invoice_id, user_id)
             try:
                 await bot.send_message(
