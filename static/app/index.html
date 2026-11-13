@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#061020">
-  <meta name="description" content="Официальное приложение ByMeVPN для Android">
+  <meta name="description" content="Приложение ByMeVPN для Android находится в разработке">
   <title>ByMeVPN — приложение для Android</title>
   <style>
     /* Hallmark · v2.0.0 · custom brand direction: quiet navy, electric blue and green */
@@ -148,11 +148,9 @@
   <header class="hero">
     <div class="hero-copy">
       <h1>ByMeVPN для Android</h1>
-      <p class="lead">Подключайтесь к привычным приложениям и сайтам — в пару простых шагов.</p>
-      <a class="download" id="download" href="#" hidden rel="noopener noreferrer">Скачать ByMeVPN для Android</a>
-      <p class="release" id="release" role="status" aria-live="polite">Проверяем актуальную версию приложения…</p>
-      <a class="release-help" id="release-help" href="https://t.me/ByMeVPNSupportBot" rel="noopener noreferrer" hidden>Получить помощь с установкой</a>
-      <noscript><p class="release">Для безопасной загрузки необходим JavaScript, чтобы проверить опубликованный релиз. <a href="https://t.me/ByMeVPNSupportBot">Поддержка</a>.</p></noscript>
+      <p class="lead">Приложение ByMeVPN для Android находится в разработке. Собственные приложения для Windows и Linux тоже в разработке.</p>
+      <p class="release">Пока рекомендуем Happ. Выберите его на странице подключения в боте.</p>
+      <noscript><p class="release">Приложение ByMeVPN для Android находится в разработке. Пока рекомендуем Happ. <a href="https://t.me/ByMeVPNSupportBot">Поддержка</a>.</p></noscript>
     </div>
     <div class="brand-stage">
       <img class="brand-logo" src="/app/logo" alt="Логотип ByMeVPN" width="1254" height="1254" fetchpriority="high">
@@ -160,16 +158,17 @@
   </header>
   <section class="details" aria-label="Информация о приложении">
     <article class="detail">
-      <h2>Первая установка</h2>
-      <p>Скачайте APK, откройте файл и разрешите установку приложений для браузера, если Android попросит об этом. Требуется Android 7.0 или новее.</p>
+      <h2>Пока используйте Happ</h2>
+      <p>Откройте страницу подключения в боте, выберите Happ и добавьте ссылку подписки.</p>
+      <p><a href="https://github.com/Happ-proxy/happ-android/releases/latest" rel="noopener noreferrer">Скачать Happ для Android</a></p>
     </article>
     <article class="detail">
       <h2>Подключение</h2>
       <p>Откройте бота и нажмите «Подключить», чтобы выбрать устройство и подходящее приложение.</p>
     </article>
     <article class="detail">
-      <h2>Другие платформы</h2>
-      <p>После установки вернитесь в бот ByMeVPN и нажмите «Подключить VPN».</p>
+      <h2>Windows и Linux</h2>
+      <p>Собственные приложения ByMeVPN для Windows и Linux находятся в разработке. Для подключения пока используйте Happ.</p>
     </article>
     <article class="detail">
       <h2>Нужна помощь?</h2>
@@ -179,35 +178,9 @@
   <footer>
     <a href="https://telegra.ph/Politika-v-otnoshenii-obrabotki-personalnyh-dannyh-ByMeVPN-10-25" rel="noopener noreferrer">Политика конфиденциальности</a>
     <a href="https://telegra.ph/Publichnaya-oferta-na-okazanie-uslug-ByMeVPN-10-25" rel="noopener noreferrer">Публичная оферта</a>
-    <p>ByMeVPN · Официальная загрузка по HTTPS</p>
+    <p>ByMeVPN · Приложения в разработке</p>
   </footer>
 </main>
-<script>
-  (async () => {
-    const status = document.getElementById('release');
-    try {
-      const response = await fetch('/app/update.json', {cache:'no-store', credentials:'omit'});
-      if (!response.ok) throw new Error('release feed unavailable');
-      const data = await response.json();
-      const url = new URL(data.download_url);
-      if (url.protocol !== 'https:' || url.hostname !== 'bymevpn.duckdns.org' ||
-          !/^\/app\/downloads\/ByMeVPN-v\d+\.\d+\.\d+\.apk$/.test(url.pathname) ||
-          !/^[a-f\d]{64}$/i.test(data.sha256)) throw new Error('invalid release manifest');
-      const download = document.getElementById('download');
-      download.href = url.href;
-      download.hidden = false;
-      const head = await fetch(url.href, {method:'HEAD', cache:'no-store', credentials:'omit'});
-      const bytes = head.ok ? Number(head.headers.get('content-length') || 0) : 0;
-      const size = bytes ? ` · ${(bytes / 1024 / 1024).toFixed(1)} МБ` : '';
-      const android = data.min_android_version || '7.0';
-      const published = data.published_at ? ` · опубликовано ${data.published_at}` : '';
-      const signing = /^[a-f\d]{64}$/i.test(data.signing_certificate_sha256 || '') ? ` · сертификат SHA-256: ${data.signing_certificate_sha256}` : '';
-      status.textContent = `Версия ${String(data.version_name)} · Android ${android}+ · SHA-256: ${data.sha256}${size}${published}${signing}`;
-    } catch (_) {
-      status.textContent = 'Не удалось проверить актуальную версию. Не устанавливайте неподтверждённый APK.';
-      document.getElementById('release-help').hidden = false;
-    }
-  })();
-</script>
+
 </body>
 </html>
