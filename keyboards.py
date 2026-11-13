@@ -19,7 +19,7 @@ def _customer_menu(*, has_subscription: bool, trial_used: bool) -> InlineKeyboar
     elif not trial_used:
         kb.row(InlineKeyboardButton(text="3 дня бесплатно", callback_data="trial_free"))
     kb.row(InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn", style="primary"))
-    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
+    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn", style="primary"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
         InlineKeyboardButton(text="Поддержка", url=support_url()),
@@ -56,11 +56,8 @@ def main_menu_active(key_id: int, subscription_url: str = "", user_id: int | Non
     )
     kb.row(connect_button)
     # Device management belongs to the subscription details, not the home hub.
-    kb.row(
-        InlineKeyboardButton(text="Подписка", callback_data="my_keys"),
-        InlineKeyboardButton(text="Продлить", callback_data=f"key_renew:{key_id}"),
-    )
-    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
+    kb.row(InlineKeyboardButton(text="Подписка", callback_data="my_keys"))
+    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn", style="primary"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
         InlineKeyboardButton(text="Поддержка", url=support_url()),
@@ -80,7 +77,7 @@ def main_menu_panel_active(subscription_url: str = "", user_id: int | None = Non
         if url:
             kb.row(InlineKeyboardButton(text="Подключить VPN", url=url))
     kb.row(InlineKeyboardButton(text="Подписка", callback_data="my_keys"))
-    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
+    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn", style="primary"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
         InlineKeyboardButton(text="Поддержка", url=support_url()),
@@ -103,7 +100,7 @@ def main_menu_expired(*, key_ids: list[int]) -> InlineKeyboardMarkup:
 
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="Продлить VPN", callback_data=renew_action))
-    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
+    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn", style="primary"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
         InlineKeyboardButton(text="Поддержка", url=support_url()),
@@ -131,7 +128,7 @@ def authorized_user_menu() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="Подписка", callback_data="my_keys"))
     kb.row(InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn"))
-    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn"))
+    kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn", style="primary"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),
         InlineKeyboardButton(text="Поддержка", url=support_url()),
