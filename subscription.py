@@ -7,7 +7,6 @@ import secrets
 import time
 import weakref
 from datetime import datetime
-from uuid import UUID
 
 from aiogram import Bot, Router
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
@@ -20,7 +19,7 @@ import database
 from database import (
     add_key, get_referrer, add_payment, set_trial_used, log_key_error,
     get_user_keys, log_analytics_event, record_payment_idempotent,
-    update_key_subscription_url, set_key_expiry,
+    update_key_uuid, set_key_expiry,
 )
 from xui_client import create_xui_user, get_xui_user, format_traffic
 from keyboards import after_key_kb, cancel_kb
@@ -67,7 +66,7 @@ async def _send_delivery_message(
     the key via «Мои ключи».
     """
     try:
-        markup = after_key_kb(subscription_url)
+        markup = after_key_kb(subscription_url, user_id=user_id)
         if edit_target is not None:
             # Trial is initiated from the main menu's photo message. Replace
             # that screen with the key card instead of posting a second message.
@@ -323,19 +322,12 @@ async def _deliver_key_unlocked(
                     from xui_client import get_user_subscription_links
                     subscription_links = await get_user_subscription_links(user_id)
                     if subscription_links:
-                        candidate_url = subscription_links[0]
-                        if await update_key_subscription_url(key_id, user_id, candidate_url):
-                            key_to_show = candidate_url
-                        else:
-                            logger.error(
-                                "Refreshed subscription URL was not persisted for user=%d key=%d",
-                                user_id, key_id,
-                            )
-                            key_to_show = existing_key
+                        key_to_show = subscription_links[0]
+                        await update_key_uuid(key_id, key_to_show)
                     else:
                         key_to_show = existing_key
                 except Exception as e:
-                    logger.error("Failed to get fresh subscription URL for user %d (%s)", user_id, type(e).__name__)
+                    logger.exception("Failed to get fresh subscription URL for user %d: %s", user_id, e)
                     key_to_show = existing_key
 
                 title = (
@@ -526,10 +518,7 @@ async def _deliver_key_unlocked(
         # Subscription URLs are access credentials; never write any part to logs.
 
         # Сохраняем ссылку на подписку и настоящий UUID клиента в БД
-        try:
-            client_uuid = str(UUID(str(user_result.get("uuid") or "")))
-        except (ValueError, TypeError, AttributeError):
-            raise ValueError("Panel returned an invalid client identifier") from None
+        client_uuid = user_result.get("uuid") or subscription_url
         key_id = await add_key(
             user_id, subscription_url, config_name, client_uuid, days, limit_ip,
             expiry=target_expiry,
@@ -583,14 +572,14 @@ async def _deliver_key_unlocked(
         # Ключ создан в 3x-ui, но не может быть доставлен
         return False
     except Exception as e:
-        logger.error("deliver_key FAILED for user=%d (%s)", user_id, type(e).__name__)
+        logger.exception("deliver_key FAILED for user=%d name='%s': %s", user_id, config_name, e)
 
         # Логируем ошибку в БД для отслеживания в админ-панели
         try:
             await log_key_error(
                 user_id=user_id,
                 error_type="subscription_creation_failed",
-                error_message=type(e).__name__,
+                error_message=str(e),
                 context={
                     "config_name": config_name,
                     "days": days,
@@ -598,10 +587,11 @@ async def _deliver_key_unlocked(
                     "is_paid": is_paid,
                     "amount": amount,
                     "method": method,
+                    "payload": payload
                 }
             )
         except Exception as log_error:
-            logger.error("Failed to log key error (%s)", type(log_error).__name__)
+            logger.error("Failed to log key error: %s", log_error)
 
         # Для платных платежей уведомляем админа об ошибке
         if is_paid:
@@ -614,7 +604,8 @@ async def _deliver_key_unlocked(
                     f"⏳ Дней: {days}\n"
                     f"💰 Сумма: {amount} {currency}\n"
                     f"🔧 Метод: {method}\n"
-                    f"❌ <code>{type(e).__name__}</code>\n\n"
+                    f"🎫 Payload: {payload}\n"
+                    f"❌ <code>{str(e)[:300]}</code>\n\n"
                     f"⚠️ Необходимо вернуть деньги или выдать подписку вручную!",
                     parse_mode="HTML",
                 )
