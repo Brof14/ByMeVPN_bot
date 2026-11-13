@@ -364,6 +364,26 @@ async def execute_key_recovery(key_id: int, admin_id: int) -> dict:
                     client_uuid = str(key.get("uuid") or "").strip() if key else ""
                     for iid in reversed(created_inbounds):
                         try:
+                            inbound = await _api_call_with_retry(api.inbound.get_by_id, iid)
+                            clients = getattr(inbound, "client_stats", None)
+                            matches = [
+                                client for client in (clients or [])
+                                if str(getattr(client, "email", "")) == str(uid)
+                            ]
+                            if clients is None or len(matches) != 1:
+                                rollback_ok = False
+                                continue
+                            row = matches[0]
+                            row_uuid = str(getattr(row, "uuid", None) or getattr(row, "id", ""))
+                            row_sub_id = str(getattr(row, "sub_id", None) or "")
+                            row_expiry = int(getattr(row, "expiry_time", 0) or 0)
+                            if (
+                                row_uuid != client_uuid
+                                or row_sub_id != _sub_id_from_key(key or {})
+                                or row_expiry != int(plan["db_expiry"]) * 1000
+                            ):
+                                rollback_ok = False
+                                continue
                             await _api_call_with_retry(api.client.delete, iid, client_uuid)
                             inbound = await _api_call_with_retry(api.inbound.get_by_id, iid)
                             clients = getattr(inbound, "client_stats", None)
