@@ -84,6 +84,40 @@ class CustomerUxFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Бонус за подписку на канал начислен", sent.await_args.args[2])
         self.assertNotIn("channel_bonus_check", button_actions(sent.await_args.args[3]))
 
+    async def test_subscription_diagnostics_use_the_selected_key_not_another_key(self):
+        from handlers.keys import cb_key_diagnostics
+        expiry = int(time.time()) + 86400
+        key = {
+            "id": 77, "user_id": 1001,
+            "key": "https://vpn.example/sub/selected",
+            "expiry": expiry, "limit_ip": 2,
+        }
+        callback = SimpleNamespace(
+            data="key_diagnostics:77",
+            from_user=SimpleNamespace(id=1001, first_name="Test"),
+        )
+        with (
+            patch("handlers.keys.get_key_by_id", new=AsyncMock(return_value=key)),
+            patch("handlers.keys.safe_answer", new=AsyncMock()),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value={
+                "enable": True, "expiry_time": expiry * 1000,
+            })),
+            patch("handlers.keys.get_xui_devices", new=AsyncMock(return_value={
+                "limit_hwid": 2, "devices": [],
+            })),
+            patch(
+                "app_links.build_connect_page_url",
+                return_value="https://example.test/connect?u=1001&k=77&s=valid",
+            ) as build,
+            patch("handlers.keys.send_or_edit", new=AsyncMock()) as sent,
+        ):
+            await cb_key_diagnostics(callback, object())
+        build.assert_called_once_with(
+            "https://vpn.example/sub/selected", "Test",
+            user_id=1001, key_id=77,
+        )
+        self.assertIn("key_info:77", button_actions(sent.await_args.args[3]))
+
     async def test_referral_rewards_have_independent_earned_and_pending_states(self):
         users = [
             {"registration_date": 1_700_000_000, "bonus_days_awarded": 15,
