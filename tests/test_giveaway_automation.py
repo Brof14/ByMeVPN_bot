@@ -52,6 +52,62 @@ class TestGiveawayAutomation(unittest.IsolatedAsyncioTestCase):
             await run_giveaway_automation(bot)
         self.assertTrue(await database.has_referral_event(701, 702, "registration_bonus"))
 
+    async def test_reserved_channel_days_are_retried_once_after_lease_timeout(self):
+        from giveaway_automation import process_pending_channel_bonuses
+        await database.ensure_user(861)
+        self.assertTrue(await database.reserve_channel_subscription_bonus(861))
+        db = await database.get_db()
+        await db.execute(
+            "UPDATE channel_subscription_bonus_leases SET expires_at=? WHERE user_id=?",
+            (int(time.time()) - 1, 861),
+        )
+        await db.commit()
+        bot = SimpleNamespace(send_message=AsyncMock())
+        with patch("subscription.deliver_key", new=AsyncMock(return_value=True)) as grant:
+            self.assertEqual(await process_pending_channel_bonuses(bot), 1)
+            self.assertEqual(await process_pending_channel_bonuses(bot), 0)
+        grant.assert_awaited_once()
+        self.assertEqual(grant.await_args.kwargs["payload"], "channel_bonus_861")
+        self.assertEqual(
+            await database.get_channel_subscription_bonus_status(861), "awarded",
+        )
+
+    async def test_uncertain_channel_reward_is_retryable_not_duplicated(self):
+        from giveaway_automation import process_pending_channel_bonuses
+        await database.ensure_user(862)
+        self.assertTrue(await database.reserve_channel_subscription_bonus(862))
+        db = await database.get_db()
+        await db.execute(
+            "UPDATE channel_subscription_bonus_leases SET expires_at=? WHERE user_id=?",
+            (int(time.time()) - 1, 862),
+        )
+        await db.commit()
+        bot = SimpleNamespace(send_message=AsyncMock())
+        with patch(
+            "subscription.deliver_key",
+            new=AsyncMock(side_effect=[False, True]),
+        ) as grant:
+            self.assertEqual(await process_pending_channel_bonuses(bot), 0)
+            self.assertEqual(
+                await database.get_channel_subscription_bonus_status(862),
+                "reserved",
+            )
+            # A failure keeps the lease, so a crash or fast scheduler cannot
+            # blindly reissue the bonus until the next safe retry window.
+            self.assertEqual(await process_pending_channel_bonuses(bot), 0)
+            await db.execute(
+                "UPDATE channel_subscription_bonus_leases SET expires_at=? WHERE user_id=?",
+                (int(time.time()) - 1, 862),
+            )
+            await db.commit()
+            self.assertEqual(await process_pending_channel_bonuses(bot), 1)
+        self.assertEqual(grant.await_count, 2)
+        self.assertEqual(
+            await database.get_channel_subscription_bonus_status(862),
+            "awarded",
+        )
+
+
     async def test_verified_ad_reward_is_retried_automatically_after_failure(self):
         from handlers.ad_program import process_pending_ad_rewards
         await database.ensure_user(801)
