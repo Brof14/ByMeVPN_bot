@@ -122,8 +122,8 @@ async def cb_upgrade_device_screen(callback: CallbackQuery, bot: Bot):
     await send_with_photo(
         bot, callback,
         f"<b>Увеличить лимит устройств</b>\n\n"
-        f"Сейчас: <b>{old} устройства</b>\n"
-        f"Новая плата за устройства: +20 ₽/мес. до 5 или +40 ₽/мес. до 10 "
+        f"Сейчас: <b>{old} устройств</b>\n"
+        f"Доплата по тарифу: +20 ₽/мес. до 5 или +40 ₽/мес. до 10 "
         "(относительно 2 устройств).\n"
         "Доплата рассчитывается за оставшийся оплаченный срок. "
         "На этапе оплаты сумма будет указана в Telegram Stars. "
@@ -220,6 +220,17 @@ async def device_upgrade_checkout_error(pre: PreCheckoutQuery) -> str | None:
         or int(key.get("expiry") or 0) <= now
     ):
         return "Условия подписки изменились. Выберите лимит устройств ещё раз."
+    if int(order["auto_renew_id"]):
+        current = await get_auto_renew_subscription(
+            pre.from_user.id, int(order["key_id"]),
+        )
+        if (
+            not current or current["status"] != "active"
+            or int(current["id"]) != int(order["auto_renew_id"])
+            or int(current["devices"]) != int(order["old_devices"])
+            or int(current["amount_rub"]) != int(order["prior_auto_renew_amount"])
+        ):
+            return "Условия автопродления изменились. Откройте заказ заново."
     return None
 
 
