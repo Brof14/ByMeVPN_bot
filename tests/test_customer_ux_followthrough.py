@@ -106,13 +106,13 @@ class CustomerUxFollowthroughTests(unittest.IsolatedAsyncioTestCase):
                 "limit_hwid": 2, "devices": [],
             })),
             patch(
-                "app_links.build_connect_page_url",
-                return_value="https://example.test/connect?u=1001&k=77&s=valid",
+                "app_links.build_user_connect_page_url",
+                new=AsyncMock(return_value="https://example.test/connect?u=1001&k=77&s=valid"),
             ) as build,
             patch("handlers.keys.send_or_edit", new=AsyncMock()) as sent,
         ):
             await cb_key_diagnostics(callback, object())
-        build.assert_called_once_with(
+        build.assert_awaited_once_with(
             "https://vpn.example/sub/selected", "Test",
             user_id=1001, key_id=77,
         )

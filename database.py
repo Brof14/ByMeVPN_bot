@@ -73,6 +73,16 @@ CREATE TABLE IF NOT EXISTS keys (
 CREATE INDEX IF NOT EXISTS idx_keys_user   ON keys(user_id);
 CREATE INDEX IF NOT EXISTS idx_keys_expiry ON keys(expiry);
 
+-- An individual, durable, server-signed connection link epoch per account.
+-- The random seed is not a bearer credential: signing also requires APP_HANDOFF_SECRET.
+-- Rotation revokes ALL prior signed connection-page URLs, including legacy links.
+CREATE TABLE IF NOT EXISTS connect_link_epochs (
+    user_id INTEGER PRIMARY KEY,
+    seed TEXT NOT NULL,
+    legacy_revoked INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+);
+
 -- The last selected plan, not an authorization to charge. Intentionally
 -- excludes prices and promo state: provider checkout must be reconfirmed.
 CREATE TABLE IF NOT EXISTS checkout_drafts (
@@ -1247,6 +1257,42 @@ async def init_db() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Revocable permanent connection-page links
+# ---------------------------------------------------------------------------
+
+async def get_connect_link_state(user_id: int) -> dict | None:
+    """Read the current signing epoch; absence means pre-migration legacy links."""
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT seed, legacy_revoked FROM connect_link_epochs WHERE user_id=?",
+        (int(user_id),),
+    )
+    row = await cursor.fetchone()
+    return {"seed": row[0], "legacy_revoked": bool(row[1])} if row else None
+
+
+async def get_or_create_connect_link_seed(user_id: int) -> str:
+    """Persist one cryptographically random epoch. Concurrent workers reuse it."""
+    uid = int(user_id)
+    if uid <= 0:
+        raise ValueError("invalid connection-page owner")
+    db = await get_db()
+    async with _db_semaphore:
+        await db.execute(
+            "INSERT OR IGNORE INTO connect_link_epochs(user_id,seed,updated_at) VALUES(?,?,?)",
+            (uid, secrets.token_hex(32), int(time.time())),
+        )
+        cursor = await db.execute(
+            "SELECT seed FROM connect_link_epochs WHERE user_id=?", (uid,),
+        )
+        row = await cursor.fetchone()
+        await db.commit()
+    if not row or len(row[0]) != 64:
+        raise RuntimeError("connection link state unavailable")
+    return row[0]
+
+
+# ---------------------------------------------------------------------------
 # Users
 # ---------------------------------------------------------------------------
 
@@ -2274,8 +2320,21 @@ async def update_user_key_credentials(user_id: int, new_uuid: str, new_subscript
                     "UPDATE keys SET uuid=?, key=? WHERE user_id=?",
                     (new_uuid, new_subscription_url, user_id),
                 )
+                if cur.rowcount <= 0:
+                    await db.rollback()
+                    return False
+                # The VPN credential and the page-link revocation MUST commit
+                # together. A reused/leaked old page link cannot expose the
+                # newly issued subscription, even if its URL is unexpectedly unchanged.
+                await db.execute(
+                    """INSERT INTO connect_link_epochs(user_id,seed,legacy_revoked,updated_at)
+                       VALUES(?,?,1,?)
+                       ON CONFLICT(user_id) DO UPDATE SET
+                           seed=excluded.seed,legacy_revoked=1,updated_at=excluded.updated_at""",
+                    (int(user_id), secrets.token_hex(32), int(time.time())),
+                )
                 await db.commit()
-                return cur.rowcount > 0
+                return True
             except Exception:
                 await db.rollback()
                 raise
@@ -5201,6 +5260,7 @@ async def delete_user_and_keys(user_id: int, *, source: str = "admin") -> list[s
                     ("keys", "user_id"), ("app_users", "user_id"),
                     ("google_accounts", "user_id"), ("email_auth", "user_id"),
                     ("checkout_drafts", "user_id"), ("known_hwid_devices", "user_id"),
+                    ("connect_link_epochs", "user_id"),
                     ("mobile_trial_bootstrap", "user_id"),
                     ("mobile_device_bootstraps", "user_id"),
                     ("trial_claim_reservations", "user_id"),

@@ -67,7 +67,19 @@ async def _send_delivery_message(
     the key via «Мои ключи».
     """
     try:
-        markup = after_key_kb(subscription_url, user_id=chat_id, key_id=key_id)
+        link_seed = ""
+        if subscription_url:
+            try:
+                from database import get_or_create_connect_link_seed
+                link_seed = await get_or_create_connect_link_seed(chat_id)
+            except Exception:
+                # Never issue a legacy, potentially revoked URL when the
+                # per-account signing state cannot be read.
+                logger.warning("Could not load connection link epoch for %s", chat_id, exc_info=True)
+        markup = after_key_kb(
+            subscription_url if link_seed else "",
+            user_id=chat_id, key_id=key_id, link_seed=link_seed,
+        )
         if edit_target is not None:
             # Trial is initiated from the main menu's photo message. Replace
             # that screen with the key card instead of posting a second message.

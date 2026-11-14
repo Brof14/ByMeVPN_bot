@@ -927,6 +927,19 @@ async def cb_ad_admin_retention_ok(callback: CallbackQuery, bot: Bot):
         await safe_answer(callback, "Заявка уже обработана.", alert=True)
         return
     await log_ad_audit(callback.from_user.id, "ad_post_retained_30_days", f"app={app_id}")
+    # The final 30-day outcome should reach the applicant without requiring
+    # them to repeatedly open a status screen. The state change is durable and
+    # is never undone if Telegram cannot deliver the notification.
+    try:
+        await bot.send_message(
+            int(app["user_id"]),
+            "<b>Публикация проверена</b>\n\n"
+            "30 дней прошли, условия подтверждены. "
+            "Заявка завершена, начисленные дни VPN сохраняются.",
+            parse_mode="HTML",
+        )
+    except Exception:
+        logger.warning("Could not deliver completed ad retention notice (app=%s)", app_id, exc_info=True)
     await send_or_edit_safe(bot, callback, f"Проверка поста по заявке #{app_id} завершена. Выданный бонус не менялся.", _ad_admin_kb())
 
 
