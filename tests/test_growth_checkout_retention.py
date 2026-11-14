@@ -13,7 +13,7 @@ class CheckoutUxTests(unittest.IsolatedAsyncioTestCase):
         callbacks = [b.callback_data for b in buttons]
         self.assertEqual(callbacks.count("pay_yookassa"), 1)
         self.assertNotIn("pay_yookassa_autorenew", callbacks)
-        self.assertNotIn("autorenew_checkout_toggle", callbacks)
+        self.assertIn("checkout_autorenew_toggle", callbacks)
 
     def test_ten_device_renewal_matches_approved_screen(self):
         from handlers.buy import _tariff_intro
@@ -28,6 +28,7 @@ class CheckoutUxTests(unittest.IsolatedAsyncioTestCase):
             ("tariff_3_10", "3+1 мес. 🎁 — 119 ₽/мес. · 476 ₽"),
             ("tariff_6_10", "6+2 мес. 🎁 — 109 ₽/мес. · 872 ₽"),
             ("tariff_12_10", "12+3 мес. 🎁 — 99 ₽/мес. · 1 485 ₽"),
+            ("promo_enter", "Есть промокод?"),
             ("back_to_menu", "← Назад"),
         ]
         actual = [
@@ -57,11 +58,11 @@ class CheckoutUxTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("3+1 мес.", text)
         self.assertIn("316 ₽", text)
         self.assertIn("120 дней", text)
-        self.assertIn("повторное списание", text)
+        self.assertIn("Следующее списание", text)
         self.assertIn("Отключить", text)
         # The explicitly excluded choice feature is unchanged.
         legacy_display = _checkout_confirmation_text({**base, "autorenew_enabled": False})
-        self.assertIn("Автопродление ЮKassa: включено", legacy_display)
+        self.assertIn("Автопродление ЮKassa: выключено", legacy_display)
 
     def test_promo_disclosure_shows_regular_future_billing_amount(self):
         from handlers.buy import _checkout_confirmation_text
@@ -71,7 +72,7 @@ class CheckoutUxTests(unittest.IsolatedAsyncioTestCase):
             "checkout_autorenew_disclosed": True, "autorenew_enabled": True,
         })
         self.assertIn("К оплате сейчас: <b>221 ₽</b>", text)
-        self.assertIn("повторное списание 316 ₽ за следующие 120 дней", text)
+        self.assertIn("Следующее списание: 316 ₽ за 120 дней", text)
 
     def test_recurring_quote_is_validated_and_legacy_terms_preserved(self):
         from webhook import _recurring_terms_for_saved_method
