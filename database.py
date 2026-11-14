@@ -175,6 +175,8 @@ CREATE TABLE IF NOT EXISTS device_upgrade_orders (
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_device_upgrade_owner ON device_upgrade_orders(user_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_device_upgrade_pending_user
+    ON device_upgrade_orders(user_id) WHERE status='pending';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_device_upgrade_charge
     ON device_upgrade_orders(charge_id) WHERE charge_id IS NOT NULL;
 
