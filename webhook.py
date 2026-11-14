@@ -202,46 +202,90 @@ async def app_login_redirect(sub: str = "", name: str = "", ticket: str = ""):
 
 
 @app.get("/connect")
-async def connection_choice_page(ticket: str = "", u: int = 0, s: str = ""):
-    """Show the small OS/app chooser without exposing the subscription URL in the link."""
+async def connection_choice_page(ticket: str = "", u: int = 0, s: str = "", k: int = 0):
+    """Resolve the exact VPN subscription and validate a revocable link."""
     from fastapi.responses import HTMLResponse
-    from app_links import APP_LOGIN_CONTENT_SECURITY_POLICY, read_connect_ticket, render_connection_choice_page, verify_permanent_connect_token
-
+    from app_links import (
+        APP_LOGIN_CONTENT_SECURITY_POLICY, read_connect_ticket,
+        render_connection_choice_page, verify_permanent_connect_token,
+    )
+    error_code = "invalid_link"
     try:
-        if u and verify_permanent_connect_token(u, s):
+        if u and s:
             import database
             keys = await database.get_user_keys(u)
-            now = int(time.time())
-            active = [k for k in keys if int(k.get("expiry") or 0) > now]
-            if not active:
-                raise ValueError("no active subscription")
-            key = max(active, key=lambda item: int(item.get("expiry") or 0))
-            payload = {"subscription_url": str(key.get("key") or ""), "user_name": ""}
+            if k:
+                matches = [item for item in keys if int(item.get("id") or 0) == k]
+                if not matches:
+                    raise ValueError("invalid_link")
+                chosen = matches[0]
+                subscription_url = str(chosen.get("key") or "")
+                expires = int(chosen.get("expiry") or 0)
+            elif keys:
+                if len(keys) != 1:
+                    raise ValueError("choose_subscription")
+                chosen = keys[0]
+                subscription_url = str(chosen.get("key") or "")
+                expires = int(chosen.get("expiry") or 0)
+            else:
+                # Server-side entitlement may exist before local synchronization.
+                from xui_client import get_xui_client_details
+                panel = await get_xui_client_details(u, strict=True)
+                if not panel or panel.get("enable") is False:
+                    raise ValueError("invalid_link")
+                subscription_url = str(panel.get("subscription_url") or "")
+                expires = int(panel.get("expiry_time") or 0) // 1000
+            if not verify_permanent_connect_token(u, s, subscription_url, key_id=k):
+                raise ValueError("invalid_link")
+            if expires <= int(time.time()):
+                raise ValueError("expired")
+            payload = {"subscription_url": subscription_url, "user_name": ""}
         else:
             payload = read_connect_ticket(ticket)
         page = render_connection_choice_page(payload["subscription_url"], payload["user_name"])
-    except (ValueError, RuntimeError):
-        return HTMLResponse(
-            """<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Ссылка недоступна — ByMeVPN</title><style>body{margin:0;background:#07111d;color:#f3f7fb;font:16px/1.5 system-ui,sans-serif}main{max-width:480px;margin:12vh auto;padding:24px}h1{font-size:24px}p{color:#a9b9c8}a{color:#80dfff}</style><main><img src="/app/assets/bymevpn-logo.png" width="44" height="44" alt="ByMeVPN"><h1>Ссылка недоступна</h1><p>Возможно, ссылка устарела или повреждена. Вернитесь в бот и запросите новую ссылку в разделе подписки.</p><p><a href="https://t.me/ByMeVPNSupportBot">Открыть поддержку ByMeVPN</a></p></main></html>""",
-            status_code=400,
-            headers={
-                "Cache-Control": "no-store, max-age=0",
-                "Referrer-Policy": "no-referrer",
-                "X-Content-Type-Options": "nosniff",
-                "X-Robots-Tag": "noindex, nofollow",
-                "Content-Security-Policy": APP_LOGIN_CONTENT_SECURITY_POLICY,
-            },
-        )
-    return HTMLResponse(
-        page,
-        headers={
+    except ValueError as exc:
+        error_code = str(exc) if str(exc) in {"expired", "choose_subscription"} else "invalid_link"
+    except Exception:
+        logger.exception("Unable to resolve the VPN connection page")
+        error_code = "unavailable"
+    else:
+        return HTMLResponse(page, headers={
             "Cache-Control": "no-store, max-age=0",
             "Referrer-Policy": "no-referrer",
             "X-Robots-Tag": "noindex, nofollow",
             "X-Content-Type-Options": "nosniff",
             "Content-Security-Policy": APP_LOGIN_CONTENT_SECURITY_POLICY,
-        },
-    )
+        })
+
+    # Do not reflect subscription URLs, signatures or internal exception text.
+    pages = {
+        "invalid_link": (
+            "Ссылка недоступна",
+            "Ссылка могла устареть после перевыпуска. Откройте подписку в боте, чтобы получить актуальную.",
+        ),
+        "expired": (
+            "Подписка закончилась",
+            "Продлите подписку в боте, чтобы снова подключить VPN.",
+        ),
+        "choose_subscription": (
+            "Выберите подписку",
+            "У вас несколько подписок. Откройте нужную в боте и нажмите «Подключить».",
+        ),
+        "unavailable": (
+            "Не удалось проверить подписку",
+            "Проверка временно недоступна. Доступ и платежи не изменены; повторно платить не нужно.",
+        ),
+    }
+    title, description = pages[error_code]
+    from html import escape as html_escape
+    error_html = f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>{html_escape(title)} — ByMeVPN</title><style>body{{margin:0;background:#07111d;color:#f3f7fb;font:16px/1.5 system-ui,sans-serif}}main{{max-width:480px;margin:12vh auto;padding:24px}}h1{{font-size:24px}}p{{color:#a9b9c8}}a{{display:inline-block;margin:12px 0;color:#80dfff}}</style></head><body><main><img src="/app/assets/bymevpn-logo.png" width="44" height="44" alt="ByMeVPN"><h1>{html_escape(title)}</h1><p>{html_escape(description)}</p><p><a href="https://t.me/ByMeVPNbot">Открыть подписку в боте</a></p><p><a href="https://t.me/ByMeVPNSupportBot">Поддержка</a></p></main></body></html>"""
+    return HTMLResponse(error_html, status_code=503 if error_code == "unavailable" else 400, headers={
+        "Cache-Control": "no-store, max-age=0",
+        "Referrer-Policy": "no-referrer",
+        "X-Robots-Tag": "noindex, nofollow",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": APP_LOGIN_CONTENT_SECURITY_POLICY,
+    })
 
 
 @app.get("/app/logo")
