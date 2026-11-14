@@ -2072,6 +2072,21 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
     }
 
 
+@account_api.get("/me/deletion-status")
+async def get_account_deletion_status(authorization: Optional[str] = Header(None)):
+    """Reconcile a lost deletion response using only the caller's signed JWT."""
+    token = (authorization or "").removeprefix("Bearer ").strip()
+    claims = _verified_token_claims(token)
+    if not claims:
+        raise HTTPException(status_code=401, detail="Сессия недействительна или истекла")
+    try:
+        deleted = await _is_removed_account(int(claims["user_id"]))
+    except Exception as exc:
+        logger.error("Account deletion status unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось проверить результат удаления") from None
+    return {"status": "deleted" if deleted else "not_deleted"}
+
+
 class ClientDiagnosticReport(BaseModel):
     platform: Literal["android", "ios", "windows", "linux", "macos"]
     stage: Literal["auth", "subscription", "import", "connect", "dns", "routing", "other"]

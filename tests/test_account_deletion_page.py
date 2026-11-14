@@ -1,5 +1,8 @@
 import unittest
-from unittest.mock import patch
+import os
+from unittest.mock import AsyncMock, patch
+
+os.environ.setdefault("JWT_SECRET", "test-only-jwt-secret-that-is-at-least-32-bytes")
 
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
@@ -29,3 +32,15 @@ class TestBrowserAccountDeletion(unittest.TestCase):
             response = self.client.get("/api/v1/auth/google/web-client")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"client_id": "public.apps.googleusercontent.com"})
+
+    def test_deletion_status_reconciliation_requires_signed_session(self):
+        with patch.object(api_router, "_verified_token_claims", return_value=None):
+            response = self.client.get("/api/v1/me/deletion-status", headers={"Authorization": "Bearer invalid"})
+        self.assertEqual(response.status_code, 401)
+        with (
+            patch.object(api_router, "_verified_token_claims", return_value={"user_id": 123}),
+            patch.object(api_router, "_is_removed_account", new=AsyncMock(return_value=True)),
+        ):
+            response = self.client.get("/api/v1/me/deletion-status", headers={"Authorization": "Bearer signed"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "deleted"})

@@ -30,31 +30,49 @@
     try {
       const response = await fetch(api + "/me", { method: "DELETE", headers: { Authorization: `Bearer ${accessToken}`, "X-Confirm-Account-Deletion": "DELETE" }, credentials: "omit", cache: "no-store" });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.detail || "Deletion could not be confirmed. Your account remains available; contact support through the app.");
-      accessToken = "";
-      document.getElementById("delete-section").hidden = true;
-      message("Account deletion completed. Financial transaction records are retained where required for accounting and payment disputes.");
-    } catch (error) { message(error.message); button.disabled = !checkbox.checked || !accessToken; }
+      if (!response.ok) { message(result.detail || "Deletion was not confirmed. Check the result before retrying."); button.disabled = !checkbox.checked || !accessToken; return; }
+      showDeleted();
+    } catch (_) {
+      message("The server response was lost. Checking whether deletion completed…");
+      try {
+        const status = await fetch(api + "/me/deletion-status", { headers: { Authorization: `Bearer ${accessToken}` }, credentials: "omit", cache: "no-store" });
+        const result = await status.json().catch(() => ({}));
+        if (status.ok && result.status === "deleted") { showDeleted(); return; }
+        message("Deletion outcome could not be confirmed. Do not submit another request yet; reload this page and sign in again to check account access.");
+      } catch (_) { message("Deletion outcome could not be confirmed. Do not submit another request yet; reload this page and sign in again to check account access."); }
+      button.disabled = true;
+    }
   });
+  function showDeleted() {
+    accessToken = "";
+    document.getElementById("delete-section").hidden = true;
+    message("Account deletion completed. Financial transaction records are retained where required for accounting and payment disputes.");
+  }
   (async () => {
     try {
       const configResponse = await fetch(api + "/auth/google/web-client", { credentials: "omit", cache: "no-store" });
       if (!configResponse.ok) return;
       const { client_id: clientId } = await configResponse.json();
-      const { nonce } = await jsonRequest("/auth/google/nonce", {});
       const deadline = Date.now() + 10000;
       const poll = setInterval(() => {
         if (window.google?.accounts?.id) {
           clearInterval(poll);
-          google.accounts.id.initialize({ client_id: clientId, nonce, callback: async ({ credential }) => {
-            message("Verifying Google sign-in…");
-            try {
-              signedIn(await jsonRequest("/auth/google", { id_token: credential, nonce }));
-            } catch (error) { message(error.message); }
-          } });
-          google.accounts.id.renderButton(document.getElementById("google-signin"), { theme: "outline", size: "large", text: "signin_with" });
+          configureGoogle(clientId);
         } else if (Date.now() > deadline) { clearInterval(poll); }
       }, 100);
     } catch (_) { /* Email sign-in remains available when Google is not configured. */ }
   })();
+  async function configureGoogle(clientId) {
+    try {
+      const { nonce } = await jsonRequest("/auth/google/nonce", {});
+      google.accounts.id.initialize({ client_id: clientId, nonce, callback: async ({ credential }) => {
+        message("Verifying Google sign-in…");
+        try { signedIn(await jsonRequest("/auth/google", { id_token: credential, nonce })); }
+        catch (error) { message(error.message); configureGoogle(clientId); }
+      } });
+      const target = document.getElementById("google-signin");
+      target.replaceChildren();
+      google.accounts.id.renderButton(target, { theme: "outline", size: "large", text: "signin_with" });
+    } catch (_) { message("Google sign-in is unavailable. Email sign-in remains available."); }
+  }
 })();
