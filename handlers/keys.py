@@ -303,7 +303,11 @@ async def _key_devices_view(user_id: int, key: dict, page: int = 0) -> tuple[str
         lines.append("")
     else:
         lines.extend(["", "Устройства появятся здесь после первого подключения."])
-    return "\n".join(lines), key_devices_kb(key["id"], devices, page)
+    return "\n".join(lines), key_devices_kb(
+        key["id"], devices, page,
+        current_limit=int(info.get("limit_hwid") or 0),
+        active=int(key.get("expiry") or 0) > int(time.time()),
+    )
 
 
 @router.callback_query(F.data.startswith("key_devices:"))
