@@ -218,6 +218,24 @@ async def connection_choice_page(ticket: str = "", u: int = 0, s: str = "", k: i
             if u <= 0 or k < 0 or not re.fullmatch(r"[a-f0-9]{64}", s):
                 raise ValueError("invalid_link")
             import database
+            # A per-account epoch revokes old page links even if a panel
+            # unexpectedly reuses the same subscription URL after rotation.
+            link_state = await database.get_connect_link_state(u)
+
+            def _link_is_current(subscription_url: str, key_id: int) -> bool:
+                if link_state and verify_permanent_connect_token(
+                    u, s, subscription_url, key_id=key_id,
+                    link_seed=link_state["seed"],
+                ):
+                    return True
+                # Existing user links created before this schema migration
+                # remain usable until a successful reissue rotates the epoch.
+                return (
+                    not link_state or not link_state["legacy_revoked"]
+                ) and verify_permanent_connect_token(
+                    u, s, subscription_url, key_id=key_id,
+                )
+
             now = int(time.time())
             keys = await database.get_user_keys(u)
             chosen = None
@@ -243,7 +261,7 @@ async def connection_choice_page(ticket: str = "", u: int = 0, s: str = "", k: i
             if chosen:
                 subscription_url = str(chosen.get("key") or "")
                 expires = int(chosen.get("expiry") or 0)
-                if not verify_permanent_connect_token(u, s, subscription_url, key_id=k):
+                if not _link_is_current(subscription_url, k):
                     raise ValueError("invalid_link")
                 if expires <= now:
                     # Only a valid, signed link for this key can trigger a
@@ -263,7 +281,7 @@ async def connection_choice_page(ticket: str = "", u: int = 0, s: str = "", k: i
                     raise ValueError("invalid_link")
                 subscription_url = str(panel.get("subscription_url") or "")
                 expires = int(panel.get("expiry_time") or 0) // 1000
-                if not verify_permanent_connect_token(u, s, subscription_url, key_id=0):
+                if not _link_is_current(subscription_url, 0):
                     raise ValueError("invalid_link")
 
             if expires <= now:
