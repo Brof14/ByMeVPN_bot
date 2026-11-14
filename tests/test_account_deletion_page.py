@@ -27,6 +27,8 @@ class TestBrowserAccountDeletion(unittest.TestCase):
         self.assertEqual(page.headers["cache-control"], "no-store, max-age=0")
         self.assertEqual(page.headers["cross-origin-opener-policy"], "same-origin-allow-popups")
         self.assertIn("connect-src 'self' https://accounts.google.com/gsi/", page.headers["content-security-policy"])
+        self.assertEqual(self.client.get("/app/assets/android.png").headers["cache-control"], "public, max-age=86400")
+        self.assertEqual(self.client.get("/app/assets/account_delete.js").headers["cache-control"], "no-store, max-age=0")
         self.assertEqual(self.client.get("/app/assets/../../api_router.py").status_code, 404)
 
     def test_public_google_web_client_exposes_only_configured_client_id(self):

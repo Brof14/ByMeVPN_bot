@@ -345,8 +345,9 @@ async def app_brand_asset(asset_name: str):
     media_type = "text/javascript" if asset_name.endswith(".js") else (
         "text/css" if asset_name.endswith(".css") else "image/png"
     )
+    cache_control = "no-store, max-age=0" if asset_name.startswith("account_delete.") else "public, max-age=86400"
     return FileResponse(path, media_type=media_type, headers={
-        "Cache-Control": "no-store, max-age=0", "X-Content-Type-Options": "nosniff",
+        "Cache-Control": cache_control, "X-Content-Type-Options": "nosniff",
     })
 
 # Global dispatcher for Telegram webhook handling
