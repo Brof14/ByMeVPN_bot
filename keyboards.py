@@ -114,8 +114,15 @@ def back_to_menu() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def support_url() -> str:
-    return _SUPPORT_URL
+_SUPPORT_ISSUES = frozenset({"connection", "subscription", "payment", "devices", "trial", "account"})
+
+
+def support_url(issue: str = "") -> str:
+    """Carry an allowlisted issue type to the support bot, never a VPN secret."""
+    return (
+        f"{_SUPPORT_URL}?start=help_{issue}"
+        if issue in _SUPPORT_ISSUES else _SUPPORT_URL
+    )
 
 
 def feedback_url() -> str:
