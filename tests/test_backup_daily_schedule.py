@@ -41,3 +41,42 @@ class BackupSchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(wait.await_count, 3)
         self.assertEqual(backup.await_count, 2)
         sleep.assert_awaited_once_with(300)
+
+    async def test_expiry_reminders_wait_until_ten_each_day(self):
+        from notifications import _expiry_notification_scheduler
+
+        with (
+            patch(
+                "notifications._wait_until_10_00_moscow",
+                new=AsyncMock(side_effect=[None, None, asyncio.CancelledError()]),
+            ) as wait,
+            patch("notifications._send_expiry_notifications", new=AsyncMock()) as deliver,
+            patch("notifications.asyncio.sleep", new=AsyncMock()) as sleep,
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await _expiry_notification_scheduler(object())
+
+        self.assertEqual(wait.await_count, 3)
+        self.assertEqual(deliver.await_count, 2)
+        sleep.assert_not_awaited()
+
+    async def test_expiry_reminder_failure_backoff(self):
+        from notifications import _expiry_notification_scheduler
+
+        with (
+            patch(
+                "notifications._wait_until_10_00_moscow",
+                new=AsyncMock(side_effect=[None, None, asyncio.CancelledError()]),
+            ) as wait,
+            patch(
+                "notifications._send_expiry_notifications",
+                new=AsyncMock(side_effect=[RuntimeError("temporary failure"), None]),
+            ) as deliver,
+            patch("notifications.asyncio.sleep", new=AsyncMock()) as sleep,
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await _expiry_notification_scheduler(object())
+
+        self.assertEqual(wait.await_count, 3)
+        self.assertEqual(deliver.await_count, 2)
+        sleep.assert_awaited_once_with(300)
