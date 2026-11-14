@@ -46,7 +46,7 @@ def main_menu_active(key_id: int, subscription_url: str = "", user_id: int | Non
     if subscription_url:
         try:
             from app_links import build_connect_page_url
-            connect_url = build_connect_page_url(subscription_url, user_id=user_id)
+            connect_url = build_connect_page_url(subscription_url, user_id=user_id, key_id=key_id)
         except (RuntimeError, ValueError):
             connect_url = None
     connect_button = (
@@ -284,7 +284,7 @@ def key_detail_kb(
     if subscription_url:
         try:
             from app_links import build_connect_page_url
-            connect_url = build_connect_page_url(subscription_url, user_id=user_id)
+            connect_url = build_connect_page_url(subscription_url, user_id=user_id, key_id=key_id)
         except (RuntimeError, ValueError):
             connect_url = None
     connect_button = (
@@ -356,11 +356,11 @@ def confirm_delete_device_kb(key_id: int, device_id: int) -> InlineKeyboardMarku
 
 def key_settings_kb(key_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="Оплата и автопродление", callback_data=f"manage_payment_methods:{key_id}"))
     kb.row(InlineKeyboardButton(
         text="Перевыпустить подписку",
         callback_data=f"key_reissue_confirm:{key_id}",
     ))
-    kb.row(InlineKeyboardButton(text="Оплата и автопродление", callback_data=f"manage_payment_methods:{key_id}"))
     # Deliberately do not expose destructive subscription deletion in the customer UI.
     kb.row(InlineKeyboardButton(text="← К подписке", callback_data=f"key_info:{key_id}"))
     return kb.as_markup()
@@ -429,13 +429,13 @@ def confirm_delete_kb(key_id: int) -> InlineKeyboardMarkup:
 # After key delivery
 # ---------------------------------------------------------------------------
 
-def after_key_kb(subscription_url: str = "", user_id: int | None = None) -> InlineKeyboardMarkup:
+def after_key_kb(subscription_url: str = "", user_id: int | None = None, key_id: int | None = None) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     connect_url = None
     if subscription_url:
         try:
             from app_links import build_connect_page_url
-            connect_url = build_connect_page_url(subscription_url, user_id=user_id)
+            connect_url = build_connect_page_url(subscription_url, user_id=user_id, key_id=key_id)
         except (RuntimeError, ValueError):
             connect_url = None
     kb.row(InlineKeyboardButton(
@@ -481,6 +481,6 @@ def legal_kb() -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="Договор публичной оферты", url="https://telegra.ph/Publichnaya-oferta-na-okazanie-uslug-ByMeVPN-10-25"))
     kb.row(InlineKeyboardButton(text="Политика конфиденциальности", url="https://telegra.ph/Politika-v-otnoshenii-obrabotki-personalnyh-dannyh-ByMeVPN-10-25"))
     kb.row(InlineKeyboardButton(text="Соглашение об автопродлении", url="https://telegra.ph/Soglashenie-ob-avtomaticheskom-prodlenii-podpiski-ByMeVPN-10-25"))
-    kb.row(InlineKeyboardButton(text="Оплата и автопродление", callback_data="manage_payment_methods"))
+    kb.row(InlineKeyboardButton(text="Управлять автопродлением", callback_data="manage_payment_methods"))
     kb.row(InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu"))
     return kb.as_markup()
