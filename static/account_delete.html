@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <title>Delete ByMeVPN account</title>
+  <link rel="stylesheet" href="/app/assets/account_delete.css">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="/app/assets/account_delete.js" defer></script>
+</head>
+<body>
+  <main>
+    <h1>Delete your ByMeVPN account</h1>
+    <p>Sign in with the Google or email account you use for ByMeVPN. We will revoke VPN access and disable recurring charges before erasing account data. Financial transaction records may be retained for accounting and payment disputes. Paid access is not preserved.</p>
+    <section id="signin">
+      <div id="google-signin"></div>
+      <h2>Or sign in with email</h2>
+      <form id="login-form">
+        <label>Email <input id="email" type="email" autocomplete="username" required></label>
+        <label>Password <input id="password" type="password" autocomplete="current-password" required></label>
+        <button type="submit">Sign in</button>
+      </form>
+    </section>
+    <section id="delete-section" hidden>
+      <p id="signed-in"></p>
+      <label class="confirm"><input id="confirm-loss" type="checkbox"> I understand that this permanently deletes my account and VPN access, and that paid time will not be preserved.</label>
+      <button id="delete-button" type="button" disabled>Delete account</button>
+    </section>
+    <p id="message" role="status" aria-live="polite"></p>
+  </main>
+</body>
+</html>

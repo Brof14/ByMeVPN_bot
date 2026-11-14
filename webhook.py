@@ -107,6 +107,26 @@ async def health_check():
     return await readiness_check()
 
 
+@app.get("/account/delete", include_in_schema=False)
+async def account_deletion_page():
+    """Browser self-service account deletion for Google and email identities."""
+    from fastapi.responses import HTMLResponse
+    from pathlib import Path
+
+    page = Path(__file__).parent / "static" / "account_delete.html"
+    return HTMLResponse(
+        page.read_text(encoding="utf-8"),
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Referrer-Policy": "strict-origin-when-cross-origin",
+            "X-Robots-Tag": "noindex, nofollow",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'self' https://accounts.google.com/gsi/; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' https://accounts.google.com/gsi/style; connect-src 'self' https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+            "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
+        },
+    )
+
+
 @app.get("/livez")
 async def liveness_check():
     """Liveness endpoint: process event loop and HTTP server are responding."""
@@ -314,13 +334,20 @@ async def app_brand_asset(asset_name: str):
         "android.png", "apple.png", "bymevpn-logo.png", "happ.png", "incy.png",
         "koala.png", "linux.png", "v2raytun.png", "v2rayng.png", "hiddify.png",
         "singbox.png", "v2rayn.png", "windows.png",
+        "account_delete.js", "account_delete.css",
     }
-    root = (Path(__file__).resolve().parent / "static" / "app" / "assets").resolve()
+    static_root = Path(__file__).resolve().parent / "static"
+    root = (static_root if asset_name.startswith("account_delete.")
+            else static_root / "app" / "assets").resolve()
     path = (root / asset_name).resolve()
     if asset_name not in allowed or path.parent != root or not path.is_file():
         raise HTTPException(status_code=404, detail="Файл не найден")
-    return FileResponse(path, media_type="image/png", headers={
-        "Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff",
+    media_type = "text/javascript" if asset_name.endswith(".js") else (
+        "text/css" if asset_name.endswith(".css") else "image/png"
+    )
+    cache_control = "no-store, max-age=0" if asset_name.startswith("account_delete.") else "public, max-age=86400"
+    return FileResponse(path, media_type=media_type, headers={
+        "Cache-Control": cache_control, "X-Content-Type-Options": "nosniff",
     })
 
 # Global dispatcher for Telegram webhook handling

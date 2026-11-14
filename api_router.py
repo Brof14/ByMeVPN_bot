@@ -1789,6 +1789,14 @@ async def get_google_desktop_client():
     }
 
 
+@auth_api.get("/google/web-client")
+async def get_google_web_client():
+    """Expose only the public web OAuth client ID for the deletion page."""
+    if not _google_signin_configured():
+        raise HTTPException(status_code=503, detail="Вход через Google временно недоступен")
+    return {"client_id": os.getenv("GOOGLE_WEB_CLIENT_ID", "").strip()}
+
+
 @auth_api.post("/google/nonce")
 async def create_google_nonce(request: Request = None):
     """Issue a short-lived server nonce only when Google login is configured."""
@@ -2062,6 +2070,21 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
             "is_google": is_google,
         }
     }
+
+
+@account_api.get("/me/deletion-status")
+async def get_account_deletion_status(authorization: Optional[str] = Header(None)):
+    """Reconcile a lost deletion response using only the caller's signed JWT."""
+    token = (authorization or "").removeprefix("Bearer ").strip()
+    claims = _verified_token_claims(token)
+    if not claims:
+        raise HTTPException(status_code=401, detail="Сессия недействительна или истекла")
+    try:
+        deleted = await _is_removed_account(int(claims["user_id"]))
+    except Exception as exc:
+        logger.error("Account deletion status unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось проверить результат удаления") from None
+    return {"status": "deleted" if deleted else "not_deleted"}
 
 
 class ClientDiagnosticReport(BaseModel):
