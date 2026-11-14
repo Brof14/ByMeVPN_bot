@@ -162,7 +162,7 @@ async def cb_ad_program(callback: CallbackQuery, bot: Bot, state: FSMContext):
         "<b>VPN за рекламу</b>\n\n"
         "Опубликуйте официальный пост ByMeVPN в своём канале и получите месяцы доступа.\n\n"
         "Укажите канал — мы проверим его и покажем размер бонуса. "
-        "Затем перешлите рекламный пост и сохраните публикацию на 30 дней."
+        "Затем перешлите рекламный пост и сохраните публикацию на 30 дней. Бонус начислим после проверки поста."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Начать · указать канал", callback_data="ad_check_channel")],
