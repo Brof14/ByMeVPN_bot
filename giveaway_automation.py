@@ -153,7 +153,7 @@ async def _send_campaign_announcements(bot: Bot, giveaway: dict) -> None:
         f"Чтобы участвовать, пригласите хотя бы одного нового пользователя по своей ссылке до <b>{deadline}</b>. "
         f"{int(giveaway.get('winners_count') or MONTHLY_WINNERS)} победителя получат "
         f"по <b>+{int(giveaway.get('prize_days') or MONTHLY_PRIZE_DAYS)} дней VPN</b>.\n\n"
-        "Учитываются новые пользователи, впервые запустившие бота по приглашению. "
+        "В зачёт попадёт тот, кто впервые запустит бота по вашей ссылке. "
         "Полные правила и ваши результаты доступны после нажатия «Участвовать»."
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
