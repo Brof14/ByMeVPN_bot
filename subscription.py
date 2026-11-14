@@ -517,7 +517,20 @@ async def _deliver_key_unlocked(
         # Subscription URLs are access credentials; never write any part to logs.
 
         # Сохраняем ссылку на подписку и настоящий UUID клиента в БД
-        client_uuid = user_result.get("uuid") or subscription_url
+        client_uuid = str(user_result.get("uuid") or "").strip()
+        if not client_uuid:
+            # Provisioning may already exist: fail closed and reconcile it.
+            await log_key_error(
+                user_id=user_id, error_type="panel_uuid_unconfirmed",
+                error_message="3x-ui did not confirm the new client UUID",
+                context={"branch": "deliver_key.create", "payment_id": payload},
+            )
+            await bot.send_message(
+                chat_id,
+                "VPN-доступ создан, но сервер пока не подтвердил его параметры. "
+                "Повторно оплачивать не нужно. Мы проверим подписку.",
+            )
+            return False
         key_id = await add_key(
             user_id, subscription_url, config_name, client_uuid, days, limit_ip,
             expiry=target_expiry,
