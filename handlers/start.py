@@ -266,7 +266,7 @@ async def _send_main_menu(
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Повторить проверку", callback_data="back_to_menu")],
-            [InlineKeyboardButton(text="Поддержка", url=support_url())],
+            [InlineKeyboardButton(text="Поддержка", url=support_url("subscription"))],
         ])
         if isinstance(target, Message):
             await bot.send_message(chat_id=user_id, text=text, reply_markup=kb)
