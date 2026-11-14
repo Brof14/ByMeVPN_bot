@@ -7384,6 +7384,35 @@ async def get_channel_subscription_bonus_status(user_id: int) -> str | None:
     return str(row[0]) if row else None
 
 
+async def get_pending_channel_bonus_retries(limit: int = 20) -> list[int]:
+    """Only retry leases that expired after an uncertain provisioning result.
+
+    The immutable provisioning_intent for channel_bonus_<id> ensures that a
+    crashed successful attempt cannot add the 10-day reward twice.
+    """
+    db = await get_db()
+    available = await (await db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' "
+        "AND name='channel_subscription_bonus'"
+    )).fetchone()
+    if not available:
+        return []
+    current = int(time.time())
+    rows = await (await db.execute(
+        """SELECT bonus.user_id FROM channel_subscription_bonus bonus
+        LEFT JOIN channel_subscription_bonus_leases lease
+          ON lease.user_id=bonus.user_id
+        WHERE bonus.status='reserved'
+          AND COALESCE(lease.expires_at, 0)<=?
+          AND NOT EXISTS (
+            SELECT 1 FROM account_tombstones dead WHERE dead.user_id=bonus.user_id
+          )
+        ORDER BY bonus.created_at, bonus.user_id LIMIT ?""",
+        (current, max(1, min(int(limit), 100))),
+    )).fetchall()
+    return [int(row[0]) for row in rows]
+
+
 async def reserve_channel_subscription_bonus(user_id: int) -> bool:
     """Lease an unawarded reward atomically across all bot workers.
 
