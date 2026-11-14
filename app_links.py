@@ -249,28 +249,55 @@ def read_connect_ticket(ticket: str, *, now: int | None = None) -> dict[str, str
         raise ValueError("invalid or expired connection ticket") from exc
 
 
-def build_connect_page_url(subscription_url: str, user_name: str = "", *, user_id: int | None = None) -> str:
+def _permanent_connect_signature(
+    user_id: int, subscription_url: str, key_id: int | None = None,
+) -> str:
+    """Bind a permanent user-facing link to the current VPN credential.
+
+    This URL has no expiration timer. When a key is reissued, the
+    subscription URL changes and the old link becomes invalid.
+    """
+    secret = os.getenv("APP_HANDOFF_SECRET") or os.getenv("JWT_SECRET") or BOT_TOKEN
+    if not secret or int(user_id) <= 0 or not subscription_url:
+        raise ValueError("connection link cannot be signed")
+    parsed = urlsplit(subscription_url)
+    if parsed.scheme != "https" or not parsed.hostname or len(subscription_url) > MAX_SUBSCRIPTION_URL_LENGTH:
+        raise ValueError("invalid VPN subscription URL")
+    fingerprint = hashlib.sha256(subscription_url.encode("utf-8")).hexdigest()
+    payload = f"connect-v2:{int(user_id)}:{int(key_id or 0)}:{fingerprint}"
+    return hmac.new(
+        hashlib.sha256(secret.encode()).digest(), payload.encode(), hashlib.sha256,
+    ).hexdigest()
+
+
+def build_connect_page_url(
+    subscription_url: str, user_name: str = "", *,
+    user_id: int | None = None, key_id: int | None = None,
+) -> str:
     if not APP_CONNECT_PAGE_URL:
         raise RuntimeError("APP_CONNECT_PAGE_URL must be configured for secure connection handover")
     base = urlsplit(APP_CONNECT_PAGE_URL)
     if base.scheme != "https" or not base.hostname or base.path or base.username is not None or base.password is not None:
         raise ValueError("APP_CONNECT_PAGE_URL must be an HTTPS origin")
     if user_id is not None:
-        secret = os.getenv("APP_HANDOFF_SECRET") or os.getenv("JWT_SECRET") or BOT_TOKEN
-        if not secret or int(user_id) <= 0:
-            raise RuntimeError("connection page secret is not configured")
-        uid = str(int(user_id))
-        mac = hmac.new(hashlib.sha256(secret.encode()).digest(), f"connect-v1:{uid}".encode(), hashlib.sha256).hexdigest()
-        return f"{APP_CONNECT_PAGE_URL}/connect?u={uid}&s={mac}"
+        uid, kid = int(user_id), int(key_id or 0)
+        signature = _permanent_connect_signature(uid, subscription_url, kid)
+        return f"{APP_CONNECT_PAGE_URL}/connect?u={uid}&k={kid}&s={signature}"
     ticket = build_connect_ticket(subscription_url, user_name)
     return f"{APP_CONNECT_PAGE_URL}/connect?ticket={quote(ticket)}"
 
 
-def verify_permanent_connect_token(user_id: int, signature: str) -> bool:
-    secret = os.getenv("APP_HANDOFF_SECRET") or os.getenv("JWT_SECRET") or BOT_TOKEN
-    if not secret or int(user_id) <= 0 or len(signature) != 64:
+def verify_permanent_connect_token(
+    user_id: int, signature: str, subscription_url: str = "", *,
+    key_id: int | None = None,
+) -> bool:
+    """Credential changes revoke previously shared permanent links."""
+    if len(signature) != 64:
         return False
-    expected = hmac.new(hashlib.sha256(secret.encode()).digest(), f"connect-v1:{int(user_id)}".encode(), hashlib.sha256).hexdigest()
+    try:
+        expected = _permanent_connect_signature(user_id, subscription_url, key_id)
+    except (ValueError, TypeError):
+        return False
     return hmac.compare_digest(expected, signature)
 
 
