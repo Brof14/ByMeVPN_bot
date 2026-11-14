@@ -7042,15 +7042,45 @@ async def get_due_giveaways(now: int | None = None) -> list[dict]:
     ]
 
 
+def _giveaway_relevant_audience_filter(user_ref: str) -> str:
+    """Only interested customers receive a monthly referral promotion.
+
+    Active paying users without recent referral activity are not interrupted.
+    Expired customers, trial users, and active referrers can still participate.
+    Column selectors are fixed internal literals, never client input.
+    """
+    if user_ref not in {"u.user_id", "n.user_id", "giveaway_notifications.user_id"}:
+        raise ValueError("invalid giveaway audience reference")
+    return f"""(
+        NOT EXISTS (
+            SELECT 1 FROM keys k
+            WHERE k.user_id={user_ref}
+              AND k.expiry>CAST(strftime('%s','now') AS INTEGER)
+        )
+        OR NOT EXISTS (
+            SELECT 1 FROM payments paid
+            WHERE paid.user_id={user_ref} AND paid.status='success'
+              AND paid.amount>0 AND paid.method!='trial'
+        )
+        OR EXISTS (
+            SELECT 1 FROM referrals ref
+            WHERE ref.referrer_id={user_ref}
+              AND ref.created >= CAST(strftime('%s','now') AS INTEGER) - 5184000
+        )
+    )"""
+
+
 async def create_giveaway_notification_snapshot(giveaway_id: int) -> int:
     """Queue one monthly promotion for each user who has not opted out."""
     db = await get_db()
     async with _db_semaphore:
+        audience = _giveaway_relevant_audience_filter("u.user_id")
         await db.execute(
-            """INSERT OR IGNORE INTO giveaway_notifications(giveaway_id, user_id, status)
+            f"""INSERT OR IGNORE INTO giveaway_notifications(giveaway_id, user_id, status)
             SELECT ?, u.user_id, 'pending' FROM users u
             LEFT JOIN marketing_preferences p ON p.user_id=u.user_id
-            WHERE COALESCE(p.promotional_opt_out, 0)=0""",
+            WHERE COALESCE(p.promotional_opt_out, 0)=0
+              AND {audience}""",
             (giveaway_id,),
         )
         await db.commit()
@@ -7074,11 +7104,13 @@ async def get_pending_giveaway_notifications(giveaway_id: int, limit: int = 50) 
             (giveaway_id, cutoff),
         )
         await db.commit()
+    audience = _giveaway_relevant_audience_filter("n.user_id")
     cur = await db.execute(
-        """SELECT n.user_id FROM giveaway_notifications n
+        f"""SELECT n.user_id FROM giveaway_notifications n
         LEFT JOIN marketing_preferences p ON p.user_id=n.user_id
         WHERE n.giveaway_id=? AND n.status='pending'
           AND COALESCE(p.promotional_opt_out, 0)=0
+          AND {audience}
         ORDER BY n.user_id LIMIT ?""",
         (giveaway_id, int(limit)),
     )
@@ -7089,11 +7121,13 @@ async def claim_giveaway_notification(giveaway_id: int, user_id: int) -> bool:
     """Atomically reserve one campaign delivery; claimed users are never requeued."""
     db = await get_db()
     async with _db_semaphore:
+        audience = _giveaway_relevant_audience_filter("giveaway_notifications.user_id")
         cur = await db.execute(
-            """UPDATE giveaway_notifications SET status='sending', sent_at=?
+            f"""UPDATE giveaway_notifications SET status='sending', sent_at=?
             WHERE giveaway_id=? AND user_id=? AND status='pending'
               AND COALESCE((SELECT promotional_opt_out FROM marketing_preferences
-                            WHERE user_id=?), 0)=0""",
+                            WHERE user_id=?), 0)=0
+              AND {audience}""",
             (int(time.time()), giveaway_id, user_id, user_id),
         )
         await db.commit()
