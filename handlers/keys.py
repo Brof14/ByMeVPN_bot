@@ -602,7 +602,7 @@ async def cb_key_reissue(callback: CallbackQuery, bot: Bot, state: FSMContext):
     text, keyboard = await _key_info_content(callback.from_user.id, updated)
     await send_or_edit(
         bot, callback,
-        "<b>Подписка перевыпущена</b>\nСтарая ссылка отключена. Скопируйте новую кнопкой «Скопировать ссылку».\n\n" + text,
+        "<b>Подписка перевыпущена</b>\nСтарая ссылка отключена. Откройте «Подключить» и добавьте новую подписку в приложение.\n\n" + text,
         keyboard, photo=KEY,
     )
 
@@ -921,15 +921,24 @@ async def _open_connect_page(callback: CallbackQuery, key_id: int | None = None)
             return
     else:
         keys = await get_user_keys(user_id)
-        active = [key for key in keys if int(key.get("expiry") or 0) > int(time.time()) and key.get("key")]
-        key = max(active, key=lambda item: int(item.get("expiry") or 0)) if active else None
+        active = [
+            item for item in keys
+            if int(item.get("expiry") or 0) > int(time.time()) and item.get("key")
+        ]
+        if len(active) > 1:
+            await callback.answer("Выберите нужную подписку в разделе «Подписка».", show_alert=True)
+            return
+        key = active[0] if active else None
     subscription_url = str((key or {}).get("key") or "")
     if not subscription_url:
-        await callback.answer("Активная подписка не найдена. Откройте раздел «Подписка».", show_alert=True)
+        await callback.answer("Подписка не найдена. Откройте раздел «Подписка».", show_alert=True)
         return
     try:
         from app_links import build_connect_page_url
-        url = build_connect_page_url(subscription_url, callback.from_user.first_name or "", user_id=user_id)
+        url = build_connect_page_url(
+            subscription_url, callback.from_user.first_name or "",
+            user_id=user_id, key_id=int(key["id"]),
+        )
     except (RuntimeError, ValueError):
         logger.exception("Connection page could not be built for user %d", user_id)
         await callback.answer("Страница подключения временно недоступна. Напишите в поддержку.", show_alert=True)
