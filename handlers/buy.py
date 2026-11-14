@@ -842,7 +842,11 @@ def _stars_invoice_error(pre: PreCheckoutQuery) -> str | None:
 
 @router.pre_checkout_query()
 async def pre_checkout(pre: PreCheckoutQuery):
-    error = _stars_invoice_error(pre)
+    if str(pre.invoice_payload or "").startswith("devup_"):
+        from handlers.device_upgrades import device_upgrade_checkout_error
+        error = await device_upgrade_checkout_error(pre)
+    else:
+        error = _stars_invoice_error(pre)
     if not error:
         from database import is_account_tombstoned
         try:
@@ -912,7 +916,11 @@ async def on_successful_payment(message: Message, bot: Bot, state: FSMContext):
     charge_id = payment.telegram_payment_charge_id or payment.invoice_payload
     lock = _stars_payment_locks.setdefault(charge_id, asyncio.Lock())
     async with lock:
-        await _process_successful_stars_payment(message, bot, state, payment, charge_id)
+        if str(payment.invoice_payload or "").startswith("devup_"):
+            from handlers.device_upgrades import process_device_upgrade_charge
+            await process_device_upgrade_charge(message, bot, payment, charge_id)
+        else:
+            await _process_successful_stars_payment(message, bot, state, payment, charge_id)
 
 
 async def _process_successful_stars_payment(
