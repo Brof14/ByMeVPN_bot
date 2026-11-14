@@ -22,7 +22,7 @@ class PromoCommandFlowTests(unittest.IsolatedAsyncioTestCase):
         from handlers.buy import receive_promo_code
         from states import PromoFlow
 
-        state = SimpleNamespace(update_data=AsyncMock(), set_state=AsyncMock())
+        state = SimpleNamespace(update_data=AsyncMock(), set_state=AsyncMock(), get_data=AsyncMock(return_value={}))
         message = SimpleNamespace(
             text=" save20 ", bot=object(), from_user=SimpleNamespace(id=123), answer=AsyncMock(),
         )

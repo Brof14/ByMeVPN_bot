@@ -39,7 +39,10 @@ def main_menu_with_keys(trial_used: bool = False) -> InlineKeyboardMarkup:
     return _customer_menu(has_subscription=True, trial_used=trial_used)
 
 
-def main_menu_active(key_id: int, subscription_url: str = "", user_id: int | None = None) -> InlineKeyboardMarkup:
+def main_menu_active(
+    key_id: int, subscription_url: str = "", user_id: int | None = None,
+    *, remaining_days: int | None = None,
+) -> InlineKeyboardMarkup:
     """Put the active subscriber's connection action first in the home menu."""
     kb = InlineKeyboardBuilder()
     connect_url = None
@@ -55,6 +58,10 @@ def main_menu_active(key_id: int, subscription_url: str = "", user_id: int | Non
         InlineKeyboardButton(text="Подключить VPN", callback_data=f"key_instructions:{key_id}")
     )
     kb.row(connect_button)
+    if remaining_days is not None and 0 < remaining_days <= 3:
+        kb.row(InlineKeyboardButton(
+            text="Продлить подписку", callback_data=f"key_renew:{key_id}",
+        ))
     # Device management belongs to the subscription details, not the home hub.
     kb.row(InlineKeyboardButton(text="Подписка", callback_data="my_keys"))
     kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn", style="primary"))

@@ -239,6 +239,49 @@ async def process_due_giveaways(bot: Bot) -> None:
         await mark_giveaway_results_notified(result["id"])
 
 
+async def process_pending_channel_bonuses(bot: Bot, limit: int = 10) -> int:
+    """Resume a failed +10-day channel reward without granting it twice.
+
+    A callback first verifies membership and reserves the reward. Here only
+    an expired reservation is retried; delivery uses the same immutable
+    provisioning intent as the original callback.
+    """
+    from database import (
+        get_pending_channel_bonus_retries, reserve_channel_subscription_bonus,
+        complete_channel_subscription_bonus,
+    )
+    from subscription import deliver_key
+    from constants import DEFAULT_DEVICE_LIMIT
+
+    completed = 0
+    for user_id in await get_pending_channel_bonus_retries(limit=limit):
+        try:
+            if not await reserve_channel_subscription_bonus(user_id):
+                continue
+            keys = await get_user_keys(user_id)
+            latest = max(keys, key=lambda item: int(item.get("expiry") or 0)) if keys else None
+            devices = int((latest or {}).get("limit_ip") or DEFAULT_DEVICE_LIMIT)
+            succeeded = await deliver_key(
+                bot=bot, user_id=user_id, chat_id=user_id,
+                config_name=f"ByMeVPN_{user_id}", days=10, limit_ip=devices,
+                is_paid=False, amount=0, method="channel_bonus",
+                payload=f"channel_bonus_{user_id}", extend_existing=True,
+            )
+            if succeeded:
+                if await complete_channel_subscription_bonus(user_id):
+                    completed += 1
+                else:
+                    logger.warning(
+                        "Delivered free channel reward but ledger not finalized for %s",
+                        user_id,
+                    )
+        except Exception:
+            logger.exception(
+                "Automatic channel bonus reconciliation failed for user %s", user_id,
+            )
+    return completed
+
+
 async def run_giveaway_automation(bot: Bot) -> None:
     """One idempotent scheduler pass; safe to retry after process restarts."""
     from referral_system_new import process_pending_referral_payment_rewards, process_pending_referral_signup_rewards
@@ -246,6 +289,7 @@ async def run_giveaway_automation(bot: Bot) -> None:
     await process_pending_referral_signup_rewards(bot)
     await process_pending_referral_payment_rewards(bot)
     await process_pending_ad_rewards(bot)
+    await process_pending_channel_bonuses(bot)
     await process_due_giveaways(bot)
     giveaway = await ensure_monthly_giveaway(bot)
     # Snapshot is INSERT OR IGNORE, so restarting won't duplicate messages.

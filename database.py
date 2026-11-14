@@ -4902,13 +4902,16 @@ async def get_referred_users_list(referrer_id: int) -> list[dict]:
                (SELECT COUNT(*) FROM keys WHERE user_id=r.referred_id AND expiry > ?) as active_keys,
                (SELECT COUNT(*) FROM referral_events WHERE referrer_id=? AND referred_id=r.referred_id AND event_type='payment_bonus') as payment_count,
                (SELECT COALESCE(SUM(days_awarded), 0) FROM referral_events 
-                WHERE referrer_id=? AND referred_id=r.referred_id) as bonus_days
+                WHERE referrer_id=? AND referred_id=r.referred_id) as bonus_days,
+               (SELECT COUNT(*) FROM referral_events
+                WHERE referrer_id=? AND referred_id=r.referred_id
+                AND event_type='registration_bonus') as signup_bonus_count
         FROM referrals r
         JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id
         WHERE r.referrer_id=?
         ORDER BY r.created DESC
         """,
-        (current_time, referrer_id, referrer_id, referrer_id)
+        (current_time, referrer_id, referrer_id, referrer_id, referrer_id)
     )
     
     rows = await cur.fetchall()
@@ -4919,6 +4922,7 @@ async def get_referred_users_list(referrer_id: int) -> list[dict]:
             "is_active": row[2] > 0,
             "has_paid": row[3] > 0,
             "bonus_days_awarded": row[4],
+            "signup_bonus_awarded": row[5] > 0,
         }
         for row in rows
     ]
@@ -7038,15 +7042,45 @@ async def get_due_giveaways(now: int | None = None) -> list[dict]:
     ]
 
 
+def _giveaway_relevant_audience_filter(user_ref: str) -> str:
+    """Only interested customers receive a monthly referral promotion.
+
+    Active paying users without recent referral activity are not interrupted.
+    Expired customers, trial users, and active referrers can still participate.
+    Column selectors are fixed internal literals, never client input.
+    """
+    if user_ref not in {"u.user_id", "n.user_id", "giveaway_notifications.user_id"}:
+        raise ValueError("invalid giveaway audience reference")
+    return f"""(
+        NOT EXISTS (
+            SELECT 1 FROM keys k
+            WHERE k.user_id={user_ref}
+              AND k.expiry>CAST(strftime('%s','now') AS INTEGER)
+        )
+        OR NOT EXISTS (
+            SELECT 1 FROM payments paid
+            WHERE paid.user_id={user_ref} AND paid.status='success'
+              AND paid.amount>0 AND paid.method!='trial'
+        )
+        OR EXISTS (
+            SELECT 1 FROM referrals ref
+            WHERE ref.referrer_id={user_ref}
+              AND ref.created >= CAST(strftime('%s','now') AS INTEGER) - 5184000
+        )
+    )"""
+
+
 async def create_giveaway_notification_snapshot(giveaway_id: int) -> int:
     """Queue one monthly promotion for each user who has not opted out."""
     db = await get_db()
     async with _db_semaphore:
+        audience = _giveaway_relevant_audience_filter("u.user_id")
         await db.execute(
-            """INSERT OR IGNORE INTO giveaway_notifications(giveaway_id, user_id, status)
+            f"""INSERT OR IGNORE INTO giveaway_notifications(giveaway_id, user_id, status)
             SELECT ?, u.user_id, 'pending' FROM users u
             LEFT JOIN marketing_preferences p ON p.user_id=u.user_id
-            WHERE COALESCE(p.promotional_opt_out, 0)=0""",
+            WHERE COALESCE(p.promotional_opt_out, 0)=0
+              AND {audience}""",
             (giveaway_id,),
         )
         await db.commit()
@@ -7070,11 +7104,13 @@ async def get_pending_giveaway_notifications(giveaway_id: int, limit: int = 50) 
             (giveaway_id, cutoff),
         )
         await db.commit()
+    audience = _giveaway_relevant_audience_filter("n.user_id")
     cur = await db.execute(
-        """SELECT n.user_id FROM giveaway_notifications n
+        f"""SELECT n.user_id FROM giveaway_notifications n
         LEFT JOIN marketing_preferences p ON p.user_id=n.user_id
         WHERE n.giveaway_id=? AND n.status='pending'
           AND COALESCE(p.promotional_opt_out, 0)=0
+          AND {audience}
         ORDER BY n.user_id LIMIT ?""",
         (giveaway_id, int(limit)),
     )
@@ -7085,11 +7121,13 @@ async def claim_giveaway_notification(giveaway_id: int, user_id: int) -> bool:
     """Atomically reserve one campaign delivery; claimed users are never requeued."""
     db = await get_db()
     async with _db_semaphore:
+        audience = _giveaway_relevant_audience_filter("giveaway_notifications.user_id")
         cur = await db.execute(
-            """UPDATE giveaway_notifications SET status='sending', sent_at=?
+            f"""UPDATE giveaway_notifications SET status='sending', sent_at=?
             WHERE giveaway_id=? AND user_id=? AND status='pending'
               AND COALESCE((SELECT promotional_opt_out FROM marketing_preferences
-                            WHERE user_id=?), 0)=0""",
+                            WHERE user_id=?), 0)=0
+              AND {audience}""",
             (int(time.time()), giveaway_id, user_id, user_id),
         )
         await db.commit()
@@ -7344,6 +7382,35 @@ async def get_channel_subscription_bonus_status(user_id: int) -> str | None:
         "SELECT status FROM channel_subscription_bonus WHERE user_id=?", (int(user_id),)
     )).fetchone()
     return str(row[0]) if row else None
+
+
+async def get_pending_channel_bonus_retries(limit: int = 20) -> list[int]:
+    """Only retry leases that expired after an uncertain provisioning result.
+
+    The immutable provisioning_intent for channel_bonus_<id> ensures that a
+    crashed successful attempt cannot add the 10-day reward twice.
+    """
+    db = await get_db()
+    available = await (await db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' "
+        "AND name='channel_subscription_bonus'"
+    )).fetchone()
+    if not available:
+        return []
+    current = int(time.time())
+    rows = await (await db.execute(
+        """SELECT bonus.user_id FROM channel_subscription_bonus bonus
+        LEFT JOIN channel_subscription_bonus_leases lease
+          ON lease.user_id=bonus.user_id
+        WHERE bonus.status='reserved'
+          AND COALESCE(lease.expires_at, 0)<=?
+          AND NOT EXISTS (
+            SELECT 1 FROM account_tombstones dead WHERE dead.user_id=bonus.user_id
+          )
+        ORDER BY bonus.created_at, bonus.user_id LIMIT ?""",
+        (current, max(1, min(int(limit), 100))),
+    )).fetchall()
+    return [int(row[0]) for row in rows]
 
 
 async def reserve_channel_subscription_bonus(user_id: int) -> bool:

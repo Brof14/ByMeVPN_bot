@@ -125,8 +125,10 @@ class FreeRewardAtomicityTests(unittest.IsolatedAsyncioTestCase):
             patch("database.reserve_channel_subscription_bonus", new=AsyncMock(return_value=True)),
             patch("database.complete_channel_subscription_bonus", new=AsyncMock(return_value=False)),
             patch("subscription.deliver_key", new=AsyncMock(return_value=True)),
+            patch("handlers.start._render_free_vpn", new=AsyncMock()) as refresh,
         ):
             await cb_channel_bonus_check(callback, bot)
+        refresh.assert_awaited_once_with(callback, bot)
         self.assertIn("проверяется", answer.await_args.args[1])
         self.assertNotIn("Готово", answer.await_args.args[1])
 

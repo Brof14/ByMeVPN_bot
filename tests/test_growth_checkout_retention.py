@@ -40,13 +40,12 @@ class CheckoutUxTests(unittest.IsolatedAsyncioTestCase):
             [button.callback_data for row in kb.inline_keyboard[:2] for button in row],
             ["devtier_2", "devtier_5", "devtier_10"],
         )
-        self.assertEqual(
-            _tariff_intro(10, renewal=True),
-            "<b>Продление подписки</b>\n\n"
-            "10 устройств — для вас и ваших близких.\n\n"
-            "Выберите срок подписки. Чем дольше срок, тем ниже стоимость месяца.\n"
-            "Полная сумма указана в каждом тарифе.",
-        )
+        intro = _tariff_intro(10, renewal=True)
+        self.assertIn("<b>Устройства:</b> выбрано до 10 устройств", intro)
+        self.assertIn("<b>Срок:</b>", intro)
+        self.assertIn("3+1 мес.", intro)
+        self.assertIn("Полная сумма указана в каждом тарифе.", intro)
+
 
     def test_checkout_uses_bundles_and_discloses_future_charge(self):
         from handlers.buy import _checkout_confirmation_text

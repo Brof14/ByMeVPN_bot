@@ -76,13 +76,15 @@ def _promo_purchase_keyboard() -> InlineKeyboardMarkup:
 def _tariff_intro(devices: int, *, renewal: bool = False, promo_binding: int | None = None) -> str:
     """Consistent purchase/renewal copy, with current selection as context."""
     devices = validate_device_limit(devices)
-    device_word = "устройства" if devices == 2 else "устройств"
+    device_word = "устройств"
     audience = "для вас" if devices == 2 else "для вас и ваших близких"
     title = "Продление подписки" if renewal else "Тарифы ByMeVPN"
     text = (
         f"<b>{title}</b>\n\n"
-        f"{devices} {device_word} — {audience}.\n\n"
-        "Выберите срок подписки. Чем дольше срок, тем ниже стоимость месяца.\n"
+        f"<b>Устройства:</b> выбрано до {devices} {device_word} — {audience}.\n"
+        "Измените количество кнопкой выше тарифов.\n\n"
+        "<b>Срок:</b> выберите тариф ниже. Чем дольше срок, тем ниже стоимость месяца.\n"
+        "Для баланса срока и первоначальной суммы рассмотрите 3+1 мес.\n"
         "Полная сумма указана в каждом тарифе."
     )
     if promo_binding in (1, 3, 6, 12):
@@ -1109,6 +1111,27 @@ async def _activate_promo_code(bot: Bot, target, state: FSMContext, code: str) -
     else:
         discount_text, promo_discount = str(discount_value), 0
 
+    current = await state.get_data()
+    selected_months = current.get("months")
+    preview = ""
+    if selected_months in (1, 3, 6, 12):
+        months = int(selected_months)
+        binding = promo.get("tariff_binding")
+        if binding is None or int(binding) == months:
+            devices = validate_device_limit(current.get("devices", DEFAULT_DEVICE_LIMIT))
+            price, period_days = get_price_for_months(months, devices)
+            if promo_type == "percent":
+                price = round(price * (100 - discount_value) / 100)
+            elif promo_type == "fixed_rub":
+                price = max(0, price - discount_value)
+            elif promo_type == "free_days":
+                period_days += int(discount_value)
+            preview = (
+                f"\nДля выбранного срока: <b>{price} ₽</b>, "
+                f"<b>{period_days} дней</b>, до {devices} устройств.\n"
+            )
+        else:
+            preview = "\nПромокод действует для другого срока: выберите подходящий тариф.\n"
     await state.update_data(promo_info=promo, promo_code=code, promo_discount=promo_discount)
     await state.set_state(None)
     logger.info("Promo activated for user %s (type=%s)", user_id, promo_type)
@@ -1116,7 +1139,8 @@ async def _activate_promo_code(bot: Bot, target, state: FSMContext, code: str) -
         bot, target,
         f"<b>Промокод применён</b>\n\n"
         f"Бонус: <b>{discount_text}</b>\n"
-        "Он учтётся при следующей покупке. Выберите тариф.",
+        f"{preview}"
+        "Цена и срок пересчитаются при выборе тарифа.",
         _promo_purchase_keyboard(),
         photo=PROMO_CODE,
     )
@@ -1144,6 +1168,9 @@ async def cmd_promo(message: Message, state: FSMContext):
             await send_with_photo(
                 message.bot, message,
                 "<b>Промокод</b>\n\nОтправьте код следующим сообщением.",
+                InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="← К тарифам", callback_data="buy_vpn"),
+                ]]),
                 photo=PROMO_CODE,
             )
             return

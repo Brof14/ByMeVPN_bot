@@ -89,11 +89,26 @@ async def cb_partner_referrals_list(callback: CallbackQuery, bot: Bot):
             f"Всего приглашено: <b>{total}</b>",
             f"Страница {page + 1} из {pages}",
         ]
-        for index, user in enumerate(referred_users[page * page_size:(page + 1) * page_size], page * page_size + 1):
+        for index, user in enumerate(
+            referred_users[page * page_size:(page + 1) * page_size],
+            page * page_size + 1,
+        ):
             days = max(0, int(user.get("bonus_days_awarded") or 0))
+            signup_status = (
+                "Регистрация: <b>+15 дней начислены</b>"
+                if user.get("signup_bonus_awarded")
+                else "Регистрация учтена · начисление проверяется"
+            )
+            payment_status = (
+                "Бонус за первую оплату начислен"
+                if user.get("has_paid")
+                else "Бонус за первую оплату ожидается"
+            )
             lines.append(
-                f"\n{index}. {format_timestamp(user['registration_date'])[:10]}"
-                f"\nНачислено: <b>+{days} дней</b>"
+                f"\nПриглашение №{index} · {format_timestamp(user['registration_date'])[:10]}"
+                f"\n{signup_status}"
+                f"\n{payment_status}"
+                f"\nВсего: <b>+{days} дней</b>"
             )
         text = "\n".join(lines)
     rows = []

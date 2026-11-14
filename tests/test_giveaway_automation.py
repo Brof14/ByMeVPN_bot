@@ -52,6 +52,62 @@ class TestGiveawayAutomation(unittest.IsolatedAsyncioTestCase):
             await run_giveaway_automation(bot)
         self.assertTrue(await database.has_referral_event(701, 702, "registration_bonus"))
 
+    async def test_reserved_channel_days_are_retried_once_after_lease_timeout(self):
+        from giveaway_automation import process_pending_channel_bonuses
+        await database.ensure_user(861)
+        self.assertTrue(await database.reserve_channel_subscription_bonus(861))
+        db = await database.get_db()
+        await db.execute(
+            "UPDATE channel_subscription_bonus_leases SET expires_at=? WHERE user_id=?",
+            (int(time.time()) - 1, 861),
+        )
+        await db.commit()
+        bot = SimpleNamespace(send_message=AsyncMock())
+        with patch("subscription.deliver_key", new=AsyncMock(return_value=True)) as grant:
+            self.assertEqual(await process_pending_channel_bonuses(bot), 1)
+            self.assertEqual(await process_pending_channel_bonuses(bot), 0)
+        grant.assert_awaited_once()
+        self.assertEqual(grant.await_args.kwargs["payload"], "channel_bonus_861")
+        self.assertEqual(
+            await database.get_channel_subscription_bonus_status(861), "awarded",
+        )
+
+    async def test_uncertain_channel_reward_is_retryable_not_duplicated(self):
+        from giveaway_automation import process_pending_channel_bonuses
+        await database.ensure_user(862)
+        self.assertTrue(await database.reserve_channel_subscription_bonus(862))
+        db = await database.get_db()
+        await db.execute(
+            "UPDATE channel_subscription_bonus_leases SET expires_at=? WHERE user_id=?",
+            (int(time.time()) - 1, 862),
+        )
+        await db.commit()
+        bot = SimpleNamespace(send_message=AsyncMock())
+        with patch(
+            "subscription.deliver_key",
+            new=AsyncMock(side_effect=[False, True]),
+        ) as grant:
+            self.assertEqual(await process_pending_channel_bonuses(bot), 0)
+            self.assertEqual(
+                await database.get_channel_subscription_bonus_status(862),
+                "reserved",
+            )
+            # A failure keeps the lease, so a crash or fast scheduler cannot
+            # blindly reissue the bonus until the next safe retry window.
+            self.assertEqual(await process_pending_channel_bonuses(bot), 0)
+            await db.execute(
+                "UPDATE channel_subscription_bonus_leases SET expires_at=? WHERE user_id=?",
+                (int(time.time()) - 1, 862),
+            )
+            await db.commit()
+            self.assertEqual(await process_pending_channel_bonuses(bot), 1)
+        self.assertEqual(grant.await_count, 2)
+        self.assertEqual(
+            await database.get_channel_subscription_bonus_status(862),
+            "awarded",
+        )
+
+
     async def test_verified_ad_reward_is_retried_automatically_after_failure(self):
         from handlers.ad_program import process_pending_ad_rewards
         await database.ensure_user(801)
@@ -140,6 +196,41 @@ class TestGiveawayAutomation(unittest.IsolatedAsyncioTestCase):
         self.assertIn("пригласите хотя бы одного нового пользователя", bot.send_message.await_args.args[1])
         self.assertIn("В зачёт попадёт тот, кто впервые запустит бота по вашей ссылке", bot.send_message.await_args.args[1])
         self.assertIn("3 победителя получат по <b>+30 дней VPN</b>", bot.send_message.await_args.args[1])
+
+    async def test_promotion_skips_active_paying_customers_without_referral_interest(self):
+        # Already paying users without recent referral activity should not
+        # receive unsolicited monthly promotional announcements.
+        now = int(time.time())
+        for uid in (591, 592, 593, 594):
+            await database.ensure_user(uid)
+        for uid in (591, 592, 593):
+            await database.add_key(
+                uid, f"https://vpn.example/sub/{uid}", str(uid),
+                f"00000000-0000-4000-8000-{uid:012d}", 30, 2,
+                expiry=now + 30 * 86400,
+            )
+        db = await database.get_db()
+        for uid in (591, 593):
+            await db.execute(
+                "INSERT INTO payments(user_id,amount,currency,method,days,created,status)"
+                " VALUES(?,?,?,?,?,?,?)",
+                (uid, 89, "RUB", "yookassa", 30, now, "success"),
+            )
+        await db.commit()
+        await database.set_referrer(5931, 593)  # opted into referrals recently
+
+        giveaway_id = await database.create_giveaway(
+            title="Тест уведомлений", description="targeted", prize_days=30,
+            winners_count=3, end_date=now + 86400,
+        )
+        await database.create_giveaway_notification_snapshot(giveaway_id)
+        pending = await database.get_pending_giveaway_notifications(giveaway_id)
+        self.assertNotIn(591, pending)
+        self.assertIn(592, pending)  # active trial without a paid subscription
+        self.assertIn(593, pending)  # already participating through referrals
+        self.assertIn(594, pending)  # no active VPN
+        self.assertFalse(await database.claim_giveaway_notification(giveaway_id, 591))
+
 
     async def test_old_monthly_campaign_is_updated_without_resending_to_users(self):
         from giveaway_automation import _month_period, ensure_monthly_giveaway
