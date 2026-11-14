@@ -181,6 +181,7 @@ def tariff_selection_kb(
             label += f" · −{discount_percent}%"
         kb.row(InlineKeyboardButton(text=label, callback_data=f"tariff_{months}_{devices}"))
 
+    kb.row(InlineKeyboardButton(text="Есть промокод?", callback_data="promo_enter"))
     kb.row(InlineKeyboardButton(text="← Назад", callback_data="back_to_menu"))
     return kb.as_markup()
 
@@ -188,8 +189,9 @@ def tariff_selection_kb(
 def payment_kb(
     price_rub: int, days: int, devices: int = DEFAULT_DEVICE_LIMIT,
     yookassa_url: str = "",
+    autorenew_enabled: bool = True,
 ) -> InlineKeyboardMarkup:
-    """Stars = rubles (1:1, intentional — covers Telegram commission)."""
+    """Show provider choices and the real YooKassa recurring option."""
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(
         text=f"Telegram Stars · {price_rub} зв.",
@@ -203,6 +205,11 @@ def payment_kb(
         text=f"CryptoBot · {price_rub} ₽",
         callback_data="pay_crypto",
     ))
+    kb.row(InlineKeyboardButton(
+        text=f"Автопродление ЮKassa: {'включено' if autorenew_enabled else 'выключено'} · изменить",
+        callback_data="checkout_autorenew_toggle",
+    ))
+    kb.row(InlineKeyboardButton(text="Есть промокод?", callback_data="promo_enter"))
     kb.row(InlineKeyboardButton(text="← Назад", callback_data=f"devtier_{devices}"))
     return kb.as_markup()
 
