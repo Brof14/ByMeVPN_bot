@@ -386,7 +386,15 @@ async def _send_main_menu(
         # Direct connection only when there is exactly one active key.
         # With multiple active subscriptions, let the customer choose.
         if len(active_keys) == 1:
-            kb = main_menu_active(int(active_keys[0]["id"]), str(active_keys[0].get("key") or ""), user_id=user_id)
+            kb = main_menu_active(
+                int(active_keys[0]["id"]),
+                str(active_keys[0].get("key") or ""),
+                user_id=user_id,
+                remaining_days=max(
+                    1,
+                    (int(active_keys[0]["expiry"]) - int(time.time()) + 86399) // 86400,
+                ),
+            )
         elif not active_keys and _panel_client_is_active(panel_client):
             # Keep the home screen usable if the VPN panel is authoritative but
             # SQLite has not yet imported the entitlement.
