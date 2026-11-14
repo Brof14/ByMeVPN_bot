@@ -947,18 +947,52 @@ async def cb_free_vpn(callback: CallbackQuery, bot: Bot):
     except Exception:
         logger.exception("Could not read channel reward state for user %d", callback.from_user.id)
         channel_status = None
-    reward_rows = (
-        [[InlineKeyboardButton(text="+10 дней уже начислены · подписка", callback_data="my_keys")]]
-        if channel_status == "awarded" else
-        [[InlineKeyboardButton(text="Подписаться на канал · +10 дней", url=CHANNEL_BONUS_URL)],
-         [InlineKeyboardButton(text="Проверить подписку · получить +10 дней", callback_data="channel_bonus_check", style="success")]]
-    )
+    if channel_status == "awarded":
+        reward_rows = [[
+            InlineKeyboardButton(
+                text="+10 дней начислены · моя подписка", callback_data="my_keys",
+            ),
+        ]]
+        try:
+            current_keys = await get_user_keys(callback.from_user.id)
+            latest = max(current_keys, key=lambda k: int(k.get("expiry") or 0)) if current_keys else None
+            if latest and int(latest.get("expiry") or 0) > int(time.time()):
+                from constants import format_timestamp
+                channel_note = (
+                    "Бонус за подписку на канал начислен. "
+                    f"Доступ действует до <b>{format_timestamp(int(latest['expiry']))[:10]}</b>.\n\n"
+                )
+            else:
+                channel_note = "Бонус за канал начислен.\n\n"
+        except Exception:
+            channel_note = "Бонус за канал начислен.\n\n"
+    elif channel_status == "reserved":
+        reward_rows = [[
+            InlineKeyboardButton(
+                text="Проверить начисление +10 дней", callback_data="channel_bonus_check",
+            ),
+        ]]
+        channel_note = (
+            "Бонус за канал проверяется. Повторную покупку оформлять не нужно.\n\n"
+        )
+    else:
+        reward_rows = [
+            [InlineKeyboardButton(
+                text="Подписаться на канал · +10 дней", url=CHANNEL_BONUS_URL,
+            )],
+            [InlineKeyboardButton(
+                text="Проверить подписку · получить +10 дней",
+                callback_data="channel_bonus_check", style="success",
+            )],
+        ]
+        channel_note = ""
     text = (
-        "<b>Больше доступа — без оплаты.</b>\n\n"
-        "Получайте дни за приглашения друзей, подписку на канал или размещение "
-        "рекламы в своём Telegram-канале. За канал начисляется +10 дней один раз.\n\n"
-        + ("Бонус за канал уже получен.\n\n" if channel_status == "awarded" else "")
-        + "Выберите удобный способ:"
+        "<b>Бесплатные дни</b>\n\n"
+        "<b>+10 дней</b> — за подписку на канал (один раз).\n"
+        "<b>До +45 дней</b> — за приглашение друга и его первую оплату.\n"
+        "<b>VPN за публикацию</b> — за размещение поста по условиям программы.\n\n"
+        + channel_note
+        + "Выберите способ:"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         *reward_rows,
@@ -1016,6 +1050,7 @@ async def cb_channel_bonus_check(callback: CallbackQuery, bot: Bot):
             "Бонус уже проверяется. Повторите попытку позже; не нужно оформлять новый доступ."
         )
         await safe_answer(callback, message, alert=True)
+        await cb_free_vpn(callback, bot)
         return
 
     try:
@@ -1036,7 +1071,8 @@ async def cb_channel_bonus_check(callback: CallbackQuery, bot: Bot):
 
     if not delivered:
         # Keep the reservation after an uncertain result to prevent duplicate grants.
-        await safe_answer(callback, "Запрос принят, но выдачу нужно проверить. Напишите в поддержку, если бонус не появился.", alert=True)
+        await safe_answer(callback, "Запрос принят, выдача проверяется. Оплачивать доступ повторно не нужно.", alert=True)
+        await cb_free_vpn(callback, bot)
         return
 
     try:
@@ -1052,6 +1088,7 @@ async def cb_channel_bonus_check(callback: CallbackQuery, bot: Bot):
             "Не нажимайте повторно; при необходимости обратитесь в поддержку.",
             alert=True,
         )
+        await cb_free_vpn(callback, bot)
         return
     try:
         await log_analytics_event(user_id, "channel_bonus_awarded", source="telegram_channel")
