@@ -123,7 +123,7 @@ class CustomerUxFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         page = render_connection_choice_page("https://panel.example/sub/test")
         self.assertIn("external.href=download.href", page)
         self.assertNotIn('const apk="/app"', page)
-        self.assertIn("Если приложение не установлено", page)
+        self.assertIn("Приложение не установлено?", page)
 
     async def test_ad_retention_due_shows_final_review_instead_of_stale_date(self):
         from handlers.ad_program import cb_ad_my_applications
