@@ -53,6 +53,36 @@ class DeletedAccountTelegramGateTests(unittest.IsolatedAsyncioTestCase):
         handler.assert_awaited_once()
         sync.assert_awaited_once_with(123, "old_user")
 
+    async def test_explicit_start_reactivates_admin_deleted_user(self):
+        event = self.event()
+        event.text = "/start"
+        handler = AsyncMock(return_value="started")
+        with (
+            patch("database.is_account_tombstoned", new=AsyncMock(return_value=True)),
+            patch("database.reactivate_admin_deleted_account", new=AsyncMock(return_value=True)) as reactivate,
+            patch("database.ensure_user", new=AsyncMock()) as sync,
+        ):
+            result = await UserProfileMiddleware()(handler, event, {})
+        self.assertEqual(result, "started")
+        reactivate.assert_awaited_once_with(123, "old_user")
+        sync.assert_awaited_once_with(123, "old_user")
+        handler.assert_awaited_once()
+
+    async def test_non_start_update_cannot_reactivate_admin_deleted_user(self):
+        event = self.event()
+        event.text = "привет"
+        handler = AsyncMock(return_value="dispatched")
+        with (
+            patch("database.is_account_tombstoned", new=AsyncMock(return_value=True)),
+            patch("database.reactivate_admin_deleted_account", new=AsyncMock()) as reactivate,
+            patch("database.ensure_user", new=AsyncMock()) as sync,
+        ):
+            result = await UserProfileMiddleware()(handler, event, {})
+        self.assertIsNone(result)
+        reactivate.assert_not_awaited()
+        sync.assert_not_awaited()
+        handler.assert_not_awaited()
+
     async def test_unavailable_account_database_fails_closed(self):
         event = self.event()
         handler = AsyncMock(return_value="dispatched")
