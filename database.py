@@ -2021,6 +2021,69 @@ async def is_account_tombstoned(user_id: int) -> bool:
     return await cursor.fetchone() is not None
 
 
+async def reactivate_admin_deleted_account(
+    user_id: int, username: Optional[str] = None,
+) -> bool:
+    """Start a clean account after an administrator removed the old one.
+
+    Self-service deletion tombstones remain final. For administrator deletions,
+    only an explicit Telegram /start may consume the tombstone and recreate the
+    minimal user row; the operation is atomic so stale callbacks cannot do it.
+    """
+    if user_id <= 0:
+        return False
+    async with _db_semaphore:
+        async with aiosqlite.connect(DB_FILE) as db:
+            await db.execute("PRAGMA busy_timeout=30000")
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    "SELECT source FROM account_tombstones WHERE user_id=?",
+                    (int(user_id),),
+                )
+                row = await cursor.fetchone()
+                if not row:
+                    # Another /start may have completed the same transition.
+                    cursor = await db.execute(
+                        "SELECT 1 FROM users WHERE user_id=? LIMIT 1",
+                        (int(user_id),),
+                    )
+                    already_reactivated = await cursor.fetchone() is not None
+                    await db.rollback()
+                    return already_reactivated
+                if row[0] != "admin":
+                    await db.rollback()
+                    return False
+
+                cursor = await db.execute(
+                    "SELECT 1 FROM users WHERE user_id=? LIMIT 1",
+                    (int(user_id),),
+                )
+                if await cursor.fetchone():
+                    # A partially removed account must be reconciled instead of
+                    # silently being presented as a new registration.
+                    await db.rollback()
+                    return False
+
+                cursor = await db.execute(
+                    "DELETE FROM account_tombstones WHERE user_id=? AND source='admin'",
+                    (int(user_id),),
+                )
+                if cursor.rowcount != 1:
+                    await db.rollback()
+                    return False
+                await db.execute(
+                    "INSERT INTO users(user_id, username) VALUES(?, ?)",
+                    (int(user_id), username),
+                )
+                await db.commit()
+                logger.info("Administrator-deleted account restarted as new user %d", user_id)
+                return True
+            except Exception:
+                await db.rollback()
+                raise
+
+
 async def try_acquire_delivery_lease(
     user_id: int, token: str, ttl_seconds: int = 180,
 ) -> bool:

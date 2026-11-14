@@ -67,28 +67,40 @@ class UserProfileMiddleware(BaseMiddleware):
         user = getattr(event, "from_user", None)
         if user is not None:
             try:
-                from database import ensure_user, is_account_tombstoned
-                # A removed user must not enter purchase/trial/referral flows:
-                # the deleted identity and VPN access cannot be re-created by
-                # a late Telegram callback or a new invoice.
+                from database import (
+                    ensure_user,
+                    is_account_tombstoned,
+                    reactivate_admin_deleted_account,
+                )
+                # Deleted users cannot re-enter through stale callbacks or
+                # payment events; an explicit /start may reset admin-deleted
+                # accounts after their old access has been removed.
                 if await is_account_tombstoned(user.id):
-                    # A Stars successful-payment update can arrive after
-                    # account erasure. Allow only this financial event through
-                    # so the payment handler can record it for manual refund.
-                    if getattr(event, "successful_payment", None) is not None:
-                        return await handler(event, data)
-                    from aiogram.types import CallbackQuery
-                    if isinstance(event, CallbackQuery):
-                        await event.answer(
-                            "Аккаунт удалён. Новые оплаты недоступны. Обратитесь в поддержку.",
-                            show_alert=True,
-                        )
-                    else:
-                        await event.answer(
-                            "Аккаунт удалён. Повторная активация через бота недоступна. "
-                            "Если нужна помощь, обратитесь в @ByMeVPNSupportBot."
-                        )
-                    return None
+                    text = getattr(event, "text", "")
+                    command = text.split(maxsplit=1)[0].split("@", 1)[0] if text else ""
+                    reactivated = (
+                        command == "/start"
+                        and await reactivate_admin_deleted_account(user.id, user.username)
+                    )
+                    if not reactivated:
+                        # A Stars successful-payment update can arrive after
+                        # account erasure. Allow only this financial event through
+                        # so the payment handler can record it for manual refund.
+                        if getattr(event, "successful_payment", None) is not None:
+                            return await handler(event, data)
+                        from aiogram.types import CallbackQuery
+                        if isinstance(event, CallbackQuery):
+                            await event.answer(
+                                "Аккаунт удалён. Новые оплаты недоступны. Обратитесь в поддержку.",
+                                show_alert=True,
+                            )
+                        else:
+                            await event.answer(
+                                "Аккаунт удалён. Повторная активация через бота недоступна. "
+                                "Если нужна помощь, обратитесь в @ByMeVPNSupportBot."
+                            )
+                        return None
+                    logger.info("Admin-deleted account restarted as a fresh Telegram user %s", user.id)
                 await ensure_user(user.id, user.username)
             except Exception:
                 logger.exception("Could not check Telegram account state for user %s", user.id)
