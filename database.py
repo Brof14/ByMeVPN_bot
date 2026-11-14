@@ -158,6 +158,26 @@ CREATE TABLE IF NOT EXISTS known_hwid_devices (
 CREATE INDEX IF NOT EXISTS idx_known_hwid_devices_pending
     ON known_hwid_devices(notified_at, user_id);
 
+-- One-time device upgrades paid through Telegram Stars.
+CREATE TABLE IF NOT EXISTS device_upgrade_orders (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    key_id INTEGER NOT NULL,
+    old_devices INTEGER NOT NULL,
+    new_devices INTEGER NOT NULL,
+    key_expiry INTEGER NOT NULL,
+    amount_stars INTEGER NOT NULL,
+    auto_renew_id INTEGER NOT NULL DEFAULT 0,
+    prior_auto_renew_amount INTEGER NOT NULL DEFAULT 0,
+    next_auto_renew_amount INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending',
+    charge_id TEXT,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_device_upgrade_owner ON device_upgrade_orders(user_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_device_upgrade_charge
+    ON device_upgrade_orders(charge_id) WHERE charge_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS provisioning_intents (
     provider TEXT NOT NULL,
     provider_payment_id TEXT NOT NULL,
@@ -7462,3 +7482,155 @@ async def complete_free_promo_order(user_id: int, code: str) -> bool:
         )
         await db.commit()
         return updated.rowcount == 1
+
+
+# ---------------------------------------------------------------------------
+# Paid device tier upgrade orders: charge evidence must be durable and bound.
+# ---------------------------------------------------------------------------
+
+async def create_device_upgrade_order(
+    user_id: int, key_id: int, old_devices: int, new_devices: int,
+    key_expiry: int, amount_stars: int, *,
+    auto_renew_id: int = 0, prior_auto_renew_amount: int = 0,
+    next_auto_renew_amount: int = 0,
+) -> str | None:
+    """Reserve a single short-lived checkout per user across retries."""
+    if (
+        old_devices not in (2, 5) or new_devices not in (5, 10)
+        or new_devices <= old_devices or amount_stars <= 0
+    ):
+        raise ValueError("invalid device upgrade")
+    import secrets
+    now = int(time.time())
+    db = await get_db()
+    async with _db_semaphore:
+        # Prior invoices expire before another can be issued. A charge already
+        # accepted by Telegram remains recoverable via its durable order row.
+        await db.execute(
+            "UPDATE device_upgrade_orders SET status='expired' "
+            "WHERE user_id=? AND status='pending' AND created_at<?",
+            (user_id, now - 900),
+        )
+        row = await (await db.execute(
+            "SELECT id FROM device_upgrade_orders "
+            "WHERE user_id=? AND status='pending' AND created_at>=? LIMIT 1",
+            (user_id, now - 900),
+        )).fetchone()
+        if row:
+            await db.commit()
+            return None
+        order_id = secrets.token_urlsafe(18)
+        await db.execute(
+            "INSERT INTO device_upgrade_orders "
+            "(id,user_id,key_id,old_devices,new_devices,key_expiry,amount_stars,"
+            "auto_renew_id,prior_auto_renew_amount,next_auto_renew_amount,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                order_id, user_id, key_id, old_devices, new_devices,
+                key_expiry, amount_stars, auto_renew_id,
+                prior_auto_renew_amount, next_auto_renew_amount, now,
+            ),
+        )
+        await db.commit()
+        return order_id
+
+
+async def get_device_upgrade_order(order_id: str) -> dict | None:
+    if not order_id or len(order_id) > 64:
+        return None
+    db = await get_db()
+    row = await (await db.execute(
+        "SELECT id,user_id,key_id,old_devices,new_devices,key_expiry,"
+        "amount_stars,auto_renew_id,prior_auto_renew_amount,"
+        "next_auto_renew_amount,status,charge_id,created_at "
+        "FROM device_upgrade_orders WHERE id=?",
+        (order_id,),
+    )).fetchone()
+    if not row:
+        return None
+    fields = (
+        "id", "user_id", "key_id", "old_devices", "new_devices",
+        "key_expiry", "amount_stars", "auto_renew_id",
+        "prior_auto_renew_amount", "next_auto_renew_amount", "status",
+        "charge_id", "created_at",
+    )
+    return dict(zip(fields, row))
+
+
+async def expire_device_upgrade_order(order_id: str) -> None:
+    db = await get_db()
+    async with _db_semaphore:
+        await db.execute(
+            "UPDATE device_upgrade_orders SET status='expired' "
+            "WHERE id=? AND status='pending'",
+            (order_id,),
+        )
+        await db.commit()
+
+
+async def finalize_device_upgrade_order(order: dict, charge_id: str) -> bool:
+    """Commit DB/device and the agreed future renewal quote atomically.
+
+    Call only after an authoritative 3x-ui read confirms the new HWID cap.
+    """
+    db = await get_db()
+    async with _db_semaphore:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            item = await (await db.execute(
+                "SELECT id,limit_ip,expiry,user_id FROM keys WHERE id=?",
+                (order["key_id"],),
+            )).fetchone()
+            if (
+                item is None or int(item[3]) != int(order["user_id"])
+                or int(item[2]) != int(order["key_expiry"])
+                or int(item[1]) not in (int(order["old_devices"]), int(order["new_devices"]))
+            ):
+                raise RuntimeError("local subscription changed during device upgrade")
+            current = await (await db.execute(
+                "SELECT status,charge_id FROM device_upgrade_orders WHERE id=?",
+                (order["id"],),
+            )).fetchone()
+            if current is None:
+                raise RuntimeError("device upgrade order disappeared")
+            if current[0] == "fulfilled" and current[1] == charge_id:
+                await db.commit()
+                return True
+            if current[0] != "pending" or (current[1] not in (None, charge_id)):
+                raise RuntimeError("device upgrade order is not pending")
+            if int(order["auto_renew_id"]):
+                cur = await db.execute(
+                    "UPDATE auto_renew_subscriptions "
+                    "SET devices=?,amount_rub=?,updated_at=? "
+                    "WHERE id=? AND user_id=? AND key_id=? AND status='active' "
+                    "AND devices=? AND amount_rub=?",
+                    (
+                        order["new_devices"], order["next_auto_renew_amount"],
+                        int(time.time()), order["auto_renew_id"], order["user_id"],
+                        order["key_id"], order["old_devices"],
+                        order["prior_auto_renew_amount"],
+                    ),
+                )
+                if cur.rowcount != 1:
+                    raise RuntimeError("automatic renewal quote changed after invoice")
+            cur = await db.execute(
+                "UPDATE keys SET limit_ip=? WHERE id=? AND user_id=? AND expiry=?",
+                (
+                    order["new_devices"], order["key_id"],
+                    order["user_id"], order["key_expiry"],
+                ),
+            )
+            if cur.rowcount != 1:
+                raise RuntimeError("local key update was not confirmed")
+            await db.execute(
+                "UPDATE device_upgrade_orders SET status='fulfilled',charge_id=? "
+                "WHERE id=? AND status='pending'",
+                (charge_id, order["id"]),
+            )
+            await db.commit()
+            invalidate_user_cache(order["user_id"])
+            invalidate_subscription_cache(order["user_id"])
+            return True
+        except Exception:
+            await db.rollback()
+            raise
