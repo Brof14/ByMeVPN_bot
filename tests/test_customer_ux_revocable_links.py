@@ -62,6 +62,65 @@ class PermanentLinkTests(unittest.TestCase):
         self.assertNotIn(rotated["key"], revoked.text)
         self.assertIn("Ссылка недоступна", revoked.text)
 
+    def test_server_renewal_overrides_stale_local_expiry_only_for_same_key(self):
+        current = "https://vpn.example/sub/same-credential"
+        expiry_local = int(time.time()) - 60
+        expiry_panel = int(time.time()) + 86400
+        link = build_connect_page_url(current, user_id=101, key_id=77)
+        params = {key: values[0] for key, values in parse_qs(urlsplit(link).query).items()}
+        local = [{"id": 77, "user_id": 101, "key": current, "expiry": expiry_local}]
+        panel = {
+            "subscription_url": current, "expiry_time": expiry_panel * 1000, "enable": True,
+        }
+        with (
+            patch("database.get_user_keys", new=AsyncMock(return_value=local)),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value=panel)),
+        ):
+            restored = self.client.get("/connect", params=params)
+        self.assertEqual(restored.status_code, 200)
+        self.assertIn(current, restored.text)
+
+        with (
+            patch("database.get_user_keys", new=AsyncMock(return_value=local)),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value={
+                **panel, "subscription_url": "https://vpn.example/sub/new-credential",
+            })),
+        ):
+            revoked = self.client.get("/connect", params=params)
+        self.assertEqual(revoked.status_code, 400)
+        self.assertIn("Подписка закончилась", revoked.text)
+        self.assertNotIn("same-credential", revoked.text)
+
+    def test_panel_only_handoff_survives_stale_expired_database_row(self):
+        panel_url = "https://vpn.example/sub/server-only"
+        expiry = int(time.time()) + 86400
+        url = build_connect_page_url(panel_url, user_id=101)
+        params = {key: values[0] for key, values in parse_qs(urlsplit(url).query).items()}
+        with (
+            patch("database.get_user_keys", new=AsyncMock(return_value=[{
+                "id": 23, "user_id": 101,
+                "key": "https://vpn.example/sub/stale",
+                "expiry": int(time.time()) - 86400,
+            }])),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value={
+                "subscription_url": panel_url,
+                "expiry_time": expiry * 1000, "enable": True,
+            })),
+        ):
+            page = self.client.get("/connect", params=params)
+        self.assertEqual(page.status_code, 200)
+        self.assertIn(panel_url, page.text)
+
+    def test_malformed_signature_rejects_before_database_and_panel_reads(self):
+        with (
+            patch("database.get_user_keys", new=AsyncMock()) as db,
+            patch("xui_client.get_xui_client_details", new=AsyncMock()) as panel,
+        ):
+            page = self.client.get("/connect", params={"u": 101, "k": 1, "s": "invalid"})
+        self.assertEqual(page.status_code, 400)
+        db.assert_not_awaited()
+        panel.assert_not_awaited()
+
     def test_server_only_access_is_still_verified(self):
         import webhook
         from xui_client import get_xui_client_details
