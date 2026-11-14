@@ -936,6 +936,11 @@ async def cb_winback_reason(callback: CallbackQuery):
 @router.callback_query(F.data == "free_vpn")
 async def cb_free_vpn(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
+    await _render_free_vpn(callback, bot)
+
+
+async def _render_free_vpn(callback: CallbackQuery, bot: Bot):
+    """Render a refreshed reward screen without answering a callback twice."""
     try:
         from database import log_analytics_event
         await log_analytics_event(callback.from_user.id, "channel_bonus_offered", source="free_days")
@@ -1050,7 +1055,7 @@ async def cb_channel_bonus_check(callback: CallbackQuery, bot: Bot):
             "Бонус уже проверяется. Повторите попытку позже; не нужно оформлять новый доступ."
         )
         await safe_answer(callback, message, alert=True)
-        await cb_free_vpn(callback, bot)
+        await _render_free_vpn(callback, bot)
         return
 
     try:
@@ -1072,7 +1077,7 @@ async def cb_channel_bonus_check(callback: CallbackQuery, bot: Bot):
     if not delivered:
         # Keep the reservation after an uncertain result to prevent duplicate grants.
         await safe_answer(callback, "Запрос принят, выдача проверяется. Оплачивать доступ повторно не нужно.", alert=True)
-        await cb_free_vpn(callback, bot)
+        await _render_free_vpn(callback, bot)
         return
 
     try:
@@ -1088,11 +1093,11 @@ async def cb_channel_bonus_check(callback: CallbackQuery, bot: Bot):
             "Не нажимайте повторно; при необходимости обратитесь в поддержку.",
             alert=True,
         )
-        await cb_free_vpn(callback, bot)
+        await _render_free_vpn(callback, bot)
         return
     try:
         await log_analytics_event(user_id, "channel_bonus_awarded", source="telegram_channel")
     except Exception:
         logger.warning("Could not record channel bonus analytics for user %d", user_id)
     await safe_answer(callback, "Готово: начислено +10 дней.")
-    await cb_free_vpn(callback, bot)
+    await _render_free_vpn(callback, bot)
