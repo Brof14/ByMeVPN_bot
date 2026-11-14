@@ -316,7 +316,10 @@ def key_detail_kb(
     return kb.as_markup()
 
 
-def key_devices_kb(key_id: int, devices: list[dict] | None = None, page: int = 0) -> InlineKeyboardMarkup:
+def key_devices_kb(
+    key_id: int, devices: list[dict] | None = None, page: int = 0,
+    *, current_limit: int | None = None, active: bool = True,
+) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     devices = devices or []
     page_size = 10
@@ -339,7 +342,8 @@ def key_devices_kb(key_id: int, devices: list[dict] | None = None, page: int = 0
             row.append(InlineKeyboardButton(text="→", callback_data=f"key_devices:{key_id}:{page + 1}"))
         kb.row(*row)
     # Each visit to this screen loads fresh device data; no refresh button needed.
-    kb.row(InlineKeyboardButton(text="Увеличить лимит устройств", callback_data=f"device_upgrade:{key_id}"))
+    if active and (current_limit is None or 0 < current_limit < 10):
+        kb.row(InlineKeyboardButton(text="Увеличить лимит устройств", callback_data=f"device_upgrade:{key_id}"))
     kb.row(InlineKeyboardButton(text="← К подписке", callback_data=f"key_info:{key_id}"))
     return kb.as_markup()
 
