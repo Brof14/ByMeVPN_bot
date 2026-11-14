@@ -41,12 +41,12 @@ def main_menu_with_keys(trial_used: bool = False) -> InlineKeyboardMarkup:
 
 def main_menu_active(
     key_id: int, subscription_url: str = "", user_id: int | None = None,
-    *, remaining_days: int | None = None,
+    *, remaining_days: int | None = None, link_seed: str = "",
 ) -> InlineKeyboardMarkup:
     """Put the active subscriber's connection action first in the home menu."""
     kb = InlineKeyboardBuilder()
     connect_url = None
-    if subscription_url:
+    if subscription_url and link_seed:
         try:
             from app_links import build_connect_page_url
             connect_url = build_connect_page_url(subscription_url, user_id=user_id, key_id=key_id, link_seed=link_seed)
@@ -465,7 +465,7 @@ def after_key_kb(
     if subscription_url:
         try:
             from app_links import build_connect_page_url
-            connect_url = build_connect_page_url(subscription_url, user_id=user_id, key_id=key_id)
+            connect_url = build_connect_page_url(subscription_url, user_id=user_id, key_id=key_id, link_seed=link_seed)
         except (RuntimeError, ValueError):
             connect_url = None
     kb.row(InlineKeyboardButton(
