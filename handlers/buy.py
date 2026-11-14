@@ -60,7 +60,7 @@ async def _block_unresolved_access_payment(callback: CallbackQuery) -> bool:
         "<b>Предыдущая оплата проверяется</b>\n\nПовторно платить не нужно. Мы проверим выдачу доступа; по срочным вопросам напишите в поддержку.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="Поддержка", url=support_url())
+            InlineKeyboardButton(text="Поддержка", url=support_url("payment"))
         ]]),
     )
     return True
@@ -673,7 +673,7 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
                     text="Проверить платёж · поддержка",
-                    url="https://t.me/ByMeVPNSupportBot",
+                    url=support_url("payment"),
                 )],
                 [InlineKeyboardButton(text="Повторить оформление", callback_data=f"tariff_{months}_{devices}")],
                 [InlineKeyboardButton(text="Оплатить через Telegram Stars", callback_data="pay_stars", )],
