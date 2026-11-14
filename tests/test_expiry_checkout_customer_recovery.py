@@ -512,7 +512,7 @@ class PlatformGuideRegression(unittest.IsolatedAsyncioTestCase):
         with (patch("handlers.keys.get_key_by_id", new=AsyncMock(return_value=selected)),
               patch("app_links.build_connect_page_url", return_value="https://example.test/connect?ticket=safe") as builder):
             await _open_connect_page(callback, 41)
-        builder.assert_called_once_with("https://panel.example/sub/41", "Test")
+        builder.assert_called_once_with("https://panel.example/sub/41", "Test", user_id=123, key_id=41)
         callback.answer.assert_awaited_once_with(url="https://example.test/connect?ticket=safe")
 
 class PaymentProviderFailures(unittest.IsolatedAsyncioTestCase):
