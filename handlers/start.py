@@ -366,6 +366,23 @@ async def _send_main_menu(
                     )
             else:
                 text = "<b>Подписка активна</b>\n\nОткройте «Подписка», чтобы подключить устройство или посмотреть срок действия."
+        # Show a real saved renewal state, not an alarming "unknown" label.
+        if len(active_keys) == 1:
+            try:
+                from database import get_auto_renew_subscription
+                renewal = await get_auto_renew_subscription(
+                    user_id, int(active_keys[0]["id"]),
+                )
+                if renewal:
+                    renewal_state = (
+                        "включено"
+                        if renewal.get("status") == "active"
+                        and renewal.get("payment_method_id")
+                        else "выключено"
+                    )
+                    text += f"\nАвтопродление: <b>{renewal_state}</b>"
+            except Exception:
+                logger.debug("Could not load renewal status on the home screen")
         # Direct connection only when there is exactly one active key.
         # With multiple active subscriptions, let the customer choose.
         if len(active_keys) == 1:
