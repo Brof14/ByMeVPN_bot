@@ -20,6 +20,7 @@ import os
 import re
 import time
 from html import escape
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
 from aiogram import Bot, F, Router
@@ -92,14 +93,14 @@ STATUS_EMOJI = {
 }
 STATUS_TEXT = {
     "draft": "Черновик",
-    "channel_pending": "Ожидает проверки",
-    "waiting_for_post": "Ожидает пост",
-    "post_submitted": "Пост отправлен на проверку",
-    "active_30_days": "Пост отправлен на проверку",
+    "channel_pending": "Канал проверяется",
+    "waiting_for_post": "Канал проверен · ожидается публикация",
+    "post_submitted": "Проверяем опубликованный пост",
+    "active_30_days": "Проверяем опубликованный пост",
     "grant_pending": "Пост подтверждён, бонус начисляется",
     "approved": "Бонус начислен · пост нужно сохранить 30 дней",
     "rejected": "Отклонено",
-    "completed": "Проверка поста завершена",
+    "completed": "Проверка завершена · условия выполнены",
     "retention_issue": "Нужна ручная проверка поста",
 }
 
@@ -213,7 +214,7 @@ async def cb_ad_check_channel(callback: CallbackQuery, bot: Bot, state: FSMConte
             "Чтобы не создавать повторную, продолжите текущую или дождитесь проверки."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Продолжить заявку", callback_data="ad_my_applications")],
+            [InlineKeyboardButton(text="Посмотреть статус", callback_data="ad_my_applications")],
             [InlineKeyboardButton(text="← Назад", callback_data="ad_program")],
         ])
         await send_with_photo(bot, callback, text, kb)
@@ -366,7 +367,7 @@ async def _create_application_and_reply(
             "После проверки канала перешлите официальный пост из @ByMeVPN."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Продолжить заявку", callback_data="ad_my_applications")],
+            [InlineKeyboardButton(text="Посмотреть статус", callback_data="ad_my_applications")],
             [InlineKeyboardButton(text="← Назад", callback_data="ad_program")]
         ])
     else:
@@ -519,8 +520,6 @@ async def cb_ad_get_post(callback: CallbackQuery, bot: Bot):
         "После публикации отправьте ссылку на пересланное сообщение. "
         "Не удаляйте его 30 дней."
     )
-    if not post_url:
-        text += "\n\nПрямая ссылка на пост пока не задана. Откройте канал и найдите рекламную публикацию."
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="Открыть исходный пост" if post_url else "Открыть @ByMeVPN",
@@ -666,9 +665,10 @@ async def cb_ad_my_applications(callback: CallbackQuery, bot: Bot, state: FSMCon
                 status,
             ])
             if application["status"] == "approved" and application.get("verification_due_at"):
-                lines.append("Сохраните публикацию до " + time.strftime(
-                    "%d.%m.%Y", time.localtime(application["verification_due_at"]),
-                ))
+                retained_until = datetime.fromtimestamp(
+                    int(application["verification_due_at"]), timezone(timedelta(hours=3)),
+                ).strftime("%d.%m.%Y")
+                lines.append(f"Сохраните публикацию до <b>{retained_until}</b> (МСК).")
             if application["status"] == "rejected" and application.get("rejection_reason"):
                 lines.append("Причина: " + escape(str(application["rejection_reason"])))
             if application["status"] == "channel_pending":
@@ -677,6 +677,10 @@ async def cb_ad_my_applications(callback: CallbackQuery, bot: Bot, state: FSMCon
                 lines.append("Следующий шаг: перешлите официальный пост.")
             if application["status"] == "grant_pending":
                 lines.append("Бонус проверяется; повторная заявка не нужна.")
+            if application["status"] in {"post_submitted", "active_30_days"}:
+                lines.append("Пока ничего делать не нужно — проверяем публикацию.")
+            if application["status"] == "completed":
+                lines.append("Проверка завершена. Срок начисленного VPN сохраняется.")
         text = "\n".join(lines)
     rows = []
     for application in current:
@@ -748,7 +752,7 @@ async def cb_ad_cancel(callback: CallbackQuery, bot: Bot, state: FSMContext):
     if data.get("current_app_id") == app_id:
         await state.clear()
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Продолжить заявку", callback_data="ad_my_applications")],
+        [InlineKeyboardButton(text="К списку заявок", callback_data="ad_my_applications")],
         [InlineKeyboardButton(text="◀️ В раздел VPN за рекламу", callback_data="ad_program")],
     ])
     await send_with_photo(bot, callback, f"✅ Заявка #{app_id} удалена. Бонус за неё начисляться не будет.", kb)
