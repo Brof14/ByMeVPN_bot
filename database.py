@@ -4902,13 +4902,16 @@ async def get_referred_users_list(referrer_id: int) -> list[dict]:
                (SELECT COUNT(*) FROM keys WHERE user_id=r.referred_id AND expiry > ?) as active_keys,
                (SELECT COUNT(*) FROM referral_events WHERE referrer_id=? AND referred_id=r.referred_id AND event_type='payment_bonus') as payment_count,
                (SELECT COALESCE(SUM(days_awarded), 0) FROM referral_events 
-                WHERE referrer_id=? AND referred_id=r.referred_id) as bonus_days
+                WHERE referrer_id=? AND referred_id=r.referred_id) as bonus_days,
+               (SELECT COUNT(*) FROM referral_events
+                WHERE referrer_id=? AND referred_id=r.referred_id
+                AND event_type='registration_bonus') as signup_bonus_count
         FROM referrals r
         JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id
         WHERE r.referrer_id=?
         ORDER BY r.created DESC
         """,
-        (current_time, referrer_id, referrer_id, referrer_id)
+        (current_time, referrer_id, referrer_id, referrer_id, referrer_id)
     )
     
     rows = await cur.fetchall()
@@ -4919,6 +4922,7 @@ async def get_referred_users_list(referrer_id: int) -> list[dict]:
             "is_active": row[2] > 0,
             "has_paid": row[3] > 0,
             "bonus_days_awarded": row[4],
+            "signup_bonus_awarded": row[5] > 0,
         }
         for row in rows
     ]
