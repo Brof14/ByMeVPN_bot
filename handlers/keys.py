@@ -214,41 +214,51 @@ async def cb_key_info(callback: CallbackQuery, bot: Bot):
 
 async def _key_info_content(user_id: int, k: dict) -> tuple[str, object]:
     key_id = int(k["id"])
-
     now = int(time.time())
-    status = "Доступ активен" if k["expiry"] > now else "Доступ завершён"
+    active = int(k["expiry"]) > now
     subscription_url = k.get("key", "")
+    device_limit = int(k.get("limit_ip") or 0)
+    device_lines = [f"Лимит: <b>до {device_limit} устройств</b>"] if device_limit else []
 
-    devices_info = ""
     try:
-        # The subscription screen must remain usable when the panel is slow.
-        # Detailed device management can still fetch the complete list on demand.
+        # Fetch live count only as an enhancement; never hide the paid limit.
         device_state = await asyncio.wait_for(get_xui_devices(user_id), timeout=0.35)
     except asyncio.TimeoutError:
         device_state = None
         logger.info("Device count timed out for user %s", user_id)
     except Exception:
         device_state = None
-        logger.warning("Failed to get device count for user %s", user_id, exc_info=True)
+        logger.warning("Could not load live device count for %s", user_id, exc_info=True)
     if isinstance(device_state, dict):
         registered = len(device_state.get("devices") or [])
-        device_limit = int(device_state.get("limit_hwid") or 0)
-        devices_info = (
-            f"Устройства: <b>{registered} из {device_limit}</b>\n"
-            if device_limit else f"Устройств: <b>{registered}</b>\n"
-        )
+        server_limit = int(device_state.get("limit_hwid") or 0)
+        if server_limit:
+            device_lines = [f"Лимит: <b>до {server_limit} устройств</b>"]
+        device_lines.append(f"Зарегистрировано: <b>{registered}</b>")
 
     all_keys = await get_user_keys(user_id)
-    has_history = any(int(item.get("expiry") or 0) <= now and item.get("id") != k.get("id") for item in all_keys)
-    text = (
-        f"<b>Подписка</b>\n{status}\n\n"
-        f"Действует до: <b>{fmt_date(k['expiry'])}</b>\n"
-        f"{devices_info}"
+    has_history = any(
+        int(item.get("expiry") or 0) <= now and item.get("id") != key_id
+        for item in all_keys
     )
-
+    status = "Подписка активна" if active else "Срок подписки закончился"
+    remaining_line = ""
+    if active:
+        days = max(1, (int(k["expiry"]) - now + 86399) // 86400)
+        word = "день" if days % 10 == 1 and days % 100 != 11 else (
+            "дня" if days % 10 in (2, 3, 4) and days % 100 not in (12, 13, 14)
+            else "дней"
+        )
+        remaining_line = f"Осталось: <b>{days} {word}</b>\n"
+    device_text = "\n".join(device_lines)
+    text = (
+        f"<b>{status}</b>\n\n"
+        f"{remaining_line}Действует до: <b>{fmt_date(k['expiry'])}</b>"
+        + (f"\n{device_text}" if device_text else "")
+    )
     return text, key_detail_kb(
         key_id, subscription_url=subscription_url, has_history=has_history,
-        is_active=k["expiry"] > now, user_id=user_id,
+        is_active=active, user_id=user_id,
     )
 
 
@@ -275,8 +285,7 @@ async def _key_devices_view(user_id: int, key: dict, page: int = 0) -> tuple[str
     for device in devices:
         device["last_seen_label"] = _time_ago(device["last_seen"]) if device["last_seen"] else "давно"
         if not device.get("model"):
-            agent = str(device.get("user_agent") or "").split(";", 1)[0].strip()
-            device["model"] = agent or str(device.get("os") or "Устройство")
+            device["model"] = str(device.get("os") or "Устройство")
     if info["limit_hwid"]:
         usage_line = f"Занято мест: <b>{len(devices)} из {info['limit_hwid']}</b>"
     else:
@@ -284,7 +293,7 @@ async def _key_devices_view(user_id: int, key: dict, page: int = 0) -> tuple[str
     lines = [
         "<b>Устройства</b>",
         usage_line,
-        "Лимит общий для всех устройств.",
+        "Место в лимите занимает каждое зарегистрированное устройство, даже если VPN выключен.",
     ]
     if devices:
         lines.extend(["", "Выберите устройство, чтобы посмотреть детали или удалить его."])
@@ -349,7 +358,7 @@ async def cb_key_device(callback: CallbackQuery, bot: Bot):
             f"🔗 {name}\n"
             f"⚙️ Система: {escape(system or 'не определена')}\n"
             f"🕒 Последняя активность: {last_seen}\n\n"
-            "Удаление освободит место, если для подписки задан лимит. Если устройство снова обновит подписку, "
+            "Для освобождения места удалите подписку со старого устройства. Если оно снова обновит подписку, "
             "оно может зарегистрироваться повторно. Не узнаёте устройство? Напишите в поддержку — поможем проверить подключение."
         )
         await send_or_edit(bot, callback, text, key_device_detail_kb(key_id, device_id), photo=DEVICES)
@@ -373,7 +382,7 @@ async def cb_key_device_delete_prompt(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
         "<b>Удалить это устройство?</b>\n\n"
-        "Оно освободит место, если включён лимит устройств. Если устройство снова обновит подписку, "
+        "Сначала удалите подписку со старого устройства. Если оно снова обновит подписку, "
         "оно может зарегистрироваться повторно. Не узнаёте устройство? Напишите в поддержку — поможем проверить подключение."
     )
     await send_or_edit(bot, callback, text, confirm_delete_device_kb(key_id, device_id), photo=DEVICES)
@@ -404,7 +413,7 @@ async def cb_key_device_delete(callback: CallbackQuery, bot: Bot):
             alert=True,
         )
         return
-    await safe_answer(callback, "Устройство удалено")
+    await safe_answer(callback, "Устройство удалено. Теперь можно подключить другое.")
     try:
         text, keyboard = await _key_devices_view(callback.from_user.id, key)
         await send_or_edit(bot, callback, text, keyboard, photo=DEVICES)
@@ -533,7 +542,7 @@ async def cb_key_reissue_confirm(callback: CallbackQuery, bot: Bot, state: FSMCo
     })
     text = (
         "<b>Перевыпустить подписку?</b>\n\n"
-        "Старая ссылка перестанет работать, вместо неё появится новая. "
+        "Старая ссылка подключения и VPN-конфигурация перестанут работать. "
         "Срок подписки и лимит устройств сохранятся. После подтверждения "
         "замените ссылку в VPN-приложении."
     )
