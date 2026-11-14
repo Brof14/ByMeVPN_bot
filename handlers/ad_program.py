@@ -665,10 +665,18 @@ async def cb_ad_my_applications(callback: CallbackQuery, bot: Bot, state: FSMCon
                 status,
             ])
             if application["status"] == "approved" and application.get("verification_due_at"):
-                retained_until = datetime.fromtimestamp(
-                    int(application["verification_due_at"]), timezone(timedelta(hours=3)),
-                ).strftime("%d.%m.%Y")
-                lines.append(f"Сохраните публикацию до <b>{retained_until}</b> (МСК).")
+                due_at = int(application["verification_due_at"])
+                if due_at <= int(time.time()):
+                    lines.append(
+                        "30 дней размещения прошли. Ожидается итоговая проверка публикации."
+                    )
+                else:
+                    retained_until = datetime.fromtimestamp(
+                        due_at, timezone(timedelta(hours=3)),
+                    ).strftime("%d.%m.%Y")
+                    lines.append(
+                        f"Сохраните публикацию до <b>{retained_until}</b> (МСК)."
+                    )
             if application["status"] == "rejected" and application.get("rejection_reason"):
                 lines.append("Причина: " + escape(str(application["rejection_reason"])))
             if application["status"] == "channel_pending":
