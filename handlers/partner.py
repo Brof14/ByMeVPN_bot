@@ -20,7 +20,7 @@ def referral_share_url(link: str) -> str:
     """One consistent, editable friend-to-friend invitation everywhere."""
     text = (
         "Попробуй ByMeVPN — VPN для телефона и компьютера.\n\n"
-        "3 дня бесплатно, без привязки карты.\n"
+        "3 дня бесплатно, без карты.\n"
         "Если зарегистрируешься по моей ссылке, мне начислят бонусные дни."
     )
     return f"https://t.me/share/url?url={quote_plus(link)}&text={quote_plus(text)}"
