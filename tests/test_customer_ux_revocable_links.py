@@ -21,8 +21,13 @@ class PermanentLinkTests(unittest.TestCase):
         self.origin = patch("app_links.APP_CONNECT_PAGE_URL", "https://connect.example")
         self.config.start()
         self.origin.start()
+        # Legacy migration tests do not initialize SQLite. They simulate a
+        # pre-migration account whose v2 URL remains readable until rotation.
+        self.link_state = patch("database.get_connect_link_state", new=AsyncMock(return_value=None))
+        self.link_state.start()
 
     def tearDown(self):
+        self.link_state.stop()
         self.origin.stop()
         self.config.stop()
 
@@ -39,6 +44,46 @@ class PermanentLinkTests(unittest.TestCase):
         self.assertFalse(verify_permanent_connect_token(101, signature, rotated, key_id=77))
         self.assertFalse(verify_permanent_connect_token(101, signature, initial, key_id=78))
         self.assertFalse(verify_permanent_connect_token(102, signature, initial, key_id=77))
+
+    def test_rotated_epoch_rejects_old_link_even_when_subscription_url_is_unchanged(self):
+        current = "https://vpn.example/sub/still-the-same"
+        first_seed, second_seed = "a" * 64, "b" * 64
+        first_url = build_connect_page_url(current, user_id=101, key_id=77, link_seed=first_seed)
+        params = {key: values[0] for key, values in parse_qs(urlsplit(first_url).query).items()}
+        active = [{"id": 77, "user_id": 101, "key": current, "expiry": int(time.time()) + 86400}]
+        with (
+            patch("database.get_connect_link_state", new=AsyncMock(return_value={
+                "seed": first_seed, "legacy_revoked": False,
+            })),
+            patch("database.get_user_keys", new=AsyncMock(return_value=active)),
+        ):
+            opened = self.client.get("/connect", params=params)
+        self.assertEqual(opened.status_code, 200)
+
+        with (
+            patch("database.get_connect_link_state", new=AsyncMock(return_value={
+                "seed": second_seed, "legacy_revoked": True,
+            })),
+            patch("database.get_user_keys", new=AsyncMock(return_value=active)),
+        ):
+            revoked = self.client.get("/connect", params=params)
+        self.assertEqual(revoked.status_code, 400)
+        self.assertNotIn(current, revoked.text)
+
+    def test_legacy_link_stops_working_after_first_successful_reissue(self):
+        current = "https://vpn.example/sub/key"
+        legacy = build_connect_page_url(current, user_id=101, key_id=77)
+        params = {key: values[0] for key, values in parse_qs(urlsplit(legacy).query).items()}
+        with (
+            patch("database.get_connect_link_state", new=AsyncMock(return_value={
+                "seed": "c" * 64, "legacy_revoked": True,
+            })),
+            patch("database.get_user_keys", new=AsyncMock(return_value=[{
+                "id": 77, "user_id": 101, "key": current, "expiry": int(time.time()) + 3600,
+            }])),
+        ):
+            response = self.client.get("/connect", params=params)
+        self.assertEqual(response.status_code, 400)
 
     def test_page_resolves_selected_key_and_rejects_rotated_credentials(self):
         from database import get_user_keys
