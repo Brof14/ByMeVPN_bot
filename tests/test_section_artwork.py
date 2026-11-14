@@ -26,7 +26,7 @@ class TestSectionArtwork(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(bot_assets.display_artwork("/tmp/not-a-section-image.png"))
 
 
-    def test_all_twenty_artworks_are_bundled(self):
+    def test_one_shared_artwork_is_bundled_for_twenty_sections(self):
         names = (
             "MENU", "SUPPORT", "ABOUT", "FREE_VPN", "REFERRALS", "MY_INVITATIONS",
             "AD_PROGRAM", "PLANS", "KEY", "DEVICES", "CONNECTION", "ANDROID",
@@ -34,7 +34,7 @@ class TestSectionArtwork(unittest.IsolatedAsyncioTestCase):
             "LEGAL", "AUTO_RENEWAL",
         )
         self.assertEqual(len(names), 20)
-        self.assertEqual(len({Path(getattr(bot_assets, name)).name for name in names}), 20)
+        self.assertEqual(len({Path(getattr(bot_assets, name)).name for name in names}), 1)
         for name in names:
             path = Path(getattr(bot_assets, name))
             self.assertTrue(path.is_file(), name)

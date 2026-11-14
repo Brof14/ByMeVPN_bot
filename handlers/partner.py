@@ -19,14 +19,9 @@ router = Router()
 def referral_share_url(link: str) -> str:
     """One consistent, editable friend-to-friend invitation everywhere."""
     text = (
-        "🚀 Попробуй ByMeVPN — VPN, который просто работает.\n"
-        "YouTube, Instagram и любимые сайты — без лишних сложностей.\n"
-        "🎁 3 дня бесплатно — без карты и обязательств.\n"
-        "⚡ Подключение за пару нажатий.\n"
-        "📱 Для телефона и компьютера.\n\n"
-        "👇 Забирай бесплатный доступ:\n"
-        f"{link}\n\n"
-        "Это моя пригласительная ссылка — за твою регистрацию мне начислят бонусные дни."
+        "Попробуй ByMeVPN — VPN для телефона и компьютера.\n\n"
+        "3 дня бесплатно, без карты.\n"
+        "Если зарегистрируешься по моей ссылке, мне начислят бонусные дни."
     )
     return f"https://t.me/share/url?url={quote_plus(link)}&text={quote_plus(text)}"
 
@@ -72,28 +67,45 @@ async def cb_partner(callback: CallbackQuery, bot: Bot):
     await send_with_photo(bot, callback, text, partner_main_kb(link), photo=REFERRALS)
 
 
-@router.callback_query(F.data == "partner_referrals_list")
+@router.callback_query(F.data.startswith("partner_referrals_list"))
 async def cb_partner_referrals_list(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     referred_users = await get_referred_users_list(callback.from_user.id)
-    if not referred_users:
-        text = "<b>Мои приглашения</b>\n\nПока пусто. Отправьте свою ссылку другу, чтобы получить +15 дней."
-    else:
-        lines = ["<b>Мои приглашения</b>"]
-        for i, user in enumerate(referred_users[:20], 1):
-            status = "Активен" if user["is_active"] else "Нет активной подписки"
-            payment = "Первая оплата получена" if user["has_paid"] else "Ожидается первая оплата"
-            lines.append(
-                f"\n{i}. {format_timestamp(user['registration_date'])}\n"
-                f"   {status} · {payment}\n"
-                f"   Бонусы за друга: <b>+{user['bonus_days_awarded']} дней</b>"
-            )
-        if len(referred_users) > 20:
-            lines.append(f"\nПоказаны последние 20 из {len(referred_users)}.")
-        text = "\n".join(lines)
+    parts = (callback.data or "").split(":")
+    try:
+        requested_page = int(parts[1]) if len(parts) > 1 else 0
+    except ValueError:
+        requested_page = 0
+    page_size = 5
+    total = len(referred_users)
+    pages = max(1, (total + page_size - 1) // page_size)
+    page = max(0, min(requested_page, pages - 1))
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+    if not referred_users:
+        text = "<b>Мои приглашения</b>\n\nПриглашений пока нет. Отправьте другу свою ссылку."
+    else:
+        lines = [
+            "<b>Мои приглашения</b>",
+            f"Всего приглашено: <b>{total}</b>",
+            f"Страница {page + 1} из {pages}",
+        ]
+        for index, user in enumerate(referred_users[page * page_size:(page + 1) * page_size], page * page_size + 1):
+            days = max(0, int(user.get("bonus_days_awarded") or 0))
+            lines.append(
+                f"\n{index}. {format_timestamp(user['registration_date'])[:10]}"
+                f"\nНачислено: <b>+{days} дней</b>"
+            )
+        text = "\n".join(lines)
+    rows = []
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="← Ранее", callback_data=f"partner_referrals_list:{page - 1}"))
+    if page + 1 < pages:
+        nav.append(InlineKeyboardButton(text="Далее →", callback_data=f"partner_referrals_list:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.extend([
         [InlineKeyboardButton(text="← К приглашениям", callback_data="partner")],
         [InlineKeyboardButton(text="Главное меню", callback_data="back_to_menu")],
     ])
-    await send_with_photo(bot, callback, text, kb, photo=MY_INVITATIONS)
+    await send_with_photo(bot, callback, text, InlineKeyboardMarkup(inline_keyboard=rows), photo=MY_INVITATIONS)

@@ -160,14 +160,9 @@ async def cb_ad_program(callback: CallbackQuery, bot: Bot, state: FSMContext):
 
     text = (
         "<b>VPN за рекламу</b>\n\n"
-        "Опубликуйте пост ByMeVPN в своём Telegram-канале и получите "
-        "дополнительные месяцы доступа.\n\n"
-        "<b>Всего три шага</b>\n"
-        "1. Укажите свой канал.\n"
-        "2. Перешлите официальный рекламный пост.\n"
-        "3. Отправьте ссылку и сохраните публикацию на 30 дней.\n\n"
-        "Бонус начислим после проверки поста. "
-        "Срок зависит от количества подписчиков."
+        "Опубликуйте официальный пост ByMeVPN в своём канале и получите месяцы доступа.\n\n"
+        "Укажите канал — мы проверим его и покажем размер бонуса. "
+        "Затем перешлите официальный рекламный пост и сохраните публикацию на 30 дней. Бонус начислим после проверки поста."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Начать · указать канал", callback_data="ad_check_channel")],
@@ -186,7 +181,7 @@ async def cb_ad_bonus_tiers(callback: CallbackQuery, bot: Bot):
         "<b>Бонус за рекламу</b>\n\n"
         "Количество подписчиков → срок доступа:\n\n"
         f"{_bonus_tier_lines()}\n\n"
-        "Для небольших каналов (до 50 подписчиков) и крупных (от 350) "
+        "Для каналов с 1–49 подписчиками и от 350 подписчиков "
         "предусмотрена дополнительная проверка.\n\n"
         "<b>Условия:</b> один бонус на канал. "
         "Опубликуйте оригинальный пост ByMeVPN и сохраните его на 30 дней. "
@@ -507,6 +502,16 @@ async def cb_ad_get_post(callback: CallbackQuery, bot: Bot):
         await safe_answer(callback, "Сначала дождитесь проверки канала.", alert=True)
         return
     post_url = official_ad_post_url()
+    if not post_url:
+        await send_with_photo(
+            bot, callback,
+            "<b>Рекламный пост временно недоступен</b>\n\n"
+            "Не публикуйте произвольный текст. Вернитесь к своей заявке позже.",
+            InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="Моя заявка", callback_data="ad_my_applications"),
+            ]]),
+        )
+        return
     text = (
         "<b>Рекламный пост</b>\n\n"
         "Перешлите официальный рекламный пост из @ByMeVPN в свой канал.\n"
@@ -630,73 +635,75 @@ async def msg_ad_post_url(message: Message, bot: Bot, state: FSMContext):
     await state.clear()
 
 
-@router.callback_query(F.data == "ad_my_applications")
+@router.callback_query(F.data.startswith("ad_my_applications"))
 async def cb_ad_my_applications(callback: CallbackQuery, bot: Bot, state: FSMContext):
-    """Show user's ad applications."""
+    """Show up to five applications per screen with an actionable status."""
     await safe_answer(callback)
     await state.clear()
-    user_id = callback.from_user.id
-
-    applications = await get_user_ad_applications(user_id)
-
-    if not applications:
-        text = (
-            "<b>Мои заявки</b>\n\n"
-            "Пока нет заявок."
-        )
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Проверить канал", callback_data="ad_check_channel")],
-            [InlineKeyboardButton(text="← Назад", callback_data="ad_program")]
-        ])
-        await send_with_photo(bot, callback, text, kb)
-        return
-
-    text = "<b>Мои заявки</b>\n\n"
-
-    for app in applications:
-        status_emoji = STATUS_EMOJI.get(app["status"], "❓")
-        status_label = STATUS_TEXT.get(app["status"], "Неизвестно")
-        channel_label = f"@{app['channel_username']}" if app["channel_username"] else (app.get("channel_ref") or "приватный канал")
-        text += (
-            f"{status_emoji} <b>Заявка #{app['id']}</b>\n"
-            f"{escape(str(channel_label))} · {app['subscriber_count']} подписчиков\n"
-            f"Бонус: <b>{app['bonus_months']} мес.</b> · {status_label}\n"
-        )
-        if app["status"] == "approved" and app.get("verification_due_at"):
-            text += f"Сохраните публикацию до {time.strftime('%d.%m.%Y', time.localtime(app['verification_due_at']))}.\n"
-        if app["status"] == "grant_pending":
-            text += "Если статус не изменится, напишите в поддержку — заявка сохранена.\n"
-        if app["status"] == "rejected" and app.get("rejection_reason"):
-            text += f"Причина: {escape(str(app['rejection_reason']))}\n"
-        if app["status"] == "channel_pending":
-            text += "Канал проверяет администратор. После проверки здесь появится рекламный пост.\n"
-        elif app["status"] == "waiting_for_post":
-            text += "Перешлите пост из @ByMeVPN без изменений и отправьте ссылку.\n"
-        if app["status"] in _ACTIVE_APP_STATUSES or app["status"] == "rejected":
-            text += "Можно удалить эту заявку, пока бонус ещё не начислен.\n"
-        text += "\n"
-
+    applications = await get_user_ad_applications(callback.from_user.id)
+    try:
+        page = int(callback.data.split(":", 1)[1]) if ":" in callback.data else 0
+    except ValueError:
+        page = 0
+    total = len(applications)
+    pages = max(1, (total + 4) // 5)
+    page = max(0, min(page, pages - 1))
+    current = applications[page * 5:(page + 1) * 5]
+    if not current:
+        text = "<b>Мои заявки</b>\n\nЗаявок пока нет."
+    else:
+        lines = [f"<b>Мои заявки</b>\nСтраница {page + 1} из {pages}"]
+        for application in current:
+            label = (
+                f"@{application['channel_username']}" if application.get("channel_username")
+                else application.get("channel_ref") or "Приватный канал"
+            )
+            status = STATUS_TEXT.get(application["status"], "Статус уточняется")
+            lines.extend([
+                "",
+                f"<b>{escape(str(label))}</b> · заявка №{application['id']}",
+                f"Бонус: {application['bonus_months']} мес.",
+                status,
+            ])
+            if application["status"] == "approved" and application.get("verification_due_at"):
+                lines.append("Сохраните публикацию до " + time.strftime(
+                    "%d.%m.%Y", time.localtime(application["verification_due_at"]),
+                ))
+            if application["status"] == "rejected" and application.get("rejection_reason"):
+                lines.append("Причина: " + escape(str(application["rejection_reason"])))
+            if application["status"] == "channel_pending":
+                lines.append("Пока ничего делать не нужно — канал проверяется.")
+            if application["status"] == "waiting_for_post":
+                lines.append("Следующий шаг: перешлите официальный пост.")
+            if application["status"] == "grant_pending":
+                lines.append("Бонус проверяется; повторная заявка не нужна.")
+        text = "\n".join(lines)
     rows = []
-    for app in applications:
-        if app["status"] == "waiting_for_post":
+    for application in current:
+        application_id = application["id"]
+        if application["status"] == "waiting_for_post":
             rows.append([InlineKeyboardButton(
-                text=f"Открыть пост · заявка #{app['id']}",
-                callback_data=f"ad_get_post:{app['id']}",
-                
+                text=f"Отправить пост · заявка №{application_id}",
+                callback_data=f"ad_get_post:{application_id}",
             )])
-        if app["status"] in ("draft", "channel_pending", "waiting_for_post", "post_submitted", "active_30_days", "rejected"):
+        if application["status"] in ("draft", "channel_pending", "waiting_for_post", "post_submitted", "active_30_days", "rejected"):
             rows.append([InlineKeyboardButton(
-                text=f"🗑 Удалить заявку #{app['id']}",
-                callback_data=f"ad_cancel_confirm:{app['id']}",
+                text=f"Удалить заявку №{application_id}",
+                callback_data=f"ad_cancel_confirm:{application_id}",
                 style="danger",
             )])
+    navigation = []
+    if page > 0:
+        navigation.append(InlineKeyboardButton(text="← Ранее", callback_data=f"ad_my_applications:{page - 1}"))
+    if page + 1 < pages:
+        navigation.append(InlineKeyboardButton(text="Далее →", callback_data=f"ad_my_applications:{page + 1}"))
+    if navigation:
+        rows.append(navigation)
     rows.extend([
-        [InlineKeyboardButton(text="📣 Проверить новый канал", callback_data="ad_check_channel", )],
+        [InlineKeyboardButton(text="Проверить новый канал", callback_data="ad_check_channel")],
         [InlineKeyboardButton(text="← Назад", callback_data="ad_program")],
     ])
-    kb = InlineKeyboardMarkup(inline_keyboard=rows)
-
-    await send_with_photo(bot, callback, text, kb)
+    await send_with_photo(bot, callback, text, InlineKeyboardMarkup(inline_keyboard=rows))
 
 
 @router.callback_query(F.data.startswith("ad_cancel_confirm:"))

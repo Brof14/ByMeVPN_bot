@@ -147,7 +147,15 @@ async def _send_campaign_announcements(bot: Bot, giveaway: dict) -> None:
         return
     info = await get_cached_bot_info(bot)
     link = f"https://t.me/{info.username}?start=gw_{giveaway['id']}"
-    text = "🏆 <b>Ежемесячный конкурс ByMeVPN</b>\n\n" + format_giveaway_terms(giveaway)
+    deadline = _moscow_date(int(giveaway["end_date"]) - 1)
+    text = (
+        "<b>Ежемесячный конкурс ByMeVPN</b>\n\n"
+        f"Чтобы участвовать, пригласите хотя бы одного нового пользователя по своей ссылке до <b>{deadline}</b>. "
+        f"{int(giveaway.get('winners_count') or MONTHLY_WINNERS)} победителя получат "
+        f"по <b>+{int(giveaway.get('prize_days') or MONTHLY_PRIZE_DAYS)} дней VPN</b>.\n\n"
+        "В зачёт попадёт тот, кто впервые запустит бота по вашей ссылке. "
+        "Полные правила и ваши результаты доступны после нажатия «Участвовать»."
+    )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎉 Участвовать", url=link, style="primary")],
         [InlineKeyboardButton(text="Не присылать акции", callback_data="marketing_optout")],

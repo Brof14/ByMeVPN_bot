@@ -19,7 +19,7 @@ import database
 from database import (
     add_key, get_referrer, add_payment, set_trial_used, log_key_error,
     get_user_keys, log_analytics_event, record_payment_idempotent,
-    update_key_uuid, set_key_expiry,
+    update_key_uuid, update_key_subscription_url, set_key_expiry,
 )
 from xui_client import create_xui_user, get_xui_user, format_traffic
 from keyboards import after_key_kb, cancel_kb
@@ -56,6 +56,7 @@ async def _send_delivery_message(
     subscription_url: str = "",
     *,
     edit_target=None,
+    key_id: int | None = None,
 ) -> bool:
     """Deliver the key message to the user. NEVER raises.
 
@@ -66,7 +67,7 @@ async def _send_delivery_message(
     the key via «Мои ключи».
     """
     try:
-        markup = after_key_kb(subscription_url, user_id=user_id)
+        markup = after_key_kb(subscription_url, user_id=chat_id, key_id=key_id)
         if edit_target is not None:
             # Trial is initiated from the main menu's photo message. Replace
             # that screen with the key card instead of posting a second message.
@@ -323,7 +324,7 @@ async def _deliver_key_unlocked(
                     subscription_links = await get_user_subscription_links(user_id)
                     if subscription_links:
                         key_to_show = subscription_links[0]
-                        await update_key_uuid(key_id, key_to_show)
+                        await update_key_subscription_url(key_id, user_id, key_to_show)
                     else:
                         key_to_show = existing_key
                 except Exception as e:
@@ -352,13 +353,11 @@ async def _deliver_key_unlocked(
                     f"<b>Ключ #{key_id}</b> продлён на <b>{days} дней</b>\n"
                     f"Устройства: <b>{limit_ip}</b>\n"
                     f"Действует до: <b>{format_timestamp(new_expiry)[:10]}</b>\n\n"
-                    f"<b>Ссылка для подключения</b>\n"
-                    f"<code>{key_to_show}</code>\n\n"
-                    f"Ссылка на VPN не изменилась. Повторно подключать устройства не нужно."
+                    "Ссылка подключения не изменилась. Повторно подключать устройства не нужно."
                 )
                 
                 delivered = await _send_delivery_message(
-                    bot, chat_id, text, key_to_show, edit_target=delivery_target,
+                    bot, chat_id, text, key_to_show, edit_target=delivery_target, key_id=key_id,
                 )
                 if not delivered:
                     await _log_notification_failure(
@@ -460,7 +459,7 @@ async def _deliver_key_unlocked(
             )
             text = _activation_message(title, bonus_note, days, limit_ip, new_expiry)
             delivered = await _send_delivery_message(
-                bot, chat_id, text, sub_url, edit_target=delivery_target,
+                bot, chat_id, text, sub_url, edit_target=delivery_target, key_id=key_id,
             )
             if not delivered:
                 await _log_notification_failure(
@@ -518,7 +517,20 @@ async def _deliver_key_unlocked(
         # Subscription URLs are access credentials; never write any part to logs.
 
         # Сохраняем ссылку на подписку и настоящий UUID клиента в БД
-        client_uuid = user_result.get("uuid") or subscription_url
+        client_uuid = str(user_result.get("uuid") or "").strip()
+        if not client_uuid:
+            # Provisioning may already exist: fail closed and reconcile it.
+            await log_key_error(
+                user_id=user_id, error_type="panel_uuid_unconfirmed",
+                error_message="3x-ui did not confirm the new client UUID",
+                context={"branch": "deliver_key.create", "payment_id": payload},
+            )
+            await bot.send_message(
+                chat_id,
+                "VPN-доступ создан, но сервер пока не подтвердил его параметры. "
+                "Повторно оплачивать не нужно. Мы проверим подписку.",
+            )
+            return False
         key_id = await add_key(
             user_id, subscription_url, config_name, client_uuid, days, limit_ip,
             expiry=target_expiry,
@@ -552,7 +564,7 @@ async def _deliver_key_unlocked(
         text = _activation_message(title, bonus_note, days, limit_ip)
         
         delivered = await _send_delivery_message(
-            bot, chat_id, text, subscription_url, edit_target=delivery_target,
+            bot, chat_id, text, subscription_url, edit_target=delivery_target, key_id=key_id,
         )
         if not delivered:
             await _log_notification_failure(

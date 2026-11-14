@@ -237,6 +237,14 @@ async def _clean_chat(bot: Bot, chat_id: int, anchor_msg_id: int, count: int = 3
     await asyncio.gather(*[delete_with_timeout(mid) for mid in ids], return_exceptions=True)
 
 
+def _remaining_days_label(expiry: int) -> str:
+    days = max(1, (int(expiry) - int(time.time()) + 86399) // 86400)
+    word = "день" if days % 10 == 1 and days % 100 != 11 else (
+        "дня" if days % 10 in (2, 3, 4) and days % 100 not in (12, 13, 14) else "дней"
+    )
+    return f"Осталось <b>{days} {word}</b>\n"
+
+
 async def _send_main_menu(
     bot: Bot,
     target: "Message | CallbackQuery",
@@ -257,9 +265,8 @@ async def _send_main_menu(
             "ваш доступ и платежи не изменены. Попробуйте немного позже."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn")],
-            [InlineKeyboardButton(text="Поддержка", url=support_url())],
-            [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+            [InlineKeyboardButton(text="Повторить проверку", callback_data="back_to_menu")],
+            [InlineKeyboardButton(text="Поддержка", url=support_url("subscription"))],
         ])
         if isinstance(target, Message):
             await bot.send_message(chat_id=user_id, text=text, reply_markup=kb)
@@ -270,30 +277,30 @@ async def _send_main_menu(
     if state == "new":
         if is_new_referral:
             text = (
-                "<b>Добро пожаловать!</b>\n\n"
+                "<b>ByMeVPN</b>\n\n"
                 "Приглашение учтено.\n\n"
-                "Начните с пробного доступа или выберите тариф.\n"
-                "Затем установите приложение и включите VPN в нём."
+                "<b>3 дня бесплатно</b> — без карты и оплаты.\n"
+                "Нажмите кнопку ниже, чтобы получить доступ."
             )
         else:
             text = (
                 "<b>ByMeVPN</b>\n\n"
-                "Защитите интернет-соединение на телефоне и компьютере.\n\n"
-                "Попробуйте VPN 3 дня бесплатно, без карты, или сразу выберите тариф.\n\n"
-                "Как подключиться: получите доступ → установите приложение → включите VPN."
+                "VPN для телефона и компьютера.\n\n"
+                "<b>3 дня бесплатно</b> — без карты и оплаты.\n\n"
+                "Получите доступ и следуйте короткой инструкции подключения."
             )
         kb = main_menu_new_user()
     elif state == "existing":
         text = (
-            "<b>Аккаунт уже подключался к ByMeVPN</b>\n\n"
-            "Пробный период доступен только аккаунтам без ранее созданного клиента. "
+            "<b>С возвращением в ByMeVPN</b>\n\n"
+            ""
             "Выберите тариф, чтобы продолжить."
         )
         kb = main_menu_existing(trial_used=True)
     elif state == "expired":
         text = (
-            "<b>Доступ завершён</b>\n\n"
-            "Продлите подписку или получите бонусные дни."
+            "<b>Срок подписки закончился</b>\n\n"
+            "Продлите доступ или получите бонусные дни."
         )
         # The first action must renew the actual existing key, not reset its
         # device choice through a new-purchase checkout.
@@ -307,6 +314,7 @@ async def _send_main_menu(
             active_key = max(active_keys, key=lambda k: k.get("expiry", 0))
             from constants import format_timestamp
             expires = format_timestamp(active_key["expiry"])[:10]
+            remaining_text = _remaining_days_label(active_key["expiry"])
             device_count = int(active_key.get("limit_ip") or 0)
             if device_count not in {2, 5, 10}:
                 device_count = 0
@@ -322,14 +330,14 @@ async def _send_main_menu(
             if device_count in {2, 5, 10}:
                 text = (
                     f"<b>Подписка активна</b>\n\n"
-                    f"Действует до <b>{expires}</b>\n"
+                    f"{remaining_text}Действует до <b>{expires}</b>\n"
                     f"Устройств в тарифе: <b>{device_count} {device_word}</b>"
                 )
             else:
                 text = (
                     f"<b>Подписка активна</b>\n\n"
-                    f"Действует до <b>{expires}</b>\n"
-                    "Лимит устройств уточняется в разделе «Подписка»."
+                    f"{remaining_text}Действует до <b>{expires}</b>\n"
+                    "Количество устройств можно проверить в разделе «Подписка»."
                 )
         else:
             panel_client = None
@@ -341,22 +349,40 @@ async def _send_main_menu(
             if _panel_client_is_active(panel_client):
                 from constants import format_timestamp
                 expires = format_timestamp(int(panel_client["expiry_time"]) // 1000)[:10]
+                remaining_text = _remaining_days_label(int(panel_client["expiry_time"]) // 1000)
                 device_count = int(panel_client.get("limit_hwid") or 0)
                 if device_count in {2, 5, 10}:
                     device_word = "устройство" if device_count == 1 else "устройства" if device_count <= 4 else "устройств"
                     text = (
                         f"<b>Подписка активна</b>\n\n"
-                        f"Действует до <b>{expires}</b>\n"
+                        f"{remaining_text}Действует до <b>{expires}</b>\n"
                         f"Устройств в тарифе: <b>{device_count} {device_word}</b>"
                     )
                 else:
                     text = (
                         f"<b>Подписка активна</b>\n\n"
-                        f"Действует до <b>{expires}</b>\n"
-                        "Лимит устройств уточняется в разделе «Подписка»."
+                        f"{remaining_text}Действует до <b>{expires}</b>\n"
+                        "Количество устройств можно проверить в разделе «Подписка»."
                     )
             else:
                 text = "<b>Подписка активна</b>\n\nОткройте «Подписка», чтобы подключить устройство или посмотреть срок действия."
+        # Show a real saved renewal state, not an alarming "unknown" label.
+        if len(active_keys) == 1:
+            try:
+                from database import get_auto_renew_subscription
+                renewal = await get_auto_renew_subscription(
+                    user_id, int(active_keys[0]["id"]),
+                )
+                if renewal:
+                    renewal_state = (
+                        "включено"
+                        if renewal.get("status") == "active"
+                        and renewal.get("payment_method_id")
+                        else "выключено"
+                    )
+                    text += f"\nАвтопродление: <b>{renewal_state}</b>"
+            except Exception:
+                logger.debug("Could not load renewal status on the home screen")
         # Direct connection only when there is exactly one active key.
         # With multiple active subscriptions, let the customer choose.
         if len(active_keys) == 1:
@@ -649,24 +675,36 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext) -> None:
     # Не удаляем сообщения после /start, чтобы избежать бесконечной кнопки Старт
 
 
+async def _trial_feedback(callback: CallbackQuery, message: str) -> None:
+    """Every trial outcome retains a direct recovery route."""
+    await callback.message.answer(
+        message,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Моя подписка", callback_data="my_keys")],
+            [InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn")],
+            [InlineKeyboardButton(text="Поддержка", url=support_url())],
+        ]),
+    )
+
+
 async def _start_free_trial(bot: Bot, callback: CallbackQuery, ref_id: int | None = None) -> None:
     """Grant one shared trial to a new account with no prior key or unexpired access."""
     user_id = callback.from_user.id
 
     await safe_answer(callback)
     if await has_trial_used(user_id):
-        await callback.message.answer(
+        await _trial_feedback(callback, 
             "Пробный период уже использован. Выберите тариф, чтобы продолжить пользоваться ByMeVPN."
         )
         return
     if await has_ever_had_key(user_id) or await get_user_keys(user_id):
-        await callback.message.answer(
+        await _trial_feedback(callback, 
             "Пробный период доступен только новым аккаунтам без ранее оформленной подписки. "
             "Выберите тариф для продления."
         )
         return
     if await has_active_subscription(user_id):
-        await callback.message.answer(
+        await _trial_feedback(callback, 
             "У вас уже есть активная подписка. Откройте раздел «Подписка», чтобы посмотреть доступ."
         )
         return
@@ -676,12 +714,12 @@ async def _start_free_trial(bot: Bot, callback: CallbackQuery, ref_id: int | Non
         panel_client = await get_xui_client_details(user_id, strict=True)
     except Exception as exc:
         logger.warning("Free trial eligibility check failed (%s)", type(exc).__name__)
-        await callback.message.answer(
+        await _trial_feedback(callback, 
             "Не удалось проверить доступность пробного периода. Попробуйте позже или напишите в поддержку."
         )
         return
     if panel_client and not _panel_client_is_expired(panel_client):
-        await callback.message.answer(
+        await _trial_feedback(callback, 
             "Не удалось подтвердить отсутствие действующего доступа. Пробный период не списан; попробуйте позже."
         )
         return
@@ -689,7 +727,7 @@ async def _start_free_trial(bot: Bot, callback: CallbackQuery, ref_id: int | Non
     pending = await get_trial_claim_reservation(user_id)
     if pending:
         if int(time.time()) - int(pending.get("created_at") or 0) < 120:
-            await callback.message.answer(
+            await _trial_feedback(callback, 
                 "Пробный период уже проверяется. Обновите статус через минуту."
             )
             return
@@ -703,21 +741,21 @@ async def _start_free_trial(bot: Bot, callback: CallbackQuery, ref_id: int | Non
                         and int(panel_devices.get("limit_ip") or 0) == 0
                         and isinstance(panel_devices.get("devices"), list)):
                     await complete_trial_claim(user_id, pending["claim_id"])
-                await callback.message.answer(
+                await _trial_feedback(callback, 
                     "Для аккаунта уже найдена активная подписка. Откройте приложение и обновите её статус."
                 )
                 return
             await release_trial_claim(user_id, pending["claim_id"])
         except Exception as exc:
             logger.warning("Free trial reservation reconciliation failed (%s)", type(exc).__name__)
-            await callback.message.answer(
+            await _trial_feedback(callback, 
                 "Не удалось проверить предыдущую попытку. Попробуйте позже или напишите в поддержку."
             )
             return
 
     claim_id = await reserve_trial_claim(user_id)
     if not claim_id:
-        await callback.message.answer(
+        await _trial_feedback(callback, 
             "Пробный период уже использован или его активация ещё проверяется."
         )
         return
@@ -741,7 +779,7 @@ async def _start_free_trial(bot: Bot, callback: CallbackQuery, ref_id: int | Non
         )
     except Exception as exc:
         logger.error("Free trial provisioning failed (%s)", type(exc).__name__)
-        await callback.message.answer(
+        await _trial_feedback(callback, 
             "Не удалось подключить пробный период. Напишите в поддержку — поможем."
         )
         return
@@ -769,7 +807,7 @@ async def _start_free_trial(bot: Bot, callback: CallbackQuery, ref_id: int | Non
             raise RuntimeError("Trial reservation could not be completed")
     except Exception as exc:
         logger.warning("Free trial panel confirmation failed (%s)", type(exc).__name__)
-        await callback.message.answer(
+        await _trial_feedback(callback, 
             "Пробный период создан, но проверка доступа ещё не завершена. Обновите статус позже."
         )
         return
@@ -835,11 +873,11 @@ async def cb_back_to_menu(callback: CallbackQuery, bot: Bot, state: FSMContext):
 async def cb_about(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
-        "<b>ByMeVPN — VPN-подписка для телефона и компьютера.</b>\n\n"
-        "Подключите приложение, добавьте подписку и включите VPN в нём. "
+        "<b>О сервисе ByMeVPN</b>\n\n"
+        "Подключение на телефоне и компьютере через приложение. "
         "Поддерживаются планы на 2, 5 и 10 устройств.\n\n"
         "Новые пользователи могут попробовать сервис 3 дня бесплатно. "
-        "\nСобственные приложения для Android, Windows и Linux уже почти готовы к выходу.\n\n"
+        "\nАктуальные приложения для подключения доступны на странице «Подключить VPN».\n\n"
         "Если подключение не получается, откройте поддержку из меню."
     )
     # Keep this screen informative and minimal; primary actions live in the menu.
@@ -861,7 +899,7 @@ async def cb_winback_feedback(callback: CallbackQuery):
         [InlineKeyboardButton(text="VPN больше не нужен", callback_data="winback_reason:not_needed")],
         [InlineKeyboardButton(text="Проблема с оплатой", callback_data="winback_reason:payment")],
         [InlineKeyboardButton(text="Другая причина", callback_data="winback_reason:other")],
-        [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+        [InlineKeyboardButton(text="Повторить проверку", callback_data="back_to_menu")],
     ])
     await callback.message.answer(
         "Почему вы перестали пользоваться ByMeVPN? Ответ необязателен, "
@@ -1019,4 +1057,5 @@ async def cb_channel_bonus_check(callback: CallbackQuery, bot: Bot):
         await log_analytics_event(user_id, "channel_bonus_awarded", source="telegram_channel")
     except Exception:
         logger.warning("Could not record channel bonus analytics for user %d", user_id)
-    await safe_answer(callback, "Готово: начислено +10 дней.", alert=True)
+    await safe_answer(callback, "Готово: начислено +10 дней.")
+    await cb_free_vpn(callback, bot)

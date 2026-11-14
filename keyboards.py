@@ -46,7 +46,7 @@ def main_menu_active(key_id: int, subscription_url: str = "", user_id: int | Non
     if subscription_url:
         try:
             from app_links import build_connect_page_url
-            connect_url = build_connect_page_url(subscription_url, user_id=user_id)
+            connect_url = build_connect_page_url(subscription_url, user_id=user_id, key_id=key_id)
         except (RuntimeError, ValueError):
             connect_url = None
     connect_button = (
@@ -114,8 +114,15 @@ def back_to_menu() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def support_url() -> str:
-    return _SUPPORT_URL
+_SUPPORT_ISSUES = frozenset({"connection", "subscription", "payment", "devices", "trial", "account"})
+
+
+def support_url(issue: str = "") -> str:
+    """Carry an allowlisted issue type to the support bot, never a VPN secret."""
+    return (
+        f"{_SUPPORT_URL}?start=help_{issue}"
+        if issue in _SUPPORT_ISSUES else _SUPPORT_URL
+    )
 
 
 def feedback_url() -> str:
@@ -181,6 +188,7 @@ def tariff_selection_kb(
             label += f" · −{discount_percent}%"
         kb.row(InlineKeyboardButton(text=label, callback_data=f"tariff_{months}_{devices}"))
 
+    kb.row(InlineKeyboardButton(text="Есть промокод?", callback_data="promo_enter"))
     kb.row(InlineKeyboardButton(text="← Назад", callback_data="back_to_menu"))
     return kb.as_markup()
 
@@ -188,8 +196,9 @@ def tariff_selection_kb(
 def payment_kb(
     price_rub: int, days: int, devices: int = DEFAULT_DEVICE_LIMIT,
     yookassa_url: str = "",
+    autorenew_enabled: bool = True,
 ) -> InlineKeyboardMarkup:
-    """Stars = rubles (1:1, intentional — covers Telegram commission)."""
+    """Show provider choices and the real YooKassa recurring option."""
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(
         text=f"Telegram Stars · {price_rub} зв.",
@@ -203,6 +212,11 @@ def payment_kb(
         text=f"CryptoBot · {price_rub} ₽",
         callback_data="pay_crypto",
     ))
+    kb.row(InlineKeyboardButton(
+        text=f"Автопродление ЮKassa: {'включено' if autorenew_enabled else 'выключено'} · изменить",
+        callback_data="checkout_autorenew_toggle",
+    ))
+    kb.row(InlineKeyboardButton(text="Есть промокод?", callback_data="promo_enter"))
     kb.row(InlineKeyboardButton(text="← Назад", callback_data=f"devtier_{devices}"))
     return kb.as_markup()
 
@@ -284,7 +298,7 @@ def key_detail_kb(
     if subscription_url:
         try:
             from app_links import build_connect_page_url
-            connect_url = build_connect_page_url(subscription_url, user_id=user_id)
+            connect_url = build_connect_page_url(subscription_url, user_id=user_id, key_id=key_id)
         except (RuntimeError, ValueError):
             connect_url = None
     connect_button = (
@@ -309,7 +323,10 @@ def key_detail_kb(
     return kb.as_markup()
 
 
-def key_devices_kb(key_id: int, devices: list[dict] | None = None, page: int = 0) -> InlineKeyboardMarkup:
+def key_devices_kb(
+    key_id: int, devices: list[dict] | None = None, page: int = 0,
+    *, current_limit: int | None = None, active: bool = True,
+) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     devices = devices or []
     page_size = 10
@@ -332,6 +349,8 @@ def key_devices_kb(key_id: int, devices: list[dict] | None = None, page: int = 0
             row.append(InlineKeyboardButton(text="→", callback_data=f"key_devices:{key_id}:{page + 1}"))
         kb.row(*row)
     # Each visit to this screen loads fresh device data; no refresh button needed.
+    if active and (current_limit is None or 0 < current_limit < 10):
+        kb.row(InlineKeyboardButton(text="Увеличить лимит устройств", callback_data=f"device_upgrade:{key_id}"))
     kb.row(InlineKeyboardButton(text="← К подписке", callback_data=f"key_info:{key_id}"))
     return kb.as_markup()
 
@@ -356,11 +375,11 @@ def confirm_delete_device_kb(key_id: int, device_id: int) -> InlineKeyboardMarku
 
 def key_settings_kb(key_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="Оплата и автопродление", callback_data=f"manage_payment_methods:{key_id}"))
     kb.row(InlineKeyboardButton(
         text="Перевыпустить подписку",
         callback_data=f"key_reissue_confirm:{key_id}",
     ))
-    kb.row(InlineKeyboardButton(text="Оплата и автопродление", callback_data=f"manage_payment_methods:{key_id}"))
     # Deliberately do not expose destructive subscription deletion in the customer UI.
     kb.row(InlineKeyboardButton(text="← К подписке", callback_data=f"key_info:{key_id}"))
     return kb.as_markup()
@@ -429,13 +448,13 @@ def confirm_delete_kb(key_id: int) -> InlineKeyboardMarkup:
 # After key delivery
 # ---------------------------------------------------------------------------
 
-def after_key_kb(subscription_url: str = "", user_id: int | None = None) -> InlineKeyboardMarkup:
+def after_key_kb(subscription_url: str = "", user_id: int | None = None, key_id: int | None = None) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     connect_url = None
     if subscription_url:
         try:
             from app_links import build_connect_page_url
-            connect_url = build_connect_page_url(subscription_url, user_id=user_id)
+            connect_url = build_connect_page_url(subscription_url, user_id=user_id, key_id=key_id)
         except (RuntimeError, ValueError):
             connect_url = None
     kb.row(InlineKeyboardButton(
@@ -481,6 +500,6 @@ def legal_kb() -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="Договор публичной оферты", url="https://telegra.ph/Publichnaya-oferta-na-okazanie-uslug-ByMeVPN-10-25"))
     kb.row(InlineKeyboardButton(text="Политика конфиденциальности", url="https://telegra.ph/Politika-v-otnoshenii-obrabotki-personalnyh-dannyh-ByMeVPN-10-25"))
     kb.row(InlineKeyboardButton(text="Соглашение об автопродлении", url="https://telegra.ph/Soglashenie-ob-avtomaticheskom-prodlenii-podpiski-ByMeVPN-10-25"))
-    kb.row(InlineKeyboardButton(text="Оплата и автопродление", callback_data="manage_payment_methods"))
+    kb.row(InlineKeyboardButton(text="Управлять автопродлением", callback_data="manage_payment_methods"))
     kb.row(InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu"))
     return kb.as_markup()

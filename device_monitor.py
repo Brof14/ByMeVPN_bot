@@ -31,9 +31,10 @@ async def _check_user(bot: Bot, user_id: int, semaphore: asyncio.Semaphore) -> N
             if not pending:
                 return
             key_id = active_keys[0]["id"]
-            markup = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="Мои устройства", callback_data=f"key_devices:{key_id}")
-            ]])
+            markup = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Мои устройства", callback_data=f"key_devices:{key_id}")],
+                [InlineKeyboardButton(text="Увеличить лимит", callback_data=f"device_upgrade:{key_id}")],
+            ])
             devices_used = len(state["devices"])
             device_limit = int(state.get("limit_hwid") or 0)
             for index, device in enumerate(pending):
@@ -50,7 +51,7 @@ async def _check_user(bot: Bot, user_id: int, semaphore: asyncio.Semaphore) -> N
                 if device_limit > 0 and devices_used >= device_limit and index == len(pending) - 1:
                     message += (
                         f"\n\n✅ Лимит устройств достигнут: {devices_used} из {device_limit}. "
-                        "Чтобы подключить ещё устройства, увеличьте лимит при продлении подписки."
+                        "Чтобы подключить больше устройств, откройте кнопку «Увеличить лимит»."
                     )
                 try:
                     await bot.send_message(user_id, message, reply_markup=markup)

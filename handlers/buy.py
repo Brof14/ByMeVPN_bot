@@ -60,7 +60,7 @@ async def _block_unresolved_access_payment(callback: CallbackQuery) -> bool:
         "<b>Предыдущая оплата проверяется</b>\n\nПовторно платить не нужно. Мы проверим выдачу доступа; по срочным вопросам напишите в поддержку.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="Поддержка", url=support_url())
+            InlineKeyboardButton(text="Поддержка", url=support_url("payment"))
         ]]),
     )
     return True
@@ -100,7 +100,7 @@ def _checkout_confirmation_text(data: dict) -> str:
     price_rub = int(data["price_rub"])
     bonus = TARIFF_BONUS_MONTHS[months]
     term = f"{months}+{bonus} мес." if bonus else "1 месяц"
-    recurring = True
+    recurring = bool(data.get("autorenew_enabled", True))
     recurring_price, recurring_days = get_price_for_months(months, devices)
     dev_name = DEVICE_CONFIG.get(devices, {}).get("name", f"{devices} устройств")
     lines = [
@@ -115,25 +115,23 @@ def _checkout_confirmation_text(data: dict) -> str:
         lines.append(f"Цена без промокода: <s>{original} ₽</s>")
     if data.get("promo_mismatch"):
         lines.append("Промокод для другого срока не применён.")
-    lines.extend([
-        "",
-        f"<b>Автопродление ЮKassa: {'включено' if recurring else 'выключено'}</b>",
-    ])
+    lines.append("")
     if recurring:
         lines.append(
-            f"При оплате через ЮKassa вы соглашаетесь на повторное списание "
-            f"{recurring_price} ₽ за следующие {recurring_days} дней по окончании оплаченного срока. "
-            "Отключить автопродление можно в разделе «О сервисе» → «Документы» → «Оплата и автопродление»."
+            f"<b>Автопродление ЮKassa: включено</b>\n"
+            f"Следующее списание: {recurring_price} ₽ за {recurring_days} дней "
+            "после окончания оплаченного срока. Изменить выбор можно кнопкой ниже "
+            "до оплаты. Отключить позднее можно в разделе «Подписка» → «Оплата и автопродление»."
         )
     else:
-        lines.append("Оплата ЮKassa будет разовой. Автоматических списаний не будет.")
+        lines.append("<b>Автопродление ЮKassa: выключено</b>\nОплата картой будет разовой.")
     lines.extend([
-        "Автопродление включено по умолчанию. Отключить его можно в разделе «О сервисе» → «Документы» → «Оплата и автопродление»; оплаченные дни сохранятся.",
         "Telegram Stars и CryptoBot — разовые платежи.",
         "",
         "Доступ откроется после подтверждения оплаты.",
-        "Оплачивая, вы соглашаетесь с <a href='https://telegra.ph/Publichnaya-oferta-na-okazanie-uslug-ByMeVPN-10-25'>офертой</a> "
-        "и <a href='https://telegra.ph/Politika-v-otnoshenii-obrabotki-personalnyh-dannyh-ByMeVPN-10-25'>политикой конфиденциальности</a>.",
+        "При оплате вы принимаете условия "
+        "<a href='https://telegra.ph/Publichnaya-oferta-na-okazanie-uslug-ByMeVPN-10-25'>оферты</a> "
+        "и <a href='https://telegra.ph/Politika-v-otnoshenii-obrabotki-personalnyh-dannyh-ByMeVPN-10-25'>политики конфиденциальности</a>.",
         "",
         "<b>Выберите способ оплаты:</b>",
     ])
@@ -149,8 +147,40 @@ async def _show_checkout(
         bot, callback, _checkout_confirmation_text(data),
         payment_kb(
             int(data["price_rub"]), int(data["days"]), devices=int(data["devices"]),
+            autorenew_enabled=bool(data.get("autorenew_enabled", True)),
         ),
         photo=PAYMENT,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Checkout options
+# ---------------------------------------------------------------------------
+
+@router.callback_query(F.data == "checkout_autorenew_toggle")
+async def cb_checkout_autorenew_toggle(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    """Let the customer explicitly opt out of future YooKassa charges."""
+    await safe_answer(callback)
+    data = await state.get_data()
+    if data.get("price_rub") is None or data.get("days") is None:
+        await _ask_tariff_again(bot, callback)
+        return
+    enabled = not bool(data.get("autorenew_enabled", True))
+    await state.update_data(autorenew_enabled=enabled)
+    await _show_checkout(bot, callback, state, {**data, "autorenew_enabled": enabled})
+
+
+@router.callback_query(F.data == "promo_enter")
+async def cb_enter_promo(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    await safe_answer(callback)
+    await state.set_state(PromoFlow.waiting_code)
+    await send_with_photo(
+        bot, callback,
+        "<b>Промокод</b>\n\nОтправьте промокод одним сообщением. После применения выберите тариф ещё раз.",
+        InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="← К тарифам", callback_data="buy_vpn"),
+        ]]),
+        photo=PROMO_CODE,
     )
 
 
@@ -348,7 +378,7 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
         promo_discount=promo_info.get("discount_value", 0) if promo_info.get("promo_type") == "percent" else 0,
         promo_mismatch=promo_mismatch,
         checkout_autorenew_disclosed=True,
-        autorenew_enabled=True,
+        autorenew_enabled=bool(data.get("autorenew_enabled", True)),
     )
     # A restart can erase MemoryStorage. Save only the choice, never its
     # computed price, so recovering cannot silently charge an old amount.
@@ -373,7 +403,7 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
         "days": days, "original_price": original_price,
         "promo_mismatch": promo_mismatch,
         "checkout_autorenew_disclosed": True,
-        "autorenew_enabled": True,
+        "autorenew_enabled": bool(data.get("autorenew_enabled", True)),
     }
     await _show_checkout(bot, callback, state, checkout_display)
 
@@ -442,7 +472,7 @@ async def _get_checkout_params(state: FSMContext, user_id: int) -> dict | None:
         "devices": validate_device_limit(data.get("devices", DEFAULT_DEVICE_LIMIT)),
         "promo_code": data.get("promo_code", ""),
         "renew_key_id": int(data["renew_key_id"]) if data.get("renew_key_id") else None,
-        "autorenew_enabled": True,
+        "autorenew_enabled": bool(data.get("autorenew_enabled", True)),
         "checkout_autorenew_disclosed": True,
     }
 
@@ -584,7 +614,7 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
     devices: int = params["devices"]
     promo_code: str = params["promo_code"]
     user_id = callback.from_user.id
-    save_payment_method = True
+    save_payment_method = bool(params.get("autorenew_enabled", True))
     next_charge_rub, next_charge_days = get_price_for_months(months, devices)
 
     # The fingerprint binds retries to the *exact* confirmed order. A
@@ -638,13 +668,14 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
         await safe_answer(callback)
         await callback.message.answer(
             "Не удалось открыть оплату через ЮKassa.\n\n"
-            "Напишите в поддержку — поможем оплатить подписку банковской картой. "
-            "Если деньги уже списались, не оплачивайте повторно: отправьте поддержке подтверждение платежа.",
+            "Попробуйте открыть оплату ещё раз. Если деньги уже списались, "
+            "не оплачивайте повторно: обратитесь в поддержку для проверки платежа.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
-                    text="💬 Оплатить картой через поддержку",
-                    url="https://t.me/ByMeVPNSupportBot",
+                    text="Проверить платёж · поддержка",
+                    url=support_url("payment"),
                 )],
+                [InlineKeyboardButton(text="Повторить оформление", callback_data=f"tariff_{months}_{devices}")],
                 [InlineKeyboardButton(text="Оплатить через Telegram Stars", callback_data="pay_stars", )],
             ]),
         )
@@ -667,7 +698,7 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
         f"Перейдите к оплате по кнопке ниже.\n\n"
         f"Сумма: <b>{price_rub} ₽</b>\n"
         f"Срок: {days} дней\n"
-        f"Устройств: до {devices} одновременно\n\n"
+        f"Устройств: до {devices}\n\n"
         f"Автопродление: <b>{'включено' if recurring_checkout else 'выключено'}</b>. "
         + (f"Следующее списание {next_charge_rub} ₽ за {next_charge_days} дней — по окончании срока. "
            "Отключить можно в настройках.\n\n" if recurring_checkout else
@@ -757,7 +788,7 @@ async def cb_pay_crypto(callback: CallbackQuery, bot: Bot, state: FSMContext):
         f"Перейдите к оплате по кнопке ниже.\n\n"
         f"Сумма: <b>{price_rub} ₽</b>\n"
         f"Срок: {days} дней\n"
-        f"Устройств: до {devices} одновременно\n\n"
+        f"Устройств: до {devices}\n\n"
         f"Подписка активируется после подтверждения оплаты.",
         kb,
         photo=PAYMENT,
@@ -811,7 +842,11 @@ def _stars_invoice_error(pre: PreCheckoutQuery) -> str | None:
 
 @router.pre_checkout_query()
 async def pre_checkout(pre: PreCheckoutQuery):
-    error = _stars_invoice_error(pre)
+    if str(pre.invoice_payload or "").startswith("devup_"):
+        from handlers.device_upgrades import device_upgrade_checkout_error
+        error = await device_upgrade_checkout_error(pre)
+    else:
+        error = _stars_invoice_error(pre)
     if not error:
         from database import is_account_tombstoned
         try:
@@ -881,7 +916,11 @@ async def on_successful_payment(message: Message, bot: Bot, state: FSMContext):
     charge_id = payment.telegram_payment_charge_id or payment.invoice_payload
     lock = _stars_payment_locks.setdefault(charge_id, asyncio.Lock())
     async with lock:
-        await _process_successful_stars_payment(message, bot, state, payment, charge_id)
+        if str(payment.invoice_payload or "").startswith("devup_"):
+            from handlers.device_upgrades import process_device_upgrade_charge
+            await process_device_upgrade_charge(message, bot, payment, charge_id)
+        else:
+            await _process_successful_stars_payment(message, bot, state, payment, charge_id)
 
 
 async def _process_successful_stars_payment(

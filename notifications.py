@@ -66,9 +66,10 @@ async def _send_autorenew_upcoming(bot: Bot, item: dict, sub: dict) -> None:
     This also serves as the trial-ending warning: trial keys have an
     auto-renew row with the real recurring price (89 ₽ / 30 days).
     """
-    date_str = datetime.fromtimestamp(item["expiry"]).strftime("%d.%m.%Y")
+    date_str = datetime.fromtimestamp(item["expiry"], timezone(timedelta(hours=3))).strftime("%d.%m.%Y в %H:%M МСК")
     days_left = max(1, int((item["expiry"] - int(time.time()) + 86399) / 86400))
-    amount = sub.get("amount_rub") or 89
+    amount = sub.get("amount_rub")
+    charge_label = f"{amount} ₽" if isinstance(amount, (int, float)) and amount > 0 else "уточняется"
     devices = sub.get("devices") or 2
     pm_title = sub.get("payment_method_title") or {
         "sbp": "счёт СБП",
@@ -78,9 +79,9 @@ async def _send_autorenew_upcoming(bot: Bot, item: dict, sub: dict) -> None:
     text = (
         f"<b>Скоро автоматическое продление</b>\n\n"
         f"Дата списания: <b>{date_str}</b> (через {days_left} {get_day_word(days_left)})\n"
-        f"Сумма: <b>{amount} ₽</b> за следующие {sub.get('days') or 30} дней ({devices} устр.)\n"
+        f"Сумма: <b>{charge_label}</b> за следующие {sub.get('days') or 30} дней ({devices} устр.)\n"
         f"Способ оплаты: {pm_title}\n\n"
-        f"Ничего делать не нужно — доступ продлится автоматически.\n"
+        f"Автопродление запланировано. Продление доступа подтвердим после успешной оплаты.\n"
         "Автопродление можно отключить кнопкой ниже. "
         "Оплаченный доступ сохранится до конца периода."
     )
@@ -115,7 +116,7 @@ async def _send_urgent_notification(bot: Bot, item: dict) -> bool:
     if sub:
         return await _send_autorenew_upcoming(bot, item, sub)
     days_left = max(1, (remaining + 86399) // 86400)
-    date_str = datetime.fromtimestamp(item["expiry"]).strftime("%d.%m.%Y")
+    date_str = datetime.fromtimestamp(item["expiry"], timezone(timedelta(hours=3))).strftime("%d.%m.%Y в %H:%M МСК")
     if item.get("is_trial"):
         text = (
             "<b>Пробный доступ заканчивается</b>\n\n"
@@ -146,7 +147,7 @@ async def _send_warning_notification(bot: Bot, item: dict) -> bool:
     sub = await _get_active_autorenew(item["user_id"], item.get("key_id"))
     if sub:
         return False
-    date_str = datetime.fromtimestamp(item["expiry"]).strftime("%d.%m.%Y")
+    date_str = datetime.fromtimestamp(item["expiry"], timezone(timedelta(hours=3))).strftime("%d.%m.%Y в %H:%M МСК")
     days_left = max(1, (int(item["expiry"]) - int(time.time()) + 86399) // 86400)
     text = (
         f"<b>Подписка активна до {date_str}</b>\n\n"
@@ -196,7 +197,7 @@ async def _send_winback_notification(bot: Bot, item: dict) -> bool:
         "Это единичное напоминание. От рекламных предложений можно отказаться."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Вернуть доступ", callback_data=_renewal_callback(item))],
+        [InlineKeyboardButton(text="Продлить подписку", callback_data=_renewal_callback(item))],
         [InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn")],
         [InlineKeyboardButton(text="Сообщить причину ухода", callback_data="winback_feedback")],
         [InlineKeyboardButton(text="Не присылать предложения", callback_data="marketing_optout")],
