@@ -117,14 +117,15 @@ async def cb_my_keys(callback: CallbackQuery, bot: Bot):
                         content, keyboard = await _key_info_content(user_id, restored)
                         await send_or_edit(bot, callback, content, keyboard, photo=KEY)
                         return
-                from app_links import build_connect_page_url
+                from app_links import build_user_connect_page_url
                 from constants import format_timestamp
                 buttons = []
                 sub_url = str(panel.get("subscription_url") or "")
                 if sub_url:
                     try:
-                        connect_url = build_connect_page_url(sub_url, user_id=user_id)
-                    except (RuntimeError, ValueError):
+                        connect_url = await build_user_connect_page_url(sub_url, user_id=user_id)
+                    except Exception:
+                        logger.warning("Could not build connection URL for user %d", user_id)
                         connect_url = None
                     if connect_url:
                         buttons.append([InlineKeyboardButton(text="Подключить VPN", url=connect_url)])
@@ -256,9 +257,17 @@ async def _key_info_content(user_id: int, k: dict) -> tuple[str, object]:
         f"{remaining_line}Действует до: <b>{fmt_date(k['expiry'])}</b>"
         + (f"\n{device_text}" if device_text else "")
     )
+    link_seed = ""
+    if subscription_url and active:
+        try:
+            from database import get_or_create_connect_link_seed
+            link_seed = await get_or_create_connect_link_seed(user_id)
+        except Exception:
+            logger.warning("Connection link state unavailable for user %s", user_id, exc_info=True)
     return text, key_detail_kb(
-        key_id, subscription_url=subscription_url, has_history=has_history,
-        is_active=active, user_id=user_id,
+        key_id, subscription_url=subscription_url if link_seed else "",
+        has_history=has_history, is_active=active, user_id=user_id,
+        link_seed=link_seed,
     )
 
 
@@ -952,12 +961,12 @@ async def _open_connect_page(callback: CallbackQuery, key_id: int | None = None)
         await callback.answer("Подписка не найдена. Откройте раздел «Подписка».", show_alert=True)
         return
     try:
-        from app_links import build_connect_page_url
-        url = build_connect_page_url(
+        from app_links import build_user_connect_page_url
+        url = await build_user_connect_page_url(
             subscription_url, callback.from_user.first_name or "",
             user_id=user_id, key_id=int(key["id"]),
         )
-    except (RuntimeError, ValueError):
+    except Exception:
         logger.exception("Connection page could not be built for user %d", user_id)
         await callback.answer("Страница подключения временно недоступна. Напишите в поддержку.", show_alert=True)
         return
