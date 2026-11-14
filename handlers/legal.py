@@ -14,12 +14,9 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 _LEGAL_TEXT = (
-    "<b>ByMeVPN®</b>\n\n"
-    "Юридическая информация ByMeVPN\n"
-    "Официальные документы, регулирующие использование сервиса.\n\n"
-    "Выберите документ для просмотра:"
+    "<b>Документы ByMeVPN</b>\n\n"
+    "Выберите документ, чтобы ознакомиться с условиями сервиса."
 )
-
 
 @router.message(F.text.startswith("/legal"))
 async def cmd_legal(message: Message, bot: Bot):
