@@ -56,6 +56,7 @@ async def _send_delivery_message(
     subscription_url: str = "",
     *,
     edit_target=None,
+    key_id: int | None = None,
 ) -> bool:
     """Deliver the key message to the user. NEVER raises.
 
@@ -66,7 +67,7 @@ async def _send_delivery_message(
     the key via «Мои ключи».
     """
     try:
-        markup = after_key_kb(subscription_url, user_id=user_id)
+        markup = after_key_kb(subscription_url, user_id=chat_id, key_id=key_id)
         if edit_target is not None:
             # Trial is initiated from the main menu's photo message. Replace
             # that screen with the key card instead of posting a second message.
@@ -352,13 +353,11 @@ async def _deliver_key_unlocked(
                     f"<b>Ключ #{key_id}</b> продлён на <b>{days} дней</b>\n"
                     f"Устройства: <b>{limit_ip}</b>\n"
                     f"Действует до: <b>{format_timestamp(new_expiry)[:10]}</b>\n\n"
-                    f"<b>Ссылка для подключения</b>\n"
-                    f"<code>{key_to_show}</code>\n\n"
-                    f"Ссылка на VPN не изменилась. Повторно подключать устройства не нужно."
+                    "Ссылка подключения не изменилась. Повторно подключать устройства не нужно."
                 )
                 
                 delivered = await _send_delivery_message(
-                    bot, chat_id, text, key_to_show, edit_target=delivery_target,
+                    bot, chat_id, text, key_to_show, edit_target=delivery_target, key_id=key_id,
                 )
                 if not delivered:
                     await _log_notification_failure(
@@ -460,7 +459,7 @@ async def _deliver_key_unlocked(
             )
             text = _activation_message(title, bonus_note, days, limit_ip, new_expiry)
             delivered = await _send_delivery_message(
-                bot, chat_id, text, sub_url, edit_target=delivery_target,
+                bot, chat_id, text, sub_url, edit_target=delivery_target, key_id=key_id,
             )
             if not delivered:
                 await _log_notification_failure(
@@ -552,7 +551,7 @@ async def _deliver_key_unlocked(
         text = _activation_message(title, bonus_note, days, limit_ip)
         
         delivered = await _send_delivery_message(
-            bot, chat_id, text, subscription_url, edit_target=delivery_target,
+            bot, chat_id, text, subscription_url, edit_target=delivery_target, key_id=key_id,
         )
         if not delivered:
             await _log_notification_failure(
