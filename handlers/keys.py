@@ -206,7 +206,7 @@ async def cb_key_info(callback: CallbackQuery, bot: Bot):
     k = await get_key_by_id(key_id)
 
     if not k or k["user_id"] != callback.from_user.id:
-        await safe_answer(callback, "Ключ не найден.", alert=True)
+        await safe_answer(callback, "Подписка не найдена.", alert=True)
         return
 
     text, keyboard = await _key_info_content(callback.from_user.id, k)
@@ -330,7 +330,7 @@ async def cb_key_devices(callback: CallbackQuery, bot: Bot):
         return
     key = await get_key_by_id(key_id)
     if not key or key["user_id"] != callback.from_user.id:
-        await safe_answer(callback, "Ключ не найден.", alert=True)
+        await safe_answer(callback, "Подписка не найдена.", alert=True)
         return
     await safe_answer(callback)
     try:
@@ -354,7 +354,7 @@ async def cb_key_device(callback: CallbackQuery, bot: Bot):
         return
     key = await get_key_by_id(key_id)
     if not key or key["user_id"] != callback.from_user.id:
-        await safe_answer(callback, "Ключ не найден.", alert=True)
+        await safe_answer(callback, "Подписка не найдена.", alert=True)
         return
     await safe_answer(callback)
     try:
@@ -390,7 +390,7 @@ async def cb_key_device_delete_prompt(callback: CallbackQuery, bot: Bot):
         return
     key = await get_key_by_id(key_id)
     if not key or key["user_id"] != callback.from_user.id:
-        await safe_answer(callback, "Ключ не найден.", alert=True)
+        await safe_answer(callback, "Подписка не найдена.", alert=True)
         return
     await safe_answer(callback)
     text = (
@@ -411,7 +411,7 @@ async def cb_key_device_delete(callback: CallbackQuery, bot: Bot):
         return
     key = await get_key_by_id(key_id)
     if not key or key["user_id"] != callback.from_user.id:
-        await safe_answer(callback, "Ключ не найден.", alert=True)
+        await safe_answer(callback, "Подписка не найдена.", alert=True)
         return
     try:
         removed = await delete_xui_hwid_device(callback.from_user.id, device_id)
@@ -437,7 +437,13 @@ async def cb_key_device_delete(callback: CallbackQuery, bot: Bot):
         )
     except Exception as exc:
         logger.warning("Device list refresh failed after deletion (%s)", type(exc).__name__)
-        await send_or_edit(bot, callback, "Устройство удалено.", key_devices_kb(key_id), photo=DEVICES)
+        await send_or_edit(
+            bot, callback,
+            "<b>Устройство удалено</b>\n\nМесто освобождено. "
+            "Теперь можно подключить другое устройство. "
+            "Если старый клиент всё ещё импортирует подписку, удалите её с прежнего устройства.",
+            key_devices_kb(key_id), photo=DEVICES,
+        )
 
 
 @router.callback_query(F.data.startswith("key_settings:"))
@@ -451,7 +457,7 @@ async def cb_key_settings(callback: CallbackQuery, bot: Bot):
 
     key = await get_key_by_id(key_id)
     if not key or key["user_id"] != callback.from_user.id:
-        await safe_answer(callback, "Ключ не найден.", alert=True)
+        await safe_answer(callback, "Подписка не найдена.", alert=True)
         return
 
     text = (
@@ -999,7 +1005,7 @@ async def cb_key_renew(callback: CallbackQuery, bot: Bot, state: FSMContext):
     k = await get_key_by_id(key_id)
 
     if not k or k["user_id"] != callback.from_user.id:
-        await safe_answer(callback, "Ключ не найден.", alert=True)
+        await safe_answer(callback, "Подписка не найдена.", alert=True)
         return
 
     key_devices = k.get("limit_ip", 2)
@@ -1028,7 +1034,7 @@ async def cb_key_delete(callback: CallbackQuery, bot: Bot):
     k = await get_key_by_id(key_id)
 
     if not k or k["user_id"] != callback.from_user.id:
-        await safe_answer(callback, "Ключ не найден.", alert=True)
+        await safe_answer(callback, "Подписка не найдена.", alert=True)
         return
 
     remark = escape(k.get("remark") or f"Ключ #{key_id}")
@@ -1080,7 +1086,7 @@ async def cb_key_delete_confirm(callback: CallbackQuery, bot: Bot):
     k = await get_key_by_id(key_id)
 
     if not k or k["user_id"] != callback.from_user.id:
-        await safe_answer(callback, "Ключ не найден.", alert=True)
+        await safe_answer(callback, "Подписка не найдена.", alert=True)
         return
 
     remark = escape(k.get("remark") or f"Ключ #{key_id}")
