@@ -167,6 +167,38 @@ class CancelAllMethodsTests(unittest.IsolatedAsyncioTestCase):
             cursor = await db.execute(f"SELECT COUNT(*) FROM {table} WHERE user_id=123")
             self.assertEqual((await cursor.fetchone())[0], 0, table)
 
+    async def test_admin_deleted_account_can_restart_as_fresh_user(self):
+        await database.add_key(123, "https://sub.test/old", "old", "old-uuid", 30, 2)
+        await database.save_auto_renew_subscription(123, 1, "old-card")
+        await database.delete_user_and_keys(123, source="admin")
+
+        self.assertTrue(await database.is_account_tombstoned(123))
+        self.assertTrue(await database.reactivate_admin_deleted_account(123, "new_name"))
+        self.assertFalse(await database.is_account_tombstoned(123))
+        self.assertEqual(await database.get_user_keys(123), [])
+        user = await database.find_user_by_id(123)
+        self.assertEqual(user["username"], "new_name")
+        self.assertFalse(user["is_banned"])
+        db = await database.get_db()
+        renew = await (await db.execute(
+            "SELECT status,payment_method_id FROM auto_renew_subscriptions WHERE user_id=123"
+        )).fetchone()
+        self.assertEqual(renew, ("cancelled", ""))
+
+    async def test_self_service_deleted_account_cannot_restart(self):
+        await database.delete_user_and_keys(123, source="self_service")
+        self.assertFalse(await database.reactivate_admin_deleted_account(123, "new_name"))
+        self.assertTrue(await database.is_account_tombstoned(123))
+
+    async def test_partial_admin_deletion_fails_closed(self):
+        db = await database.get_db()
+        await db.execute(
+            "INSERT INTO account_tombstones(user_id,deleted_at,source) VALUES(123,1,'admin')"
+        )
+        await db.commit()
+        self.assertFalse(await database.reactivate_admin_deleted_account(123, "new_name"))
+        self.assertTrue(await database.is_account_tombstoned(123))
+
     async def test_checkout_lease_blocks_account_deletion_during_invoice_creation(self):
         attempt = await database.claim_yookassa_checkout_attempt(123, "c" * 64)
         self.assertTrue(await database.has_recent_unsettled_checkout(123))

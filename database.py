@@ -2056,12 +2056,15 @@ async def reactivate_admin_deleted_account(
                     return False
 
                 cursor = await db.execute(
-                    "SELECT 1 FROM users WHERE user_id=? LIMIT 1",
+                    "SELECT is_banned, ban_reason FROM users WHERE user_id=? LIMIT 1",
                     (int(user_id),),
                 )
-                if await cursor.fetchone():
-                    # A partially removed account must be reconciled instead of
-                    # silently being presented as a new registration.
+                user_row = await cursor.fetchone()
+                if user_row and not (
+                    bool(user_row[0]) and user_row[1] == "account_deleted"
+                ):
+                    # A partially removed or independently banned account must
+                    # be reconciled instead of silently being reactivated.
                     await db.rollback()
                     return False
 
@@ -2072,10 +2075,20 @@ async def reactivate_admin_deleted_account(
                 if cursor.rowcount != 1:
                     await db.rollback()
                     return False
-                await db.execute(
-                    "INSERT INTO users(user_id, username) VALUES(?, ?)",
-                    (int(user_id), username),
-                )
+                if user_row:
+                    await db.execute(
+                        """UPDATE users
+                           SET username=?, email=NULL, referrer_id=NULL,
+                               total_paid=0, is_banned=0, ban_reason=NULL
+                           WHERE user_id=? AND is_banned=1
+                             AND ban_reason='account_deleted'""",
+                        (username, int(user_id)),
+                    )
+                else:
+                    await db.execute(
+                        "INSERT INTO users(user_id, username) VALUES(?, ?)",
+                        (int(user_id), username),
+                    )
                 await db.commit()
                 logger.info("Administrator-deleted account restarted as new user %d", user_id)
                 return True
