@@ -32,14 +32,14 @@ class CommercialNavigationTests(unittest.TestCase):
                 self.assertIn("free_vpn", callbacks(keyboard))
                 self.assertTrue(all(b.style in ("primary", "success", "danger") for b in buttons))
                 free = next(b for b in buttons if b.callback_data == "free_vpn")
-                self.assertEqual(free.style, "success")
+                self.assertEqual(free.style, "primary")
 
     def test_devices_live_inside_subscription_and_actions_are_grouped(self):
         home = main_menu_active(42)
         self.assertNotIn("key_devices:42", callbacks(home))
         self.assertEqual(
             [b.callback_data for b in home.inline_keyboard[1]],
-            ["my_keys", "key_renew:42"],
+            ["my_keys"],
         )
         details = key_detail_kb(42, subscription_url="https://example.test/sub/key")
         self.assertEqual(
