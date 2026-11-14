@@ -20,7 +20,9 @@ class UpdateSiteTests(unittest.TestCase):
         self.assets = self.root / "assets"
         self.assets.mkdir()
         for icon in update_site.ICON_ASSETS:
-            (self.assets / icon).write_bytes(b"\x89PNG\r\n\x1a\n" + icon.encode())
+            payload = (b'<svg xmlns="http://www.w3.org/2000/svg"/>'
+                       if icon.endswith(".svg") else b"\x89PNG\r\n\x1a\n" + icon.encode())
+            (self.assets / icon).write_bytes(payload)
         app = FastAPI()
         app.include_router(update_site.router)
         self.client = TestClient(app)
@@ -39,8 +41,11 @@ class UpdateSiteTests(unittest.TestCase):
             with self.subTest(icon=icon):
                 response = self.client.get(f"/app/assets/{icon}")
                 self.assertEqual(response.status_code, 200)
-                self.assertEqual(response.content, b"\x89PNG\r\n\x1a\n" + icon.encode())
-                self.assertEqual(response.headers["content-type"], "image/png")
+                expected = (b'<svg xmlns="http://www.w3.org/2000/svg"/>'
+                            if icon.endswith(".svg") else b"\x89PNG\r\n\x1a\n" + icon.encode())
+                self.assertEqual(response.content, expected)
+                self.assertEqual(response.headers["content-type"],
+                                 "image/svg+xml" if icon.endswith(".svg") else "image/png")
                 self.assertEqual(response.headers["cache-control"], "public, max-age=86400")
                 self.assertEqual(response.headers["x-content-type-options"], "nosniff")
         self.assertEqual(self.client.get("/app/assets/unknown.png").status_code, 404)

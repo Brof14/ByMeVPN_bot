@@ -20,6 +20,7 @@ ICON_ASSETS = frozenset({
     "android.png", "apple.png", "bymevpn-logo.png", "happ.png", "incy.png", "koala.png", "linux.png",
         "v2raytun.png", "v2rayng.png",
     "v2rayn.png", "windows.png",
+    "hiddify.svg", "singbox.svg",
 })
 ORIGIN = "https://bymevpn.duckdns.org"
 APK_NAME = re.compile(r"^ByMeVPN-v(\d+\.\d+\.\d+)\.apk$")
@@ -134,7 +135,7 @@ async def app_brand_asset(asset_name: str):
         raise HTTPException(status_code=404, detail="Файл не найден")
     return FileResponse(
         path,
-        media_type="image/png",
+        media_type="image/svg+xml" if asset_name.endswith(".svg") else "image/png",
         headers={
             "Cache-Control": "public, max-age=86400",
             "X-Content-Type-Options": "nosniff",

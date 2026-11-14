@@ -342,7 +342,7 @@ async def app_brand_asset(asset_name: str):
     allowed = {
         "android.png", "apple.png", "bymevpn-logo.png", "happ.png", "incy.png",
         "koala.png", "linux.png", "v2raytun.png", "v2rayng.png", "hiddify.png",
-        "singbox.png", "v2rayn.png", "windows.png",
+        "singbox.svg", "hiddify.svg", "v2rayn.png", "windows.png",
     }
     root = (Path(__file__).resolve().parent / "static" / "app" / "assets").resolve()
     path = (root / asset_name).resolve()
