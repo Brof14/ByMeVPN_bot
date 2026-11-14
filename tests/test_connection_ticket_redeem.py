@@ -38,7 +38,7 @@ class ConnectionTicketHttpTests(unittest.TestCase):
         with patch("app_links.BOT_TOKEN", "local-test-secret"):
             return app_links.build_connect_ticket(url)
 
-    def test_get_renders_connection_page_directly_and_spends_ticket_once(self):
+    def test_get_renders_connection_page_and_preserves_valid_ticket(self):
         secret = "https://panel.example/sub/private-user-token"
         with patch("app_links.BOT_TOKEN", "local-test-secret"):
             ticket = app_links.build_connect_ticket(secret)
@@ -50,8 +50,8 @@ class ConnectionTicketHttpTests(unittest.TestCase):
             self.assertIn('id="platforms"', opened.text)
             self.assertNotIn("Открываем страницу подключения", opened.text)
             self.assertIn("no-store", opened.headers["cache-control"])
-            self.assertEqual(reused.status_code, 410)
-            self.assertNotIn(secret, reused.text)
+            self.assertEqual(reused.status_code, 200)
+            self.assertIn(secret, reused.text)
 
     def test_tampered_ticket_does_not_consume_anything(self):
         with patch("connect_ticket_replay.consume_connect_ticket", new=AsyncMock()) as consume:
