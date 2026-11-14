@@ -118,6 +118,36 @@ class CustomerUxFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("key_info:77", button_actions(sent.await_args.args[3]))
 
+    def test_android_failed_download_reopens_the_real_selected_source(self):
+        from app_links import render_connection_choice_page
+        page = render_connection_choice_page("https://panel.example/sub/test")
+        self.assertIn("external.href=download.href", page)
+        self.assertNotIn('const apk="/app"', page)
+        self.assertIn("Если приложение не установлено", page)
+
+    async def test_ad_retention_due_shows_final_review_instead_of_stale_date(self):
+        from handlers.ad_program import cb_ad_my_applications
+        item = {
+            "id": 87, "user_id": 1001, "channel_username": "test_channel",
+            "status": "approved", "bonus_months": 2,
+            "verification_due_at": int(time.time()) - 86400,
+        }
+        callback = self.callback("ad_my_applications")
+        state = SimpleNamespace(clear=AsyncMock())
+        with (
+            patch("handlers.ad_program.safe_answer", new=AsyncMock()),
+            patch(
+                "handlers.ad_program.get_user_ad_applications",
+                new=AsyncMock(return_value=[item]),
+            ),
+            patch("handlers.ad_program.send_with_photo", new=AsyncMock()) as sent,
+        ):
+            await cb_ad_my_applications(callback, object(), state)
+        self.assertIn(
+            "Ожидается итоговая проверка публикации", sent.await_args.args[2],
+        )
+
+
     async def test_referral_rewards_have_independent_earned_and_pending_states(self):
         users = [
             {"registration_date": 1_700_000_000, "bonus_days_awarded": 15,
