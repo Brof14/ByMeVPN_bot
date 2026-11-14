@@ -249,6 +249,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             send.await_args.args[2],
             "<b>Подписка активна</b>\n\n"
+            "Осталось <b>1 день</b>\n"
             "Действует до <b>09.03.2027</b>\n"
             "Устройств в тарифе: <b>2 устройства</b>",
         )
