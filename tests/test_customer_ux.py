@@ -363,7 +363,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             by_action = {button.callback_data: button for button in buttons}
             self.assertEqual(by_action["about"].style, "primary")
             self.assertIn(by_action["buy_vpn"].style, {None, "primary"})
-            self.assertEqual(by_action["free_vpn"].style, "success")
+            self.assertEqual(by_action["free_vpn"].style, "primary")
         menu = main_menu_with_keys()
         self.assertEqual([len(row) for row in menu.inline_keyboard], [1, 1, 1, 2])
         self.assertEqual(menu.inline_keyboard[0][0].style, "primary")
@@ -461,7 +461,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         from app_links import render_connection_choice_page
         page = render_connection_choice_page("https://panel.example/sub/test")
         self.assertIn("macos", page)
-        self.assertNotIn("Hiddify", page)
+        self.assertIn("Hiddify", page)
         self.assertIn("v2rayN", page)
 
     async def test_referral_start_uses_a_welcome_variant(self):
@@ -474,9 +474,9 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         ):
             await _send_main_menu(SimpleNamespace(), SimpleNamespace(), 123, "Алексей", is_new_referral=True)
         welcome = send.call_args.args[2]
-        self.assertIn("Добро пожаловать", welcome)
+        self.assertIn("<b>ByMeVPN</b>", welcome)
         self.assertIn("Приглашение учтено", welcome)
-        self.assertIn("Начните с пробного доступа", welcome)
+        self.assertIn("3 дня бесплатно", welcome)
 
     def test_key_settings_hide_destructive_action(self):
         markup = key_settings_kb(9)
