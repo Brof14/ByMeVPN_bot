@@ -1789,6 +1789,14 @@ async def get_google_desktop_client():
     }
 
 
+@auth_api.get("/google/web-client")
+async def get_google_web_client():
+    """Expose only the public web OAuth client ID for the deletion page."""
+    if not _google_signin_configured():
+        raise HTTPException(status_code=503, detail="Вход через Google временно недоступен")
+    return {"client_id": os.getenv("GOOGLE_WEB_CLIENT_ID", "").strip()}
+
+
 @auth_api.post("/google/nonce")
 async def create_google_nonce(request: Request = None):
     """Issue a short-lived server nonce only when Google login is configured."""
