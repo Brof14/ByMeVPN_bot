@@ -56,7 +56,7 @@ class TestTelegramDeviceDelete(unittest.IsolatedAsyncioTestCase):
             await keys.cb_key_device_delete(callback, object())
 
         delete.assert_not_awaited()
-        answer.assert_awaited_once_with(callback, "Ключ не найден.", alert=True)
+        answer.assert_awaited_once_with(callback, "Подписка не найдена.", alert=True)
 
     async def test_panel_failure_does_not_claim_device_was_deleted(self):
         callback = self.callback()
