@@ -141,6 +141,41 @@ class TestGiveawayAutomation(unittest.IsolatedAsyncioTestCase):
         self.assertIn("В зачёт попадёт тот, кто впервые запустит бота по вашей ссылке", bot.send_message.await_args.args[1])
         self.assertIn("3 победителя получат по <b>+30 дней VPN</b>", bot.send_message.await_args.args[1])
 
+    async def test_promotion_skips_active_paying_customers_without_referral_interest(self):
+        # Already paying users without recent referral activity should not
+        # receive unsolicited monthly promotional announcements.
+        now = int(time.time())
+        for uid in (591, 592, 593, 594):
+            await database.ensure_user(uid)
+        for uid in (591, 592, 593):
+            await database.add_key(
+                uid, f"https://vpn.example/sub/{uid}", str(uid),
+                f"00000000-0000-4000-8000-{uid:012d}", 30, 2,
+                expiry=now + 30 * 86400,
+            )
+        db = await database.get_db()
+        for uid in (591, 593):
+            await db.execute(
+                "INSERT INTO payments(user_id,amount,currency,method,days,created,status)"
+                " VALUES(?,?,?,?,?,?,?)",
+                (uid, 89, "RUB", "yookassa", 30, now, "success"),
+            )
+        await db.commit()
+        await database.set_referrer(5931, 593)  # opted into referrals recently
+
+        giveaway_id = await database.create_giveaway(
+            title="Тест уведомлений", description="targeted", prize_days=30,
+            winners_count=3, end_date=now + 86400,
+        )
+        await database.create_giveaway_notification_snapshot(giveaway_id)
+        pending = await database.get_pending_giveaway_notifications(giveaway_id)
+        self.assertNotIn(591, pending)
+        self.assertIn(592, pending)  # active trial without a paid subscription
+        self.assertIn(593, pending)  # already participating through referrals
+        self.assertIn(594, pending)  # no active VPN
+        self.assertFalse(await database.claim_giveaway_notification(giveaway_id, 591))
+
+
     async def test_old_monthly_campaign_is_updated_without_resending_to_users(self):
         from giveaway_automation import _month_period, ensure_monthly_giveaway
 
