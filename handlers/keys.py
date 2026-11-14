@@ -517,9 +517,12 @@ async def cb_key_diagnostics(callback: CallbackQuery, bot: Bot):
     )
     from aiogram.types import InlineKeyboardMarkup
     try:
-        from app_links import build_connect_page_url
-        connect_url = build_connect_page_url(str(key.get("key") or ""), callback.from_user.first_name or "", user_id=callback.from_user.id)
-    except (RuntimeError, ValueError):
+        from app_links import build_user_connect_page_url
+        connect_url = await build_user_connect_page_url(
+            str(key.get("key") or ""), callback.from_user.first_name or "",
+            user_id=callback.from_user.id, key_id=key_id,
+        )
+    except Exception:
         connect_url = ""
     kb = InlineKeyboardMarkup(inline_keyboard=[
         *([[InlineKeyboardButton(text="Подключить VPN", url=connect_url)]] if connect_url else []),
