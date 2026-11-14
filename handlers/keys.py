@@ -416,7 +416,12 @@ async def cb_key_device_delete(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback, "Устройство удалено")
     try:
         text, keyboard = await _key_devices_view(callback.from_user.id, key)
-        await send_or_edit(bot, callback, text, keyboard, photo=DEVICES)
+        await send_or_edit(
+            bot, callback,
+            "<b>Устройство удалено</b>\n\n"
+            "Место освобождено. Теперь можно подключить другое устройство.\n\n" + text,
+            keyboard, photo=DEVICES,
+        )
     except Exception as exc:
         logger.warning("Device list refresh failed after deletion (%s)", type(exc).__name__)
         await send_or_edit(bot, callback, "Устройство удалено.", key_devices_kb(key_id), photo=DEVICES)
