@@ -251,11 +251,12 @@ def read_connect_ticket(ticket: str, *, now: int | None = None) -> dict[str, str
 
 def _permanent_connect_signature(
     user_id: int, subscription_url: str, key_id: int | None = None,
+    *, link_seed: str = "",
 ) -> str:
-    """Bind a permanent user-facing link to the current VPN credential.
+    """Sign a key-specific permanent page link with its durable rotation epoch.
 
-    This URL has no expiration timer. When a key is reissued, the
-    subscription URL changes and the old link becomes invalid.
+    Legacy v2 MACs remain readable only until the first successful reissue.
+    New v3 MACs include an individual random DB epoch, revoked on reissue.
     """
     secret = os.getenv("APP_HANDOFF_SECRET") or os.getenv("JWT_SECRET") or BOT_TOKEN
     if not secret or int(user_id) <= 0 or not subscription_url:
@@ -264,7 +265,15 @@ def _permanent_connect_signature(
     if parsed.scheme != "https" or not parsed.hostname or len(subscription_url) > MAX_SUBSCRIPTION_URL_LENGTH:
         raise ValueError("invalid VPN subscription URL")
     fingerprint = hashlib.sha256(subscription_url.encode("utf-8")).hexdigest()
-    payload = f"connect-v2:{int(user_id)}:{int(key_id or 0)}:{fingerprint}"
+    if link_seed:
+        try:
+            if len(link_seed) != 64 or len(bytes.fromhex(link_seed)) != 32:
+                raise ValueError
+        except ValueError:
+            raise ValueError("invalid connection link epoch") from None
+        payload = f"connect-v3:{int(user_id)}:{int(key_id or 0)}:{fingerprint}:{link_seed}"
+    else:
+        payload = f"connect-v2:{int(user_id)}:{int(key_id or 0)}:{fingerprint}"
     return hmac.new(
         hashlib.sha256(secret.encode()).digest(), payload.encode(), hashlib.sha256,
     ).hexdigest()
@@ -273,6 +282,7 @@ def _permanent_connect_signature(
 def build_connect_page_url(
     subscription_url: str, user_name: str = "", *,
     user_id: int | None = None, key_id: int | None = None,
+    link_seed: str = "",
 ) -> str:
     if not APP_CONNECT_PAGE_URL:
         raise RuntimeError("APP_CONNECT_PAGE_URL must be configured for secure connection handover")
@@ -281,21 +291,33 @@ def build_connect_page_url(
         raise ValueError("APP_CONNECT_PAGE_URL must be an HTTPS origin")
     if user_id is not None:
         uid, kid = int(user_id), int(key_id or 0)
-        signature = _permanent_connect_signature(uid, subscription_url, kid)
+        signature = _permanent_connect_signature(uid, subscription_url, kid, link_seed=link_seed)
         return f"{APP_CONNECT_PAGE_URL}/connect?u={uid}&k={kid}&s={signature}"
     ticket = build_connect_ticket(subscription_url, user_name)
     return f"{APP_CONNECT_PAGE_URL}/connect?ticket={quote(ticket)}"
 
 
+async def build_user_connect_page_url(
+    subscription_url: str, user_name: str = "", *,
+    user_id: int, key_id: int | None = None,
+) -> str:
+    """Use the same random connection-link epoch on every screen and worker."""
+    from database import get_or_create_connect_link_seed
+    seed = await get_or_create_connect_link_seed(user_id)
+    return build_connect_page_url(
+        subscription_url, user_name, user_id=user_id, key_id=key_id, link_seed=seed,
+    )
+
+
 def verify_permanent_connect_token(
     user_id: int, signature: str, subscription_url: str = "", *,
-    key_id: int | None = None,
+    key_id: int | None = None, link_seed: str = "",
 ) -> bool:
     """Credential changes revoke previously shared permanent links."""
     if len(signature) != 64:
         return False
     try:
-        expected = _permanent_connect_signature(user_id, subscription_url, key_id)
+        expected = _permanent_connect_signature(user_id, subscription_url, key_id, link_seed=link_seed)
     except (ValueError, TypeError):
         return False
     return hmac.compare_digest(expected, signature)
