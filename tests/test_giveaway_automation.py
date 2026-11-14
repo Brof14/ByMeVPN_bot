@@ -158,6 +158,37 @@ class TestGiveawayAutomation(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await process_pending_ad_rewards(bot, limit=1), 1)
         self.assertEqual([call.kwargs["user_id"] for call in delivery.await_args_list], [811, 812])
 
+    async def test_due_ad_post_review_alerts_are_limited_and_not_auto_approved(self):
+        from giveaway_automation import remind_due_ad_retention_reviews
+        await database.ensure_user(887)
+        app_id = await database.create_ad_application(
+            user_id=887, channel_id=-100887, channel_username="channel887",
+            subscriber_count=68, bonus_months=2,
+            channel_ref="channel887", status="approved",
+        )
+        db = await database.get_db()
+        await db.execute(
+            "UPDATE ad_applications SET verification_due_at=? WHERE id=?",
+            (int(time.time()) - 1, app_id),
+        )
+        await db.commit()
+        with patch("giveaway_automation._notify_admins", new=AsyncMock()) as notice:
+            self.assertEqual(await remind_due_ad_retention_reviews(object()), 1)
+            self.assertEqual(await remind_due_ad_retention_reviews(object()), 0)
+            for _ in range(2):
+                await db.execute(
+                    "UPDATE ad_retention_review_notices SET last_reminded_at=? "
+                    "WHERE application_id=?",
+                    (int(time.time()) - 86401, app_id),
+                )
+                await db.commit()
+                self.assertEqual(await remind_due_ad_retention_reviews(object()), 1)
+            self.assertEqual(await remind_due_ad_retention_reviews(object()), 0)
+        self.assertEqual(notice.await_count, 3)
+        application = await database.get_ad_application_by_id(app_id)
+        self.assertEqual(application["status"], "approved")
+
+
     async def test_pending_ad_reward_migration_preserves_application(self):
         await database.ensure_user(821)
         app_id = await database.create_ad_application(

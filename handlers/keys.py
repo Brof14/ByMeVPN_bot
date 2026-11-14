@@ -46,7 +46,7 @@ async def cmd_keys(message: Message, bot: Bot):
 
     if not keys:
         await send_with_photo(bot, message,
-            "<b>У вас пока нет VPN-ключей</b>\n\n"
+            "<b>У вас пока нет подписки</b>\n\n"
             "Оформите подписку или получите дополнительные дни за приглашение друга и публикацию в канале.",
             back_to_menu(),
             photo=KEY,
@@ -339,7 +339,7 @@ async def cb_key_devices(callback: CallbackQuery, bot: Bot):
         logger.exception("Could not load connection details for user %s", callback.from_user.id)
         await send_or_edit(bot, callback,
                            "<b>Не удалось загрузить устройства</b>\n\nПопробуйте обновить список чуть позже.",
-                           key_devices_kb(key_id), photo=None)
+                           key_devices_kb(key_id), photo=DEVICES)
         return
     await send_or_edit(bot, callback, text, keyboard, photo=DEVICES)
 
@@ -452,7 +452,7 @@ async def cb_key_settings(callback: CallbackQuery, bot: Bot):
     try:
         key_id = int(callback.data.split(":", 1)[1])
     except (IndexError, ValueError):
-        await safe_answer(callback, "Не удалось открыть настройки ключа.", alert=True)
+        await safe_answer(callback, "Не удалось открыть управление подпиской.", alert=True)
         return
 
     key = await get_key_by_id(key_id)
@@ -464,7 +464,7 @@ async def cb_key_settings(callback: CallbackQuery, bot: Bot):
         "<b>Управление подпиской</b>\n\n"
         "Обновите ссылку доступа или настройте оплату."
     )
-    await send_or_edit(bot, callback, text, key_settings_kb(key_id), photo=None)
+    await send_or_edit(bot, callback, text, key_settings_kb(key_id), photo=KEY)
 
 
 @router.callback_query(F.data.startswith("key_diagnostics:"))
@@ -529,7 +529,7 @@ async def cb_key_diagnostics(callback: CallbackQuery, bot: Bot):
         [InlineKeyboardButton(text="Поддержка", url=support_url("connection"))],
         [InlineKeyboardButton(text="← К подписке", callback_data=f"key_info:{key_id}")],
     ])
-    await send_or_edit(bot, callback, text, kb, photo=None)
+    await send_or_edit(bot, callback, text, kb, photo=KEY)
 
 
 @router.callback_query(F.data.startswith("key_reissue_confirm:"))
