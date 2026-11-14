@@ -212,32 +212,61 @@ async def connection_choice_page(ticket: str = "", u: int = 0, s: str = "", k: i
     error_code = "invalid_link"
     try:
         if u and s:
+            # Fast reject malformed public requests without querying the
+            # database or VPN panel. The full credential-bound HMAC below is
+            # still the actual authorization check.
+            if u <= 0 or k < 0 or not re.fullmatch(r"[a-f0-9]{64}", s):
+                raise ValueError("invalid_link")
             import database
+            now = int(time.time())
             keys = await database.get_user_keys(u)
+            chosen = None
             if k:
-                matches = [item for item in keys if int(item.get("id") or 0) == k]
-                if not matches:
+                chosen = next(
+                    (item for item in keys if int(item.get("id") or 0) == k),
+                    None,
+                )
+                if chosen is None:
                     raise ValueError("invalid_link")
-                chosen = matches[0]
-                subscription_url = str(chosen.get("key") or "")
-                expires = int(chosen.get("expiry") or 0)
-            elif keys:
-                if len(keys) != 1:
-                    raise ValueError("choose_subscription")
-                chosen = keys[0]
-                subscription_url = str(chosen.get("key") or "")
-                expires = int(chosen.get("expiry") or 0)
             else:
-                # Server-side entitlement may exist before local synchronization.
+                # An expired local record must not shadow a paid, active
+                # server-only entitlement while SQLite synchronization lags.
+                active = [
+                    item for item in keys
+                    if int(item.get("expiry") or 0) > now
+                ]
+                if len(active) > 1:
+                    raise ValueError("choose_subscription")
+                if active:
+                    chosen = active[0]
+
+            if chosen:
+                subscription_url = str(chosen.get("key") or "")
+                expires = int(chosen.get("expiry") or 0)
+                if not verify_permanent_connect_token(u, s, subscription_url, key_id=k):
+                    raise ValueError("invalid_link")
+                if expires <= now:
+                    # Only a valid, signed link for this key can trigger a
+                    # panel-side verification of a late subscription renewal.
+                    from xui_client import get_xui_client_details
+                    panel = await get_xui_client_details(u, strict=True)
+                    if (
+                        panel and panel.get("enable") is not False
+                        and str(panel.get("subscription_url") or "") == subscription_url
+                        and int(panel.get("expiry_time") or 0) // 1000 > now
+                    ):
+                        expires = int(panel["expiry_time"]) // 1000
+            else:
                 from xui_client import get_xui_client_details
                 panel = await get_xui_client_details(u, strict=True)
                 if not panel or panel.get("enable") is False:
                     raise ValueError("invalid_link")
                 subscription_url = str(panel.get("subscription_url") or "")
                 expires = int(panel.get("expiry_time") or 0) // 1000
-            if not verify_permanent_connect_token(u, s, subscription_url, key_id=k):
-                raise ValueError("invalid_link")
-            if expires <= int(time.time()):
+                if not verify_permanent_connect_token(u, s, subscription_url, key_id=0):
+                    raise ValueError("invalid_link")
+
+            if expires <= now:
                 raise ValueError("expired")
             payload = {"subscription_url": subscription_url, "user_name": ""}
         else:
