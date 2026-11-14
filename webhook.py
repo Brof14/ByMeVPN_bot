@@ -118,10 +118,11 @@ async def account_deletion_page():
         page.read_text(encoding="utf-8"),
         headers={
             "Cache-Control": "no-store, max-age=0",
-            "Referrer-Policy": "no-referrer",
+            "Referrer-Policy": "strict-origin-when-cross-origin",
             "X-Robots-Tag": "noindex, nofollow",
             "X-Content-Type-Options": "nosniff",
-            "Content-Security-Policy": "default-src 'self'; script-src 'self' https://accounts.google.com; style-src 'self'; connect-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+            "Content-Security-Policy": "default-src 'self' https://accounts.google.com/gsi/; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' https://accounts.google.com/gsi/style; connect-src 'self' https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+            "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
         },
     )
 
