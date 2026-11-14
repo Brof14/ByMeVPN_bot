@@ -237,6 +237,14 @@ async def _clean_chat(bot: Bot, chat_id: int, anchor_msg_id: int, count: int = 3
     await asyncio.gather(*[delete_with_timeout(mid) for mid in ids], return_exceptions=True)
 
 
+def _remaining_days_label(expiry: int) -> str:
+    days = max(1, (int(expiry) - int(time.time()) + 86399) // 86400)
+    word = "день" if days % 10 == 1 and days % 100 != 11 else (
+        "дня" if days % 10 in (2, 3, 4) and days % 100 not in (12, 13, 14) else "дней"
+    )
+    return f"Осталось <b>{days} {word}</b>\n"
+
+
 async def _send_main_menu(
     bot: Bot,
     target: "Message | CallbackQuery",
@@ -257,9 +265,8 @@ async def _send_main_menu(
             "ваш доступ и платежи не изменены. Попробуйте немного позже."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn")],
-            [InlineKeyboardButton(text="Поддержка", url=support_url())],
             [InlineKeyboardButton(text="Повторить проверку", callback_data="back_to_menu")],
+            [InlineKeyboardButton(text="Поддержка", url=support_url())],
         ])
         if isinstance(target, Message):
             await bot.send_message(chat_id=user_id, text=text, reply_markup=kb)
@@ -307,6 +314,7 @@ async def _send_main_menu(
             active_key = max(active_keys, key=lambda k: k.get("expiry", 0))
             from constants import format_timestamp
             expires = format_timestamp(active_key["expiry"])[:10]
+            remaining_text = _remaining_days_label(active_key["expiry"])
             device_count = int(active_key.get("limit_ip") or 0)
             if device_count not in {2, 5, 10}:
                 device_count = 0
@@ -322,13 +330,13 @@ async def _send_main_menu(
             if device_count in {2, 5, 10}:
                 text = (
                     f"<b>Подписка активна</b>\n\n"
-                    f"Действует до <b>{expires}</b>\n"
+                    f"{remaining_text}Действует до <b>{expires}</b>\n"
                     f"Устройств в тарифе: <b>{device_count} {device_word}</b>"
                 )
             else:
                 text = (
                     f"<b>Подписка активна</b>\n\n"
-                    f"Действует до <b>{expires}</b>\n"
+                    f"{remaining_text}Действует до <b>{expires}</b>\n"
                     "Количество устройств можно проверить в разделе «Подписка»."
                 )
         else:
@@ -341,18 +349,19 @@ async def _send_main_menu(
             if _panel_client_is_active(panel_client):
                 from constants import format_timestamp
                 expires = format_timestamp(int(panel_client["expiry_time"]) // 1000)[:10]
+                remaining_text = _remaining_days_label(int(panel_client["expiry_time"]) // 1000)
                 device_count = int(panel_client.get("limit_hwid") or 0)
                 if device_count in {2, 5, 10}:
                     device_word = "устройство" if device_count == 1 else "устройства" if device_count <= 4 else "устройств"
                     text = (
                         f"<b>Подписка активна</b>\n\n"
-                        f"Действует до <b>{expires}</b>\n"
+                        f"{remaining_text}Действует до <b>{expires}</b>\n"
                         f"Устройств в тарифе: <b>{device_count} {device_word}</b>"
                     )
                 else:
                     text = (
                         f"<b>Подписка активна</b>\n\n"
-                        f"Действует до <b>{expires}</b>\n"
+                        f"{remaining_text}Действует до <b>{expires}</b>\n"
                         "Количество устройств можно проверить в разделе «Подписка»."
                     )
             else:
