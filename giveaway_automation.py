@@ -150,7 +150,7 @@ async def _send_campaign_announcements(bot: Bot, giveaway: dict) -> None:
     deadline = _moscow_date(int(giveaway["end_date"]) - 1)
     text = (
         "<b>Ежемесячный конкурс ByMeVPN</b>\n\n"
-        f"Пригласите друзей по своей ссылке до <b>{deadline}</b>. "
+        f"Чтобы участвовать, пригласите хотя бы одного нового пользователя по своей ссылке до <b>{deadline}</b>. "
         f"{int(giveaway.get('winners_count') or MONTHLY_WINNERS)} победителя получат "
         f"по <b>+{int(giveaway.get('prize_days') or MONTHLY_PRIZE_DAYS)} дней VPN</b>.\n\n"
         "Учитываются новые пользователи, впервые запустившие бота по приглашению. "
