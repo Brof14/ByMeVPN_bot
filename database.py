@@ -7391,11 +7391,15 @@ async def get_pending_channel_bonus_retries(limit: int = 20) -> list[int]:
     crashed successful attempt cannot add the 10-day reward twice.
     """
     db = await get_db()
-    available = await (await db.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' "
-        "AND name='channel_subscription_bonus'"
-    )).fetchone()
-    if not available:
+    present = await (await db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name IN ('channel_subscription_bonus', 'channel_subscription_bonus_leases')"
+    )).fetchall()
+    if {str(row[0]) for row in present} != {
+        "channel_subscription_bonus", "channel_subscription_bonus_leases",
+    }:
+        # Older installations may have bonus rows but not the lease table.
+        # The reservation path creates the missing table before we retry.
         return []
     current = int(time.time())
     rows = await (await db.execute(
