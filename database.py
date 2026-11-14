@@ -6729,6 +6729,39 @@ async def mark_ad_reward_attempt(app_id: int) -> None:
     await db.commit()
 
 
+async def claim_ad_retention_review_reminder(
+    application_id: int, *, now: int | None = None,
+) -> bool:
+    """Remind admins on due day, then at most twice more, once per day.
+
+    This schedules human verification; it never marks a customer's posted
+    advertisement as retained without evidence.
+    """
+    now = int(time.time() if now is None else now)
+    db = await get_db()
+    async with _db_semaphore:
+        await db.execute(
+            """CREATE TABLE IF NOT EXISTS ad_retention_review_notices (
+                application_id INTEGER PRIMARY KEY,
+                last_reminded_at INTEGER NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 1
+            )"""
+        )
+        cursor = await db.execute(
+            """INSERT INTO ad_retention_review_notices(
+                application_id, last_reminded_at, attempts
+            ) VALUES (?, ?, 1)
+            ON CONFLICT(application_id) DO UPDATE SET
+                last_reminded_at=excluded.last_reminded_at,
+                attempts=ad_retention_review_notices.attempts+1
+            WHERE ad_retention_review_notices.attempts<3
+              AND ad_retention_review_notices.last_reminded_at<=?""",
+            (int(application_id), now, now - 86400),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+
+
 async def get_ad_applications_due_for_retention(now: int | None = None, limit: int = 100) -> list[dict]:
     """Applications whose 30-day post-retention period is due for manual review."""
     db = await get_db()
@@ -7391,11 +7424,15 @@ async def get_pending_channel_bonus_retries(limit: int = 20) -> list[int]:
     crashed successful attempt cannot add the 10-day reward twice.
     """
     db = await get_db()
-    available = await (await db.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' "
-        "AND name='channel_subscription_bonus'"
-    )).fetchone()
-    if not available:
+    present = await (await db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name IN ('channel_subscription_bonus', 'channel_subscription_bonus_leases')"
+    )).fetchall()
+    if {str(row[0]) for row in present} != {
+        "channel_subscription_bonus", "channel_subscription_bonus_leases",
+    }:
+        # Older installations may have bonus rows but not the lease table.
+        # The reservation path creates the missing table before we retry.
         return []
     current = int(time.time())
     rows = await (await db.execute(

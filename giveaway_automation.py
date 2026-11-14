@@ -239,6 +239,32 @@ async def process_due_giveaways(bot: Bot) -> None:
         await mark_giveaway_results_notified(result["id"])
 
 
+async def remind_due_ad_retention_reviews(bot: Bot, limit: int = 30) -> int:
+    """Notify admins that a 30-day posting requires its final manual review."""
+    from database import (
+        get_ad_applications_due_for_retention,
+        claim_ad_retention_review_reminder,
+    )
+    notices = 0
+    for application in await get_ad_applications_due_for_retention(limit=limit):
+        try:
+            if not await claim_ad_retention_review_reminder(application["id"]):
+                continue
+            notices += 1
+            await _notify_admins(
+                bot,
+                f"<b>Проверка публикации после 30 дней</b>\n"
+                f"Заявка №{int(application['id'])}, "
+                f"пользователь <code>{int(application['user_id'])}</code>.\n"
+                "Проверьте публикацию в Telegram и отметьте результат "
+                "через «Заявки на проверку» в админке. "
+                "Без подтверждения бот не завершает проверку автоматически.",
+            )
+        except Exception:
+            logger.exception("Could not notify admins about due ad retention review")
+    return notices
+
+
 async def process_pending_channel_bonuses(bot: Bot, limit: int = 10) -> int:
     """Resume a failed +10-day channel reward without granting it twice.
 
@@ -290,6 +316,7 @@ async def run_giveaway_automation(bot: Bot) -> None:
     await process_pending_referral_payment_rewards(bot)
     await process_pending_ad_rewards(bot)
     await process_pending_channel_bonuses(bot)
+    await remind_due_ad_retention_reviews(bot)
     await process_due_giveaways(bot)
     giveaway = await ensure_monthly_giveaway(bot)
     # Snapshot is INSERT OR IGNORE, so restarting won't duplicate messages.

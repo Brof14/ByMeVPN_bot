@@ -34,6 +34,24 @@ class SemanticPremiumEmojiTests(unittest.TestCase):
         self.assertEqual(ICON_IDS["about"], "5879785854284599288")
         self.assertEqual(ICON_IDS["plans"], "5983399041197675256")
 
+    def test_buttons_remain_readable_with_premium_icons_disabled(self):
+        for enabled in ("0", "1"):
+            with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": enabled}):
+                for label, callback in (
+                    ("Подключить VPN", "key_instructions:42"),
+                    ("Бесплатные дни", "free_vpn"),
+                    ("← Назад", "back_to_menu"),
+                ):
+                    button = themed_button(text=label, callback_data=callback)
+                    self.assertTrue(button.text.strip())
+                    self.assertEqual(button.callback_data, callback)
+                    if enabled == "0":
+                        self.assertIsNone(button.icon_custom_emoji_id)
+                    elif callback == "key_instructions:42":
+                        self.assertEqual(
+                            button.icon_custom_emoji_id, ICON_IDS["connect"],
+                        )
+
     def test_current_connection_actions_have_semantic_icons(self):
         roles = {
             "key_instructions:42": "connect",
