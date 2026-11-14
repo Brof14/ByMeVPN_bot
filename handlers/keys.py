@@ -508,7 +508,7 @@ async def cb_key_diagnostics(callback: CallbackQuery, bot: Bot):
         connect_url = ""
     kb = InlineKeyboardMarkup(inline_keyboard=[
         *([[InlineKeyboardButton(text="Подключить VPN", url=connect_url)]] if connect_url else []),
-        [InlineKeyboardButton(text="Поддержка", url="https://t.me/ByMeVPNSupportBot")],
+        [InlineKeyboardButton(text="Поддержка", url=support_url("connection"))],
         [InlineKeyboardButton(text="← К подписке", callback_data=f"key_info:{key_id}")],
     ])
     await send_or_edit(bot, callback, text, kb, photo=None)
