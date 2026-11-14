@@ -413,7 +413,7 @@ async def cb_key_device_delete(callback: CallbackQuery, bot: Bot):
             alert=True,
         )
         return
-    await safe_answer(callback, "Устройство удалено. Теперь можно подключить другое.")
+    await safe_answer(callback, "Устройство удалено")
     try:
         text, keyboard = await _key_devices_view(callback.from_user.id, key)
         await send_or_edit(bot, callback, text, keyboard, photo=DEVICES)
