@@ -503,6 +503,23 @@ async def _connection_reminder_scheduler(bot: Bot) -> None:
         await asyncio.sleep(300)
 
 
+async def _database_backup_scheduler(bot: Bot) -> None:
+    """Perform a daily backup at the next local 03:00, without 48h gaps.
+
+    _wait_until_03_00 already selects tomorrow after a completed run;
+    sleeping another 24 hours after that would skip every other day.
+    """
+    while True:
+        try:
+            await _wait_until_03_00()
+            await _backup_database(bot)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Daily backup scheduler failed; retrying schedule")
+            await asyncio.sleep(300)
+
+
 async def start_notification_scheduler(bot: Bot) -> None:
     """Run expiry notifications once per day at ~10:00 and backup at 03:00."""
     logger.info("Notification scheduler started")
@@ -524,21 +541,11 @@ async def start_notification_scheduler(bot: Bot) -> None:
         bot,
     )
 
-    # Start backup scheduler as separate task
-    async def backup_scheduler():
-        while True:
-            try:
-                await _wait_until_03_00()
-                await _backup_database(bot)
-            except Exception as e:
-                # FIX: without this try/except, any unhandled exception here
-                # (network error, disk full, etc.) would kill this background
-                # task permanently with no retry and no visible error.
-                logger.error("Backup scheduler error: %s", e)
-            # Wait 24 hours before next backup attempt
-            await asyncio.sleep(86400)
-
-    spawn_supervised("database_backup_scheduler", backup_scheduler, bot)
+    spawn_supervised(
+        "database_backup_scheduler",
+        lambda: _database_backup_scheduler(bot),
+        bot,
+    )
 
     # Do not send renewal reminders as a side effect of every container restart.
     # The daily cadence is anchored to 10:00 Moscow time.
