@@ -250,6 +250,16 @@ def format_timestamp(ts: int) -> str:
         return "—"
 
 
+def format_expiry_msk(timestamp: int) -> str:
+    """Unambiguous customer-facing expiry in Moscow time, with minutes."""
+    from datetime import timedelta, timezone
+    try:
+        dt = datetime.fromtimestamp(int(timestamp), tz=timezone(timedelta(hours=3)))
+        return dt.strftime("%d.%m.%Y %H:%M МСК")
+    except (OverflowError, OSError, TypeError, ValueError):
+        return "—"
+
+
 def format_days_left(expiry: int) -> str:
     """
     Format remaining time until key expiry.
