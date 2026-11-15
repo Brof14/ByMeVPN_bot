@@ -66,11 +66,15 @@ async def _block_unresolved_access_payment(callback: CallbackQuery) -> bool:
     return True
 
 
-def _promo_purchase_keyboard() -> InlineKeyboardMarkup:
-    """Return to the tariff chooser after a promotion."""
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn")
-    ]])
+def _promo_purchase_keyboard(months: int | None = None, devices: int = DEFAULT_DEVICE_LIMIT) -> InlineKeyboardMarkup:
+    """Return to the already chosen plan, or let the customer choose another."""
+    rows = []
+    if months in (1, 3, 6, 12):
+        rows.append([InlineKeyboardButton(
+            text="Проверить заказ", callback_data=f"tariff_{months}_{validate_device_limit(devices)}",
+        )])
+    rows.append([InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _tariff_intro(devices: int, *, renewal: bool = False, promo_binding: int | None = None) -> str:
@@ -122,15 +126,14 @@ def _checkout_confirmation_text(data: dict) -> str:
         lines.append(
             f"<b>Автопродление ЮKassa: включено</b>\n"
             f"Следующее списание: {recurring_price} ₽ за {recurring_days} дней "
-            "после окончания оплаченного срока. Изменить выбор можно кнопкой ниже "
-            "до оплаты. Отключить позднее можно в разделе «Подписка» → «Оплата и автопродление»."
+            "после окончания оплаченного срока. Изменить до оплаты — кнопкой ниже; "
+            "отключить позднее — «Подписка» → «Оплата и автопродление»."
         )
     else:
         lines.append("<b>Автопродление ЮKassa: выключено</b>\nОплата картой будет разовой.")
     lines.extend([
-        "Telegram Stars и CryptoBot — разовые платежи.",
-        "",
-        "Доступ откроется после подтверждения оплаты.",
+        "Stars и CryptoBot — разовые платежи.",
+        "Доступ после подтверждения оплаты.",
         "При оплате вы принимаете условия "
         "<a href='https://telegra.ph/Publichnaya-oferta-na-okazanie-uslug-ByMeVPN-10-25'>оферты</a> "
         "и <a href='https://telegra.ph/Politika-v-otnoshenii-obrabotki-personalnyh-dannyh-ByMeVPN-10-25'>политики конфиденциальности</a>.",
@@ -670,13 +673,13 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
         await safe_answer(callback)
         await callback.message.answer(
             "Не удалось открыть оплату через ЮKassa.\n\n"
-            "Попробуйте открыть оплату ещё раз. Если деньги уже списались, "
-            "не оплачивайте повторно: обратитесь в поддержку для проверки платежа.",
+            "Если деньги уже списались, не платите повторно. Проверьте статус "
+            "или вернитесь к оформлению.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
-                    text="Проверить платёж · поддержка",
-                    url=support_url("payment"),
+                    text="Проверить платёж", callback_data="checkout_check_payment",
                 )],
+                [InlineKeyboardButton(text="Поддержка", url=support_url("payment"))],
                 [InlineKeyboardButton(text="Повторить оформление", callback_data=f"tariff_{months}_{devices}")],
                 [InlineKeyboardButton(text="Оплатить через Telegram Stars", callback_data="pay_stars", )],
             ]),
@@ -715,6 +718,50 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
 # ---------------------------------------------------------------------------
 # Payment: Crypto Bot (@send)
 # ---------------------------------------------------------------------------
+
+@router.callback_query(F.data == "checkout_check_payment")
+async def cb_checkout_check_payment(callback: CallbackQuery, bot: Bot):
+    """Read-only self-service YooKassa status; never confirm access on guesswork."""
+    await safe_answer(callback)
+    from database import get_yookassa_pending_by_user, get_user_payments
+    from payments import get_yookassa_payment_status
+
+    try:
+        pending = await get_yookassa_pending_by_user(callback.from_user.id)
+    except Exception:
+        logger.exception("Could not load customer's pending YooKassa invoice")
+        pending = None
+
+    status = None
+    if pending and str(pending.get("payment_id") or ""):
+        status = await get_yookassa_payment_status(str(pending["payment_id"]))
+
+    if status == "succeeded":
+        title = "<b>Оплата получена</b>"
+        details = "Доступ может ещё обрабатываться. Откройте подписку, чтобы проверить результат. Повторно платить не нужно."
+    elif status in {"pending", "waiting_for_capture"}:
+        title = "<b>Платёж обрабатывается</b>"
+        details = "Подтверждение оплаты пока не получено. Не создавайте повторный платёж, пока проверка не завершится."
+    elif status == "canceled":
+        title = "<b>Платёж отменён</b>"
+        details = "По этому счёту списание не подтверждено. Вы можете вернуться к тарифам."
+    elif pending:
+        title = "<b>Статус оплаты временно недоступен</b>"
+        details = "Не оплачивайте повторно, если банк уже показал списание. Повторите проверку немного позже."
+    else:
+        # This view must not manufacture a provider transaction after a timeout:
+        # an invoice may exist at YooKassa without a local pending row.
+        title = "<b>Платёж для проверки не найден</b>"
+        details = "Подтверждённого счёта ЮKassa в текущей записи нет. Если банк уже списал деньги, передайте обращение в поддержку."
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Подписка", callback_data="my_keys")],
+        [InlineKeyboardButton(text="Повторить проверку", callback_data="checkout_check_payment")],
+        [InlineKeyboardButton(text="Поддержка по оплате", url=support_url("payment"))],
+        [InlineKeyboardButton(text="← К тарифам", callback_data="buy_vpn")],
+    ])
+    await send_with_photo(bot, callback, f"{title}\\n\\n{details}", keyboard, photo=PAYMENT)
+
 
 @router.callback_query(F.data == "pay_crypto")
 async def cb_pay_crypto(callback: CallbackQuery, bot: Bot, state: FSMContext):
@@ -1140,8 +1187,14 @@ async def _activate_promo_code(bot: Bot, target, state: FSMContext, code: str) -
         f"<b>Промокод применён</b>\n\n"
         f"Бонус: <b>{discount_text}</b>\n"
         f"{preview}"
+        "Проверьте обновлённый заказ перед оплатой." if preview and "Для выбранного срока:" in preview else
         "Цена и срок пересчитаются при выборе тарифа.",
-        _promo_purchase_keyboard(),
+        _promo_purchase_keyboard(
+            int(selected_months) if selected_months in (1, 3, 6, 12)
+            and (promo.get("tariff_binding") is None or int(promo["tariff_binding"]) == int(selected_months))
+            else None,
+            validate_device_limit(current.get("devices", DEFAULT_DEVICE_LIMIT)),
+        ),
         photo=PROMO_CODE,
     )
     return True
