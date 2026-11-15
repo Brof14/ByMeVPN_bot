@@ -12,6 +12,12 @@ class ExpiryReminderRegression(unittest.IsolatedAsyncioTestCase):
         incident_check = patch("billing_incidents.has_unresolved_access_delivery", new=AsyncMock(return_value=False))
         incident_check.start()
         self.addCleanup(incident_check.stop)
+        # These are isolated handler-unit tests without an initialized DB.
+        # Model a user with no active keys so the production pre-charge
+        # duplicate-subscription guard can run independently of provider mocks.
+        no_keys = patch("database.get_user_keys", new=AsyncMock(return_value=[]))
+        no_keys.start()
+        self.addCleanup(no_keys.stop)
 
     async def test_tariff_bound_promo_cannot_be_used_on_another_period(self):
         from handlers.buy import cb_select_tariff
@@ -539,6 +545,12 @@ class PaymentProviderFailures(unittest.IsolatedAsyncioTestCase):
         incident_check = patch("billing_incidents.has_unresolved_access_delivery", new=AsyncMock(return_value=False))
         incident_check.start()
         self.addCleanup(incident_check.stop)
+        # These are isolated handler-unit tests without an initialized DB.
+        # Model a user with no active keys so the production pre-charge
+        # duplicate-subscription guard can run independently of provider mocks.
+        no_keys = patch("database.get_user_keys", new=AsyncMock(return_value=[]))
+        no_keys.start()
+        self.addCleanup(no_keys.stop)
 
     def callback(self):
         return SimpleNamespace(data="pay_yookassa", from_user=SimpleNamespace(id=123), message=SimpleNamespace(answer=AsyncMock()))
