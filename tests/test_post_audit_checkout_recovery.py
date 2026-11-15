@@ -5,6 +5,45 @@ from unittest.mock import AsyncMock, patch
 
 
 class CheckoutRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_legacy_duplicate_access_prevents_new_checkout(self):
+        import time
+        from handlers.buy import _block_unresolved_access_payment
+        now = int(time.time())
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=12021),
+            message=SimpleNamespace(answer=AsyncMock()),
+        )
+        with (
+            patch("database.get_user_keys", new=AsyncMock(return_value=[
+                {"id": 1, "expiry": now + 1000},
+                {"id": 2, "expiry": now + 1000},
+            ])),
+            patch("billing_incidents.has_unresolved_access_delivery", new=AsyncMock()) as checker,
+        ):
+            self.assertTrue(await _block_unresolved_access_payment(callback))
+        checker.assert_not_awaited()
+        self.assertIn("Не оплачивайте повторно", callback.message.answer.await_args.args[0])
+
+    async def test_archived_renewal_cannot_override_different_live_key(self):
+        import time
+        from handlers.keys import cb_key_renew
+        now = int(time.time())
+        callback = SimpleNamespace(
+            data="key_renew:77",
+            from_user=SimpleNamespace(id=12021),
+        )
+        state = SimpleNamespace(update_data=AsyncMock(), set_state=AsyncMock())
+        archived = {"id": 77, "user_id": 12021, "expiry": now - 86400, "limit_ip": 2}
+        live = {"id": 88, "user_id": 12021, "expiry": now + 86400, "limit_ip": 5}
+        with (
+            patch("handlers.keys.safe_answer", new=AsyncMock()) as answer,
+            patch("handlers.keys.get_key_by_id", new=AsyncMock(return_value=archived)),
+            patch("handlers.keys.get_user_keys", new=AsyncMock(return_value=[archived, live])),
+        ):
+            await cb_key_renew(callback, object(), state)
+        state.update_data.assert_not_awaited()
+        self.assertIn("Другая подписка уже активна", answer.await_args.args[1])
+
     async def test_pending_yookassa_payment_can_be_checked_without_creating_another_charge(self):
         from handlers.buy import cb_checkout_check_payment
         callback = SimpleNamespace(from_user=SimpleNamespace(id=12021))
