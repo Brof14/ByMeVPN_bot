@@ -610,7 +610,15 @@ async def process_provider_device_upgrade(
         previous = await get_payment_by_id(ledger_id)
         if not is_new:
             if previous and previous.get("status") == "success":
-                return True
+                # A successful ledger with an unfulfilled order is a durable
+                # inconsistency. Never tell the customer the upgrade worked.
+                await update_payment_status(ledger_id, "recovery_required")
+                await _notify_upgrade_admin(
+                    bot,
+                    f"Платёж {provider} {invoice_id}: success в журнале, "
+                    f"но заказ {order['id']} ещё не выполнен; нужна сверка.",
+                )
+                return False
             if not previous or previous.get("status") != "failed":
                 # An earlier worker may have updated 3x-ui before crashing.
                 # Do not retry automatically without reconciling the panel.
