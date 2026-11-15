@@ -190,7 +190,7 @@ def tariff_selection_kb(
             label = f"1 мес. — {total_label} ₽"
         else:
             label = (
-                f"{months}+{TARIFF_BONUS_MONTHS[months]} мес. 🎁 — "
+                f"{months}+{TARIFF_BONUS_MONTHS[months]} мес. — "
                 f"{monthly_display} ₽/мес. · {total_label} ₽"
             )
         if applies:

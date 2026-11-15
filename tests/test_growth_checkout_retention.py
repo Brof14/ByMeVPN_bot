@@ -24,9 +24,9 @@ class CheckoutUxTests(unittest.IsolatedAsyncioTestCase):
             ("devtier_5", "5 устройств"),
             ("devtier_10", "✓ 10 устройств"),
             ("tariff_1_10", "1 мес. — 129 ₽"),
-            ("tariff_3_10", "3+1 мес. 🎁 — 119 ₽/мес. · 476 ₽"),
-            ("tariff_6_10", "6+2 мес. 🎁 — 109 ₽/мес. · 872 ₽"),
-            ("tariff_12_10", "12+3 мес. 🎁 — 99 ₽/мес. · 1 485 ₽"),
+            ("tariff_3_10", "3+1 мес. — 119 ₽/мес. · 476 ₽"),
+            ("tariff_6_10", "6+2 мес. — 109 ₽/мес. · 872 ₽"),
+            ("tariff_12_10", "12+3 мес. — 99 ₽/мес. · 1 485 ₽"),
             ("promo_enter", "Есть промокод?"),
             ("back_to_menu", "← Назад"),
         ]
@@ -57,7 +57,7 @@ class CheckoutUxTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("316 ₽", text)
         self.assertIn("120 дней", text)
         self.assertIn("Следующее списание", text)
-        self.assertIn("Отключить", text)
+        self.assertIn("Оплата и автопродление", text)
         legacy_display = _checkout_confirmation_text({**base, "autorenew_enabled": False})
         self.assertIn("Автопродление ЮKassa включено по умолчанию", legacy_display)
 
@@ -138,3 +138,47 @@ class RetentionQualityTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(await _send_winback_notification(bot, item))
         lookup.assert_not_awaited()
         bot.send_message.assert_not_awaited()
+
+    async def test_winback_only_for_still_lapsed_customer(self):
+        from notifications import _send_winback_notification
+        item = {"user_id": 123, "key_id": 4, "expiry": int(time.time()) - 3 * 86400}
+        bot = SimpleNamespace(send_message=AsyncMock())
+        with (
+            patch("notifications.is_promotional_opted_out", new=AsyncMock(return_value=False)),
+            patch("database.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value=None)),
+            patch("notifications._get_active_autorenew", new=AsyncMock(return_value=None)),
+        ):
+            self.assertTrue(await _send_winback_notification(bot, item))
+        self.assertIn("Вернуться", bot.send_message.await_args.args[1])
+        actions = [b.callback_data for row in bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard for b in row]
+        self.assertIn("marketing_optout", actions)
+        self.assertIn("key_renew:4", actions)
+
+    async def test_winback_never_targets_panel_only_active_customer(self):
+        from notifications import _send_winback_notification
+        item = {"user_id": 123, "key_id": 4, "expiry": int(time.time()) - 3 * 86400}
+        bot = SimpleNamespace(send_message=AsyncMock())
+        with (
+            patch("notifications.is_promotional_opted_out", new=AsyncMock(return_value=False)),
+            patch("database.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("xui_client.get_xui_client_details", new=AsyncMock(
+                return_value={"expiry_time": (int(time.time()) + 7200) * 1000}
+            )),
+            patch("notifications._get_active_autorenew", new=AsyncMock()) as renew,
+        ):
+            self.assertFalse(await _send_winback_notification(bot, item))
+        renew.assert_not_awaited()
+        bot.send_message.assert_not_awaited()
+
+    async def test_new_ad_reward_tiers_are_capped(self):
+        from database import calculate_bonus_months
+        expected = [(1, 1), (49, 1), (50, 2), (99, 2), (100, 3),
+                    (150, 4), (250, 6), (350, 12)]
+        for subscribers, months in expected:
+            with self.subTest(subscribers=subscribers):
+                self.assertEqual(await calculate_bonus_months(subscribers), months)
+
+
+if __name__ == "__main__":
+    unittest.main()

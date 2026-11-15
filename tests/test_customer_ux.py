@@ -1,4 +1,5 @@
 """Regression tests for simplified customer menus and card-management controls."""
+import os
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -530,13 +531,15 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(any(button.url for button in row))
 
     def test_tariff_grid_shows_monthly_price_and_semantic_button_colors(self):
-        markup = tariff_selection_kb()
+        with patch.dict(os.environ, {"BOT_PREMIUM_BUTTON_ICONS": "1"}):
+            markup = tariff_selection_kb()
         tariff_buttons = [
             button for row in markup.inline_keyboard for button in row
             if button.callback_data and button.callback_data.startswith("tariff_")
         ]
         three_months = next(button for button in tariff_buttons if button.callback_data == "tariff_3_2")
-        self.assertIn("3+1 мес. 🎁 — 79 ₽/мес. · 316 ₽", three_months.text)
+        self.assertIn("3+1 мес. — 79 ₽/мес. · 316 ₽", three_months.text)
+        self.assertEqual(three_months.icon_custom_emoji_id, "6023826881160157558")
         self.assertEqual(three_months.style, "primary")
         self.assertEqual(
             [button.style for button in tariff_buttons],
