@@ -219,10 +219,24 @@ async def _deliver_key_unlocked(
     from constants import validate_device_limit as const_validate_device_limit, format_timestamp
     limit_ip = const_validate_device_limit(limit_ip)
 
-    # Check if user has existing keys to extend (if extend_existing is True)
+    # One user -> one active VPN subscription, including callbacks that request
+    # a brand-new key. Check BEFORE writing to 3x-ui: an SQLite trigger alone
+    # would reject the subsequent insert after the server had already changed.
+    existing_keys = await get_user_keys(user_id)
+    current_time = int(time.time())
+    active_keys = [key for key in existing_keys if int(key.get("expiry") or 0) > current_time]
+    if len(active_keys) > 1:
+        logger.error("Refusing provisioning for legacy duplicate active keys: user=%s", user_id)
+        return False
+    if active_keys and not extend_existing:
+        logger.warning("New subscription refused: user=%s already has active key", user_id)
+        return False
+    if active_keys and target_key_id is not None and int(active_keys[0]["id"]) != int(target_key_id):
+        logger.warning("Cannot renew expired key while a different one is active: user=%s", user_id)
+        return False
+
+    # Reuse the existing key when provisioning any paid renewal or bonus.
     if extend_existing:
-        existing_keys = await get_user_keys(user_id)
-        current_time = int(time.time())
         
         # Find active or expired keys (extend even expired keys within 7 days grace period)
         extendable_keys = [k for k in existing_keys if k.get("expiry", 0) > current_time - 7*86400]
