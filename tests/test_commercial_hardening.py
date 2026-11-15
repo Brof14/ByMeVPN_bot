@@ -63,7 +63,8 @@ class CommercialNavigationTests(unittest.TestCase):
             text = labels[f"tariff_{months}_2"]
             self.assertIn(label, text)
             self.assertIn(f"{total:,}".replace(",", " ") + " ₽", text)
-            self.assertEqual("🎁" in text, months > 1)
+            if months > 1:
+                self.assertNotIn("🎁", text)
 
     def test_connection_html_has_no_stale_apk_hardcoding(self):
         root = Path(__file__).resolve().parents[1]

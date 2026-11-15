@@ -247,7 +247,6 @@ def themed_button(*args, **kwargs) -> TelegramInlineKeyboardButton:
 
     if (
         "icon_custom_emoji_id" not in kwargs
-        and not callback.startswith(("tariff_3_", "tariff_6_", "tariff_12_"))
         and os.getenv("BOT_PREMIUM_BUTTON_ICONS", "0").strip().lower() in {"1", "true", "yes", "on"}
     ):
         icon = _icon_for(
