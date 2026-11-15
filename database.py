@@ -3670,7 +3670,7 @@ async def get_yookassa_pending_by_user(user_id: int) -> Optional[dict]:
     db = await get_db()
     cur = await db.execute(
         "SELECT payment_id, days, devices, amount_rub, created "
-        "FROM yookassa_pending WHERE user_id=?",
+        "FROM yookassa_pending WHERE user_id=? ORDER BY created DESC LIMIT 1",
         (user_id,),
     )
     row = await cur.fetchone()
