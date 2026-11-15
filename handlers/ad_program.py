@@ -164,7 +164,7 @@ async def cb_ad_program(callback: CallbackQuery, bot: Bot, state: FSMContext):
         "Опубликуйте официальный пост в своём Telegram-канале и получите бонусные месяцы.\n\n"
         "<b>1.</b> Укажите канал — покажем возможный бонус.\n"
         "<b>2.</b> Разместите официальный пост и отправьте ссылку.\n"
-        "<b>3.</b> Сохраните публикацию на 30 дней для итоговой проверки."
+        "<b>3.</b> Сохраните публикацию на 30 дней для итоговой проверки. Бонус начислим после проверки поста."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Начать · указать канал", callback_data="ad_check_channel")],
