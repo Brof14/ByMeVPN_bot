@@ -7797,6 +7797,17 @@ async def get_device_upgrade_order(order_id: str) -> dict | None:
     return dict(zip(fields, row))
 
 
+async def get_latest_device_upgrade_for_user(user_id: int) -> dict | None:
+    """Customer-owned, read-only lookup for a recently selected device tier."""
+    db = await get_db()
+    row = await (await db.execute(
+        "SELECT id FROM device_upgrade_orders WHERE user_id=? "
+        "ORDER BY created_at DESC,rowid DESC LIMIT 1",
+        (int(user_id),),
+    )).fetchone()
+    return await get_device_upgrade_order(row[0]) if row else None
+
+
 async def bind_device_upgrade_invoice(
     order_id: str, user_id: int, provider: str, invoice_id: str,
 ) -> bool:
