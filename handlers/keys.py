@@ -337,9 +337,17 @@ async def cb_key_devices(callback: CallbackQuery, bot: Bot):
         text, keyboard = await _key_devices_view(callback.from_user.id, key, page)
     except Exception:
         logger.exception("Could not load connection details for user %s", callback.from_user.id)
-        await send_or_edit(bot, callback,
-                           "<b>Не удалось загрузить устройства</b>\n\nПопробуйте обновить список чуть позже.",
-                           key_devices_kb(key_id), photo=DEVICES)
+        retry = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Повторить загрузку", callback_data=f"key_devices:{key_id}")],
+            [InlineKeyboardButton(text="Поддержка", url=support_url("devices"))],
+            [InlineKeyboardButton(text="← К подписке", callback_data=f"key_info:{key_id}")],
+        ])
+        await send_or_edit(
+            bot, callback,
+            "<b>Не удалось загрузить устройства</b>\n\n"
+            "Попробуйте обновить список. Подписка и лимит устройств не изменены.",
+            retry, photo=DEVICES,
+        )
         return
     await send_or_edit(bot, callback, text, keyboard, photo=DEVICES)
 
@@ -427,8 +435,25 @@ async def cb_key_device_delete(callback: CallbackQuery, bot: Bot):
         )
         return
     await safe_answer(callback, "Устройство удалено")
+    # A successful deletion should lead straight to the next useful action.
+    # The connection URL is a normal HTTPS button, not a callback redirect.
+    connect_url = None
+    try:
+        from app_links import build_user_connect_page_url
+        if key.get("key") and int(key.get("expiry") or 0) > int(time.time()):
+            connect_url = await build_user_connect_page_url(
+                str(key["key"]),
+                user_id=callback.from_user.id, key_id=key_id,
+            )
+    except Exception:
+        logger.warning("Could not prepare next device's connect URL for %s", callback.from_user.id)
     try:
         text, keyboard = await _key_devices_view(callback.from_user.id, key)
+        if connect_url:
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Подключить другое устройство", url=connect_url)],
+                *keyboard.inline_keyboard,
+            ])
         await send_or_edit(
             bot, callback,
             "<b>Устройство удалено</b>\n\n"
@@ -442,7 +467,11 @@ async def cb_key_device_delete(callback: CallbackQuery, bot: Bot):
             "<b>Устройство удалено</b>\n\nМесто освобождено. "
             "Теперь можно подключить другое устройство. "
             "Если старый клиент всё ещё импортирует подписку, удалите её с прежнего устройства.",
-            key_devices_kb(key_id), photo=DEVICES,
+            InlineKeyboardMarkup(inline_keyboard=[
+                *([[InlineKeyboardButton(text="Подключить другое устройство", url=connect_url)]] if connect_url else []),
+                [InlineKeyboardButton(text="Обновить список", callback_data=f"key_devices:{key_id}")],
+                [InlineKeyboardButton(text="← К подписке", callback_data=f"key_info:{key_id}")],
+            ]), photo=DEVICES,
         )
 
 
