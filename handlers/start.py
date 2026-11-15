@@ -414,6 +414,19 @@ async def _send_main_menu(
                 str(panel_client.get("subscription_url") or ""), user_id=user_id,
                 link_seed=link_seed,
             )
+        elif len(active_keys) > 1:
+            # A pre-migration duplicate paid record is an incident, not a
+            # normal menu choice. Never silently drop paid days or offer a
+            # fresh purchase until the account has been reconciled.
+            text = (
+                "<b>Подписка требует проверки</b>\n\n"
+                "Обнаружены повторяющиеся записи активного доступа. "
+                "Не оформляйте новый платёж: поддержка проверит оплаченный срок."
+            )
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Поддержка", url=support_url("subscription"))],
+                [InlineKeyboardButton(text="Подписка", callback_data="my_keys")],
+            ])
         else:
             kb = main_menu_with_keys(trial_used=True)
 
