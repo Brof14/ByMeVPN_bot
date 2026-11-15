@@ -979,7 +979,17 @@ async def _open_connect_page(callback: CallbackQuery, key_id: int | None = None)
         logger.exception("Connection page could not be built for user %d", user_id)
         await callback.answer("Страница подключения временно недоступна. Напишите в поддержку.", show_alert=True)
         return
-    await callback.answer(url=url)
+    # answerCallbackQuery.url is restricted by Telegram and rejects ordinary
+    # external URLs with URL_INVALID. Open the HTTPS page through a normal URL
+    # button in a follow-up message instead.
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer(
+            "Откройте страницу подключения:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="Подключить VPN", url=url),
+            ]]),
+        )
 
 
 @router.callback_query(F.data == "connection_guide")

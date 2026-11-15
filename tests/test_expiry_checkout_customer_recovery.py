@@ -493,7 +493,8 @@ class PromoAccountingAlerts(unittest.IsolatedAsyncioTestCase):
 class PlatformGuideRegression(unittest.IsolatedAsyncioTestCase):
     async def test_one_active_key_is_selected_from_general_guide(self):
         from handlers.keys import _open_connect_page
-        callback = SimpleNamespace(from_user=SimpleNamespace(id=123, first_name="Test"), answer=AsyncMock())
+        callback = SimpleNamespace(from_user=SimpleNamespace(id=123, first_name="Test"), answer=AsyncMock(),
+                                   message=SimpleNamespace(answer=AsyncMock()))
         keys = [
             {"id": 41, "expiry": int(time.time()) + 86400, "key": "https://panel.example/sub/41"},
             {"id": 2, "expiry": int(time.time()) - 86400, "key": "https://panel.example/sub/2"},
@@ -502,18 +503,29 @@ class PlatformGuideRegression(unittest.IsolatedAsyncioTestCase):
               patch("app_links.build_user_connect_page_url", new=AsyncMock(return_value="https://example.test/connect?ticket=opaque")) as builder):
             await _open_connect_page(callback)
         builder.assert_awaited_once_with("https://panel.example/sub/41", "Test", user_id=123, key_id=41)
-        callback.answer.assert_awaited_once_with(url="https://example.test/connect?ticket=opaque")
+        callback.answer.assert_awaited_once_with()
+        callback.message.answer.assert_awaited_once()
+        self.assertEqual(
+            callback.message.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0].url,
+            "https://example.test/connect?ticket=opaque",
+        )
 
     async def test_multiple_active_keys_avoid_choosing_wrong_subscription(self):
         from handlers.keys import _open_connect_page
-        callback = SimpleNamespace(from_user=SimpleNamespace(id=123, first_name="Test"), answer=AsyncMock())
+        callback = SimpleNamespace(from_user=SimpleNamespace(id=123, first_name="Test"), answer=AsyncMock(),
+                                   message=SimpleNamespace(answer=AsyncMock()))
         selected = {"id": 41, "user_id": 123, "expiry": int(time.time()) + 86400,
                     "key": "https://panel.example/sub/41"}
         with (patch("handlers.keys.get_key_by_id", new=AsyncMock(return_value=selected)),
               patch("app_links.build_user_connect_page_url", new=AsyncMock(return_value="https://example.test/connect?ticket=safe")) as builder):
             await _open_connect_page(callback, 41)
         builder.assert_awaited_once_with("https://panel.example/sub/41", "Test", user_id=123, key_id=41)
-        callback.answer.assert_awaited_once_with(url="https://example.test/connect?ticket=safe")
+        callback.answer.assert_awaited_once_with()
+        callback.message.answer.assert_awaited_once()
+        self.assertEqual(
+            callback.message.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0].url,
+            "https://example.test/connect?ticket=safe",
+        )
 
 class PaymentProviderFailures(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
