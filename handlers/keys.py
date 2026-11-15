@@ -71,10 +71,17 @@ async def cmd_keys(message: Message, bot: Bot):
             photo=KEY,
         )
         return
-    await send_with_photo(bot, message,
-        "<b>Подписки</b>\n\nВыберите подписку.",
-        my_keys_list_kb(active_keys, has_history=len(active_keys) < len(keys)),
-        photo=KEY,
+    # Legacy duplicates require paid-access reconciliation, not a customer
+    # choice between multiple supposedly independent active subscriptions.
+    await send_with_photo(
+        bot, message,
+        "<b>Подписка требует проверки</b>\n\n"
+        "Обнаружены несколько записей действующего доступа. "
+        "Не оформляйте новый платёж: поддержка проверит оплаченный срок.",
+        InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Поддержка", url=support_url("subscription"))],
+            [InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu")],
+        ]), photo=KEY,
     )
 
 
@@ -179,8 +186,16 @@ async def cb_my_keys(callback: CallbackQuery, bot: Bot):
         text = "<b>История подписок</b>\n\nАктивной подписки сейчас нет. Выберите завершённую, чтобы открыть её данные."
         await send_with_photo(bot, callback, text, key_history_kb(keys), photo=KEY)
         return
-    text = "<b>Ваш активный VPN</b>\n\nВыберите подписку для управления. Завершённые подписки находятся в истории."
-    await send_with_photo(bot, callback, text, my_keys_list_kb(active_keys, has_history=len(active_keys) < len(keys)), photo=KEY)
+    text = (
+        "<b>Подписка требует проверки</b>\n\n"
+        "В учёте обнаружено несколько записей действующего VPN. "
+        "Не оплачивайте повторно: поддержка проверит срок и объединение доступа."
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Поддержка", url=support_url("subscription"))],
+        [InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu")],
+    ])
+    await send_with_photo(bot, callback, text, kb, photo=KEY)
 
 
 @router.callback_query(F.data == "key_history")
