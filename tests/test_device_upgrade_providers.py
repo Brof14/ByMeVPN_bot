@@ -140,6 +140,30 @@ class ProviderDeviceUpgradeTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(await database.get_crypto_pending(invoice_id))
 
+    async def test_success_ledger_with_unfulfilled_upgrade_is_quarantined(self):
+        order_id, invoice_id = await self.create_bound_order("yookassa")
+        await database.add_yookassa_pending(invoice_id, 8101, 0, 5, 20)
+        await database.record_payment_idempotent(
+            user_id=8101, amount=20, currency="RUB",
+            method="device_upgrade", days=0, payload=invoice_id,
+            status="success", tariff="Увеличение лимита устройств", devices=5,
+            provider="yookassa", provider_payment_id=invoice_id,
+        )
+        with patch("xui_client.update_xui_user", new=AsyncMock()) as panel:
+            self.assertFalse(await process_provider_device_upgrade(
+                self.bot, "yookassa", invoice_id,
+                self._yookassa_verified(order_id, invoice_id),
+            ))
+        panel.assert_not_awaited()
+        db = await database.get_db()
+        status = await (await db.execute(
+            "SELECT status FROM payments "
+            "WHERE provider='yookassa' AND provider_payment_id=?",
+            (invoice_id,),
+        )).fetchone()
+        self.assertEqual(status, ("recovery_required",))
+        self.assertEqual((await database.get_device_upgrade_order(order_id))["status"], "pending")
+
     async def test_changed_invoice_amount_never_mutates_panel(self):
         order_id, invoice_id = await self.create_bound_order("yookassa")
         await database.add_yookassa_pending(invoice_id, 8101, 0, 5, 20)
