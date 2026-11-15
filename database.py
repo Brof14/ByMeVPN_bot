@@ -7739,17 +7739,21 @@ async def create_device_upgrade_order(
     now = int(time.time())
     db = await get_db()
     async with _db_semaphore:
-        # Prior invoices expire before another can be issued. A charge already
-        # accepted by Telegram remains recoverable via its durable order row.
+        # Never release a YooKassa reservation just because 15 minutes
+        # passed: an external invoice may still settle. Crypto invoices expire
+        # at the provider after 3600 seconds; allow five minutes for races.
+        # Stars pre-checkout rejects invoices older than fifteen minutes.
         await db.execute(
             "UPDATE device_upgrade_orders SET status='expired' "
-            "WHERE user_id=? AND status='pending' AND created_at<?",
-            (user_id, now - 900),
+            "WHERE user_id=? AND status='pending' AND "
+            "((provider='stars' AND created_at<?) OR "
+            "(provider='cryptobot' AND created_at<? AND provider_payment_id IS NOT NULL))",
+            (user_id, now - 900, now - 3900),
         )
         row = await (await db.execute(
             "SELECT id FROM device_upgrade_orders "
-            "WHERE user_id=? AND status='pending' AND created_at>=? LIMIT 1",
-            (user_id, now - 900),
+            "WHERE user_id=? AND status='pending' LIMIT 1",
+            (user_id,),
         )).fetchone()
         if row:
             await db.commit()
