@@ -23,7 +23,7 @@ class ConversionUXTests(unittest.TestCase):
                 text = actions[f"tariff_{months}_{limit}"]
                 total = f"{rubles:,}".replace(",", " ")
                 if months > 1:
-                    self.assertIn(f"{months}+{(1 if months == 3 else 2 if months == 6 else 3)} мес. 🎁", text)
+                    self.assertIn(f"{months}+{(1 if months == 3 else 2 if months == 6 else 3)} мес. —", text)
                     self.assertIn(f"{rubles // (months + {3: 1, 6: 2, 12: 3}[months])} ₽/мес.", text)
                     self.assertIn(f"· {total} ₽", text)
                 else:

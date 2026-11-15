@@ -777,7 +777,10 @@ class TestSubscriptionEntitlementHttpIntegration(unittest.TestCase):
             result["entitlement"], self.public_key, expected_user_id=7654321,
             expected_hwid=self.hwid,
         ))
-        self.assertEqual(result["seconds_remaining"], 3 * 24 * 60 * 60)
+        # Rounded wall-clock seconds can drop one second across the mocked panel
+        # timestamp and the API response; expiry still matches a three-day trial.
+        self.assertGreaterEqual(result["seconds_remaining"], 3 * 24 * 60 * 60 - 2)
+        self.assertLessEqual(result["seconds_remaining"], 3 * 24 * 60 * 60)
         self.assertEqual(result["max_devices"], 2)
         self.assertEqual(result["active_devices"], 1)
 

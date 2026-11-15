@@ -38,6 +38,58 @@ class TestMobileApiV2(unittest.TestCase):
     def tearDown(self):
         self.payment_guard.stop()
 
+
+    def test_renewal_get_is_owner_scoped_and_never_exposes_payment_credentials(self):
+        record = {
+            "status": "active",
+            "payment_method_id": "pm_super_secret_from_provider",
+            "payment_method_title": "**** 9999",
+            "amount_rub": 89,
+            "next_retry_at": 1234,
+        }
+        with patch.object(api_router.database, "get_auto_renew_subscription", new=AsyncMock(return_value=record)) as fetch:
+            response = self.client.get("/api/v1/mobile/v2/renewal")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            "auto_renew": True,
+            "can_cancel": True,
+            "source": "server",
+            "next_charge_at": None,
+            "next_amount_rub": None,
+        })
+        fetch.assert_awaited_once_with(987654321, include_legacy=True)
+        self.assertNotIn("pm_super_secret", response.text)
+        self.assertNotIn("9999", response.text)
+
+    def test_renewal_cancel_requires_explicit_confirmation(self):
+        result = self.client.post("/api/v1/mobile/v2/renewal/cancel", json={})
+        self.assertEqual(result.status_code, 422)
+
+    def test_renewal_cancel_is_serialized_and_preserves_paid_access(self):
+        with (
+            patch.object(api_router.database, "try_acquire_delivery_lease", new=AsyncMock(return_value=True)) as claim,
+            patch.object(api_router.database, "suspend_all_user_autorenew", new=AsyncMock(return_value=2)) as cancel,
+            patch.object(api_router.database, "release_delivery_lease", new=AsyncMock()) as release,
+        ):
+            result = self.client.post("/api/v1/mobile/v2/renewal/cancel", json={"confirm": True})
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json()["paid_access_preserved"], True)
+        self.assertEqual(result.json()["cancelled_records"], 2)
+        self.assertFalse(result.json()["auto_renew"])
+        self.assertEqual(claim.await_args.args[0], 987654321)
+        cancel.assert_awaited_once_with(987654321)
+        self.assertEqual(release.await_args.args[0], 987654321)
+        self.assertEqual(release.await_args.args[1], claim.await_args.args[1])
+
+    def test_renewal_cancel_fails_closed_if_delivery_lease_is_held(self):
+        with (
+            patch.object(api_router.database, "try_acquire_delivery_lease", new=AsyncMock(return_value=False)),
+            patch.object(api_router.database, "suspend_all_user_autorenew", new=AsyncMock()) as cancel,
+        ):
+            result = self.client.post("/api/v1/mobile/v2/renewal/cancel", json={"confirm": True})
+        self.assertEqual(result.status_code, 409)
+        cancel.assert_not_awaited()
+
     def test_catalog_uses_tier_bound_plan_codes_and_android_response_fields(self):
         expected_prices = {
             2: (89, 316, 552, 885),
