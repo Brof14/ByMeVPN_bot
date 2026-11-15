@@ -34,6 +34,44 @@ class CustomerUxFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("key_renew:9", button_actions(urgent))
         self.assertEqual(next(iter(urgent.inline_keyboard[0])).callback_data, "key_instructions:9")
 
+    def test_active_home_uses_direct_signed_https_button(self):
+        from unittest.mock import patch
+        with patch("app_links.APP_CONNECT_PAGE_URL", "https://connect.example"):
+            with patch.dict("os.environ", {"APP_HANDOFF_SECRET": "test-secret"}):
+                home = main_menu_active(
+                    9, "https://vpn.example/sub/active", user_id=1001,
+                    remaining_days=24, link_seed="a" * 64,
+                )
+        first = home.inline_keyboard[0][0]
+        self.assertEqual(first.text, "Подключить VPN")
+        self.assertIsNone(first.callback_data)
+        self.assertTrue(first.url.startswith("https://connect.example/connect?u=1001&k=9&s="))
+
+    async def test_live_active_home_publishes_direct_url_without_secondary_message(self):
+        from handlers.start import _send_main_menu
+        expiry = int(time.time()) + 10 * 86400
+        key = {
+            "id": 71, "expiry": expiry,
+            "key": "https://vpn.example/sub/active",
+            "limit_ip": 2,
+        }
+        with (
+            patch("handlers.start._user_state", new=AsyncMock(return_value="active")),
+            patch("handlers.start.get_user_keys", new=AsyncMock(return_value=[key])),
+            patch("database.get_auto_renew_subscription", new=AsyncMock(return_value=None)),
+            patch("database.get_or_create_connect_link_seed", new=AsyncMock(return_value="a" * 64)),
+            patch("app_links.APP_CONNECT_PAGE_URL", "https://connect.example"),
+            patch.dict("os.environ", {"APP_HANDOFF_SECRET": "test-secret"}),
+            patch("handlers.start.send_with_photo", new=AsyncMock()) as send,
+        ):
+            await _send_main_menu(object(), self.callback().message, 1001, "Customer")
+        keyboard = send.await_args.args[3]
+        button = keyboard.inline_keyboard[0][0]
+        self.assertEqual(button.text, "Подключить VPN")
+        self.assertIsNone(button.callback_data)
+        self.assertTrue(button.url.startswith("https://connect.example/connect?u=1001&k=71&s="))
+        send.assert_awaited_once()
+
     def test_plan_intro_separates_devices_and_duration(self):
         copy = _tariff_intro(2)
         self.assertIn("<b>Устройства:</b>", copy)

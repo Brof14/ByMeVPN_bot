@@ -119,6 +119,13 @@ class CancelAllMethodsTests(unittest.IsolatedAsyncioTestCase):
         self.tmp = tempfile.TemporaryDirectory()
         database.DB_FILE, database._db_pool = str(Path(self.tmp.name) / "cancel.db"), None
         await database.init_db()
+        # Historical billing/recovery regressions deliberately construct legacy
+        # duplicate-key snapshots from before the new invariant. Their fixtures
+        # must remain readable without weakening the production DB triggers.
+        legacy_db = await database.get_db()
+        await legacy_db.execute("DROP TRIGGER IF EXISTS trg_keys_single_active_insert")
+        await legacy_db.execute("DROP TRIGGER IF EXISTS trg_keys_single_active_extend")
+        await legacy_db.commit()
         await database.ensure_user(123)
 
     async def asyncTearDown(self):

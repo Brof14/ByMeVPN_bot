@@ -24,7 +24,7 @@ from keyboards import (
     confirm_reissue_kb, support_url,
 )
 from utils import send_with_photo, send_or_edit, safe_answer
-from constants import format_timestamp as fmt_date, format_days_left as fmt_days_left
+from constants import format_timestamp as fmt_date, format_days_left as fmt_days_left, format_expiry_msk as fmt_expiry_msk
 from states import BuyFlow
 from bot_assets import KEY, DEVICES, RENEWAL, AUTO_RENEWAL
 from bot_style import themed_button as InlineKeyboardButton
@@ -71,10 +71,17 @@ async def cmd_keys(message: Message, bot: Bot):
             photo=KEY,
         )
         return
-    await send_with_photo(bot, message,
-        "<b>Подписки</b>\n\nВыберите подписку.",
-        my_keys_list_kb(active_keys, has_history=len(active_keys) < len(keys)),
-        photo=KEY,
+    # Legacy duplicates require paid-access reconciliation, not a customer
+    # choice between multiple supposedly independent active subscriptions.
+    await send_with_photo(
+        bot, message,
+        "<b>Подписка требует проверки</b>\n\n"
+        "Обнаружены несколько записей действующего доступа. "
+        "Не оформляйте новый платёж: поддержка проверит оплаченный срок.",
+        InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Поддержка", url=support_url("subscription"))],
+            [InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu")],
+        ]), photo=KEY,
     )
 
 
@@ -179,8 +186,16 @@ async def cb_my_keys(callback: CallbackQuery, bot: Bot):
         text = "<b>История подписок</b>\n\nАктивной подписки сейчас нет. Выберите завершённую, чтобы открыть её данные."
         await send_with_photo(bot, callback, text, key_history_kb(keys), photo=KEY)
         return
-    text = "<b>Ваш активный VPN</b>\n\nВыберите подписку для управления. Завершённые подписки находятся в истории."
-    await send_with_photo(bot, callback, text, my_keys_list_kb(active_keys, has_history=len(active_keys) < len(keys)), photo=KEY)
+    text = (
+        "<b>Подписка требует проверки</b>\n\n"
+        "В учёте обнаружено несколько записей действующего VPN. "
+        "Не оплачивайте повторно: поддержка проверит срок и объединение доступа."
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Поддержка", url=support_url("subscription"))],
+        [InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu")],
+    ])
+    await send_with_photo(bot, callback, text, kb, photo=KEY)
 
 
 @router.callback_query(F.data == "key_history")
@@ -254,7 +269,7 @@ async def _key_info_content(user_id: int, k: dict) -> tuple[str, object]:
     device_text = "\n".join(device_lines)
     text = (
         f"<b>{status}</b>\n\n"
-        f"{remaining_line}Действует до: <b>{fmt_date(k['expiry'])}</b>"
+        f"{remaining_line}Действует до: <b>{fmt_expiry_msk(k['expiry'])}</b>"
         + (f"\n{device_text}" if device_text else "")
     )
     link_seed = ""
@@ -337,9 +352,17 @@ async def cb_key_devices(callback: CallbackQuery, bot: Bot):
         text, keyboard = await _key_devices_view(callback.from_user.id, key, page)
     except Exception:
         logger.exception("Could not load connection details for user %s", callback.from_user.id)
-        await send_or_edit(bot, callback,
-                           "<b>Не удалось загрузить устройства</b>\n\nПопробуйте обновить список чуть позже.",
-                           key_devices_kb(key_id), photo=DEVICES)
+        retry = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Повторить загрузку", callback_data=f"key_devices:{key_id}")],
+            [InlineKeyboardButton(text="Поддержка", url=support_url("devices"))],
+            [InlineKeyboardButton(text="← К подписке", callback_data=f"key_info:{key_id}")],
+        ])
+        await send_or_edit(
+            bot, callback,
+            "<b>Не удалось загрузить устройства</b>\n\n"
+            "Попробуйте обновить список. Подписка и лимит устройств не изменены.",
+            retry, photo=DEVICES,
+        )
         return
     await send_or_edit(bot, callback, text, keyboard, photo=DEVICES)
 
@@ -427,8 +450,25 @@ async def cb_key_device_delete(callback: CallbackQuery, bot: Bot):
         )
         return
     await safe_answer(callback, "Устройство удалено")
+    # A successful deletion should lead straight to the next useful action.
+    # The connection URL is a normal HTTPS button, not a callback redirect.
+    connect_url = None
+    try:
+        from app_links import build_user_connect_page_url
+        if key.get("key") and int(key.get("expiry") or 0) > int(time.time()):
+            connect_url = await build_user_connect_page_url(
+                str(key["key"]),
+                user_id=callback.from_user.id, key_id=key_id,
+            )
+    except Exception:
+        logger.warning("Could not prepare next device's connect URL for %s", callback.from_user.id)
     try:
         text, keyboard = await _key_devices_view(callback.from_user.id, key)
+        if connect_url:
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Подключить другое устройство", url=connect_url)],
+                *keyboard.inline_keyboard,
+            ])
         await send_or_edit(
             bot, callback,
             "<b>Устройство удалено</b>\n\n"
@@ -442,7 +482,11 @@ async def cb_key_device_delete(callback: CallbackQuery, bot: Bot):
             "<b>Устройство удалено</b>\n\nМесто освобождено. "
             "Теперь можно подключить другое устройство. "
             "Если старый клиент всё ещё импортирует подписку, удалите её с прежнего устройства.",
-            key_devices_kb(key_id), photo=DEVICES,
+            InlineKeyboardMarkup(inline_keyboard=[
+                *([[InlineKeyboardButton(text="Подключить другое устройство", url=connect_url)]] if connect_url else []),
+                [InlineKeyboardButton(text="Обновить список", callback_data=f"key_devices:{key_id}")],
+                [InlineKeyboardButton(text="← К подписке", callback_data=f"key_info:{key_id}")],
+            ]), photo=DEVICES,
         )
 
 
@@ -727,7 +771,7 @@ async def _load_autorenew_context(user_id: int, key_id: int) -> tuple[dict | Non
         keys = await get_user_keys(user_id)
         expiry_ts = max((key.get("expiry", 0) for key in keys), default=0)
     if expiry_ts:
-        expiry_str = fmt_date(expiry_ts)
+        expiry_str = fmt_expiry_msk(expiry_ts)
     return sub, card_title, expiry_str
 
 
@@ -1019,6 +1063,27 @@ async def cb_key_renew(callback: CallbackQuery, bot: Bot, state: FSMContext):
 
     if not k or k["user_id"] != callback.from_user.id:
         await safe_answer(callback, "Подписка не найдена.", alert=True)
+        return
+
+    # An expired historical key must not be renewed while a different active
+    # subscription exists: the invoice would otherwise be paid before the
+    # single-active-key provisioning guard rejects delivery.
+    try:
+        existing = await get_user_keys(callback.from_user.id)
+    except Exception:
+        await safe_answer(callback, "Не удалось проверить подписки. Повторите позже.", alert=True)
+        return
+    another_active = [
+        key for key in existing
+        if int(key.get("expiry") or 0) > int(time.time())
+        and int(key.get("id") or 0) != key_id
+    ]
+    if another_active:
+        await safe_answer(
+            callback,
+            "Другая подписка уже активна. Продлите действующую подписку, а не архивную.",
+            alert=True,
+        )
         return
 
     key_devices = k.get("limit_ip", 2)

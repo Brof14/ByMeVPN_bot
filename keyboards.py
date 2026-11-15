@@ -72,13 +72,15 @@ def main_menu_active(
     return kb.as_markup()
 
 
-def main_menu_panel_active(subscription_url: str = "", user_id: int | None = None) -> InlineKeyboardMarkup:
+def main_menu_panel_active(
+    subscription_url: str = "", user_id: int | None = None, *, link_seed: str = "",
+) -> InlineKeyboardMarkup:
     """Server-only entitlement: do not pretend a missing local key exists."""
     kb = InlineKeyboardBuilder()
-    if subscription_url:
+    if subscription_url and link_seed:
         try:
             from app_links import build_connect_page_url
-            url = build_connect_page_url(subscription_url, user_id=user_id)
+            url = build_connect_page_url(subscription_url, user_id=user_id, link_seed=link_seed)
         except (RuntimeError, ValueError):
             url = ""
         if url:

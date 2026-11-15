@@ -383,22 +383,50 @@ async def _send_main_menu(
                     text += f"\nАвтопродление: <b>{renewal_state}</b>"
             except Exception:
                 logger.debug("Could not load renewal status on the home screen")
-        # Direct connection only when there is exactly one active key.
-        # With multiple active subscriptions, let the customer choose.
+        # Sign the HOME URL before rendering the keyboard. Telegram cannot
+        # open an arbitrary HTTPS site through answerCallbackQuery.url; a real
+        # URL button is required for one-tap navigation without extra messages.
         if len(active_keys) == 1:
+            link_seed = ""
+            try:
+                from database import get_or_create_connect_link_seed
+                link_seed = await get_or_create_connect_link_seed(user_id)
+            except Exception:
+                logger.exception("Home connection link epoch unavailable for user %s", user_id)
             kb = main_menu_active(
                 int(active_keys[0]["id"]),
                 str(active_keys[0].get("key") or ""),
                 user_id=user_id,
+                link_seed=link_seed,
                 remaining_days=max(
                     1,
                     (int(active_keys[0]["expiry"]) - int(time.time()) + 86399) // 86400,
                 ),
             )
         elif not active_keys and _panel_client_is_active(panel_client):
-            # Keep the home screen usable if the VPN panel is authoritative but
-            # SQLite has not yet imported the entitlement.
-            kb = main_menu_panel_active(str(panel_client.get("subscription_url") or ""), user_id=user_id)
+            link_seed = ""
+            try:
+                from database import get_or_create_connect_link_seed
+                link_seed = await get_or_create_connect_link_seed(user_id)
+            except Exception:
+                logger.exception("Server-only connection link epoch unavailable for %s", user_id)
+            kb = main_menu_panel_active(
+                str(panel_client.get("subscription_url") or ""), user_id=user_id,
+                link_seed=link_seed,
+            )
+        elif len(active_keys) > 1:
+            # A pre-migration duplicate paid record is an incident, not a
+            # normal menu choice. Never silently drop paid days or offer a
+            # fresh purchase until the account has been reconciled.
+            text = (
+                "<b>Подписка требует проверки</b>\n\n"
+                "Обнаружены повторяющиеся записи активного доступа. "
+                "Не оформляйте новый платёж: поддержка проверит оплаченный срок."
+            )
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Поддержка", url=support_url("subscription"))],
+                [InlineKeyboardButton(text="Подписка", callback_data="my_keys")],
+            ])
         else:
             kb = main_menu_with_keys(trial_used=True)
 

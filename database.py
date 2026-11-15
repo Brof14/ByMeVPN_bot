@@ -11,6 +11,7 @@ import logging
 import math
 import re
 from typing import Optional
+from datetime import datetime, timedelta, timezone
 import aiosqlite
 from cache import cache_user_info, invalidate_user_cache, invalidate_subscription_cache
 from async_utils import _db_semaphore
@@ -31,6 +32,18 @@ if _db_dir:
 
 # Global database connection pool
 _db_pool: Optional[aiosqlite.Connection] = None
+
+# Use real Moscow calendar boundaries instead of rolling 30-day estimates.
+_MOSCOW_TZ = timezone(timedelta(hours=3))
+
+
+def _moscow_calendar_starts(now: int) -> tuple[int, int, int]:
+    date = datetime.fromtimestamp(int(now), tz=_MOSCOW_TZ)
+    day = date.replace(hour=0, minute=0, second=0, microsecond=0)
+    week = day - timedelta(days=day.weekday())
+    month = day.replace(day=1)
+    return int(day.timestamp()), int(week.timestamp()), int(month.timestamp())
+
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -1250,6 +1263,49 @@ async def init_db() -> None:
         logger.warning(
             "Reattached auto-renew subscription %d to the user's only current key %d (user %d)",
             sub_id, new_key_id, user_id,
+        )
+
+    # Guard the commercial invariant in SQLite, not only in UI callbacks.
+    # Historical expired subscriptions remain in the customer's history.
+    # Existing independently-paid active keys must never be silently deleted
+    # or shortened by a database migration.
+    await db.executescript("""
+        CREATE TRIGGER IF NOT EXISTS trg_keys_single_active_insert
+        BEFORE INSERT ON keys
+        WHEN NEW.expiry > CAST(strftime('%s','now') AS INTEGER)
+         AND EXISTS (
+            SELECT 1 FROM keys
+            WHERE user_id=NEW.user_id
+              AND expiry > CAST(strftime('%s','now') AS INTEGER)
+         )
+        BEGIN
+            SELECT RAISE(ABORT, 'only one active subscription per user');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_keys_single_active_extend
+        BEFORE UPDATE OF expiry ON keys
+        WHEN NEW.expiry > CAST(strftime('%s','now') AS INTEGER)
+         AND EXISTS (
+            SELECT 1 FROM keys
+            WHERE user_id=NEW.user_id AND id != OLD.id
+              AND expiry > CAST(strftime('%s','now') AS INTEGER)
+         )
+        BEGIN
+            SELECT RAISE(ABORT, 'only one active subscription per user');
+        END;
+    """)
+    # Do not resolve paid legacy duplicates by guessing which invoice to erase.
+    # Operators can reconcile these exceptional pre-existing accounts against
+    # their payment ledger and the authoritative VPN panel.
+    duplicates = await (await db.execute(
+        "SELECT user_id, COUNT(*) FROM keys WHERE expiry > ? "
+        "GROUP BY user_id HAVING COUNT(*) > 1",
+        (int(time.time()),),
+    )).fetchall()
+    for duplicate_user_id, count in duplicates:
+        logger.error(
+            "Existing account %s has %s active key rows; manual paid-access "
+            "reconciliation is required before enforcing single-subscription UI",
+            duplicate_user_id, count,
         )
 
     await db.commit()
@@ -3614,7 +3670,7 @@ async def get_yookassa_pending_by_user(user_id: int) -> Optional[dict]:
     db = await get_db()
     cur = await db.execute(
         "SELECT payment_id, days, devices, amount_rub, created "
-        "FROM yookassa_pending WHERE user_id=?",
+        "FROM yookassa_pending WHERE user_id=? ORDER BY created DESC LIMIT 1",
         (user_id,),
     )
     row = await cur.fetchone()
@@ -5020,17 +5076,15 @@ async def get_admin_stats() -> dict:
     total_revenue = (await cur.fetchone())[0]
     
     # Today's revenue
-    today_start = current_time - (current_time % 86400)
+    today_start, week_start, month_start = _moscow_calendar_starts(current_time)
     cur = await db.execute("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status='success' AND currency='RUB' AND method!='trial' AND created >= ?", (today_start,))
     today_revenue = (await cur.fetchone())[0]
     
     # Week revenue
-    week_start = current_time - ((current_time // 86400) % 7) * 86400
     cur = await db.execute("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status='success' AND currency='RUB' AND method!='trial' AND created >= ?", (week_start,))
     week_revenue = (await cur.fetchone())[0]
     
     # Month revenue
-    month_start = current_time - ((current_time // 86400) % 30) * 86400
     cur = await db.execute("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status='success' AND currency='RUB' AND method!='trial' AND created >= ?", (month_start,))
     month_revenue = (await cur.fetchone())[0]
     
@@ -5086,9 +5140,7 @@ async def get_extended_stats() -> dict:
         })
     
     # New users stats
-    day_start = current_time - (current_time % 86400)
-    week_start = current_time - ((current_time // 86400) % 7) * 86400
-    month_start = current_time - ((current_time // 86400) % 30) * 86400
+    day_start, week_start, month_start = _moscow_calendar_starts(current_time)
     
     cur = await db.execute("SELECT COUNT(*) FROM users WHERE created >= ?", (day_start,))
     new_day = (await cur.fetchone())[0]
@@ -5420,9 +5472,8 @@ async def get_payment_stats() -> dict:
         return sum(int(row[1] or 0) for row in rows), by_currency
 
     total_count, total_by_currency = await totals()
-    today_start = current_time - (current_time % 86400)
+    today_start, week_start, month_start = _moscow_calendar_starts(current_time)
     today_count, today_by_currency = await totals("created >= ?", (today_start,))
-    month_start = current_time - ((current_time // 86400) % 30) * 86400
     month_count, month_by_currency = await totals("created >= ?", (month_start,))
 
     cur = await db.execute(

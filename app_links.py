@@ -111,19 +111,19 @@ def render_app_open_page(deep_link: str) -> str:
   :root {{
     color-scheme: dark;
     --font-ui: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
-    --color-bg: #061020;
-    --color-surface: #0d1b2c;
-    --color-line: #20364d;
-    --color-ink: #f3f8ff;
-    --color-muted: #b3c2d2;
-    --color-quiet: #8195aa;
-    --color-blue: #21a5ff;
+    --color-bg: #07111d;
+    --color-surface: #101d2b;
+    --color-line: #273747;
+    --color-ink: #f3f7fb;
+    --color-muted: #a9b9c8;
+    --color-quiet: #8194a6;
+    --color-blue: #158fff;
     --color-cyan: #27d5e8;
-    --color-green: #43e58b;
-    --color-focus: #a6ffcb;
+    --color-green: #6be6bc;
+    --color-focus: #80dfff;
     --color-shadow: rgb(0 0 0 / 34%);
-    --radius-card: 24px;
-    --radius-control: 14px;
+    --radius-card: 12px;
+    --radius-control: 9px;
   }}
   *, *::before, *::after {{ box-sizing: border-box; }}
   html, body {{ overflow-x: clip; }}
@@ -133,11 +133,11 @@ def render_app_open_page(deep_link: str) -> str:
     font-family: var(--font-ui); background: var(--color-bg); color: var(--color-ink);
   }}
   main {{ width: min(100%, 440px); min-width: 0; }}
-  .panel {{ position: relative; overflow: clip; padding: clamp(24px, 6vw, 40px); border: 1px solid var(--color-line); border-radius: var(--radius-card); background: var(--color-surface); box-shadow: 0 24px 70px var(--color-shadow); text-align: center; }}
+  .panel {{ position: relative; overflow: clip; padding: clamp(24px, 6vw, 40px); border: 1px solid var(--color-line); border-radius: var(--radius-card); background: var(--color-surface); text-align: center; }}
   .panel::before {{ position: absolute; inset: 0 0 auto; height: 3px; background: linear-gradient(112deg, var(--color-blue), var(--color-cyan) 54%, var(--color-green)); content: ""; }}
   .logo {{
     display: block; width: min(36vw, 132px); height: auto; aspect-ratio: 1; object-fit: contain;
-    margin: 0 auto 24px; border: 1px solid var(--color-line); border-radius: 22px;
+    margin: 0 auto 24px; border: 1px solid var(--color-line); border-radius: 12px;
   }}
   h1 {{ font-size: clamp(1.4rem, 6vw, 1.8rem); line-height: 1.2; overflow-wrap: break-word; min-width: 0; margin: 0 0 12px; }}
   p {{ color: var(--color-muted); line-height: 1.55; margin: 0 0 22px; }}
@@ -212,7 +212,7 @@ def build_connect_ticket(subscription_url: str, user_name: str = "", *, now: int
 
 
 def read_connect_ticket(ticket: str, *, now: int | None = None) -> dict[str, str]:
-    """Decrypt and validate a handover ticket; signed links do not expire."""
+    """Decrypt and validate a time-limited handover ticket."""
     if not ticket or len(ticket) > 4096:
         raise ValueError("invalid connection ticket")
     try:
@@ -233,6 +233,8 @@ def read_connect_ticket(ticket: str, *, now: int | None = None) -> dict[str, str
             if expiry > current + LEGACY_CONNECT_TICKET_TTL_SECONDS + 5:
                 raise ValueError
             expiry += CONNECT_TICKET_TTL_SECONDS - LEGACY_CONNECT_TICKET_TTL_SECONDS
+        if current >= expiry:
+            raise ValueError("connection ticket expired")
         subscription_url = str(value.get("sub", ""))
         parsed = urlsplit(subscription_url)
         if (

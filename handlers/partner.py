@@ -105,10 +105,9 @@ async def cb_partner_referrals_list(callback: CallbackQuery, bot: Bot):
                 else "Бонус за первую оплату ожидается"
             )
             lines.append(
-                f"\nПриглашение №{index} · {format_timestamp(user['registration_date'])[:10]}"
-                f"\n{signup_status}"
-                f"\n{payment_status}"
-                f"\nВсего: <b>+{days} дней</b>"
+                f"\n#{index} · {format_timestamp(user['registration_date'])[:10]}"
+                f"\n{signup_status} · {payment_status}"
+                f" · <b>+{days} дней</b>"
             )
         text = "\n".join(lines)
     rows = []
