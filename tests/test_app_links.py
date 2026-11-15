@@ -178,18 +178,22 @@ class TestAppOpenPage(unittest.TestCase):
 
 
 class TestConnectionPageHttp(unittest.TestCase):
-    def test_current_and_legacy_tickets_remain_valid_without_expiry(self):
+    def test_current_and_legacy_tickets_expire(self):
         import base64
         from app_links import _connect_aead
         with patch.dict(os.environ, {"APP_HANDOFF_SECRET": "isolated-test-secret"}):
             ticket = build_connect_ticket("https://sub.example/demo", now=1_000_000)
-            self.assertEqual(read_connect_ticket(ticket, now=1_000_000 + 3600)["subscription_url"], "https://sub.example/demo")
-            self.assertEqual(read_connect_ticket(ticket, now=1_000_001 + CONNECT_TICKET_TTL_SECONDS)["subscription_url"], "https://sub.example/demo")
+            self.assertEqual(read_connect_ticket(ticket, now=1_000_000 + 3599)["subscription_url"], "https://sub.example/demo")
+            with self.assertRaisesRegex(ValueError, "expired"):
+                read_connect_ticket(ticket, now=1_000_000 + 3600)
+            with self.assertRaisesRegex(ValueError, "expired"):
+                read_connect_ticket(ticket, now=1_000_001 + CONNECT_TICKET_TTL_SECONDS)
             payload = json.dumps({"sub": "https://sub.example/demo", "exp": 1_000_000 + 900}).encode()
             nonce = os.urandom(12)
             legacy = base64.urlsafe_b64encode(nonce + _connect_aead().encrypt(nonce, payload, b"bymevpn-connect-ticket-v1")).decode().rstrip("=")
             self.assertEqual(read_connect_ticket(legacy, now=1_000_000 + 1800)["subscription_url"], "https://sub.example/demo")
-            self.assertEqual(read_connect_ticket(legacy, now=1_000_001 + CONNECT_TICKET_TTL_SECONDS)["subscription_url"], "https://sub.example/demo")
+            with self.assertRaisesRegex(ValueError, "expired"):
+                read_connect_ticket(legacy, now=1_000_001 + CONNECT_TICKET_TTL_SECONDS)
 
     def test_verified_import_links_escape_query_and_warning(self):
         page = render_connection_choice_page("https://sub.example/abc?x=1&y=2")
@@ -215,7 +219,7 @@ class TestConnectionPageHttp(unittest.TestCase):
             self.assertIn("no-store", response.headers["cache-control"])
             self.assertIn("default-src 'none'", response.headers["content-security-policy"])
             long_lived = build_connect_ticket("https://sub.example/preview", now=int(time.time()) - CONNECT_TICKET_TTL_SECONDS - 1)
-            self.assertEqual(client.get("/connect", params={"ticket": long_lived}).status_code, 200)
+            self.assertEqual(client.get("/connect", params={"ticket": long_lived}).status_code, 400)
             self.assertEqual(client.get("/connect", params={"ticket": "invalid"}).status_code, 400)
 
 
