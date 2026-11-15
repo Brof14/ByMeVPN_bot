@@ -24,7 +24,7 @@ from keyboards import (
     confirm_reissue_kb, support_url,
 )
 from utils import send_with_photo, send_or_edit, safe_answer
-from constants import format_timestamp as fmt_date, format_days_left as fmt_days_left
+from constants import format_timestamp as fmt_date, format_days_left as fmt_days_left, format_expiry_msk as fmt_expiry_msk
 from states import BuyFlow
 from bot_assets import KEY, DEVICES, RENEWAL, AUTO_RENEWAL
 from bot_style import themed_button as InlineKeyboardButton
@@ -269,7 +269,7 @@ async def _key_info_content(user_id: int, k: dict) -> tuple[str, object]:
     device_text = "\n".join(device_lines)
     text = (
         f"<b>{status}</b>\n\n"
-        f"{remaining_line}Действует до: <b>{fmt_date(k['expiry'])}</b>"
+        f"{remaining_line}Действует до: <b>{fmt_expiry_msk(k['expiry'])}</b>"
         + (f"\n{device_text}" if device_text else "")
     )
     link_seed = ""
@@ -771,7 +771,7 @@ async def _load_autorenew_context(user_id: int, key_id: int) -> tuple[dict | Non
         keys = await get_user_keys(user_id)
         expiry_ts = max((key.get("expiry", 0) for key in keys), default=0)
     if expiry_ts:
-        expiry_str = fmt_date(expiry_ts)
+        expiry_str = fmt_expiry_msk(expiry_ts)
     return sub, card_title, expiry_str
 
 
