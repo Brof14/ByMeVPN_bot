@@ -34,6 +34,19 @@ class CustomerUxFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("key_renew:9", button_actions(urgent))
         self.assertEqual(next(iter(urgent.inline_keyboard[0])).callback_data, "key_instructions:9")
 
+    def test_active_home_uses_direct_signed_https_button(self):
+        from unittest.mock import patch
+        with patch("app_links.APP_CONNECT_PAGE_URL", "https://connect.example"):
+            with patch.dict("os.environ", {"APP_HANDOFF_SECRET": "test-secret"}):
+                home = main_menu_active(
+                    9, "https://vpn.example/sub/active", user_id=1001,
+                    remaining_days=24, link_seed="a" * 64,
+                )
+        first = home.inline_keyboard[0][0]
+        self.assertEqual(first.text, "Подключить VPN")
+        self.assertIsNone(first.callback_data)
+        self.assertTrue(first.url.startswith("https://connect.example/connect?u=1001&k=9&s="))
+
     def test_plan_intro_separates_devices_and_duration(self):
         copy = _tariff_intro(2)
         self.assertIn("<b>Устройства:</b>", copy)
