@@ -1,0 +1,198 @@
+"""Regression tests for provider-bound device upgrades and fail-closed billing."""
+import tempfile
+import time
+import unittest
+from decimal import Decimal
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+import database
+from handlers.device_upgrades import process_provider_device_upgrade
+
+
+class ProviderDeviceUpgradeTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old_path, self.old_pool = database.DB_FILE, database._db_pool
+        database.DB_FILE, database._db_pool = str(Path(self.tmp.name) / "provider-upgrades.db"), None
+        await database.init_db()
+        await database.ensure_user(8101)
+        self.expiry = int(time.time()) + 30 * 86400
+        self.key_id = await database.add_key(
+            8101, "https://vpn.example/sub/active", "VPN",
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", 30, 2, expiry=self.expiry,
+        )
+        self.bot = SimpleNamespace(send_message=AsyncMock())
+
+    async def asyncTearDown(self):
+        await database.close_db()
+        database.DB_FILE, database._db_pool = self.old_path, self.old_pool
+        self.tmp.cleanup()
+
+    async def create_bound_order(self, provider):
+        order_id = await database.create_device_upgrade_order(
+            8101, self.key_id, 2, 5, self.expiry, 20, provider=provider,
+        )
+        self.assertIsInstance(order_id, str)
+        invoice_id = f"invoice-{provider}"
+        self.assertTrue(await database.bind_device_upgrade_invoice(
+            order_id, 8101, provider, invoice_id,
+        ))
+        self.assertFalse(await database.bind_device_upgrade_invoice(
+            order_id, 8101, provider, "second-charge",
+        ))
+        self.assertEqual(
+            (await database.get_device_upgrade_order_for_invoice(provider, invoice_id))["id"],
+            order_id,
+        )
+        self.assertIsNone(await database.get_device_upgrade_order_for_invoice(
+            provider, "second-charge",
+        ))
+        return order_id, invoice_id
+
+    async def test_provider_binding_cannot_be_reassigned_to_another_customer(self):
+        order_id, invoice_id = await self.create_bound_order("yookassa")
+        self.assertFalse(await database.bind_device_upgrade_invoice(
+            order_id, 9999, "yookassa", invoice_id,
+        ))
+        self.assertFalse(await database.bind_device_upgrade_invoice(
+            order_id, 8101, "cryptobot", invoice_id,
+        ))
+        self.assertIsNone(await database.create_device_upgrade_order(
+            8101, self.key_id, 2, 10, self.expiry, 40, provider="stars",
+        ))
+        order = await database.get_device_upgrade_order(order_id)
+        self.assertEqual(order["provider"], "yookassa")
+        self.assertEqual(order["provider_payment_id"], invoice_id)
+
+    def _yookassa_verified(self, order_id, invoice_id, amount="20.00"):
+        return {
+            "id": invoice_id, "status": "succeeded",
+            "amount": {"value": amount, "currency": "RUB"},
+            "metadata": {
+                "purpose": "device_upgrade", "device_upgrade_order_id": order_id,
+                "user_id": "8101", "days": "0", "devices": "5",
+                "key_id": str(self.key_id), "old_devices": "2", "amount_rub": "20",
+            },
+        }
+
+    def _cryptobot_verified(self, order_id, invoice_id, amount="20"):
+        return {
+            "invoice_id": invoice_id, "status": "paid",
+            "currency_type": "fiat", "fiat": "RUB", "amount": amount,
+            "payload": f"devup_{order_id}",
+        }
+
+    async def _mock_confirmed_panel(self, order_id, invoice_id, provider, invoice):
+        with (
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value={
+                "enable": True, "expiry_time": self.expiry * 1000, "limit_hwid": 2,
+            })),
+            patch("xui_client.update_xui_user", new=AsyncMock(return_value={
+                "expiry_time": self.expiry * 1000, "limit_hwid": 5,
+            })) as panel_update,
+            patch("xui_client.get_xui_devices", new=AsyncMock(return_value={
+                "limit_hwid": 5, "devices": [],
+            })),
+            patch("app_links.build_user_connect_page_url", new=AsyncMock(
+                return_value="https://connect.example/connect?u=8101&s=signed",
+            )),
+        ):
+            self.assertTrue(await process_provider_device_upgrade(
+                self.bot, provider, invoice_id, invoice,
+            ))
+            self.assertTrue(await process_provider_device_upgrade(
+                self.bot, provider, invoice_id, invoice,
+            ))
+        panel_update.assert_awaited_once()
+        item = await database.get_key_by_id(self.key_id)
+        self.assertEqual(item["expiry"], self.expiry)
+        self.assertEqual(item["limit_ip"], 5)
+        order = await database.get_device_upgrade_order(order_id)
+        self.assertEqual(order["status"], "fulfilled")
+        self.assertEqual(order["charge_id"], f"{provider}:{invoice_id}")
+        db = await database.get_db()
+        payments = await (await db.execute(
+            "SELECT status,COUNT(*) FROM payments WHERE provider=? AND provider_payment_id=? GROUP BY status",
+            (provider, invoice_id),
+        )).fetchall()
+        self.assertEqual(payments, [("success", 1)])
+        self.bot.send_message.assert_awaited_once()
+
+    async def test_yookassa_payment_verified_and_fulfilled_only_once(self):
+        order_id, invoice_id = await self.create_bound_order("yookassa")
+        await database.add_yookassa_pending(invoice_id, 8101, 0, 5, 20)
+        await self._mock_confirmed_panel(
+            order_id, invoice_id, "yookassa",
+            self._yookassa_verified(order_id, invoice_id),
+        )
+        self.assertIsNone(await database.get_yookassa_pending(invoice_id))
+
+    async def test_cryptobot_payment_verified_and_fulfilled_only_once(self):
+        order_id, invoice_id = await self.create_bound_order("cryptobot")
+        await database.add_crypto_pending(
+            invoice_id, 8101, 0, 5, 20, payload=f"devup_{order_id}",
+        )
+        await self._mock_confirmed_panel(
+            order_id, invoice_id, "cryptobot",
+            self._cryptobot_verified(order_id, invoice_id),
+        )
+        self.assertIsNone(await database.get_crypto_pending(invoice_id))
+
+    async def test_changed_invoice_amount_never_mutates_panel(self):
+        order_id, invoice_id = await self.create_bound_order("yookassa")
+        await database.add_yookassa_pending(invoice_id, 8101, 0, 5, 20)
+        with patch("xui_client.update_xui_user", new=AsyncMock()) as update:
+            self.assertFalse(await process_provider_device_upgrade(
+                self.bot, "yookassa", invoice_id,
+                self._yookassa_verified(order_id, invoice_id, "19.00"),
+            ))
+        update.assert_not_awaited()
+        self.assertEqual((await database.get_key_by_id(self.key_id))["limit_ip"], 2)
+
+    async def test_bad_cryptobot_payload_never_mutates_panel(self):
+        order_id, invoice_id = await self.create_bound_order("cryptobot")
+        await database.add_crypto_pending(invoice_id, 8101, 0, 5, 20, payload=f"devup_{order_id}")
+        invoice = self._cryptobot_verified(order_id, invoice_id)
+        invoice["payload"] = "8101:0:5"
+        with patch("xui_client.update_xui_user", new=AsyncMock()) as update:
+            self.assertFalse(await process_provider_device_upgrade(
+                self.bot, "cryptobot", invoice_id, invoice,
+            ))
+        update.assert_not_awaited()
+        self.assertEqual((await database.get_key_by_id(self.key_id))["limit_ip"], 2)
+
+    async def test_unknown_provider_invoice_is_never_provisioned(self):
+        with patch("xui_client.update_xui_user", new=AsyncMock()) as update:
+            self.assertFalse(await process_provider_device_upgrade(
+                self.bot, "cryptobot", "unknown-paid-invoice",
+                {"status": "paid", "amount": "20", "payload": "devup_unknown"},
+            ))
+        update.assert_not_awaited()
+
+    async def test_failed_panel_update_quarantines_paid_upgrade_without_extending_days(self):
+        order_id, invoice_id = await self.create_bound_order("yookassa")
+        await database.add_yookassa_pending(invoice_id, 8101, 0, 5, 20)
+        with (
+            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value={
+                "enable": True, "expiry_time": self.expiry * 1000, "limit_hwid": 2,
+            })),
+            patch("xui_client.update_xui_user", new=AsyncMock(return_value=None)),
+        ):
+            self.assertFalse(await process_provider_device_upgrade(
+                self.bot, "yookassa", invoice_id, self._yookassa_verified(order_id, invoice_id),
+            ))
+        self.assertEqual((await database.get_key_by_id(self.key_id))["expiry"], self.expiry)
+        self.assertEqual((await database.get_key_by_id(self.key_id))["limit_ip"], 2)
+        self.assertEqual((await database.get_device_upgrade_order(order_id))["status"], "pending")
+        db = await database.get_db()
+        status = await (await db.execute(
+            "SELECT status FROM payments WHERE provider='yookassa' AND provider_payment_id=?",
+            (invoice_id,),
+        )).fetchone()
+        self.assertEqual(status[0], "recovery_required")
+
+
+if __name__ == "__main__":
+    unittest.main()
