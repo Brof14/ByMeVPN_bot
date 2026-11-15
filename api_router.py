@@ -3050,6 +3050,61 @@ async def create_mobile_v2_payment(
     return await api_create_payment(legacy_request, user_id=user_id)
 
 
+class MobileRenewalCancelRequest(BaseModel):
+    """An explicit customer decision; never toggle recurring billing implicitly."""
+    confirm: Literal[True]
+
+
+@mobile_v2_router.get("/renewal")
+async def get_mobile_renewal(
+    user_id: int = Depends(get_current_user_id),
+):
+    """Owner-scoped recurring status; no payment token or invented next-charge date."""
+    row = await database.get_auto_renew_subscription(user_id, include_legacy=True)
+    enabled = bool(
+        row and row.get("status") == "active" and
+        str(row.get("payment_method_id") or "").strip()
+    )
+    return {
+        "auto_renew": enabled,
+        "can_cancel": enabled,
+        "source": "server",
+        # The worker may recalculate the amount or charge schedule. Do not
+        # present old DB plan values as the next guaranteed payment.
+        "next_charge_at": None,
+        "next_amount_rub": None,
+    }
+
+
+@mobile_v2_router.post("/renewal/cancel")
+async def cancel_mobile_renewal(
+    req: MobileRenewalCancelRequest,
+    user_id: int = Depends(get_current_user_id),
+):
+    """Disable all recurring payment tokens while retaining every paid VPN key.
+
+    The same cross-process delivery lease guards actual invoice creation,
+    account deletion and Telegram billing changes. The cancellation endpoint
+    is idempotent, even if legacy records exist for the same customer.
+    """
+    lease_token = secrets.token_urlsafe(24)
+    if not await database.try_acquire_delivery_lease(user_id, lease_token):
+        raise HTTPException(
+            status_code=409,
+            detail="Операция с оплатой выполняется. Повторите отключение позже.",
+        )
+    try:
+        cancelled_count = await database.suspend_all_user_autorenew(user_id)
+        return {
+            "auto_renew": False,
+            "cancelled": True,
+            "cancelled_records": cancelled_count,
+            "paid_access_preserved": True,
+        }
+    finally:
+        await database.release_delivery_lease(user_id, lease_token)
+
+
 @mobile_v2_router.get("/payment/check")
 async def check_mobile_v2_payment(
     request: Request,
