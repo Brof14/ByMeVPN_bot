@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.methods import SendMessage
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity
+from aiogram.methods import EditMessageMedia, SendMessage
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, MessageEntity
 
 from bot_style import ICON_IDS, PREMIUM_EMOJI_IDS, PremiumEmojiRequestMiddleware, premium_emoji_text
 
@@ -85,6 +85,25 @@ class PremiumEmojiMiddlewareTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(sent), 2)
         self.assertIn("<tg-emoji", sent[0].text)
         self.assertEqual(sent[1].text, method.text)
+
+    async def test_converts_caption_nested_in_edit_message_media(self):
+        caption = "<b>📱 Устройство</b>\n🔗 Laptop\n⚙️ Система: Windows\n🕒 Последняя активность"
+        method = EditMessageMedia(
+            chat_id=1,
+            message_id=2,
+            media=InputMediaPhoto(media="file-id", caption=caption, parse_mode=ParseMode.HTML),
+        )
+        bot = SimpleNamespace(default=SimpleNamespace(parse_mode=ParseMode.HTML))
+        captured = {}
+
+        async def downstream(_bot, outgoing):
+            captured["method"] = outgoing
+            return "ok"
+
+        await PremiumEmojiRequestMiddleware()(downstream, bot, method)
+        rendered_caption = captured["method"].media.caption
+        self.assertEqual(rendered_caption.count("<tg-emoji"), 4)
+        self.assertIn(f'emoji-id="{ICON_IDS["devices"]}"', rendered_caption)
 
 
 if __name__ == "__main__":
