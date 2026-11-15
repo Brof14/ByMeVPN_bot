@@ -23,19 +23,63 @@ Do not alter the previously excluded global buttons/banner/caption behavior, sec
 
 Support bot PR #4, merged separately, uses a check-mark reaction to confirm delivery, falling back to the original short text receipt when reactions are unsupported.
 
+## Follow-up implementation — PR #111
+
+The first post-audit PR left a cross-provider device upgrade gap. This
+follow-up implements YooKassa and CryptoBot payment options **in addition
+to the existing Telegram Stars flow**, while keeping the original prices,
+1:1 Stars/RUB assumptions, the default auto-renew state, gift-month
+language, and the active-customer main menu unchanged.
+
+- Only a single existing active subscription can be upgraded; a fresh,
+  server-confirmed device limit/expiry is required before the quote.
+- Upgrades use the existing incremental tier cost prorated over the
+  remaining paid term. The VPN expiry is never extended by an upgrade.
+- A provider invoice is bound durably to the exact customer, key,
+  price, limits and order before its URL is displayed.
+- Both providers' successful payments use the same safe processing:
+  settlement verification, exact currency/amount and metadata,
+  account-scoped lease, 3x-ui HWID update and readback,
+  atomic billing/account state update, idempotent webhook replay,
+  and recovery-required quarantine for ambiguous outcomes.
+- For customers, a read-only "Проверить оплату" action explains
+  pending/confirmed/terminal states, and never starts another payment.
+  External invoices are not silently expired after 15 minutes.
+- Existing Stars upgrade processing now observes the same per-account
+  delivery lease, and a successful Stars upgrade offers the direct
+  signed connection-page URL.
+- `scripts/audit_duplicate_subscriptions.py` reports legacy multi-key
+  paid-access conflicts on a backup without exposing credentials or
+  altering existing paid terms. Existing panel/DB synchronization
+  diagnostics redact VPN UUIDs.
+- `scripts/predeploy_db_guard.py --db <database> --backup-dir <private-dir>`
+  uses SQLite online backup, verifies integrity, rehearses the **current**
+  migrations on a disposable clone, and tests the one-active-key
+  database triggers. It never writes to the live source.
+- A GitHub Chromium job now renders real HTML/JS with synthetic
+  subscription data at Android/iOS/desktop sizes, checks horizontal
+  overflow, basic platform choice and touch target height, and uploads
+  screenshots for manual design review. Screenshots are not proof of
+  successful real VPN tunneling.
+
+Important: adding these external billing paths **must not** be interpreted
+as successful live provider settlements; the GitHub checks use mocks and
+isolated SQLite. No real card charge, CryptoBot asset payment, Telegram
+client, VPS deployment or Windows tunnel test is claimed here.
+
 ## Mandatory production acceptance before rollout
 
 - [ ] Backup production SQLite, run integrity check, rehearse rollback.
 - [ ] Query users with multiple active keys; reconcile **paid** periods with YooKassa, Stars and Crypto records. Never automatically truncate time.
-- [ ] Verify schema migrations and triggers on a copy of production data.
+- [ ] Run the predeploy guard on a secure production SQLite backup, check its integrity, migrations and singleton-key triggers.
 - [ ] Tap active subscriber's Connect VPN button in Android/iOS/Desktop Telegram: immediate website open, no extra message.
 - [ ] Verify expired temporary links fail, personal links survive refresh and rotate on key reissue.
 - [ ] Test real VPN tunnels and third-party import for at least Android and desktop; verify the published APK and checksum.
-- [ ] Test provider sandbox payments, timeout, duplicate webhook, refunds and recurring cancellation.
+- [ ] Test YooKassa/CryptoBot device upgrades in provider sandbox or controlled accounts, including timeout, duplicate callback, cancellation, refunds, active recurring price, panel readback and restoration of pending billing.
 - [ ] Check support swipe replies and reaction receipts.
-- [ ] Inspect real Android/iPhone/Desktop screenshots including long text, large fonts and narrow screens.
+- [ ] Inspect actual Chromium CI screenshots and real Telegram screenshots on Android/iPhone/Desktop, with large font accessibility and narrow screens. CI checks synthetic layouts, not visual perfection.
 - [ ] Measure first successful VPN connection, checkout completion, payment errors and user retention.
 
 ## Not proven or not implemented in this PR
 
-VPS deployment, physical-device live tests, actual payment-provider tests, complete redesign, architecture split of database.py, cross-provider device-upgrade checkout, fully integrated support case management, measured customer conversion and CAC/LTV. GitHub CI cannot establish a production 100/100 score.
+VPS deployment, physical-device live tests, actual payment-provider tests, complete redesign, architecture split of database.py, fully integrated support case management, measured customer conversion and CAC/LTV. GitHub CI cannot establish a production 100/100 score.
