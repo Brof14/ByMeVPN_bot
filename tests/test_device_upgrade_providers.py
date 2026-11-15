@@ -227,6 +227,47 @@ class ProviderDeviceUpgradeTests(unittest.IsolatedAsyncioTestCase):
             "https://pay.example.invalid/yoo-created",
         )
 
+    async def test_recurring_customer_sees_new_future_price_before_provider_payment(self):
+        from handlers.device_upgrades import cb_device_upgrade_provider
+        await database.save_auto_renew_subscription(
+            user_id=8101, key_id=self.key_id, payment_method_id="saved-card",
+            months=1, days=30, devices=2, amount_rub=89,
+        )
+        recurring = await database.get_auto_renew_subscription(8101, self.key_id)
+        event = SimpleNamespace(
+            data=f"device_upgrade_provider:yookassa:{self.key_id}:5",
+            from_user=SimpleNamespace(id=8101),
+        )
+        context = {
+            "key": await database.get_key_by_id(self.key_id),
+            "expiry": self.expiry, "limit": 2, "recurring": recurring,
+        }
+
+        async def checkout(amount, description, user_id, days, **kwargs):
+            await database.add_yookassa_pending("recurring-invoice", 8101, 0, 5, 20)
+            return {
+                "payment_url": "https://pay.example.invalid/recurring-invoice",
+                "payment_id": "recurring-invoice",
+            }
+
+        with (
+            patch("handlers.device_upgrades._upgrade_context", new=AsyncMock(return_value=context)),
+            patch("database.is_account_tombstoned", new=AsyncMock(return_value=False)),
+            patch("handlers.device_upgrades.safe_answer", new=AsyncMock()),
+            patch("payments.create_yookassa_payment", new=AsyncMock(side_effect=checkout)),
+            patch("handlers.device_upgrades.send_with_photo", new=AsyncMock()) as sent,
+        ):
+            await cb_device_upgrade_provider(event, self.bot)
+        text = sent.await_args.args[2]
+        self.assertIn("109 ₽", text)
+        self.assertIn("30 дней", text)
+        self.assertIn("Отключить", text)
+        old = await database.get_auto_renew_subscription(8101, self.key_id)
+        self.assertEqual(old["amount_rub"], 89)
+        order = await database.get_latest_device_upgrade_for_user(8101)
+        self.assertEqual(order["prior_auto_renew_amount"], 89)
+        self.assertEqual(order["next_auto_renew_amount"], 109)
+
     async def test_crypto_checkout_persists_invoice_before_exposing_url(self):
         from handlers.device_upgrades import cb_device_upgrade_provider
         event = SimpleNamespace(
