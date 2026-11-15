@@ -82,6 +82,7 @@ async def _show_upgrade_error(bot: Bot, callback: CallbackQuery, message: str):
         "Доступ и платежи не изменены.",
         InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Подписка", callback_data="my_keys")],
+            [InlineKeyboardButton(text="Проверить доплату", callback_data="device_upgrade_status")],
             [InlineKeyboardButton(text="Поддержка", url=support_url())],
         ]),
         photo=DEVICES,
@@ -292,10 +293,77 @@ async def cb_device_upgrade_provider(callback: CallbackQuery, bot: Bot):
         "нового лимита. Не создавайте второй счёт, пока этот проверяется.",
         InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Перейти к оплате", url=payment_url)],
+            [InlineKeyboardButton(text="Проверить оплату", callback_data="device_upgrade_status")],
             [InlineKeyboardButton(text="Поддержка по оплате", url=support_url("payment"))],
             [InlineKeyboardButton(text="← К устройствам", callback_data=f"key_devices:{key_id}")],
         ]), photo=DEVICES,
     )
+
+
+@router.callback_query(F.data == "device_upgrade_status")
+async def cb_device_upgrade_status(callback: CallbackQuery, bot: Bot):
+    """Explain the last device upgrade state without creating another charge."""
+    await safe_answer(callback)
+    from database import get_latest_device_upgrade_for_user
+    try:
+        order = await get_latest_device_upgrade_for_user(callback.from_user.id)
+    except Exception:
+        logger.exception("Cannot load device upgrade status")
+        await _show_upgrade_error(bot, callback, "Проверка счёта сейчас недоступна.")
+        return
+    if not order:
+        text = "<b>Доплата не найдена</b>\n\nУ вас пока нет сохранённого счёта на дополнительные устройства."
+    elif order["status"] == "fulfilled":
+        text = (
+            "<b>Доплата подтверждена</b>\n\n"
+            f"Лимит: <b>до {order['new_devices']} устройств</b>. "
+            "Оставшийся срок подписки не изменился."
+        )
+    elif order["status"] == "pending":
+        external = order.get("provider")
+        provider_status = None
+        if order.get("provider_payment_id") and external in {"yookassa", "cryptobot"}:
+            try:
+                from payments import get_yookassa_payment_status, get_crypto_invoice
+                if external == "yookassa":
+                    provider_status = await get_yookassa_payment_status(order["provider_payment_id"])
+                else:
+                    invoice = await get_crypto_invoice(order["provider_payment_id"])
+                    provider_status = (invoice or {}).get("status")
+            except Exception:
+                logger.warning("Provider status unavailable for device upgrade")
+        if provider_status in {"succeeded", "paid"}:
+            description = (
+                "Провайдер подтвердил оплату. Лимит ещё проверяется на сервере. "
+                "Не создавайте второй счёт."
+            )
+        elif provider_status in {"canceled", "expired"}:
+            description = (
+                "Провайдер сообщил, что счёт не оплачен и больше не активен. "
+                "Если деньги всё же списались, сначала обратитесь в поддержку."
+            )
+        else:
+            description = (
+                "Подтверждение нового лимита ещё ожидается. "
+                "Если уже оплатили, не платите повторно; проверка выполняется автоматически."
+            )
+        text = (
+            "<b>Доплата проверяется</b>\n\n"
+            f"Новый лимит: <b>до {order['new_devices']} устройств</b>.\n"
+            + description
+        )
+    else:
+        text = (
+            "<b>Счёт больше не активен</b>\n\n"
+            "Если деньги уже списались, не создавайте новый счёт — "
+            "поддержка проверит оплату."
+        )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Мои устройства", callback_data="my_keys")],
+        [InlineKeyboardButton(text="Повторить проверку", callback_data="device_upgrade_status")],
+        [InlineKeyboardButton(text="Поддержка по оплате", url=support_url("payment"))],
+    ])
+    await send_with_photo(bot, callback, text, keyboard, photo=DEVICES)
 
 
 @router.callback_query(F.data.startswith("device_upgrade_buy:"))
