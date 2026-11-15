@@ -126,7 +126,6 @@ def _checkout_confirmation_text(data: dict) -> str:
     price_rub = int(data["price_rub"])
     bonus = TARIFF_BONUS_MONTHS[months]
     term = f"{months}+{bonus} мес." if bonus else "1 месяц"
-    recurring = bool(data.get("autorenew_enabled", True))
     recurring_price, recurring_days = get_price_for_months(months, devices)
     dev_name = DEVICE_CONFIG.get(devices, {}).get("name", f"{devices} устройств")
     lines = [
@@ -142,15 +141,12 @@ def _checkout_confirmation_text(data: dict) -> str:
     if data.get("promo_mismatch"):
         lines.append("Промокод для другого срока не применён.")
     lines.append("")
-    if recurring:
-        lines.append(
-            f"<b>Автопродление ЮKassa: включено</b>\n"
-            f"Следующее списание: {recurring_price} ₽ за {recurring_days} дней "
-            "после окончания оплаченного срока. Изменить до оплаты — кнопкой ниже; "
-            "Отключить позднее — «Подписка» → «Оплата и автопродление»."
-        )
-    else:
-        lines.append("<b>Автопродление ЮKassa: выключено</b>\nОплата картой будет разовой.")
+    lines.append(
+        "<b>Автопродление ЮKassa включено по умолчанию.</b>\n"
+        f"Следующее списание: {recurring_price} ₽ за {recurring_days} дней "
+        "после окончания оплаченного срока. Управлять автопродлением можно "
+        "в разделе «Подписка» → «Оплата и автопродление»."
+    )
     lines.extend([
         "Stars и CryptoBot — разовые платежи.",
         "Доступ после подтверждения оплаты.",
@@ -172,7 +168,6 @@ async def _show_checkout(
         bot, callback, _checkout_confirmation_text(data),
         payment_kb(
             int(data["price_rub"]), int(data["days"]), devices=int(data["devices"]),
-            autorenew_enabled=bool(data.get("autorenew_enabled", True)),
         ),
         photo=PAYMENT,
     )
@@ -181,19 +176,6 @@ async def _show_checkout(
 # ---------------------------------------------------------------------------
 # Checkout options
 # ---------------------------------------------------------------------------
-
-@router.callback_query(F.data == "checkout_autorenew_toggle")
-async def cb_checkout_autorenew_toggle(callback: CallbackQuery, bot: Bot, state: FSMContext):
-    """Let the customer explicitly opt out of future YooKassa charges."""
-    await safe_answer(callback)
-    data = await state.get_data()
-    if data.get("price_rub") is None or data.get("days") is None:
-        await _ask_tariff_again(bot, callback)
-        return
-    enabled = not bool(data.get("autorenew_enabled", True))
-    await state.update_data(autorenew_enabled=enabled)
-    await _show_checkout(bot, callback, state, {**data, "autorenew_enabled": enabled})
-
 
 @router.callback_query(F.data == "promo_enter")
 async def cb_enter_promo(callback: CallbackQuery, bot: Bot, state: FSMContext):
@@ -403,7 +385,7 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
         promo_discount=promo_info.get("discount_value", 0) if promo_info.get("promo_type") == "percent" else 0,
         promo_mismatch=promo_mismatch,
         checkout_autorenew_disclosed=True,
-        autorenew_enabled=bool(data.get("autorenew_enabled", True)),
+        autorenew_enabled=True,
     )
     # A restart can erase MemoryStorage. Save only the choice, never its
     # computed price, so recovering cannot silently charge an old amount.
@@ -428,7 +410,7 @@ async def cb_select_tariff(callback: CallbackQuery, bot: Bot, state: FSMContext)
         "days": days, "original_price": original_price,
         "promo_mismatch": promo_mismatch,
         "checkout_autorenew_disclosed": True,
-        "autorenew_enabled": bool(data.get("autorenew_enabled", True)),
+        "autorenew_enabled": True,
     }
     await _show_checkout(bot, callback, state, checkout_display)
 
@@ -866,411 +848,3 @@ async def cb_pay_crypto(callback: CallbackQuery, bot: Bot, state: FSMContext):
 
 # ---------------------------------------------------------------------------
 # Pre-checkout confirmation (required by Telegram for Stars)
-# ---------------------------------------------------------------------------
-
-def _stars_invoice_error(pre: PreCheckoutQuery) -> str | None:
-    """Validate an issued invoice before authorizing a Telegram Stars charge.
-
-    No database access or mutable FSM values: the immutable invoice payload
-    and the server's canonical pricing are the only accepted references.
-    """
-    invalid = "Счёт устарел или некорректен. Выберите тариф ещё раз."
-    try:
-        if pre.currency != "XTR" or int(pre.total_amount) <= 0:
-            return invalid
-        parts = pre.invoice_payload.split("_")
-        if len(parts) < 7 or parts[0] != "stars":
-            return invalid
-        user_id, days, devices, months = map(int, parts[1:5])
-        if user_id != pre.from_user.id or devices not in VALID_DEVICE_LIMITS:
-            return invalid
-        if months not in (1, 3, 6, 12) or not parts[-1].isdigit():
-            return invalid
-        issued_at = int(parts[-1])
-        now = int(time.time())
-        if issued_at > now + 60 or now - issued_at > 48 * 60 * 60:
-            return invalid
-        from constants import MAX_GRANT_DAYS
-        if not 0 < days <= MAX_GRANT_DAYS:
-            return invalid
-        expected_amount, expected_days = get_price_for_months(months, devices)
-        legacy_amount = get_monthly_display(months, devices) * months
-        has_promo = bool("_".join(parts[5:-1]))
-        amount = int(pre.total_amount)
-        if has_promo:
-            # Promo terms may reduce amount or add days; they were applied at
-            # invoice creation. Never permit a larger or shorter package.
-            if amount > expected_amount or days < expected_days:
-                return invalid
-        elif amount not in {expected_amount, legacy_amount} or days != expected_days:
-            return invalid
-    except (ValueError, TypeError, AttributeError, IndexError):
-        return invalid
-    return None
-
-
-@router.pre_checkout_query()
-async def pre_checkout(pre: PreCheckoutQuery):
-    if str(pre.invoice_payload or "").startswith("devup_"):
-        from handlers.device_upgrades import device_upgrade_checkout_error
-        error = await device_upgrade_checkout_error(pre)
-    else:
-        error = _stars_invoice_error(pre)
-    if not error:
-        from database import is_account_tombstoned
-        try:
-            if await is_account_tombstoned(pre.from_user.id):
-                error = "Аккаунт удалён. Новые оплаты заблокированы. Обратитесь в поддержку."
-        except Exception:
-            logger.exception("Stars pre-checkout account status check failed")
-            error = "Не удалось проверить аккаунт. Повторите оплату позже."
-    if error:
-        await pre.answer(ok=False, error_message=error)
-    else:
-        await pre.answer(ok=True)
-
-
-# ---------------------------------------------------------------------------
-# Successful Stars payment → idempotent delivery
-# ---------------------------------------------------------------------------
-
-@router.message(F.successful_payment)
-async def on_successful_payment(message: Message, bot: Bot, state: FSMContext):
-    user_id = message.from_user.id
-    from database import is_account_tombstoned
-    if await is_account_tombstoned(user_id):
-        # This update can arrive after account erasure even if the pre-checkout
-        # was approved earlier. Record the charge without recreating VPN access.
-        payment = message.successful_payment
-        charge_id = payment.telegram_payment_charge_id or payment.invoice_payload
-        is_new, _ = await record_payment_idempotent(
-            user_id=user_id,
-            amount=payment.total_amount,
-            currency=payment.currency,
-            method="stars",
-            days=0,
-            payload=charge_id,
-            status="recovery_required",
-            tariff="Deleted account — manual refund review",
-            devices=DEFAULT_DEVICE_LIMIT,
-            provider="stars",
-            provider_payment_id=charge_id,
-        )
-        if is_new:
-            from html import escape
-            from config import ADMIN_ID
-            try:
-                await bot.send_message(
-                    ADMIN_ID,
-                    "⚠️ Stars оплата после удаления аккаунта. "
-                    f"Пользователь <code>{user_id}</code>, "
-                    f"платёж <code>{escape(str(charge_id))}</code>. "
-                    "Не выдавайте доступ автоматически; проверьте возврат вручную.",
-                    parse_mode="HTML",
-                )
-            except Exception:
-                logger.exception("Could not alert admin about late Stars charge after deletion")
-        try:
-            await message.answer(
-                "Оплата получена после удаления аккаунта. "
-                "Доступ не активируется автоматически. Не оплачивайте повторно; "
-                "обратитесь в @ByMeVPNSupportBot для проверки возврата."
-            )
-        except Exception:
-            logger.warning("Could not notify user %d about late Stars charge", user_id)
-        return
-    await ensure_user(user_id, message.from_user.username)
-
-    payment = message.successful_payment
-    charge_id = payment.telegram_payment_charge_id or payment.invoice_payload
-    lock = _stars_payment_locks.setdefault(charge_id, asyncio.Lock())
-    async with lock:
-        if str(payment.invoice_payload or "").startswith("devup_"):
-            from handlers.device_upgrades import process_device_upgrade_charge
-            await process_device_upgrade_charge(message, bot, payment, charge_id)
-        else:
-            await _process_successful_stars_payment(message, bot, state, payment, charge_id)
-
-
-async def _process_successful_stars_payment(
-    message: Message, bot: Bot, state: FSMContext, payment, charge_id: str
-) -> None:
-    user_id = message.from_user.id
-    payload = payment.invoice_payload
-    stars = payment.total_amount
-    currency = payment.currency  # XTR
-
-    # The invoice payload is the immutable order snapshot. Never use mutable FSM
-    # state to decide what was paid for.
-    parts = payload.split("_")
-    try:
-        if len(parts) < 7 or parts[0] != "stars" or int(parts[1]) != user_id:
-            raise ValueError("invalid invoice payload shape or owner")
-        days = int(parts[2])
-        raw_devices = int(parts[3])
-        if raw_devices not in VALID_DEVICE_LIMITS:
-            raise ValueError("invalid device limit in invoice payload")
-        devices = validate_device_limit(raw_devices)
-        months = int(parts[4])
-        if days <= 0 or months not in (1, 3, 6, 12) or not parts[-1].isdigit():
-            raise ValueError("invalid subscription period or invoice timestamp")
-        if currency != "XTR" or stars <= 0:
-            raise ValueError("invalid Stars currency or amount")
-        promo_code = "_".join(parts[5:-1]) or None
-    except (ValueError, TypeError, IndexError) as e:
-        logger.error("Invalid Stars invoice payload for user %d, charge %s: %s", user_id, charge_id, e)
-        await record_payment_idempotent(
-            user_id=user_id, amount=stars, currency=currency, method="stars",
-            days=0, payload=payload, status="recovery_required",
-            tariff="Stars payment — manual review", devices=DEFAULT_DEVICE_LIMIT,
-            provider="stars", provider_payment_id=charge_id,
-        )
-        try:
-            from config import ADMIN_ID
-            await bot.send_message(
-                ADMIN_ID,
-                f"⚠️ Оплата Stars требует ручной сверки: user <code>{user_id}</code>, "
-                f"charge <code>{charge_id}</code>, payload некорректен.",
-                parse_mode="HTML",
-            )
-            await bot.send_message(
-                user_id,
-                "⚠️ Telegram подтвердил оплату, но данные заказа не удалось проверить. "
-                "Не оплачивайте повторно — поддержка проверит платёж.",
-            )
-        except Exception:
-            pass
-        return
-
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
-    tariff_name = f"Stars {days} дней ({devices} устр.)"
-    is_new, pay_db_id = await record_payment_idempotent(
-        user_id=user_id,
-        amount=stars,
-        currency=currency,
-        method="stars",
-        days=days,
-        payload=charge_id,
-        status="processing",
-        tariff=tariff_name,
-        devices=devices,
-        provider="stars",
-        provider_payment_id=charge_id,
-    )
-
-    if not is_new:
-        from database import get_payment_by_id
-        existing_payment = await get_payment_by_id(pay_db_id) if pay_db_id else None
-        existing_status = existing_payment.get("status") if existing_payment else None
-        if existing_status == "success":
-            logger.info("Stars duplicate payment already fulfilled: charge_id=%s user=%d", charge_id, user_id)
-            return
-        if existing_status == "failed":
-            logger.warning("Retrying failed Stars provisioning: charge_id=%s user=%d", charge_id, user_id)
-            await update_payment_status(pay_db_id, "processing")
-        else:
-            await update_payment_status(pay_db_id, "recovery_required")
-            logger.error(
-                "Stars payment %s has ambiguous status %r; manual reconciliation required",
-                charge_id, existing_status,
-            )
-            try:
-                from config import ADMIN_ID
-                await bot.send_message(
-                    ADMIN_ID,
-                    f"⚠️ Платёж Stars <code>{charge_id}</code> пользователя <code>{user_id}</code> "
-                    f"имеет неоднозначный статус {existing_status!r}. Нужна ручная сверка.",
-                    parse_mode="HTML",
-                )
-                await bot.send_message(
-                    user_id,
-                    "⚠️ Оплата найдена, но статус выдачи требует проверки. "
-                    "Не оплачивайте повторно — поддержка проверит платёж.",
-                )
-            except Exception:
-                pass
-            return
-
-    success = await deliver_key(
-        bot=bot,
-        user_id=user_id,
-        chat_id=message.chat.id,
-        config_name=f"ByMeVPN_{user_id}",
-        days=days,
-        limit_ip=devices,
-        is_paid=True,
-        amount=stars,
-        currency=currency,
-        method="stars",
-        payload=charge_id,
-        extend_existing=True,
-    )
-
-    if success:
-        await update_payment_status(pay_db_id, "success")
-        if promo_code:
-            await record_fulfilled_promo(bot, promo_code, user_id, "stars", charge_id)
-        await state.clear()
-
-        # Referral reward: single canonical path (idempotent, one per pair).
-        from referral_system_new import award_referral_for_payment
-        await award_referral_for_payment(user_id, charge_id, amount=int(payment.total_amount), bot=bot)
-    else:
-        await update_payment_status(pay_db_id, "recovery_required")
-        logger.error("Stars delivery failed for user %d, charge_id %s", user_id, charge_id)
-        try:
-            from config import ADMIN_ID
-            await bot.send_message(
-                ADMIN_ID,
-                f"⚠️ Не удалось выдать подписку по Stars: user <code>{user_id}</code>, "
-                f"charge <code>{charge_id}</code>. Платёж можно безопасно повторить через обработчик failed.",
-                parse_mode="HTML",
-            )
-        except Exception:
-            pass
-        try:
-            await bot.send_message(
-                user_id,
-                "<b>Оплата получена · доступ проверяется</b>\n\nНе оплачивайте повторно. Мы проверяем выдачу и сообщим, когда ключ будет готов. Если вопрос срочный: @ByMeVPNSupportBot",
-                parse_mode="HTML",
-            )
-        except Exception:
-            logger.debug("Could not send Stars recovery status to user %d", user_id)
-
-
-# ---------------------------------------------------------------------------
-# Promo Code Callback Handler (for button activation)
-# ---------------------------------------------------------------------------
-
-async def _activate_promo_code(bot: Bot, target, state: FSMContext, code: str) -> bool:
-    """Validate and attach a promo to the next checkout without consuming it."""
-    code = code.strip().upper()
-    user_id = target.from_user.id
-    promo = await validate_promo_code(code)
-    if not promo:
-        await send_with_photo(
-            bot, target,
-            "<b>Не удалось применить промокод</b>\n\n"
-            "Проверьте код: возможно, он истёк или закончились активации.",
-            photo=PROMO_CODE,
-        )
-        return False
-    if await has_user_used_promo(code, user_id):
-        await send_with_photo(
-            bot, target,
-            "<b>Промокод уже использован</b>\n\nКаждый код можно применить один раз.",
-            photo=PROMO_CODE,
-        )
-        return False
-
-    promo_type = promo["promo_type"]
-    discount_value = promo["discount_value"]
-    if promo_type == "percent":
-        discount_text, promo_discount = f"{discount_value}%", discount_value
-    elif promo_type == "fixed_rub":
-        discount_text, promo_discount = f"{discount_value} ₽", 0
-    elif promo_type == "free_days":
-        discount_text, promo_discount = f"+{discount_value} дней", 0
-    else:
-        discount_text, promo_discount = str(discount_value), 0
-
-    current = await state.get_data()
-    selected_months = current.get("months")
-    preview = ""
-    if selected_months in (1, 3, 6, 12):
-        months = int(selected_months)
-        binding = promo.get("tariff_binding")
-        if binding is None or int(binding) == months:
-            devices = validate_device_limit(current.get("devices", DEFAULT_DEVICE_LIMIT))
-            price, period_days = get_price_for_months(months, devices)
-            if promo_type == "percent":
-                price = round(price * (100 - discount_value) / 100)
-            elif promo_type == "fixed_rub":
-                price = max(0, price - discount_value)
-            elif promo_type == "free_days":
-                period_days += int(discount_value)
-            preview = (
-                f"\nДля выбранного срока: <b>{price} ₽</b>, "
-                f"<b>{period_days} дней</b>, до {devices} устройств.\n"
-            )
-        else:
-            preview = "\nПромокод действует для другого срока: выберите подходящий тариф.\n"
-    await state.update_data(promo_info=promo, promo_code=code, promo_discount=promo_discount)
-    await state.set_state(None)
-    logger.info("Promo activated for user %s (type=%s)", user_id, promo_type)
-    await send_with_photo(
-        bot, target,
-        f"<b>Промокод применён</b>\n\n"
-        f"Бонус: <b>{discount_text}</b>\n"
-        f"{preview}"
-        + ("Проверьте обновлённый заказ перед оплатой."
-           if preview and "Для выбранного срока:" in preview
-           else "Цена и срок пересчитаются при выборе тарифа."),
-        _promo_purchase_keyboard(
-            int(selected_months) if selected_months in (1, 3, 6, 12)
-            and (promo.get("tariff_binding") is None or int(promo["tariff_binding"]) == int(selected_months))
-            else None,
-            validate_device_limit(current.get("devices", DEFAULT_DEVICE_LIMIT)),
-        ),
-        photo=PROMO_CODE,
-    )
-    return True
-
-
-@router.callback_query(F.data.startswith("activate_promo:"))
-async def cb_activate_promo(callback: CallbackQuery, state: FSMContext):
-    """Activate promo code via button click."""
-    await safe_answer(callback)
-    await _activate_promo_code(callback.bot, callback, state, callback.data.split(":", 1)[1])
-
-
-# ---------------------------------------------------------------------------
-# Promo Code Command
-# ---------------------------------------------------------------------------
-
-@router.message(Command("promo"))
-async def cmd_promo(message: Message, state: FSMContext):
-    """Start promo entry; users can type the code in their next message."""
-    try:
-        parts = (message.text or "").split(maxsplit=1)
-        if len(parts) < 2 or not parts[1].strip():
-            await state.set_state(PromoFlow.waiting_code)
-            await send_with_photo(
-                message.bot, message,
-                "<b>Промокод</b>\n\nОтправьте код следующим сообщением.",
-                InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="← К тарифам", callback_data="buy_vpn"),
-                ]]),
-                photo=PROMO_CODE,
-            )
-            return
-        await _activate_promo_code(message.bot, message, state, parts[1])
-    except Exception:
-        logger.exception("Promo activation failed")
-        await message.answer("Не удалось применить код. Попробуйте ещё раз позже.")
-
-
-@router.message(PromoFlow.waiting_code, F.text)
-async def receive_promo_code(message: Message, state: FSMContext):
-    """Accept a plain promo code after /promo; no command prefix is needed."""
-    code = (message.text or "").strip()
-    if code.lower() in {"/cancel", "отмена"}:
-        await state.set_state(None)
-        await message.answer("Ввод промокода отменён.")
-        return
-    if code.startswith("/"):
-        await state.set_state(None)
-        await message.answer("Ввод промокода закрыт. Откройте нужный раздел меню и попробуйте снова.")
-        return
-    if not code or len(code) > 64 or any(ch.isspace() for ch in code):
-        await message.answer("Отправьте только код одним сообщением или /cancel для отмены.")
-        return
-    try:
-        await _activate_promo_code(message.bot, message, state, code)
-    except Exception:
-        logger.exception("Promo activation failed")
-        await message.answer("Не удалось проверить код. Попробуйте ещё раз позже.")

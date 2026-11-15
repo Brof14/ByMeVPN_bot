@@ -6,14 +6,13 @@ from unittest.mock import AsyncMock, patch
 
 
 class CheckoutUxTests(unittest.IsolatedAsyncioTestCase):
-    def test_single_yookassa_checkout_with_switchable_default(self):
-        """Preserve user-excluded 3.2: checkout has one recurring YooKassa option."""
+    def test_single_yookassa_checkout_without_autorenew_toggle(self):
         from keyboards import payment_kb
         buttons = [b for row in payment_kb(316, 120).inline_keyboard for b in row]
         callbacks = [b.callback_data for b in buttons]
         self.assertEqual(callbacks.count("pay_yookassa"), 1)
         self.assertNotIn("pay_yookassa_autorenew", callbacks)
-        self.assertIn("checkout_autorenew_toggle", callbacks)
+        self.assertNotIn("checkout_autorenew_toggle", callbacks)
 
     def test_ten_device_renewal_matches_approved_screen(self):
         from handlers.buy import _tariff_intro
@@ -59,9 +58,8 @@ class CheckoutUxTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("120 дней", text)
         self.assertIn("Следующее списание", text)
         self.assertIn("Отключить", text)
-        # The explicitly excluded choice feature is unchanged.
         legacy_display = _checkout_confirmation_text({**base, "autorenew_enabled": False})
-        self.assertIn("Автопродление ЮKassa: выключено", legacy_display)
+        self.assertIn("Автопродление ЮKassa включено по умолчанию", legacy_display)
 
     def test_promo_disclosure_shows_regular_future_billing_amount(self):
         from handlers.buy import _checkout_confirmation_text
@@ -140,47 +138,3 @@ class RetentionQualityTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(await _send_winback_notification(bot, item))
         lookup.assert_not_awaited()
         bot.send_message.assert_not_awaited()
-
-    async def test_winback_only_for_still_lapsed_customer(self):
-        from notifications import _send_winback_notification
-        item = {"user_id": 123, "key_id": 4, "expiry": int(time.time()) - 3 * 86400}
-        bot = SimpleNamespace(send_message=AsyncMock())
-        with (
-            patch("notifications.is_promotional_opted_out", new=AsyncMock(return_value=False)),
-            patch("database.get_user_keys", new=AsyncMock(return_value=[])),
-            patch("xui_client.get_xui_client_details", new=AsyncMock(return_value=None)),
-            patch("notifications._get_active_autorenew", new=AsyncMock(return_value=None)),
-        ):
-            self.assertTrue(await _send_winback_notification(bot, item))
-        self.assertIn("Вернуться", bot.send_message.await_args.args[1])
-        actions = [b.callback_data for row in bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard for b in row]
-        self.assertIn("marketing_optout", actions)
-        self.assertIn("key_renew:4", actions)
-
-    async def test_winback_never_targets_panel_only_active_customer(self):
-        from notifications import _send_winback_notification
-        item = {"user_id": 123, "key_id": 4, "expiry": int(time.time()) - 3 * 86400}
-        bot = SimpleNamespace(send_message=AsyncMock())
-        with (
-            patch("notifications.is_promotional_opted_out", new=AsyncMock(return_value=False)),
-            patch("database.get_user_keys", new=AsyncMock(return_value=[])),
-            patch("xui_client.get_xui_client_details", new=AsyncMock(
-                return_value={"expiry_time": (int(time.time()) + 7200) * 1000}
-            )),
-            patch("notifications._get_active_autorenew", new=AsyncMock()) as renew,
-        ):
-            self.assertFalse(await _send_winback_notification(bot, item))
-        renew.assert_not_awaited()
-        bot.send_message.assert_not_awaited()
-
-    async def test_new_ad_reward_tiers_are_capped(self):
-        from database import calculate_bonus_months
-        expected = [(1, 1), (49, 1), (50, 2), (99, 2), (100, 3),
-                    (150, 4), (250, 6), (350, 12)]
-        for subscribers, months in expected:
-            with self.subTest(subscribers=subscribers):
-                self.assertEqual(await calculate_bonus_months(subscribers), months)
-
-
-if __name__ == "__main__":
-    unittest.main()

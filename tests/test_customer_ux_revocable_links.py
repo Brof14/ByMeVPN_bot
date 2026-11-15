@@ -193,24 +193,9 @@ class CheckoutPreferenceTests(unittest.IsolatedAsyncioTestCase):
             "autorenew_enabled": enabled,
         }
 
-    def test_yookassa_preference_changes_visible_copy(self):
-        self.assertIn("Автопродление ЮKassa: включено", _checkout_confirmation_text(self._checkout(True)))
-        self.assertIn("Автопродление ЮKassa: выключено", _checkout_confirmation_text(self._checkout(False)))
-        self.assertIn(
-            "checkout_autorenew_toggle",
-            [button.callback_data for row in payment_kb(89, 30).inline_keyboard for button in row],
-        )
-
-    async def test_switcher_preserves_quote_and_updates_state(self):
-        from handlers.buy import cb_checkout_autorenew_toggle
-        data = self._checkout(True)
-        state = SimpleNamespace(get_data=AsyncMock(return_value=data), update_data=AsyncMock())
-        callback = SimpleNamespace(from_user=SimpleNamespace(id=101))
-        with (
-            patch("handlers.buy.safe_answer", new=AsyncMock()),
-            patch("handlers.buy.send_with_photo", new=AsyncMock()) as send,
-        ):
-            await cb_checkout_autorenew_toggle(callback, object(), state)
-        state.update_data.assert_awaited_once_with(autorenew_enabled=False)
-        self.assertIn("Автопродление ЮKassa: выключено", send.await_args.args[2])
-        self.assertIn("К оплате сейчас: <b>89 ₽</b>", send.await_args.args[2])
+    def test_auto_renew_is_default_and_checkout_has_no_toggle_button(self):
+        text = _checkout_confirmation_text(self._checkout(False))
+        self.assertIn("Автопродление ЮKassa включено по умолчанию", text)
+        self.assertNotIn("Автопродление ЮKassa: выключено", text)
+        callbacks = [button.callback_data for row in payment_kb(89, 30).inline_keyboard for button in row]
+        self.assertNotIn("checkout_autorenew_toggle", callbacks)
