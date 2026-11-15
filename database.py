@@ -11,6 +11,7 @@ import logging
 import math
 import re
 from typing import Optional
+from datetime import datetime, timedelta, timezone
 import aiosqlite
 from cache import cache_user_info, invalidate_user_cache, invalidate_subscription_cache
 from async_utils import _db_semaphore
@@ -31,6 +32,18 @@ if _db_dir:
 
 # Global database connection pool
 _db_pool: Optional[aiosqlite.Connection] = None
+
+# Use real Moscow calendar boundaries instead of rolling 30-day estimates.
+_MOSCOW_TZ = timezone(timedelta(hours=3))
+
+
+def _moscow_calendar_starts(now: int) -> tuple[int, int, int]:
+    date = datetime.fromtimestamp(int(now), tz=_MOSCOW_TZ)
+    day = date.replace(hour=0, minute=0, second=0, microsecond=0)
+    week = day - timedelta(days=day.weekday())
+    month = day.replace(day=1)
+    return int(day.timestamp()), int(week.timestamp()), int(month.timestamp())
+
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -5063,17 +5076,15 @@ async def get_admin_stats() -> dict:
     total_revenue = (await cur.fetchone())[0]
     
     # Today's revenue
-    today_start = current_time - (current_time % 86400)
+    today_start, week_start, month_start = _moscow_calendar_starts(current_time)
     cur = await db.execute("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status='success' AND currency='RUB' AND method!='trial' AND created >= ?", (today_start,))
     today_revenue = (await cur.fetchone())[0]
     
     # Week revenue
-    week_start = current_time - ((current_time // 86400) % 7) * 86400
     cur = await db.execute("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status='success' AND currency='RUB' AND method!='trial' AND created >= ?", (week_start,))
     week_revenue = (await cur.fetchone())[0]
     
     # Month revenue
-    month_start = current_time - ((current_time // 86400) % 30) * 86400
     cur = await db.execute("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status='success' AND currency='RUB' AND method!='trial' AND created >= ?", (month_start,))
     month_revenue = (await cur.fetchone())[0]
     
@@ -5129,9 +5140,7 @@ async def get_extended_stats() -> dict:
         })
     
     # New users stats
-    day_start = current_time - (current_time % 86400)
-    week_start = current_time - ((current_time // 86400) % 7) * 86400
-    month_start = current_time - ((current_time // 86400) % 30) * 86400
+    day_start, week_start, month_start = _moscow_calendar_starts(current_time)
     
     cur = await db.execute("SELECT COUNT(*) FROM users WHERE created >= ?", (day_start,))
     new_day = (await cur.fetchone())[0]
@@ -5463,9 +5472,8 @@ async def get_payment_stats() -> dict:
         return sum(int(row[1] or 0) for row in rows), by_currency
 
     total_count, total_by_currency = await totals()
-    today_start = current_time - (current_time % 86400)
+    today_start, week_start, month_start = _moscow_calendar_starts(current_time)
     today_count, today_by_currency = await totals("created >= ?", (today_start,))
-    month_start = current_time - ((current_time // 86400) % 30) * 86400
     month_count, month_by_currency = await totals("created >= ?", (month_start,))
 
     cur = await db.execute(
