@@ -1065,6 +1065,27 @@ async def cb_key_renew(callback: CallbackQuery, bot: Bot, state: FSMContext):
         await safe_answer(callback, "Подписка не найдена.", alert=True)
         return
 
+    # An expired historical key must not be renewed while a different active
+    # subscription exists: the invoice would otherwise be paid before the
+    # single-active-key provisioning guard rejects delivery.
+    try:
+        existing = await get_user_keys(callback.from_user.id)
+    except Exception:
+        await safe_answer(callback, "Не удалось проверить подписки. Повторите позже.", alert=True)
+        return
+    another_active = [
+        key for key in existing
+        if int(key.get("expiry") or 0) > int(time.time())
+        and int(key.get("id") or 0) != key_id
+    ]
+    if another_active:
+        await safe_answer(
+            callback,
+            "Другая подписка уже активна. Продлите действующую подписку, а не архивную.",
+            alert=True,
+        )
+        return
+
     key_devices = k.get("limit_ip", 2)
     await state.update_data(renew_key_id=key_id, devices=key_devices)
     await state.set_state(BuyFlow.choosing_type)
