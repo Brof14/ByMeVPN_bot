@@ -71,7 +71,8 @@ class CommercialNavigationTests(unittest.TestCase):
         installer = (root / "static" / "app" / "index.html").read_text("utf-8")
         self.assertNotIn("ByMeVPN-v1.0.14.apk", chooser)
         self.assertNotIn("ByMeVPN-v1.0.14.apk", installer)
-        self.assertIn("в разработке", installer)
+        self.assertIn("ByMeVPN-app/releases/latest", installer)
+        self.assertIn("Happ", installer)
         self.assertIn("https://t.me/ByMeVPNSupportBot", installer)
 
 
