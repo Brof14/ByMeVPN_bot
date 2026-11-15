@@ -5,6 +5,7 @@ Run via: docker run --rm -v /opt/ByMeVPN_bot:/app -w /app bymevpn_bot-vpnbot pyt
 """
 import os
 import sys
+import hashlib
 import json
 import time
 import asyncio
@@ -17,6 +18,11 @@ if PROJECT_ROOT not in sys.path:
 import database
 import xui_client
 from constants import format_timestamp
+
+
+def uuid_fingerprint(value) -> str:
+    """Show only a non-reversible fingerprint, never VPN credentials."""
+    return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:10] if value else "missing"
 
 
 async def run_audit():
@@ -98,7 +104,7 @@ async def run_audit():
                 "account": email,
                 "category": "NAMED_ACCOUNT_IN_3XUI",
                 "db_state": "Not present in SQLite keys (admin/manual account)",
-                "xui_state": f"UUID: {xclient['uuid']}, inbounds: {xclient['inbounds']}",
+                "xui_state": f"UUID fingerprint: {uuid_fingerprint(xclient['uuid'])}, inbounds: {xclient['inbounds']}",
                 "recommended_action": "DO NOT DELETE. Keep as administrative/special client.",
             })
             continue
@@ -109,13 +115,26 @@ async def run_audit():
                 "account": str(user_id),
                 "category": "IN_3XUI_MISSING_IN_DB",
                 "db_state": "Missing from SQLite keys table",
-                "xui_state": f"UUID: {xclient['uuid']}, expiry: {format_timestamp(xclient['expiry_time']//1000 if xclient['expiry_time'] else 0)}, inbounds: {xclient['inbounds']}",
+                "xui_state": f"UUID fingerprint: {uuid_fingerprint(xclient['uuid'])}, expiry: {format_timestamp(xclient['expiry_time']//1000 if xclient['expiry_time'] else 0)}, inbounds: {xclient['inbounds']}",
                 "recommended_action": "Safe import into SQLite keys on next renewal or user interaction (zero destruction).",
             })
             continue
 
         # Client exists in both DB and 3x-ui!
-        active_db_key = db_keys[0]  # most recent key
+        live_keys = [item for item in db_keys if int(item.get("expiry") or 0) > now_ts]
+        if len(live_keys) > 1:
+            discrepancies.append({
+                "account": str(user_id),
+                "category": "DUPLICATE_ACTIVE_KEYS",
+                "db_state": f"{len(live_keys)} active SQLite keys: "
+                    + ", ".join(str(item["key_id"]) for item in live_keys),
+                "xui_state": "Requires paid-term verification",
+                "recommended_action": "Do not delete or shorten paid access without ledger/provider reconciliation.",
+            })
+        active_db_key = max(
+            live_keys or db_keys,
+            key=lambda item: (int(item.get("expiry") or 0), int(item.get("key_id") or 0)),
+        )
         xui_uuid = xclient.get("uuid")
         db_uuid = active_db_key.get("uuid")
         xui_expiry = (xclient.get("expiry_time", 0) or 0) // 1000
@@ -132,22 +151,22 @@ async def run_audit():
         else:
             issues = []
             if not uuid_match:
-                issues.append(f"UUID mismatch (DB: {db_uuid}, 3x-ui: {xui_uuid})")
+                issues.append(f"UUID fingerprint mismatch (DB: {uuid_fingerprint(db_uuid)}, 3x-ui: {uuid_fingerprint(xui_uuid)})")
             if not expiry_match:
                 issues.append(f"Expiry mismatch (DB: {format_timestamp(db_expiry)}, 3x-ui: {format_timestamp(xui_expiry)})")
 
             discrepancies.append({
                 "account": str(user_id),
                 "category": "ATTRIBUTE_MISMATCH",
-                "db_state": f"UUID: {db_uuid}, expiry: {format_timestamp(db_expiry)}, limit_ip: {active_db_key.get('limit_ip')}",
-                "xui_state": f"UUID: {xui_uuid}, expiry: {format_timestamp(xui_expiry)}, limit_ip: {xclient.get('limit_ip')}",
+                "db_state": f"UUID fingerprint: {uuid_fingerprint(db_uuid)}, expiry: {format_timestamp(db_expiry)}, limit_ip: {active_db_key.get('limit_ip')}",
+                "xui_state": f"UUID fingerprint: {uuid_fingerprint(xui_uuid)}, expiry: {format_timestamp(xui_expiry)}, limit_ip: {xclient.get('limit_ip')}",
                 "recommended_action": f"Align attributes safely: {'; '.join(issues)}. Preserve 3x-ui UUID.",
             })
 
     # Check DB keys missing in 3x-ui
     for uid, keys in db_keys_by_user.items():
         if str(uid) not in xui_clients_by_email:
-            active_key = keys[0]
+            active_key = max(keys, key=lambda item: int(item.get('expiry') or 0))
             is_active = active_key.get("expiry", 0) > now_ts
             discrepancies.append({
                 "account": str(uid),

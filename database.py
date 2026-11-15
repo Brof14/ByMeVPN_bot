@@ -190,6 +190,8 @@ CREATE TABLE IF NOT EXISTS device_upgrade_orders (
     new_devices INTEGER NOT NULL,
     key_expiry INTEGER NOT NULL,
     amount_stars INTEGER NOT NULL,
+    provider TEXT NOT NULL DEFAULT 'stars',
+    provider_payment_id TEXT,
     auto_renew_id INTEGER NOT NULL DEFAULT 0,
     prior_auto_renew_amount INTEGER NOT NULL DEFAULT 0,
     next_auto_renew_amount INTEGER NOT NULL DEFAULT 0,
@@ -1211,6 +1213,20 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
 
     # Migration: keys.cleaned (admin cleanup soft-delete marker)
     await _ensure_schema_column(db, "keys", "cleaned", "INTEGER DEFAULT 0")
+
+    # Legacy Stars orders survive this additive migration. Newly created
+    # provider checkouts must bind their exact invoice ID before exposing URL.
+    await _ensure_schema_column(
+        db, "device_upgrade_orders", "provider", "TEXT NOT NULL DEFAULT 'stars'",
+    )
+    await _ensure_schema_column(
+        db, "device_upgrade_orders", "provider_payment_id", "TEXT",
+    )
+    await db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_device_upgrade_provider_invoice "
+        "ON device_upgrade_orders(provider, provider_payment_id) "
+        "WHERE provider_payment_id IS NOT NULL"
+    )
 
 
 async def init_db() -> None:
@@ -7710,28 +7726,34 @@ async def create_device_upgrade_order(
     key_expiry: int, amount_stars: int, *,
     auto_renew_id: int = 0, prior_auto_renew_amount: int = 0,
     next_auto_renew_amount: int = 0,
+    provider: str = "stars",
 ) -> str | None:
-    """Reserve a single short-lived checkout per user across retries."""
+    """Reserve one provider-bound, short-lived checkout per user across retries."""
     if (
         old_devices not in (2, 5) or new_devices not in (5, 10)
         or new_devices <= old_devices or amount_stars <= 0
+        or provider not in {"stars", "yookassa", "cryptobot"}
     ):
         raise ValueError("invalid device upgrade")
     import secrets
     now = int(time.time())
     db = await get_db()
     async with _db_semaphore:
-        # Prior invoices expire before another can be issued. A charge already
-        # accepted by Telegram remains recoverable via its durable order row.
+        # Never release a YooKassa reservation just because 15 minutes
+        # passed: an external invoice may still settle. Crypto invoices expire
+        # at the provider after 3600 seconds; allow five minutes for races.
+        # Stars pre-checkout rejects invoices older than fifteen minutes.
         await db.execute(
             "UPDATE device_upgrade_orders SET status='expired' "
-            "WHERE user_id=? AND status='pending' AND created_at<?",
-            (user_id, now - 900),
+            "WHERE user_id=? AND status='pending' AND "
+            "((provider='stars' AND created_at<?) OR "
+            "(provider='cryptobot' AND created_at<? AND provider_payment_id IS NOT NULL))",
+            (user_id, now - 900, now - 3900),
         )
         row = await (await db.execute(
             "SELECT id FROM device_upgrade_orders "
-            "WHERE user_id=? AND status='pending' AND created_at>=? LIMIT 1",
-            (user_id, now - 900),
+            "WHERE user_id=? AND status='pending' LIMIT 1",
+            (user_id,),
         )).fetchone()
         if row:
             await db.commit()
@@ -7740,11 +7762,11 @@ async def create_device_upgrade_order(
         await db.execute(
             "INSERT INTO device_upgrade_orders "
             "(id,user_id,key_id,old_devices,new_devices,key_expiry,amount_stars,"
-            "auto_renew_id,prior_auto_renew_amount,next_auto_renew_amount,created_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            "provider,auto_renew_id,prior_auto_renew_amount,next_auto_renew_amount,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 order_id, user_id, key_id, old_devices, new_devices,
-                key_expiry, amount_stars, auto_renew_id,
+                key_expiry, amount_stars, provider, auto_renew_id,
                 prior_auto_renew_amount, next_auto_renew_amount, now,
             ),
         )
@@ -7759,7 +7781,8 @@ async def get_device_upgrade_order(order_id: str) -> dict | None:
     row = await (await db.execute(
         "SELECT id,user_id,key_id,old_devices,new_devices,key_expiry,"
         "amount_stars,auto_renew_id,prior_auto_renew_amount,"
-        "next_auto_renew_amount,status,charge_id,created_at "
+        "next_auto_renew_amount,status,charge_id,created_at,"
+        "provider,provider_payment_id "
         "FROM device_upgrade_orders WHERE id=?",
         (order_id,),
     )).fetchone()
@@ -7769,9 +7792,55 @@ async def get_device_upgrade_order(order_id: str) -> dict | None:
         "id", "user_id", "key_id", "old_devices", "new_devices",
         "key_expiry", "amount_stars", "auto_renew_id",
         "prior_auto_renew_amount", "next_auto_renew_amount", "status",
-        "charge_id", "created_at",
+        "charge_id", "created_at", "provider", "provider_payment_id",
     )
     return dict(zip(fields, row))
+
+
+async def get_latest_device_upgrade_for_user(user_id: int) -> dict | None:
+    """Customer-owned, read-only lookup for a recently selected device tier."""
+    db = await get_db()
+    row = await (await db.execute(
+        "SELECT id FROM device_upgrade_orders WHERE user_id=? "
+        "ORDER BY created_at DESC,rowid DESC LIMIT 1",
+        (int(user_id),),
+    )).fetchone()
+    return await get_device_upgrade_order(row[0]) if row else None
+
+
+async def bind_device_upgrade_invoice(
+    order_id: str, user_id: int, provider: str, invoice_id: str,
+) -> bool:
+    """Bind a concrete invoice before showing its payment URL.
+
+    Rebinding with the identical ID is idempotent. A different invoice must
+    never be attached to the same paid upgrade order.
+    """
+    if provider not in {"yookassa", "cryptobot"} or not invoice_id or len(invoice_id) > 128:
+        return False
+    db = await get_db()
+    async with _db_semaphore:
+        cursor = await db.execute(
+            "UPDATE device_upgrade_orders SET provider_payment_id=? "
+            "WHERE id=? AND user_id=? AND provider=? AND status='pending' "
+            "AND (provider_payment_id IS NULL OR provider_payment_id=?)",
+            (invoice_id, order_id, user_id, provider, invoice_id),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+
+
+async def get_device_upgrade_order_for_invoice(
+    provider: str, invoice_id: str,
+) -> dict | None:
+    if provider not in {"yookassa", "cryptobot"} or not invoice_id or len(invoice_id) > 128:
+        return None
+    db = await get_db()
+    row = await (await db.execute(
+        "SELECT id FROM device_upgrade_orders WHERE provider=? AND provider_payment_id=?",
+        (provider, invoice_id),
+    )).fetchone()
+    return await get_device_upgrade_order(row[0]) if row else None
 
 
 async def expire_device_upgrade_order(order_id: str) -> None:
