@@ -425,6 +425,47 @@ async def process_provider_device_upgrade(
     user_id = int(order["user_id"])
     amount = int(order["amount_stars"])  # Owner-approved 1:1 Stars/RUB tariff value.
     charge_id = f"{provider}:{invoice_id}"
+    # Provider redelivery is normal after successful fulfillment. The pending
+    # provider receipt is intentionally deleted on success. Trust only the
+    # completed order *and* the successful durable ledger for idempotent reply.
+    if order["status"] == "fulfilled":
+        from database import get_db
+        db = await get_db()
+        receipt = await (await db.execute(
+            "SELECT user_id,amount,currency,status FROM payments "
+            "WHERE provider=? AND provider_payment_id=?",
+            (provider, str(invoice_id)),
+        )).fetchone()
+        try:
+            amount_data = paid_invoice.get("amount") if provider == "yookassa" else None
+            paid_value = (
+                Decimal(str((amount_data or {}).get("value")))
+                if provider == "yookassa" else Decimal(str(paid_invoice.get("amount")))
+            )
+            provider_confirmed = (
+                paid_invoice.get("status") == ("succeeded" if provider == "yookassa" else "paid")
+                and str(paid_invoice.get("id" if provider == "yookassa" else "invoice_id") or "") == str(invoice_id)
+                and (amount_data or {}).get("currency") == "RUB"
+                if provider == "yookassa" else (
+                    paid_invoice.get("status") == "paid"
+                    and str(paid_invoice.get("invoice_id") or "") == str(invoice_id)
+                    and paid_invoice.get("currency_type") == "fiat"
+                    and paid_invoice.get("fiat") == "RUB"
+                )
+            )
+        except (InvalidOperation, ValueError, TypeError):
+            provider_confirmed = False
+            paid_value = Decimal(-1)
+        if (
+            order.get("charge_id") == charge_id and provider_confirmed
+            and paid_value.is_finite() and paid_value == Decimal(amount)
+            and receipt and int(receipt[0]) == user_id
+            and int(receipt[1]) == amount and receipt[2] == "RUB"
+            and receipt[3] == "success"
+        ):
+            return True
+        return False
+
     try:
         if provider == "yookassa":
             metadata = paid_invoice.get("metadata") or {}
