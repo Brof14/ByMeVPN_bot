@@ -163,6 +163,14 @@ async def cb_device_upgrade_methods(callback: CallbackQuery, bot: Bot):
         logger.exception("Cannot quote alternative device upgrade providers")
         await _show_upgrade_error(bot, callback, "Не удалось проверить подписку. Попробуйте позже.")
         return
+    upcoming = ""
+    if context["recurring"]:
+        terms = context["recurring"]
+        next_total = get_price_for_months(int(terms["months"]), target)[0]
+        upcoming = (
+            f"\nСледующее автопродление: {next_total} ₽ за "
+            f"{int(terms['days'])} дней. Отключить — в настройках подписки."
+        )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=f"ЮKassa · {quote} ₽",
@@ -182,8 +190,8 @@ async def cb_device_upgrade_methods(callback: CallbackQuery, bot: Bot):
         bot, callback,
         f"<b>До {target} устройств</b>\n\n"
         f"Доплата за остаток срока: <b>{quote} ₽</b> "
-        f"или <b>{quote} ⭐</b>. Срок доступа не изменится.\n\n"
-        "Выберите способ оплаты:",
+        f"или <b>{quote} ⭐</b>. Срок доступа не изменится."
+        f"{upcoming}\n\nВыберите способ оплаты:",
         kb, photo=DEVICES,
     )
 
@@ -207,14 +215,15 @@ async def cb_device_upgrade_provider(callback: CallbackQuery, bot: Bot):
         from database import is_account_tombstoned
         if await is_account_tombstoned(user_id):
             raise ValueError("Аккаунт закрыт")
+        next_amount = (
+            get_price_for_months(int(recurring["months"]), target)[0]
+            if recurring else 0
+        )
         order_id = await create_device_upgrade_order(
             user_id, key_id, context["limit"], target, context["expiry"],
             quote, provider=provider, auto_renew_id=auto_id,
             prior_auto_renew_amount=int(recurring["amount_rub"]) if recurring else 0,
-            next_auto_renew_amount=(
-                get_price_for_months(int(recurring["months"]), target)[0]
-                if recurring else 0
-            ),
+            next_auto_renew_amount=next_amount,
         )
         if not order_id:
             raise ValueError(
@@ -284,13 +293,20 @@ async def cb_device_upgrade_provider(callback: CallbackQuery, bot: Bot):
             ]), photo=DEVICES,
         )
         return
+    renewal_note = (
+        f"\n\nСледующее автопродление: <b>{next_amount} ₽</b> "
+        f"за <b>{int(recurring['days'])} дней</b>. "
+        "Отключить можно в настройках подписки."
+        if recurring else "\n\nДоплата разовая. Новое автопродление не подключается."
+    )
     await send_with_photo(
         bot, callback,
         f"<b>Доплата за устройства</b>\n\n"
         f"Новый лимит: <b>{target}</b>\n"
         f"Сумма: <b>{quote} ₽</b>\n"
         "Срок подписки не изменится. После оплаты дождитесь подтверждения "
-        "нового лимита. Не создавайте второй счёт, пока этот проверяется.",
+        "нового лимита. Не создавайте второй счёт, пока этот проверяется."
+        f"{renewal_note}",
         InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Перейти к оплате", url=payment_url)],
             [InlineKeyboardButton(text="Проверить оплату", callback_data="device_upgrade_status")],
@@ -535,6 +551,15 @@ async def process_provider_device_upgrade(
             and int(receipt[1]) == amount and receipt[2] == "RUB"
             and receipt[3] == "success"
         ):
+            try:
+                if provider == "yookassa":
+                    await mark_yookassa_processed(str(invoice_id))
+                    await delete_yookassa_pending(str(invoice_id))
+                else:
+                    await mark_crypto_processed(str(invoice_id))
+                    await delete_crypto_pending(str(invoice_id))
+            except Exception:
+                logger.exception("Confirmed device-upgrade replay receipt cleanup failed")
             return True
         return False
 
