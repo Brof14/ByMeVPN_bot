@@ -249,6 +249,8 @@ async def main() -> None:
 
     # Create bot instance with HTML parse mode
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    from bot_style import PremiumEmojiRequestMiddleware
+    bot.session.middleware.register(PremiumEmojiRequestMiddleware())
     dp = Dispatcher(storage=RedisStorage.from_url(REDIS_URL))
     dp.message.outer_middleware(UserProfileMiddleware())
     dp.callback_query.outer_middleware(UserProfileMiddleware())

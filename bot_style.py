@@ -10,8 +10,11 @@ BOT_PREMIUM_BUTTON_ICONS=0 until entitlement is confirmed; fallback buttons
 retain readable text and the same actions.
 """
 import os
+import re
 
 from aiogram.types import InlineKeyboardButton as TelegramInlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.client.session.middlewares.base import BaseRequestMiddleware
+from aiogram.exceptions import TelegramBadRequest
 
 # Use Minimalist B&W IDs for common actions; keep limited platform and gift
 # exceptions where the pack has no matching glyph.
@@ -60,6 +63,128 @@ ICON_IDS: dict[str, str] = {
     "tariff_1": "6023880246128810031",      # calendar
     "warning": "5879813604068298387",       # exclamation
 }
+
+# Message text glyphs that occur in customer and admin screens. The premium
+# emoji is the authoritative visual; the original glyph remains the fallback.
+PREMIUM_EMOJI_IDS = {
+    "📱": ICON_IDS["devices"], "🔗": ICON_IDS["connect"],
+    "⚙️": ICON_IDS["settings"], "⚙": ICON_IDS["settings"],
+    "🕒": ICON_IDS["history"], "📱": ICON_IDS["devices"],
+    "⚠️": ICON_IDS["warning"], "⚠": ICON_IDS["warning"],
+    "✅": ICON_IDS["check"], "❌": ICON_IDS["delete"],
+    "💳": ICON_IDS["card"], "🎁": ICON_IDS["gift"],
+    "🚀": ICON_IDS["connect"], "🎉": ICON_IDS["gift"],
+    "💰": ICON_IDS["wallet"], "🔑": ICON_IDS["subscription"],
+    "➕": ICON_IDS["list"], "✉️": ICON_IDS["support"],
+    "📈": ICON_IDS["list"], "✖️": ICON_IDS["delete"],
+    "🤝": ICON_IDS["referrals"], "📝": ICON_IDS["feedback"],
+    "🔄": ICON_IDS["refresh"], "📞": ICON_IDS["support"],
+    "👤": ICON_IDS["profile"], "🌐": ICON_IDS["connect"],
+    "🎫": ICON_IDS["coupon"], "📣": ICON_IDS["ads"],
+    "⭐": ICON_IDS["stars"], "✏️": ICON_IDS["feedback"],
+    "🗑️": ICON_IDS["delete"], "🔔": ICON_IDS["notifications_on"],
+    "📋": ICON_IDS["list"], "🏠": ICON_IDS["back"],
+    "🔙": ICON_IDS["back"], "💎": ICON_IDS["plans"],
+    "🛒": ICON_IDS["plans"], "🆘": ICON_IDS["support"],
+    "🚨": ICON_IDS["warning"], "🔧": ICON_IDS["settings"],
+    "📅": ICON_IDS["tariff_1"], "🌍": ICON_IDS["connect"],
+    "🤖": ICON_IDS["settings"], "🎯": ICON_IDS["check"],
+    "⚡": ICON_IDS["connect"], "⚪": ICON_IDS["warning"],
+    "✓": ICON_IDS["check"], "❗": ICON_IDS["warning"],
+    "➡": ICON_IDS["connect"], "🆓": ICON_IDS["free"],
+    "🆔": ICON_IDS["profile"], "🆕": ICON_IDS["refresh"],
+    "🌱": ICON_IDS["free"], "🏆": ICON_IDS["check"],
+    "🏷": ICON_IDS["coupon"], "👀": ICON_IDS["profile"],
+    "👆": ICON_IDS["profile"], "👑": ICON_IDS["profile"],
+    "👥": ICON_IDS["referrals"], "👨": ICON_IDS["profile"],
+    "💸": ICON_IDS["wallet"], "💼": ICON_IDS["wallet"],
+    "💾": ICON_IDS["copy"], "📆": ICON_IDS["tariff_1"],
+    "📊": ICON_IDS["list"], "📍": ICON_IDS["connect"],
+    "📛": ICON_IDS["warning"], "📢": ICON_IDS["ads"],
+    "📥": ICON_IDS["share"], "📦": ICON_IDS["list"],
+    "📬": ICON_IDS["support"], "📭": ICON_IDS["support"],
+    "🔌": ICON_IDS["settings"], "🔍": ICON_IDS["search"],
+    "🔐": ICON_IDS["settings"], "🔒": ICON_IDS["settings"],
+    "🔛": ICON_IDS["settings"], "🔢": ICON_IDS["list"],
+    "🔴": ICON_IDS["warning"], "🔵": ICON_IDS["connect"],
+    "🗄": ICON_IDS["history"], "🗝": ICON_IDS["subscription"],
+    "🚫": ICON_IDS["delete"], "🛑": ICON_IDS["delete"],
+    "🟢": ICON_IDS["check"], "🧭": ICON_IDS["connect"],
+    "🧹": ICON_IDS["delete"],
+    "✉": ICON_IDS["support"], "✏": ICON_IDS["feedback"],
+    "✖": ICON_IDS["delete"], "📤": ICON_IDS["share"],
+    "🗑": ICON_IDS["delete"],
+}
+
+
+def premium_emoji_text(text: str) -> str:
+    """Wrap known visible emoji in Telegram custom-emoji entities."""
+    regional_flag = re.compile("[\\U0001F1E6-\\U0001F1FF]{2}")
+    text = regional_flag.sub(
+        lambda match: f'<tg-emoji emoji-id="{ICON_IDS["connect"]}">{match.group()}</tg-emoji>',
+        text,
+    )
+    pattern = re.compile("|".join(re.escape(g) for g in sorted(PREMIUM_EMOJI_IDS, key=len, reverse=True)))
+    return pattern.sub(
+        lambda match: f'<tg-emoji emoji-id="{PREMIUM_EMOJI_IDS[match.group()]}">{match.group()}</tg-emoji>',
+        text,
+    )
+
+
+class PremiumEmojiRequestMiddleware(BaseRequestMiddleware):
+    """Apply premium emoji consistently to all HTML bot messages and buttons."""
+
+    async def __call__(self, make_request, bot, method):
+        updates = {}
+        default_parse_mode = getattr(getattr(bot, "default", None), "parse_mode", None)
+        for attr, entities_attr in (("text", "entities"), ("caption", "caption_entities")):
+            value = getattr(method, attr, None)
+            if not value or getattr(method, entities_attr, None):
+                continue
+            parse_mode = getattr(method, "parse_mode", None)
+            if parse_mode is None or type(parse_mode).__name__ == "Default":
+                parse_mode = default_parse_mode
+            if parse_mode and str(parse_mode).lower().endswith("html"):
+                converted = premium_emoji_text(value)
+                if converted != value:
+                    updates[attr] = converted
+
+        markup = getattr(method, "reply_markup", None)
+        if isinstance(markup, InlineKeyboardMarkup):
+            rows = []
+            changed = False
+            for row in markup.inline_keyboard:
+                new_row = []
+                for button in row:
+                    if button.icon_custom_emoji_id:
+                        new_row.append(button)
+                        continue
+                    icon = next((PREMIUM_EMOJI_IDS[g] for g in sorted(PREMIUM_EMOJI_IDS, key=len, reverse=True) if g in button.text), None)
+                    if icon:
+                        clean = button.text
+                        for glyph in sorted(PREMIUM_EMOJI_IDS, key=len, reverse=True):
+                            clean = clean.replace(glyph, "").strip()
+                        new_row.append(button.model_copy(update={"text": clean or button.text, "icon_custom_emoji_id": icon}))
+                        changed = True
+                    else:
+                        new_row.append(button)
+                rows.append(new_row)
+            if changed:
+                updates["reply_markup"] = markup.model_copy(update={"inline_keyboard": rows})
+        if not updates:
+            return await make_request(bot, method)
+
+        original_method = method
+        method = method.model_copy(update=updates)
+        try:
+            return await make_request(bot, method)
+        except TelegramBadRequest as exc:
+            # Keep the bot usable if Telegram rejects custom emoji for this bot
+            # or client method. Retry only errors that point to emoji support.
+            error = str(exc).lower()
+            if not any(marker in error for marker in ("emoji", "tg-emoji", "button_type_invalid")):
+                raise
+            return await make_request(bot, original_method)
 
 MINIMALIST_BW_ICON_IDS = frozenset({
     "6005570495603282482", "5983399041197675256", "5825794181183836432",
