@@ -149,6 +149,19 @@ class PremiumEmojiRequestMiddleware(BaseRequestMiddleware):
                 if converted != value:
                     updates[attr] = converted
 
+        # EditMessageMedia stores the visible caption inside its InputMedia
+        # object, so it does not expose a top-level ``caption`` field.
+        media = getattr(method, "media", None)
+        media_caption = getattr(media, "caption", None) if media else None
+        if media_caption and not getattr(media, "caption_entities", None):
+            media_parse_mode = getattr(media, "parse_mode", None)
+            if media_parse_mode is None or type(media_parse_mode).__name__ == "Default":
+                media_parse_mode = default_parse_mode
+            if media_parse_mode and str(media_parse_mode).lower().endswith("html"):
+                converted = premium_emoji_text(media_caption)
+                if converted != media_caption:
+                    updates["media"] = media.model_copy(update={"caption": converted})
+
         markup = getattr(method, "reply_markup", None)
         if isinstance(markup, InlineKeyboardMarkup):
             rows = []
