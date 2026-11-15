@@ -136,7 +136,7 @@ async def cb_upgrade_device_screen(callback: CallbackQuery, bot: Bot):
         f"Сейчас: <b>{old} {current_word}</b>\n"
         f"{rate_description}\n"
         "Доплата рассчитывается за оставшийся оплаченный срок. "
-        "На этапе оплаты сумма будет указана в Telegram Stars. "
+        "На этапе оплаты покажем сумму в выбранной валюте. "
         "Срок VPN не изменится."
         f"{disclaimer}\n\nВыберите новый лимит:",
         InlineKeyboardMarkup(inline_keyboard=rows),
