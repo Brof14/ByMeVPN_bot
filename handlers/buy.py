@@ -47,7 +47,27 @@ _stars_payment_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.W
 
 
 async def _block_unresolved_access_payment(callback: CallbackQuery) -> bool:
-    """Keep a second checkout from being offered while paid access is unresolved."""
+    """Prevent checkout when paid access is unresolved or legacy keys conflict."""
+    from database import get_user_keys
+    try:
+        keys = await get_user_keys(callback.from_user.id)
+        if sum(int(key.get("expiry") or 0) > int(time.time()) for key in keys) > 1:
+            await callback.message.answer(
+                "<b>Подписка требует проверки</b>\n\n"
+                "Обнаружены повторяющиеся записи действующего доступа. "
+                "Не оплачивайте повторно: поддержка проверит оплаченный срок.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="Поддержка", url=support_url("subscription")),
+                ]]),
+            )
+            return True
+    except Exception:
+        logger.exception("Cannot verify single-active-subscription safety before checkout")
+        await callback.message.answer(
+            "Не удалось безопасно проверить подписку. Повторите попытку позже.",
+        )
+        return True
     from billing_incidents import has_unresolved_access_delivery
     try:
         unresolved = await has_unresolved_access_delivery(callback.from_user.id)
