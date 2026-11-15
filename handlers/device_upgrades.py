@@ -399,6 +399,227 @@ async def device_upgrade_checkout_error(pre: PreCheckoutQuery) -> str | None:
     return None
 
 
+async def process_provider_device_upgrade(
+    bot: Bot, provider: str, invoice_id: str, paid_invoice: dict,
+) -> bool:
+    """Confirm a YooKassa/CryptoBot paid invoice without granting extra days.
+
+    The provider invoice must have been persisted and bound to this exact
+    order before the customer saw a payment URL. The account-scoped lease
+    serializes this with renewal, deletion and reissue across bot workers.
+    """
+    import secrets
+    from decimal import Decimal, InvalidOperation
+    from database import (
+        get_crypto_pending, get_yookassa_pending, get_payment_by_id,
+        try_acquire_delivery_lease, release_delivery_lease,
+        is_account_tombstoned, delete_crypto_pending, delete_yookassa_pending,
+        mark_crypto_processed, mark_yookassa_processed,
+    )
+    if provider not in {"yookassa", "cryptobot"} or not invoice_id:
+        return False
+    order = await get_device_upgrade_order_for_invoice(provider, str(invoice_id))
+    if not order:
+        logger.error("Paid device upgrade invoice has no durable binding (%s)", provider)
+        return False
+    user_id = int(order["user_id"])
+    amount = int(order["amount_stars"])  # Owner-approved 1:1 Stars/RUB tariff value.
+    charge_id = f"{provider}:{invoice_id}"
+    try:
+        if provider == "yookassa":
+            metadata = paid_invoice.get("metadata") or {}
+            pending = await get_yookassa_pending(str(invoice_id))
+            amount_data = paid_invoice.get("amount") or {}
+            actual = Decimal(str(amount_data.get("value")))
+            valid = (
+                paid_invoice.get("status") == "succeeded"
+                and str(paid_invoice.get("id") or "") == str(invoice_id)
+                and str(amount_data.get("currency")) == "RUB"
+                and str(metadata.get("purpose") or "") == "device_upgrade"
+                and str(metadata.get("device_upgrade_order_id") or "") == order["id"]
+                and str(metadata.get("user_id") or "") == str(user_id)
+                and str(metadata.get("days") or "") == "0"
+                and str(metadata.get("devices") or "") == str(order["new_devices"])
+                and str(metadata.get("key_id") or "") == str(order["key_id"])
+                and str(metadata.get("old_devices") or "") == str(order["old_devices"])
+                and str(metadata.get("amount_rub") or "") == str(amount)
+                and isinstance(pending, dict)
+                and int(pending["user_id"]) == user_id
+                and int(pending["days"]) == 0
+                and int(pending["devices"]) == int(order["new_devices"])
+                and int(pending["amount_rub"]) == amount
+                and actual.is_finite() and actual == Decimal(amount)
+            )
+        else:
+            pending = await get_crypto_pending(str(invoice_id))
+            actual = Decimal(str(paid_invoice.get("amount")))
+            valid = (
+                paid_invoice.get("status") == "paid"
+                and str(paid_invoice.get("invoice_id") or "") == str(invoice_id)
+                and paid_invoice.get("currency_type") == "fiat"
+                and paid_invoice.get("fiat") == "RUB"
+                and str(paid_invoice.get("payload") or "") == f"devup_{order['id']}"
+                and isinstance(pending, dict)
+                and str(pending.get("payload") or "") == f"devup_{order['id']}"
+                and int(pending["user_id"]) == user_id
+                and int(pending["days"]) == 0
+                and int(pending["devices"]) == int(order["new_devices"])
+                and int(pending["amount_rub"]) == amount
+                and actual.is_finite() and actual == Decimal(amount)
+            )
+    except (InvalidOperation, ValueError, TypeError, KeyError):
+        valid = False
+    if not valid:
+        logger.error("Provider device upgrade mismatches persisted invoice (%s)", provider)
+        await _notify_upgrade_admin(
+            bot, f"Оплаченный {provider} счёт за устройства {invoice_id} "
+            f"не совпал с заказом {order['id']} пользователя {user_id}. Нужна ручная сверка.",
+        )
+        return False
+
+    token = secrets.token_urlsafe(24)
+    if not await try_acquire_delivery_lease(user_id, token, ttl_seconds=300):
+        logger.warning("Device upgrade invoice blocked by account lease: user=%s", user_id)
+        return False
+    ledger_id = None
+    try:
+        if await is_account_tombstoned(user_id):
+            raise RuntimeError("account was deleted before upgrade fulfillment")
+        is_new, ledger_id = await record_payment_idempotent(
+            user_id=user_id, amount=amount, currency="RUB",
+            method="device_upgrade", days=0, payload=str(invoice_id),
+            status="processing", tariff="Увеличение лимита устройств",
+            devices=int(order["new_devices"]), provider=provider,
+            provider_payment_id=str(invoice_id),
+        )
+        if not ledger_id:
+            raise RuntimeError("payment ledger id unavailable")
+        previous = await get_payment_by_id(ledger_id)
+        if not is_new:
+            if previous and previous.get("status") == "success":
+                return True
+            if not previous or previous.get("status") != "failed":
+                # An earlier worker may have updated 3x-ui before crashing.
+                # Do not retry automatically without reconciling the panel.
+                if previous and previous.get("status") == "processing":
+                    await update_payment_status(ledger_id, "recovery_required")
+                return False
+            await update_payment_status(ledger_id, "processing")
+        if order["status"] == "fulfilled":
+            if order.get("charge_id") != charge_id:
+                raise RuntimeError("order was fulfilled against a different invoice")
+            await update_payment_status(ledger_id, "success")
+            return True
+        if order["status"] != "pending":
+            raise RuntimeError("order is not fulfillable")
+
+        key = await get_key_by_id(int(order["key_id"]))
+        if (
+            not key or int(key.get("user_id") or 0) != user_id
+            or int(key.get("expiry") or 0) != int(order["key_expiry"])
+            or int(key.get("expiry") or 0) <= int(time.time())
+            or int(key.get("limit_ip") or 0) not in (
+                int(order["old_devices"]), int(order["new_devices"]),
+            )
+        ):
+            raise RuntimeError("local subscription changed since checkout")
+
+        from xui_client import get_xui_client_details, get_xui_devices, update_xui_user
+        panel = await get_xui_client_details(user_id, strict=True)
+        if (
+            not panel or panel.get("enable") is False
+            or abs(int(panel.get("expiry_time") or 0) // 1000 - int(order["key_expiry"])) > 2
+            or int(panel.get("limit_hwid") or 0) not in (
+                int(order["old_devices"]), int(order["new_devices"]),
+            )
+        ):
+            raise RuntimeError("VPN panel does not match paid upgrade")
+        if int(panel["limit_hwid"]) != int(order["new_devices"]):
+            res = await update_xui_user(
+                user_id, new_expiry_ms=int(order["key_expiry"]) * 1000,
+                limit_ip=0, limit_hwid=int(order["new_devices"]),
+            )
+            if not res:
+                raise RuntimeError("VPN panel did not confirm device upgrade")
+        for attempt in range(3):
+            devices = await get_xui_devices(user_id)
+            if isinstance(devices, dict) and int(devices.get("limit_hwid") or 0) == int(order["new_devices"]):
+                break
+            import asyncio
+            await asyncio.sleep(0.3)
+        else:
+            raise RuntimeError("VPN panel HWID limit was not confirmed")
+
+        if not await finalize_device_upgrade_order(order, charge_id):
+            raise RuntimeError("device upgrade database commit not confirmed")
+        await update_payment_status(ledger_id, "success")
+        try:
+            if provider == "yookassa":
+                await mark_yookassa_processed(str(invoice_id))
+                await delete_yookassa_pending(str(invoice_id))
+            else:
+                await mark_crypto_processed(str(invoice_id))
+                await delete_crypto_pending(str(invoice_id))
+        except Exception:
+            logger.exception("Device upgrade paid successfully, but receipt cleanup failed")
+        try:
+            from app_links import build_user_connect_page_url
+            url = await build_user_connect_page_url(
+                str(key.get("key") or ""), user_id=user_id,
+                key_id=int(order["key_id"]),
+            )
+        except Exception:
+            url = ""
+        buttons = []
+        if url:
+            buttons.append([InlineKeyboardButton(text="Подключить VPN", url=url)])
+        buttons.append([InlineKeyboardButton(
+            text="Мои устройства", callback_data=f"key_devices:{order['key_id']}",
+        )])
+        try:
+            await bot.send_message(
+                user_id,
+                f"<b>Лимит увеличен до {order['new_devices']} устройств</b>\n\n"
+                "Оплата подтверждена, срок подписки не изменился.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+            )
+        except Exception:
+            logger.warning("Paid device upgrade confirmation could not be delivered to user %s", user_id)
+        return True
+    except Exception:
+        logger.exception("Paid %s device upgrade requires reconciliation: user=%s", provider, user_id)
+        if ledger_id:
+            await update_payment_status(ledger_id, "recovery_required")
+        await _notify_upgrade_admin(
+            bot, f"Оплаченный {provider} счёт {invoice_id}, пользователь {user_id}, "
+            f"заказ {order['id']}: сверить HWID, списание и платежный журнал.",
+        )
+        try:
+            await bot.send_message(
+                user_id,
+                "Оплата за дополнительные устройства получена, но подтверждение "
+                "нового лимита пока не завершено. Не платите повторно. "
+                "Поддержка проверит ваш заказ.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="Поддержка", url=support_url("payment")),
+                ]]),
+            )
+        except Exception:
+            logger.warning("Could not send customer recovery message")
+        return False
+    finally:
+        await release_delivery_lease(user_id, token)
+
+
+async def _notify_upgrade_admin(bot: Bot, text: str) -> None:
+    from config import ADMIN_IDS
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, text)
+        except Exception:
+            logger.warning("Device upgrade incident notification failed")
+
+
 async def process_device_upgrade_charge(message, bot: Bot, payment, charge_id: str):
     """Use authoritative server state; never extend duration for an upgrade."""
     user_id = message.from_user.id
