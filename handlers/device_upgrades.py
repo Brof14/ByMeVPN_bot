@@ -662,6 +662,21 @@ async def _notify_upgrade_admin(bot: Bot, text: str) -> None:
 
 
 async def process_device_upgrade_charge(message, bot: Bot, payment, charge_id: str):
+    """Serialize Stars upgrade against renewals and external-provider upgrades."""
+    import secrets
+    from database import try_acquire_delivery_lease, release_delivery_lease
+    user_id = int(message.from_user.id)
+    token = secrets.token_urlsafe(24)
+    if not await try_acquire_delivery_lease(user_id, token, ttl_seconds=300):
+        logger.warning("Stars device upgrade is waiting for an account operation: %s", user_id)
+        return
+    try:
+        await _process_device_upgrade_charge_locked(message, bot, payment, charge_id)
+    finally:
+        await release_delivery_lease(user_id, token)
+
+
+async def _process_device_upgrade_charge_locked(message, bot: Bot, payment, charge_id: str):
     """Use authoritative server state; never extend duration for an upgrade."""
     user_id = message.from_user.id
     from database import get_payment_by_id
@@ -686,6 +701,7 @@ async def process_device_upgrade_charge(message, bot: Bot, payment, charge_id: s
     try:
         if (
             not order or order["user_id"] != user_id
+            or order.get("provider", "stars") != "stars"
             or payment.currency != "XTR"
             or int(payment.total_amount) != int(order["amount_stars"])
             or order["status"] not in ("pending", "fulfilled")
@@ -734,7 +750,8 @@ async def process_device_upgrade_charge(message, bot: Bot, payment, charge_id: s
         else:
             raise RuntimeError("VPN panel HWID limit not confirmed")
 
-        await finalize_device_upgrade_order(order, charge_id)
+        if not await finalize_device_upgrade_order(order, charge_id):
+            raise RuntimeError("device upgrade DB finalize did not confirm success")
         await update_payment_status(ledger_id, "success")
     except Exception:
         logger.exception("Paid device upgrade needs reconciliation: %s", charge_id)
@@ -761,18 +778,32 @@ async def process_device_upgrade_charge(message, bot: Bot, payment, charge_id: s
         )
         return
 
+    try:
+        from app_links import build_user_connect_page_url
+        key = await get_key_by_id(int(order["key_id"]))
+        connect_url = await build_user_connect_page_url(
+            str((key or {}).get("key") or ""), user_id=user_id,
+            key_id=int(order["key_id"]),
+        )
+    except Exception:
+        logger.warning("Could not prepare direct connection link after Stars device upgrade")
+        connect_url = ""
+    rows = [
+        [InlineKeyboardButton(
+            text="Подключить VPN",
+            url=connect_url,
+        )] if connect_url else [InlineKeyboardButton(
+            text="Подключить VPN",
+            callback_data=f"key_instructions:{order['key_id']}",
+        )],
+        [InlineKeyboardButton(
+            text="Мои устройства",
+            callback_data=f"key_devices:{order['key_id']}",
+        )],
+    ]
     await bot.send_message(
         user_id,
         f"<b>Лимит увеличен до {order['new_devices']} устройств</b>\n\n"
         "Срок подписки не изменился. Теперь можно подключить новое устройство.",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text="Подключить VPN",
-                callback_data=f"key_instructions:{order['key_id']}",
-            )],
-            [InlineKeyboardButton(
-                text="Мои устройства",
-                callback_data=f"key_devices:{order['key_id']}",
-            )],
-        ]),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
