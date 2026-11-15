@@ -236,6 +236,72 @@ class ProviderDeviceUpgradeTests(unittest.IsolatedAsyncioTestCase):
             "https://pay.example.invalid/crypto-created",
         )
 
+    async def test_paid_status_keeps_invoice_reserved_without_issuing_second_charge(self):
+        from handlers.device_upgrades import cb_device_upgrade_status
+        order_id, invoice_id = await self.create_bound_order("yookassa")
+        event = SimpleNamespace(from_user=SimpleNamespace(id=8101))
+        with (
+            patch("handlers.device_upgrades.safe_answer", new=AsyncMock()),
+            patch("payments.get_yookassa_payment_status", new=AsyncMock(return_value="succeeded")),
+            patch("handlers.device_upgrades.send_with_photo", new=AsyncMock()) as send,
+        ):
+            await cb_device_upgrade_status(event, self.bot)
+        self.assertIn("Провайдер подтвердил оплату", send.await_args.args[2])
+        self.assertEqual(
+            (await database.get_device_upgrade_order(order_id))["status"], "pending"
+        )
+        self.assertIsNone(await database.create_device_upgrade_order(
+            8101, self.key_id, 2, 10, self.expiry, 40, provider="stars",
+        ))
+
+    async def test_terminal_provider_status_releases_invoice_reservation(self):
+        from handlers.device_upgrades import cb_device_upgrade_status
+        order_id, invoice_id = await self.create_bound_order("yookassa")
+        event = SimpleNamespace(from_user=SimpleNamespace(id=8101))
+        with (
+            patch("handlers.device_upgrades.safe_answer", new=AsyncMock()),
+            patch("payments.get_yookassa_payment_status", new=AsyncMock(return_value="canceled")),
+            patch("handlers.device_upgrades.send_with_photo", new=AsyncMock()) as send,
+        ):
+            await cb_device_upgrade_status(event, self.bot)
+        self.assertIn("Провайдер подтвердил отмену", send.await_args.args[2])
+        self.assertEqual(
+            (await database.get_device_upgrade_order(order_id))["status"], "expired"
+        )
+        self.assertIsNotNone(await database.create_device_upgrade_order(
+            8101, self.key_id, 2, 10, self.expiry, 40, provider="stars",
+        ))
+
+    async def test_unknown_provider_status_never_releases_pending_invoice(self):
+        from handlers.device_upgrades import cb_device_upgrade_status
+        order_id, invoice_id = await self.create_bound_order("cryptobot")
+        event = SimpleNamespace(from_user=SimpleNamespace(id=8101))
+        with (
+            patch("handlers.device_upgrades.safe_answer", new=AsyncMock()),
+            patch("payments.get_crypto_invoice", new=AsyncMock(return_value=None)),
+            patch("handlers.device_upgrades.send_with_photo", new=AsyncMock()) as send,
+        ):
+            await cb_device_upgrade_status(event, self.bot)
+        self.assertIn("ещё ожидается", send.await_args.args[2])
+        self.assertEqual(
+            (await database.get_device_upgrade_order(order_id))["status"], "pending"
+        )
+
+    async def test_expiration_does_not_discard_payable_yookassa_invoices(self):
+        order_id, invoice_id = await self.create_bound_order("yookassa")
+        db = await database.get_db()
+        await db.execute(
+            "UPDATE device_upgrade_orders SET created_at=? WHERE id=?",
+            (int(time.time()) - 7200, order_id),
+        )
+        await db.commit()
+        self.assertIsNone(await database.create_device_upgrade_order(
+            8101, self.key_id, 2, 10, self.expiry, 40, provider="stars",
+        ))
+        self.assertEqual(
+            (await database.get_device_upgrade_order(order_id))["status"], "pending"
+        )
+
     async def test_unknown_provider_invoice_is_never_provisioned(self):
         with patch("xui_client.update_xui_user", new=AsyncMock()) as update:
             self.assertFalse(await process_provider_device_upgrade(
