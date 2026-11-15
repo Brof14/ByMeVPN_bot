@@ -761,6 +761,16 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                 await delete_yookassa_pending(payment_id)
             return
 
+        # Device upgrades are a different, one-time zero-day product. Route
+        # them BEFORE the ordinary subscription minimum-days validation.
+        metadata_for_purpose = payment.get("metadata") or {}
+        if isinstance(metadata_for_purpose, dict) and metadata_for_purpose.get("purpose") == "device_upgrade":
+            from handlers.device_upgrades import process_provider_device_upgrade
+            await process_provider_device_upgrade(
+                bot, "yookassa", str(payment_id), payment,
+            )
+            return
+
         # ── Step 2: Read the legacy processed marker, but do not trust it alone ──
         # Older code paths could write this marker before successful delivery.
         # The payment ledger below is the source of truth for fulfillment status.
@@ -1147,6 +1157,20 @@ async def _process_crypto_invoice(bot: Bot, invoice: dict) -> None:
 
     try:
         if invoice.get("status") != "paid":
+            return
+
+        # A paid device upgrade never issues or extends a subscription.
+        # Check BOTH the provider payload and our durable pending record so
+        # a corrupted provider payload cannot fall through to normal delivery.
+        pending_for_purpose = await get_crypto_pending(invoice_id)
+        if (
+            str(invoice.get("payload") or "").startswith("devup_")
+            or str((pending_for_purpose or {}).get("payload") or "").startswith("devup_")
+        ):
+            from handlers.device_upgrades import process_provider_device_upgrade
+            await process_provider_device_upgrade(
+                bot, "cryptobot", str(invoice_id), invoice,
+            )
             return
 
         already_marked_processed = await is_crypto_processed(invoice_id)
