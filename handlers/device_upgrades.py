@@ -79,7 +79,7 @@ async def _show_upgrade_error(bot: Bot, callback: CallbackQuery, message: str):
     await send_with_photo(
         bot, callback,
         f"<b>Увеличение лимита недоступно</b>\n\n{message}\n"
-        "Доступ и платежи не изменены.",
+        "Доступ не изменён. Если ранее создавали счёт, не оплачивайте его повторно.",
         InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Подписка", callback_data="my_keys")],
             [InlineKeyboardButton(text="Проверить доплату", callback_data="device_upgrade_status")],
@@ -338,8 +338,12 @@ async def cb_device_upgrade_status(callback: CallbackQuery, bot: Bot):
                 "Не создавайте второй счёт."
             )
         elif provider_status in {"canceled", "expired"}:
+            # Only the provider's verified terminal state permits releasing
+            # an external invoice reservation for another safe checkout.
+            await expire_device_upgrade_order(order["id"])
             description = (
-                "Провайдер сообщил, что счёт не оплачен и больше не активен. "
+                "Провайдер подтвердил отмену или истечение счёта. "
+                "Можно выбрать новый лимит и способ оплаты. "
                 "Если деньги всё же списались, сначала обратитесь в поддержку."
             )
         else:
