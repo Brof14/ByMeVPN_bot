@@ -1252,6 +1252,49 @@ async def init_db() -> None:
             sub_id, new_key_id, user_id,
         )
 
+    # Guard the commercial invariant in SQLite, not only in UI callbacks.
+    # Historical expired subscriptions remain in the customer's history.
+    # Existing independently-paid active keys must never be silently deleted
+    # or shortened by a database migration.
+    await db.executescript("""
+        CREATE TRIGGER IF NOT EXISTS trg_keys_single_active_insert
+        BEFORE INSERT ON keys
+        WHEN NEW.expiry > CAST(strftime('%s','now') AS INTEGER)
+         AND EXISTS (
+            SELECT 1 FROM keys
+            WHERE user_id=NEW.user_id
+              AND expiry > CAST(strftime('%s','now') AS INTEGER)
+         )
+        BEGIN
+            SELECT RAISE(ABORT, 'only one active subscription per user');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_keys_single_active_extend
+        BEFORE UPDATE OF expiry ON keys
+        WHEN NEW.expiry > CAST(strftime('%s','now') AS INTEGER)
+         AND EXISTS (
+            SELECT 1 FROM keys
+            WHERE user_id=NEW.user_id AND id != OLD.id
+              AND expiry > CAST(strftime('%s','now') AS INTEGER)
+         )
+        BEGIN
+            SELECT RAISE(ABORT, 'only one active subscription per user');
+        END;
+    """)
+    # Do not resolve paid legacy duplicates by guessing which invoice to erase.
+    # Operators can reconcile these exceptional pre-existing accounts against
+    # their payment ledger and the authoritative VPN panel.
+    duplicates = await (await db.execute(
+        "SELECT user_id, COUNT(*) FROM keys WHERE expiry > ? "
+        "GROUP BY user_id HAVING COUNT(*) > 1",
+        (int(time.time()),),
+    )).fetchall()
+    for duplicate_user_id, count in duplicates:
+        logger.error(
+            "Existing account %s has %s active key rows; manual paid-access "
+            "reconciliation is required before enforcing single-subscription UI",
+            duplicate_user_id, count,
+        )
+
     await db.commit()
     logger.info("Database initialized: %s", DB_FILE)
 
