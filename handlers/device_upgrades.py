@@ -16,8 +16,9 @@ from bot_style import themed_button as InlineKeyboardButton
 from constants import DEVICE_PRICE_EXTRA, get_price_for_months
 from database import (
     create_device_upgrade_order, expire_device_upgrade_order,
-    finalize_device_upgrade_order, get_auto_renew_subscription,
-    get_device_upgrade_order, get_key_by_id, get_user_keys,
+    bind_device_upgrade_invoice, finalize_device_upgrade_order, get_auto_renew_subscription,
+    get_device_upgrade_order, get_device_upgrade_order_for_invoice,
+    get_key_by_id, get_user_keys,
     record_payment_idempotent, update_payment_status,
 )
 from keyboards import support_url
@@ -114,6 +115,10 @@ async def cb_upgrade_device_screen(callback: CallbackQuery, bot: Bot):
             text=f"До {target} устройств · {quote} ⭐",
             callback_data=f"device_upgrade_buy:{key_id}:{target}",
         )])
+        rows.append([InlineKeyboardButton(
+            text=f"Картой или CryptoBot · до {target} устройств",
+            callback_data=f"device_upgrade_methods:{key_id}:{target}",
+        )])
     rows.append([InlineKeyboardButton(text="← К устройствам", callback_data=f"key_devices:{key_id}")])
     disclaimer = (
         "\n\nАвтопродление сохранится с новой ценой, которую покажем перед оплатой."
@@ -139,6 +144,160 @@ async def cb_upgrade_device_screen(callback: CallbackQuery, bot: Bot):
     )
 
 
+@router.callback_query(F.data.startswith("device_upgrade_methods:"))
+async def cb_device_upgrade_methods(callback: CallbackQuery, bot: Bot):
+    """Alternative providers, without changing the existing Stars checkout."""
+    await safe_answer(callback)
+    try:
+        _, key_str, target_str = callback.data.split(":")
+        key_id, target = int(key_str), int(target_str)
+        context = await _upgrade_context(callback.from_user.id, key_id)
+        quote = upgrade_price_stars(
+            context["limit"], target, context["expiry"] - int(time.time()),
+        )
+    except (ValueError, IndexError) as exc:
+        await _show_upgrade_error(bot, callback, str(exc))
+        return
+    except Exception:
+        logger.exception("Cannot quote alternative device upgrade providers")
+        await _show_upgrade_error(bot, callback, "Не удалось проверить подписку. Попробуйте позже.")
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=f"ЮKassa · {quote} ₽",
+            callback_data=f"device_upgrade_provider:yookassa:{key_id}:{target}",
+        )],
+        [InlineKeyboardButton(
+            text=f"CryptoBot · {quote} ₽",
+            callback_data=f"device_upgrade_provider:cryptobot:{key_id}:{target}",
+        )],
+        [InlineKeyboardButton(
+            text=f"Telegram Stars · {quote} ⭐",
+            callback_data=f"device_upgrade_buy:{key_id}:{target}",
+        )],
+        [InlineKeyboardButton(text="← Назад", callback_data=f"device_upgrade:{key_id}")],
+    ])
+    await send_with_photo(
+        bot, callback,
+        f"<b>До {target} устройств</b>\n\n"
+        f"Доплата за остаток срока: <b>{quote} ₽</b> "
+        f"или <b>{quote} ⭐</b>. Срок доступа не изменится.\n\n"
+        "Выберите способ оплаты:",
+        kb, photo=DEVICES,
+    )
+
+
+@router.callback_query(F.data.startswith("device_upgrade_provider:"))
+async def cb_device_upgrade_provider(callback: CallbackQuery, bot: Bot):
+    """Create a one-time, provider-bound invoice for a verified active key."""
+    await safe_answer(callback)
+    try:
+        _, provider, key_str, target_str = callback.data.split(":")
+        if provider not in {"yookassa", "cryptobot"}:
+            raise ValueError("Недоступный способ оплаты")
+        key_id, target = int(key_str), int(target_str)
+        user_id = callback.from_user.id
+        context = await _upgrade_context(user_id, key_id)
+        quote = upgrade_price_stars(
+            context["limit"], target, context["expiry"] - int(time.time()),
+        )
+        recurring = context["recurring"]
+        auto_id = int(recurring["id"]) if recurring else 0
+        from database import is_account_tombstoned
+        if await is_account_tombstoned(user_id):
+            raise ValueError("Аккаунт закрыт")
+        order_id = await create_device_upgrade_order(
+            user_id, key_id, context["limit"], target, context["expiry"],
+            quote, provider=provider, auto_renew_id=auto_id,
+            prior_auto_renew_amount=int(recurring["amount_rub"]) if recurring else 0,
+            next_auto_renew_amount=(
+                get_price_for_months(int(recurring["months"]), target)[0]
+                if recurring else 0
+            ),
+        )
+        if not order_id:
+            raise ValueError(
+                "Предыдущий счёт ещё может быть оплачен. "
+                "Не оплачивайте повторно; если нужно, обратитесь в поддержку."
+            )
+    except (ValueError, IndexError) as exc:
+        await _show_upgrade_error(bot, callback, str(exc))
+        return
+    except Exception:
+        logger.exception("Cannot safely create alternative provider upgrade checkout")
+        await _show_upgrade_error(bot, callback, "Сейчас нельзя создать новый счёт. Попробуйте позже.")
+        return
+
+    payment_url = ""
+    invoice_id = ""
+    try:
+        if provider == "yookassa":
+            import hashlib
+            from payments import create_yookassa_payment
+            result = await create_yookassa_payment(
+                quote, f"ByMeVPN · увеличение лимита до {target} устройств",
+                user_id, days=0, devices=target, months=1,
+                extra_metadata={
+                    "purpose": "device_upgrade", "device_upgrade_order_id": order_id,
+                    "key_id": key_id, "old_devices": context["limit"],
+                },
+                idempotency_key=hashlib.sha256(
+                    f"device_upgrade:yookassa:{order_id}".encode(),
+                ).hexdigest(),
+                return_payment_details=True, save_payment_method=False,
+            )
+            if isinstance(result, dict):
+                payment_url = str(result.get("payment_url") or "")
+                invoice_id = str(result.get("payment_id") or "")
+        else:
+            from payments import create_crypto_payment
+            from database import add_crypto_pending
+            payload = f"devup_{order_id}"
+            invoice = await create_crypto_payment(
+                quote, f"ByMeVPN · до {target} устройств",
+                user_id, days=0, devices=target, external_payload=payload,
+            )
+            if invoice:
+                payment_url, invoice_id = invoice
+                # The crypto monitor can only process this paid invoice when its
+                # server-owned metadata has been durably persisted.
+                await add_crypto_pending(
+                    invoice_id, user_id, 0, target, quote, payload=payload,
+                )
+        if not payment_url.startswith("https://") or not invoice_id:
+            raise RuntimeError("provider did not confirm a persisted invoice")
+        if not await bind_device_upgrade_invoice(order_id, user_id, provider, invoice_id):
+            raise RuntimeError("provider invoice was not durably bound to upgrade")
+    except Exception:
+        # The provider may have created an invoice even after a client timeout.
+        # Keep the pending order reserved to prevent duplicate charges.
+        logger.exception("Device upgrade provider checkout requires reconciliation")
+        await send_with_photo(
+            bot, callback,
+            "<b>Не удалось подтвердить счёт</b>\n\n"
+            "Счёт мог быть создан, но его сохранение не подтверждено. "
+            "Не оплачивайте повторно — поддержка проверит заказ.",
+            InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Поддержка по оплате", url=support_url("payment"))],
+                [InlineKeyboardButton(text="← К подписке", callback_data=f"key_info:{key_id}")],
+            ]), photo=DEVICES,
+        )
+        return
+    await send_with_photo(
+        bot, callback,
+        f"<b>Доплата за устройства</b>\n\n"
+        f"Новый лимит: <b>{target}</b>\n"
+        f"Сумма: <b>{quote} ₽</b>\n"
+        "Срок подписки не изменится. После оплаты дождитесь подтверждения "
+        "нового лимита. Не создавайте второй счёт, пока этот проверяется.",
+        InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Перейти к оплате", url=payment_url)],
+            [InlineKeyboardButton(text="Поддержка по оплате", url=support_url("payment"))],
+            [InlineKeyboardButton(text="← К устройствам", callback_data=f"key_devices:{key_id}")],
+        ]), photo=DEVICES,
+    )
+
+
 @router.callback_query(F.data.startswith("device_upgrade_buy:"))
 async def cb_upgrade_device_buy(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
@@ -160,7 +319,7 @@ async def cb_upgrade_device_buy(callback: CallbackQuery, bot: Bot):
             raise ValueError("Аккаунт закрыт")
         order_id = await create_device_upgrade_order(
             callback.from_user.id, key_id, old, target, context["expiry"],
-            quote, auto_renew_id=auto_id,
+            quote, provider="stars", auto_renew_id=auto_id,
             prior_auto_renew_amount=old_auto_amount,
             next_auto_renew_amount=next_auto_amount,
         )
@@ -211,6 +370,7 @@ async def device_upgrade_checkout_error(pre: PreCheckoutQuery) -> str | None:
     now = int(time.time())
     if (
         not order or order["status"] != "pending"
+        or order.get("provider", "stars") != "stars"
         or now - int(order["created_at"]) > INVOICE_LIFETIME
         or int(order["user_id"]) != pre.from_user.id
         or pre.currency != "XTR"
