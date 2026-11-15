@@ -254,7 +254,7 @@ async def connection_choice_page(ticket: str = "", u: int = 0, s: str = "", k: i
                     if int(item.get("expiry") or 0) > now
                 ]
                 if len(active) > 1:
-                    raise ValueError("choose_subscription")
+                    raise ValueError("duplicate_active")
                 if active:
                     chosen = active[0]
 
@@ -291,7 +291,7 @@ async def connection_choice_page(ticket: str = "", u: int = 0, s: str = "", k: i
             payload = read_connect_ticket(ticket)
         page = render_connection_choice_page(payload["subscription_url"], payload["user_name"])
     except ValueError as exc:
-        error_code = str(exc) if str(exc) in {"expired", "choose_subscription"} else "invalid_link"
+        error_code = str(exc) if str(exc) in {"expired", "duplicate_active"} else "invalid_link"
     except Exception:
         logger.exception("Unable to resolve the VPN connection page")
         error_code = "unavailable"
@@ -328,7 +328,7 @@ async def connection_choice_page(ticket: str = "", u: int = 0, s: str = "", k: i
     primary_action = {
         "invalid_link": ("Открыть подписку в боте", "https://t.me/ByMeVPNbot"),
         "expired": ("Продлить подписку в боте", "https://t.me/ByMeVPNbot"),
-        "choose_subscription": ("Выбрать подписку в боте", "https://t.me/ByMeVPNbot"),
+        "duplicate_active": ("Открыть поддержку", "https://t.me/ByMeVPNSupportBot?start=help_subscription"),
         "unavailable": ("Повторить проверку", ""),
     }[error_code]
     error_html = f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>{html_escape(title)} — ByMeVPN</title><style>body{{margin:0;background:#07111d;color:#f3f7fb;font:16px/1.5 system-ui,sans-serif}}main{{max-width:480px;margin:12vh auto;padding:24px}}h1{{font-size:24px}}p{{color:#a9b9c8}}a{{display:inline-block;margin:12px 0;color:#80dfff}}</style></head><body><main><img src="/app/assets/bymevpn-logo.png" width="44" height="44" alt="ByMeVPN"><h1>{html_escape(title)}</h1><p>{html_escape(description)}</p><p><a href="{html_escape(primary_action[1], quote=True)}">{html_escape(primary_action[0])}</a></p><p><a href="https://t.me/ByMeVPNSupportBot?start=help_connection">Поддержка</a></p></main></body></html>"""
