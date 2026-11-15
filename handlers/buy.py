@@ -723,7 +723,7 @@ async def cb_pay_yookassa(callback: CallbackQuery, bot: Bot, state: FSMContext):
 async def cb_checkout_check_payment(callback: CallbackQuery, bot: Bot):
     """Read-only self-service YooKassa status; never confirm access on guesswork."""
     await safe_answer(callback)
-    from database import get_yookassa_pending_by_user, get_user_payments
+    from database import get_yookassa_pending_by_user
     from payments import get_yookassa_payment_status
 
     try:
@@ -760,7 +760,7 @@ async def cb_checkout_check_payment(callback: CallbackQuery, bot: Bot):
         [InlineKeyboardButton(text="Поддержка по оплате", url=support_url("payment"))],
         [InlineKeyboardButton(text="← К тарифам", callback_data="buy_vpn")],
     ])
-    await send_with_photo(bot, callback, f"{title}\\n\\n{details}", keyboard, photo=PAYMENT)
+    await send_with_photo(bot, callback, f"{title}\n\n{details}", keyboard, photo=PAYMENT)
 
 
 @router.callback_query(F.data == "pay_crypto")
@@ -1187,8 +1187,9 @@ async def _activate_promo_code(bot: Bot, target, state: FSMContext, code: str) -
         f"<b>Промокод применён</b>\n\n"
         f"Бонус: <b>{discount_text}</b>\n"
         f"{preview}"
-        "Проверьте обновлённый заказ перед оплатой." if preview and "Для выбранного срока:" in preview else
-        "Цена и срок пересчитаются при выборе тарифа.",
+        + ("Проверьте обновлённый заказ перед оплатой."
+           if preview and "Для выбранного срока:" in preview
+           else "Цена и срок пересчитаются при выборе тарифа."),
         _promo_purchase_keyboard(
             int(selected_months) if selected_months in (1, 3, 6, 12)
             and (promo.get("tariff_binding") is None or int(promo["tariff_binding"]) == int(selected_months))
