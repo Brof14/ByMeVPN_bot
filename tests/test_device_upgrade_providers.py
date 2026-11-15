@@ -163,6 +163,79 @@ class ProviderDeviceUpgradeTests(unittest.IsolatedAsyncioTestCase):
         update.assert_not_awaited()
         self.assertEqual((await database.get_key_by_id(self.key_id))["limit_ip"], 2)
 
+    async def test_yookassa_checkout_binds_invoice_before_exposing_url(self):
+        from handlers.device_upgrades import cb_device_upgrade_provider
+        event = SimpleNamespace(
+            data=f"device_upgrade_provider:yookassa:{self.key_id}:5",
+            from_user=SimpleNamespace(id=8101),
+        )
+        context = {
+            "key": await database.get_key_by_id(self.key_id),
+            "expiry": self.expiry, "limit": 2, "recurring": None,
+        }
+
+        async def create_provider_invoice(amount, description, user_id, days, **kwargs):
+            self.assertEqual((amount, user_id, days), (20, 8101, 0))
+            self.assertEqual(kwargs["extra_metadata"]["purpose"], "device_upgrade")
+            self.assertFalse(kwargs["save_payment_method"])
+            await database.add_yookassa_pending("yoo-created", 8101, 0, 5, 20)
+            return {
+                "payment_url": "https://pay.example.invalid/yoo-created",
+                "payment_id": "yoo-created", "status": "pending",
+            }
+
+        with (
+            patch("handlers.device_upgrades._upgrade_context", new=AsyncMock(return_value=context)),
+            patch("database.is_account_tombstoned", new=AsyncMock(return_value=False)),
+            patch("handlers.device_upgrades.safe_answer", new=AsyncMock()),
+            patch("payments.create_yookassa_payment", new=AsyncMock(side_effect=create_provider_invoice)),
+            patch("handlers.device_upgrades.send_with_photo", new=AsyncMock()) as sent,
+        ):
+            await cb_device_upgrade_provider(event, self.bot)
+        db = await database.get_db()
+        current = await (await db.execute(
+            "SELECT id,provider,provider_payment_id FROM device_upgrade_orders "
+            "WHERE user_id=8101",
+        )).fetchone()
+        self.assertEqual((current[1], current[2]), ("yookassa", "yoo-created"))
+        self.assertEqual(
+            sent.await_args.args[3].inline_keyboard[0][0].url,
+            "https://pay.example.invalid/yoo-created",
+        )
+
+    async def test_crypto_checkout_persists_invoice_before_exposing_url(self):
+        from handlers.device_upgrades import cb_device_upgrade_provider
+        event = SimpleNamespace(
+            data=f"device_upgrade_provider:cryptobot:{self.key_id}:5",
+            from_user=SimpleNamespace(id=8101),
+        )
+        context = {
+            "key": await database.get_key_by_id(self.key_id),
+            "expiry": self.expiry, "limit": 2, "recurring": None,
+        }
+        with (
+            patch("handlers.device_upgrades._upgrade_context", new=AsyncMock(return_value=context)),
+            patch("database.is_account_tombstoned", new=AsyncMock(return_value=False)),
+            patch("handlers.device_upgrades.safe_answer", new=AsyncMock()),
+            patch("payments.create_crypto_payment", new=AsyncMock(return_value=(
+                "https://pay.example.invalid/crypto-created", "crypto-created",
+            ))),
+            patch("handlers.device_upgrades.send_with_photo", new=AsyncMock()) as sent,
+        ):
+            await cb_device_upgrade_provider(event, self.bot)
+        db = await database.get_db()
+        current = await (await db.execute(
+            "SELECT id,provider,provider_payment_id FROM device_upgrade_orders "
+            "WHERE user_id=8101",
+        )).fetchone()
+        self.assertEqual((current[1], current[2]), ("cryptobot", "crypto-created"))
+        pending = await database.get_crypto_pending("crypto-created")
+        self.assertEqual(pending["payload"], f"devup_{current[0]}")
+        self.assertEqual(
+            sent.await_args.args[3].inline_keyboard[0][0].url,
+            "https://pay.example.invalid/crypto-created",
+        )
+
     async def test_unknown_provider_invoice_is_never_provisioned(self):
         with patch("xui_client.update_xui_user", new=AsyncMock()) as update:
             self.assertFalse(await process_provider_device_upgrade(
