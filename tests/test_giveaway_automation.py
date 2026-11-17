@@ -206,6 +206,9 @@ class TestGiveawayAutomation(unittest.IsolatedAsyncioTestCase):
 
         await database.ensure_user(501)
         await database.ensure_user(502)
+        db = await database.get_db()
+        await db.execute("UPDATE users SET created=? WHERE user_id IN (501,502)", (int(time.time()) - 86401,))
+        await db.commit()
         await database.set_promotional_opt_out(502)
         bot = SimpleNamespace(
             send_message=AsyncMock(),
@@ -227,7 +230,7 @@ class TestGiveawayAutomation(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Участие бесплатное", bot.send_message.await_args.args[1])
         self.assertIn("кто впервые запустил бота", bot.send_message.await_args.args[1])
         self.assertIn("Нажмите ниже, чтобы увидеть свою ссылку и прогресс", bot.send_message.await_args.args[1])
-        self.assertIn("3 победителя получат по <b>+30 дней VPN</b>", bot.send_message.await_args.args[1])
+        self.assertIn("3 участника с наибольшим числом приглашений получат по <b>+30 дней VPN</b>", bot.send_message.await_args.args[1])
 
     async def test_promotion_skips_active_paying_customers_without_referral_interest(self):
         # Already paying users without recent referral activity should not
@@ -235,6 +238,12 @@ class TestGiveawayAutomation(unittest.IsolatedAsyncioTestCase):
         now = int(time.time())
         for uid in (591, 592, 593, 594):
             await database.ensure_user(uid)
+        db = await database.get_db()
+        await db.execute(
+            "UPDATE users SET created=? WHERE user_id IN (591,592,593,594)",
+            (now - 86401,),
+        )
+        await db.commit()
         for uid in (591, 592, 593):
             await database.add_key(
                 uid, f"https://vpn.example/sub/{uid}", str(uid),
