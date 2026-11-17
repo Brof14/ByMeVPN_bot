@@ -16,7 +16,8 @@ class TestNotificationMarketing(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertTrue(await _send_urgent_notification(bot, item))
         text = bot.send_message.await_args.args[1]
-        self.assertIn("До окончания подписки", text)
+        self.assertIn("Подписка заканчивается через", text)
+        self.assertIn("срок добавится к текущему", text)
         self.assertNotIn("30% скидки", text)
         keyboard = bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard
         self.assertEqual(keyboard[0][0].callback_data, "buy_vpn")

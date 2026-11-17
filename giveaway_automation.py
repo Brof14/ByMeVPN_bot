@@ -78,9 +78,12 @@ def format_giveaway_terms(giveaway: dict) -> str:
     prize_days = int(giveaway.get("prize_days") or MONTHLY_PRIZE_DAYS)
     winners_count = int(giveaway.get("winners_count") or MONTHLY_WINNERS)
     return (
-        "<b>Участие:</b> пригласите хотя бы одного нового пользователя. В зачёт попадёт тот, кто впервые запустит бота по вашей ссылке.\n\n"
-        f"<b>Призы:</b> {winners_count} победителя получат по <b>+{prize_days} дней VPN</b>. Выигрывают те, кто пригласил больше друзей; при равенстве победителя определит жребий. Если участников меньше {winners_count}, приз получит каждый.\n\n"
-        f"Приглашения засчитываются до <b>{cutoff}</b>, результаты будут подведены <b>{results}</b>."
+        "<b>Как участвовать</b>\n"
+        "Участие бесплатное. Поделитесь своей ссылкой и пригласите друзей, которые впервые запустят бота.\n\n"
+        f"<b>Призы</b>\n{winners_count} участника с наибольшим числом приглашений получат по "
+        f"<b>+{prize_days} дней VPN</b>. При равном результате победителя определит жребий.\n\n"
+        f"Приглашения учитываются до <b>{cutoff}</b>. Итоги — <b>{results}</b>; "
+        "победителям дни начислит бот автоматически."
     )
 
 
@@ -149,12 +152,12 @@ async def _send_campaign_announcements(bot: Bot, giveaway: dict) -> None:
     link = f"https://t.me/{info.username}?start=gw_{giveaway['id']}"
     deadline = _moscow_date(int(giveaway["end_date"]) - 1)
     text = (
-        "<b>Ежемесячный конкурс ByMeVPN</b>\n\n"
-        f"Чтобы участвовать, пригласите хотя бы одного нового пользователя по своей ссылке до <b>{deadline}</b>. "
-        f"{int(giveaway.get('winners_count') or MONTHLY_WINNERS)} победителя получат "
-        f"по <b>+{int(giveaway.get('prize_days') or MONTHLY_PRIZE_DAYS)} дней VPN</b>.\n\n"
-        "В зачёт попадёт тот, кто впервые запустит бота по вашей ссылке. "
-        "Полные правила и ваши результаты доступны после нажатия «Участвовать»."
+        "<b>Приглашайте друзей — получайте дни VPN</b>\n\n"
+        f"До <b>{deadline}</b> приглашайте друзей по своей ссылке. Учитываются только те, "
+        "кто впервые запустил бота.\n\n"
+        f"{int(giveaway.get('winners_count') or MONTHLY_WINNERS)} участника с наибольшим числом приглашений "
+        f"получат по <b>+{int(giveaway.get('prize_days') or MONTHLY_PRIZE_DAYS)} дней VPN</b>. "
+        "Участие бесплатное, дни победителям начислит бот. Нажмите ниже, чтобы увидеть свою ссылку и прогресс."
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎉 Участвовать", url=link, style="primary")],

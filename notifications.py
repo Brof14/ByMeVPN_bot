@@ -127,9 +127,9 @@ async def _send_urgent_notification(bot: Bot, item: dict) -> bool:
         action = "Выбрать подписку"
     else:
         text = (
-            f"<b>До окончания подписки — {days_left} {get_day_word(days_left)}</b>\n\n"
-            f"Доступ сохранится до <b>{date_str}</b>. "
-            "Продлите заранее: ключ и настройки менять не придётся."
+            f"<b>Подписка заканчивается через {days_left} {get_day_word(days_left)}</b>\n\n"
+            f"VPN будет работать до <b>{date_str}</b>. Продлите сейчас — срок добавится к текущему, "
+            "а ключ и настройки останутся прежними."
         )
         action = "Продлить подписку"
     kb = InlineKeyboardMarkup(inline_keyboard=[

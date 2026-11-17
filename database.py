@@ -7240,6 +7240,7 @@ async def create_giveaway_notification_snapshot(giveaway_id: int) -> int:
             SELECT ?, u.user_id, 'pending' FROM users u
             LEFT JOIN marketing_preferences p ON p.user_id=u.user_id
             WHERE COALESCE(p.promotional_opt_out, 0)=0
+              AND u.created <= CAST(strftime('%s','now') AS INTEGER) - 86400
               AND {audience}""",
             (giveaway_id,),
         )

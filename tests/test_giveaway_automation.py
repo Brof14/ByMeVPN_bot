@@ -224,8 +224,9 @@ class TestGiveawayAutomation(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Участвовать", bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard[0][0].text)
         self.assertNotIn("YouTube", bot.send_message.await_args.args[1])
         self.assertNotIn("Instagram", bot.send_message.await_args.args[1])
-        self.assertIn("пригласите хотя бы одного нового пользователя", bot.send_message.await_args.args[1])
-        self.assertIn("В зачёт попадёт тот, кто впервые запустит бота по вашей ссылке", bot.send_message.await_args.args[1])
+        self.assertIn("Участие бесплатное", bot.send_message.await_args.args[1])
+        self.assertIn("кто впервые запустил бота", bot.send_message.await_args.args[1])
+        self.assertIn("Нажмите ниже, чтобы увидеть свою ссылку и прогресс", bot.send_message.await_args.args[1])
         self.assertIn("3 победителя получат по <b>+30 дней VPN</b>", bot.send_message.await_args.args[1])
 
     async def test_promotion_skips_active_paying_customers_without_referral_interest(self):
