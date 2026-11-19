@@ -7,7 +7,7 @@ _ASSETS = Path(__file__).resolve().parent / "assets" / "sections"
 
 def _asset(name: str) -> str:
     # One compact shared banner makes Telegram file_id caching reusable.
-    return str(_ASSETS / "bymevpn.jpg")
+    return str(_ASSETS / "bymevpn.png")
 
 
 MENU = _asset("menu")
