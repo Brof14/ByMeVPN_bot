@@ -53,6 +53,7 @@ class TestMobileApiV2(unittest.TestCase):
         self.assertEqual(response.json(), {
             "auto_renew": True,
             "can_cancel": True,
+            "can_enable": False,
             "source": "server",
             "next_charge_at": None,
             "next_amount_rub": None,
@@ -60,6 +61,43 @@ class TestMobileApiV2(unittest.TestCase):
         fetch.assert_awaited_once_with(987654321, include_legacy=True)
         self.assertNotIn("pm_super_secret", response.text)
         self.assertNotIn("9999", response.text)
+
+    def test_renewal_enable_requires_explicit_confirmation(self):
+        response = self.client.post("/api/v1/mobile/v2/renewal/enable", json={})
+        self.assertEqual(response.status_code, 422)
+
+    def test_renewal_enable_resumes_only_existing_saved_payment_method(self):
+        with (
+            patch.object(api_router.database, "try_acquire_delivery_lease", new=AsyncMock(return_value=True)) as claim,
+            patch.object(api_router.database, "resume_auto_renew", new=AsyncMock(return_value=True)) as resume,
+            patch.object(api_router.database, "release_delivery_lease", new=AsyncMock()) as release,
+        ):
+            response = self.client.post("/api/v1/mobile/v2/renewal/enable", json={"confirm": True})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"auto_renew": True, "enabled": True})
+        resume.assert_awaited_once_with(987654321)
+        self.assertEqual(claim.await_args.args[0], 987654321)
+        self.assertEqual(release.await_args.args[0], 987654321)
+        self.assertEqual(release.await_args.args[1], claim.await_args.args[1])
+
+    def test_renewal_enable_fails_closed_without_saved_method(self):
+        with (
+            patch.object(api_router.database, "try_acquire_delivery_lease", new=AsyncMock(return_value=True)),
+            patch.object(api_router.database, "resume_auto_renew", new=AsyncMock(return_value=False)) as resume,
+            patch.object(api_router.database, "release_delivery_lease", new=AsyncMock()),
+        ):
+            response = self.client.post("/api/v1/mobile/v2/renewal/enable", json={"confirm": True})
+        self.assertEqual(response.status_code, 409)
+        resume.assert_awaited_once_with(987654321)
+
+    def test_renewal_enable_fails_when_billing_lease_is_held(self):
+        with (
+            patch.object(api_router.database, "try_acquire_delivery_lease", new=AsyncMock(return_value=False)),
+            patch.object(api_router.database, "resume_auto_renew", new=AsyncMock()) as resume,
+        ):
+            response = self.client.post("/api/v1/mobile/v2/renewal/enable", json={"confirm": True})
+        self.assertEqual(response.status_code, 409)
+        resume.assert_not_awaited()
 
     def test_renewal_cancel_requires_explicit_confirmation(self):
         result = self.client.post("/api/v1/mobile/v2/renewal/cancel", json={})
