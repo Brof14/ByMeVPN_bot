@@ -186,6 +186,7 @@ class CancelAllMethodsTests(unittest.IsolatedAsyncioTestCase):
         user = await database.find_user_by_id(123)
         self.assertEqual(user["username"], "new_name")
         self.assertFalse(user["is_banned"])
+        self.assertFalse(await database.has_trial_used(123))
         db = await database.get_db()
         renew = await (await db.execute(
             "SELECT status,payment_method_id FROM auto_renew_subscriptions WHERE user_id=123"

@@ -2219,7 +2219,9 @@ async def reactivate_admin_deleted_account(
                     await db.execute(
                         """UPDATE users
                            SET username=?, email=NULL, referrer_id=NULL,
-                               total_paid=0, is_banned=0, ban_reason=NULL
+                               trial_used=0, total_paid=0,
+                               created=strftime('%s','now'),
+                               is_banned=0, ban_reason=NULL
                            WHERE user_id=? AND is_banned=1
                              AND ban_reason='account_deleted'""",
                         (username, int(user_id)),
