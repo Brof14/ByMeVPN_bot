@@ -728,18 +728,34 @@ async def _start_free_trial(bot: Bot, callback: CallbackQuery, ref_id: int | Non
     user_id = callback.from_user.id
 
     await safe_answer(callback)
-    if await has_trial_used(user_id):
+    # These read-only eligibility checks are independent. Run them together so
+    # an eligible customer does not wait through four serial DB round trips.
+    eligibility = await asyncio.gather(
+        has_trial_used(user_id),
+        has_ever_had_key(user_id),
+        get_user_keys(user_id),
+        has_active_subscription(user_id),
+        return_exceptions=True,
+    )
+    if any(isinstance(value, Exception) for value in eligibility):
+        logger.warning("Free trial eligibility lookup failed (%s)", user_id)
+        await _trial_feedback(callback,
+            "Не удалось проверить доступность пробного периода. Попробуйте позже или напишите в поддержку."
+        )
+        return
+    trial_used, ever_had_key, user_keys, active_subscription = eligibility
+    if trial_used:
         await _trial_feedback(callback, 
             "Пробный период уже использован. Выберите тариф, чтобы продолжить пользоваться ByMeVPN."
         )
         return
-    if await has_ever_had_key(user_id) or await get_user_keys(user_id):
+    if ever_had_key or user_keys:
         await _trial_feedback(callback, 
             "Пробный период доступен только новым аккаунтам без ранее оформленной подписки. "
             "Выберите тариф для продления."
         )
         return
-    if await has_active_subscription(user_id):
+    if active_subscription:
         await _trial_feedback(callback, 
             "У вас уже есть активная подписка. Откройте раздел «Подписка», чтобы посмотреть доступ."
         )
