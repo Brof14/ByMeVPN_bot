@@ -3055,6 +3055,11 @@ class MobileRenewalCancelRequest(BaseModel):
     confirm: Literal[True]
 
 
+class MobileRenewalEnableRequest(BaseModel):
+    """Explicitly resume an already-authorized saved payment method."""
+    confirm: Literal[True]
+
+
 @mobile_v2_router.get("/renewal")
 async def get_mobile_renewal(
     user_id: int = Depends(get_current_user_id),
@@ -3065,15 +3070,41 @@ async def get_mobile_renewal(
         row and row.get("status") == "active" and
         str(row.get("payment_method_id") or "").strip()
     )
+    can_enable = bool(row and str(row.get("payment_method_id") or "").strip())
     return {
         "auto_renew": enabled,
         "can_cancel": enabled,
+        "can_enable": can_enable and not enabled,
         "source": "server",
         # The worker may recalculate the amount or charge schedule. Do not
         # present old DB plan values as the next guaranteed payment.
         "next_charge_at": None,
         "next_amount_rub": None,
     }
+
+
+@mobile_v2_router.post("/renewal/enable")
+async def enable_mobile_renewal(
+    req: MobileRenewalEnableRequest,
+    user_id: int = Depends(get_current_user_id),
+):
+    """Resume recurring billing only when an already-consented payment method exists."""
+    lease_token = secrets.token_urlsafe(24)
+    if not await database.try_acquire_delivery_lease(user_id, lease_token):
+        raise HTTPException(
+            status_code=409,
+            detail="Операция с оплатой выполняется. Повторите включение позже.",
+        )
+    try:
+        enabled = await database.resume_auto_renew(user_id)
+        if not enabled:
+            raise HTTPException(
+                status_code=409,
+                detail="Нет сохранённого способа оплаты с действующим согласием на автопродление.",
+            )
+        return {"auto_renew": True, "enabled": True}
+    finally:
+        await database.release_delivery_lease(user_id, lease_token)
 
 
 @mobile_v2_router.post("/renewal/cancel")
