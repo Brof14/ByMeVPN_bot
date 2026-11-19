@@ -462,8 +462,18 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext) -> None:
     user_id = message.from_user.id
     user_name = message.from_user.full_name or message.from_user.first_name or "Друг"
 
-    # Remember whether this is a genuinely new bot user before idempotent insert.
-    is_first_start = await find_user_by_id(user_id) is None
+    # An admin deletion leaves a tombstone to block stale sessions and callbacks.
+    # Explicit /start is the sole path that consumes that tombstone and creates
+    # a clean account. Self-service deletion tombstones remain final.
+    from database import is_account_tombstoned, reactivate_admin_deleted_account
+    was_deleted = await is_account_tombstoned(user_id)
+    if was_deleted:
+        if not await reactivate_admin_deleted_account(user_id, message.from_user.username):
+            await message.answer("Этот аккаунт удалён. Если это ошибка, обратитесь в поддержку.")
+            return
+        is_first_start = True
+    else:
+        is_first_start = await find_user_by_id(user_id) is None
 
     # Register user (idempotent)
     await ensure_user(user_id, message.from_user.username)
