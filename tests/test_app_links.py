@@ -153,7 +153,7 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertIn("Скопировать ссылку", page)
         self.assertNotIn("Если не открылось — скопировать", page)
         self.assertIn('src="/app/assets/bymevpn-logo.png"', page)
-        self.assertIn("Выберите платформу, установите приложение", page)
+        self.assertIn("Выберите устройство, установите рекомендованное приложение", page)
         self.assertIn("Не удалось определить устройство. Выберите платформу вручную ниже.", page)
         self.assertIn("href=\"/app\">открыть страницу загрузки ByMeVPN", page)
         self.assertIn("Рекомендуем", page)
@@ -168,6 +168,11 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertIn('id="account-help"', page)
         self.assertIn("аккаунт и подписка загрузятся в приложение", page)
         self.assertIn("viewport-fit=cover", page)
+        self.assertIn('id="windows-note" hidden', page)
+        self.assertIn("Приложение ByMeVPN для Windows находится в разработке", page)
+        self.assertIn("windows:[\"Скачайте Happ для Windows", page)
+        self.assertIn('fetchpriority="high"', page)
+        self.assertIn('img.loading=target===icon?"eager":"lazy"', page)
 
     def test_connection_page_escapes_script_endings_and_template_markers(self):
         page = render_connection_choice_page("https://sub.example/__APPS__?x=</script>")
