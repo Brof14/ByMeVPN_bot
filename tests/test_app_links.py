@@ -102,8 +102,7 @@ class TestAppOpenPage(unittest.TestCase):
         optimized = logo.parent / "app" / "assets" / "bymevpn-logo.png"
         self.assertTrue(optimized.is_file())
         self.assertLess(optimized.stat().st_size, logo.stat().st_size)
-        self.assertEqual(struct.unpack(">II", optimized.read_bytes()[16:24]),
-                         struct.unpack(">II", logo.read_bytes()[16:24]))
+        self.assertEqual(struct.unpack(">II", optimized.read_bytes()[16:24]), (128, 128))
 
     def test_untrusted_values_cannot_break_out_of_script(self):
         page = render_app_open_page(
@@ -153,7 +152,7 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertIn("Скопировать ссылку", page)
         self.assertNotIn("Если не открылось — скопировать", page)
         self.assertIn('src="/app/assets/bymevpn-logo.png"', page)
-        self.assertIn('srcset="/app/assets/bymevpn-logo.webp"', page)
+        self.assertIn('fetchpriority="high"', page)
         self.assertIn('id="noscript-subscription"', page)
         self.assertIn("navigator.sendBeacon(\"/connect/metrics\"", page)
         self.assertIn("Скачайте Happ для Windows", page)
