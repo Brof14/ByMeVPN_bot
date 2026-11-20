@@ -151,7 +151,7 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertIn("prefers-reduced-motion", page)
         self.assertIn("Скопировать ссылку", page)
         self.assertNotIn("Если не открылось — скопировать", page)
-        self.assertIn('src="/app/assets/bymevpn-logo.png"', page)
+        self.assertIn('src="/app/assets/bymevpn-logo.png?v=20261121"', page)
         self.assertIn('fetchpriority="high"', page)
         self.assertIn('id="noscript-subscription"', page)
         self.assertIn("navigator.sendBeacon(\"/connect/metrics\"", page)
