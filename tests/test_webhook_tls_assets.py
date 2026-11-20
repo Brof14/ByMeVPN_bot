@@ -21,6 +21,13 @@ class _FakeServer:
 
 
 class ConnectionTlsAssetTests(unittest.IsolatedAsyncioTestCase):
+    async def test_connection_metrics_accept_only_bounded_anonymous_timings(self):
+        client = TestClient(webhook.app)
+        ok = client.post("/connect/metrics", json={"type": "connect_page", "ttfb": 120, "dom": 450, "load": 700})
+        self.assertEqual(ok.status_code, 204)
+        self.assertEqual(client.post("/connect/metrics", json={"type": "other", "ttfb": 1, "dom": 2, "load": 3}).status_code, 400)
+        self.assertEqual(client.post("/connect/metrics", json={"type": "connect_page", "ttfb": -1, "dom": 2, "load": 3}).status_code, 400)
+
     async def test_tls_app_serves_logo_and_allowlisted_icons(self):
         with (
             patch.object(webhook, "APP_CONNECT_TLS_CERT_FILE", "/unused/cert.pem"),
@@ -37,13 +44,14 @@ class ConnectionTlsAssetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(logo.headers["x-content-type-options"], "nosniff")
 
         for name in (
-            "android.png", "apple.png", "bymevpn-logo.png", "happ.png", "incy.png", "koala.png", "linux.png",
+            "android.png", "apple.png", "bymevpn-logo.png", "bymevpn-logo.webp", "happ.png", "incy.png", "koala.png", "linux.png",
             "v2rayn.png", "windows.png",
         ):
             with self.subTest(name=name):
                 response = client.get(f"/app/assets/{name}")
                 self.assertEqual(response.status_code, 200)
-                self.assertEqual(response.headers["content-type"], "image/png")
+                expected_type = "image/webp" if name.endswith(".webp") else "image/png"
+                self.assertEqual(response.headers["content-type"], expected_type)
                 self.assertEqual(response.headers["cache-control"], "public, max-age=86400")
 
         self.assertEqual(client.get("/app/assets/unknown.png").status_code, 404)

@@ -372,4 +372,10 @@ def render_connection_choice_page(subscription_url: str, user_name: str = "") ->
         ],
     }
     apps_json = _js_string(json.dumps(apps, ensure_ascii=False))
-    return _connection_page_template().replace("__APPS__", apps_json, 1).replace("__SUB__", sub, 1)
+    from html import escape
+    return (
+        _connection_page_template()
+        .replace("__APPS__", apps_json, 1)
+        .replace("__SUB_HTML__", escape(subscription_url, quote=True), 1)
+        .replace("__SUB__", sub, 1)
+    )

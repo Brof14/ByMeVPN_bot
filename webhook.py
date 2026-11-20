@@ -88,6 +88,31 @@ def _is_allowed_yookassa_source(source_ip: str | None) -> bool:
 # Setting only docs_url/redoc_url to None still leaves /openapi.json public.
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
+
+async def collect_connection_page_metrics(request: Request) -> Response:
+    """Accept sampled, coarse page timings without user or URL identifiers."""
+    try:
+        if int(request.headers.get("content-length", "0") or 0) > 512:
+            return Response(status_code=413)
+        payload = await request.json()
+        if not isinstance(payload, dict) or payload.get("type") != "connect_page":
+            return Response(status_code=400)
+        timings = {}
+        for field in ("ttfb", "dom", "load"):
+            value = payload.get(field)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 120000:
+                return Response(status_code=400)
+            timings[field] = int(value)
+        logger.info("connect_page_perf_ms %s", timings)
+        return Response(status_code=204)
+    except (ValueError, TypeError):
+        return Response(status_code=400)
+    except Exception:
+        return Response(status_code=400)
+
+
+app.add_api_route("/connect/metrics", collect_connection_page_metrics, methods=["POST"], include_in_schema=False)
+
 try:
     from api_router import api_router
     app.include_router(api_router, prefix="/api/v1")
@@ -364,7 +389,7 @@ async def app_brand_asset(asset_name: str):
     from fastapi.responses import FileResponse
 
     allowed = {
-        "android.png", "apple.png", "bymevpn-logo.png", "happ.png", "incy.png",
+        "android.png", "apple.png", "bymevpn-logo.png", "bymevpn-logo.webp", "happ.png", "incy.png",
         "koala.png", "linux.png", "v2raytun.png", "v2rayng.png", "hiddify.png",
         "singbox.svg", "hiddify.svg", "v2rayn.png", "windows.png",
     }
@@ -372,7 +397,8 @@ async def app_brand_asset(asset_name: str):
     path = (root / asset_name).resolve()
     if asset_name not in allowed or path.parent != root or not path.is_file():
         raise HTTPException(status_code=404, detail="Файл не найден")
-    return FileResponse(path, media_type="image/png", headers={
+    media_type = "image/webp" if asset_name.endswith(".webp") else "image/png"
+    return FileResponse(path, media_type=media_type, headers={
         "Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff",
     })
 
@@ -1414,12 +1440,13 @@ async def start_connection_tls_server() -> None:
 
     secure_app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     secure_app.add_api_route("/connect", connection_choice_page, methods=["GET"])
+    secure_app.add_api_route("/connect/metrics", collect_connection_page_metrics, methods=["POST"], include_in_schema=False)
     secure_app.add_api_route("/app/login", app_login_redirect, methods=["GET"])
 
     logo_path = Path(__file__).resolve().parent / "static" / "bymevpn-mark.png"
     asset_root = Path(__file__).resolve().parent / "static" / "app" / "assets"
     icon_assets = frozenset({
-        "android.png", "apple.png", "bymevpn-logo.png", "happ.png", "incy.png", "koala.png", "linux.png",
+        "android.png", "apple.png", "bymevpn-logo.png", "bymevpn-logo.webp", "happ.png", "incy.png", "koala.png", "linux.png",
         "v2raytun.png", "v2rayng.png", "hiddify.png", "singbox.png",
         "v2rayn.png", "windows.png",
     })
@@ -1444,7 +1471,7 @@ async def start_connection_tls_server() -> None:
             raise HTTPException(status_code=404, detail="Файл не найден")
         return FileResponse(
             path,
-            media_type="image/png",
+            media_type="image/webp" if asset_name.endswith(".webp") else "image/png",
             headers={"Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff"},
         )
 
