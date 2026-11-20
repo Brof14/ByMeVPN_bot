@@ -40,7 +40,7 @@ from keyboards import (
 )
 from utils import send_with_photo, safe_answer, get_cached_bot_info
 from async_utils import monitor_performance
-from bot_style import themed_button as InlineKeyboardButton
+from bot_style import ICON_IDS, themed_button as InlineKeyboardButton
 from bot_assets import MENU, ABOUT, FREE_VPN
 
 logger = logging.getLogger(__name__)
@@ -945,8 +945,8 @@ async def cb_about(callback: CallbackQuery, bot: Bot):
     # Keep this screen informative and minimal; primary actions live in the menu.
     from aiogram.types import InlineKeyboardMarkup
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Новости", url="https://t.me/ByMeVPN")],
-        [InlineKeyboardButton(text="Документы", callback_data="legal")],
+        [InlineKeyboardButton(text="Документы", callback_data="legal"),
+         InlineKeyboardButton(text="Новости", url="https://t.me/ByMeVPN", icon_custom_emoji_id=ICON_IDS["ads"])],
         [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu")],
     ])
     await send_with_photo(bot, callback, text, kb, photo=ABOUT)

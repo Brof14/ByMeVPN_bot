@@ -262,6 +262,9 @@ class AdForwardingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(kb.inline_keyboard[-1][0].callback_data, "back_to_menu")
             if handler is cb_about:
                 self.assertFalse(any(b.text in {"Тарифы", "Подключение"} for b in buttons(kb)))
+                self.assertEqual([b.text for b in kb.inline_keyboard[0]], ["Документы", "Новости"])
+                self.assertEqual(kb.inline_keyboard[0][1].url, "https://t.me/ByMeVPN")
+                self.assertEqual(kb.inline_keyboard[0][1].icon_custom_emoji_id, "5771695636411847302")
 
     async def test_get_post_displays_forward_instruction_not_template(self):
         from handlers.ad_program import cb_ad_get_post
