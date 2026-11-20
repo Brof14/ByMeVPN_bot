@@ -520,7 +520,8 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext) -> None:
                 )
                 return
             await message.answer(
-                "✅ <b>Вход в приложение ByMeVPN подтверждён!</b>\n\n"
+                f'<tg-emoji emoji-id="{ICON_IDS["check"]}">&#9989;</tg-emoji> '
+                "<b>Вход в приложение ByMeVPN подтверждён!</b>\n\n"
                 "Нажмите «🚀 Открыть приложение» — оно автоматически войдёт в ваш аккаунт и загрузит подписку.\n\n"
                 "Если приложение уже открыто, просто вернитесь в него.",
                 parse_mode="HTML",
