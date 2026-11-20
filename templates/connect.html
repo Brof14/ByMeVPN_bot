@@ -49,7 +49,7 @@ function render(){const list=apps[current],chosen=list[0];document.getElementByI
 function showConnectFallback(){window.setTimeout(()=>{if(connectPending&&!document.hidden)connectHelp.hidden=false},350)}connect.addEventListener("click",()=>{connectPending=true;connectHelp.hidden=true;window.setTimeout(showConnectFallback,1800)});document.addEventListener("visibilitychange",()=>{if(!document.hidden&&connectPending)showConnectFallback()});
 download.addEventListener("click",()=>{if(current==="android"){external.href=download.href;downloadHelp.hidden=false}});
 document.getElementById("copy-subscription").addEventListener("click",copyLink);render();document.getElementById("app").hidden=false;
-try{const n=performance.getEntriesByType("navigation")[0];if(n&&Math.random()<.1){window.addEventListener("load",()=>{const m={type:"connect_page",ttfb:Math.round(n.responseStart),dom:Math.round(n.domContentLoadedEventEnd),load:Math.round(n.loadEventEnd)};navigator.sendBeacon("/connect/metrics",new Blob([JSON.stringify(m)],{type:"application/json"}))},{once:true})}}catch(_){}
+try{if(Math.random()<.1){window.addEventListener("load",()=>window.setTimeout(()=>{const n=performance.getEntriesByType("navigation")[0];if(!n)return;const m={type:"connect_page",ttfb:Math.round(n.responseStart),dom:Math.round(n.domContentLoadedEventEnd),load:Math.round(n.loadEventEnd)};navigator.sendBeacon("/connect/metrics",new Blob([JSON.stringify(m)],{type:"application/json"}))},0),{once:true})}}catch(_){}
 })();
 </script>
 </body></html>

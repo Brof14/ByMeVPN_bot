@@ -157,7 +157,7 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertNotIn('onclick="this.select()"', page)
         self.assertIn("на телефоне нажмите и удерживайте поле", page)
         self.assertIn("navigator.sendBeacon(\"/connect/metrics\"", page)
-        self.assertIn('window.addEventListener("load",()=>{const m=', page)
+        self.assertIn('window.addEventListener("load",()=>window.setTimeout(()=>{const n=', page)
         self.assertIn("Скачайте Happ для Windows", page)
         self.assertIn("Если Happ не открылся", page)
         self.assertIn("Выберите устройство, установите рекомендованное приложение", page)
