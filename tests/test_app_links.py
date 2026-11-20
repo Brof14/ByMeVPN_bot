@@ -155,7 +155,7 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertIn('fetchpriority="high"', page)
         self.assertIn('id="noscript-subscription"', page)
         self.assertNotIn('onclick="this.select()"', page)
-        self.assertIn("Нажмите и удерживайте поле", page)
+        self.assertIn("на телефоне нажмите и удерживайте поле", page)
         self.assertIn("navigator.sendBeacon(\"/connect/metrics\"", page)
         self.assertIn('window.addEventListener("load",()=>{const m=', page)
         self.assertIn("Скачайте Happ для Windows", page)
