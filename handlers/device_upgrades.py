@@ -95,7 +95,6 @@ async def cb_upgrade_device_screen(callback: CallbackQuery, bot: Bot):
     try:
         key_id = int(callback.data.split(":")[1])
         context = await _upgrade_context(callback.from_user.id, key_id)
-        remaining = context["expiry"] - int(time.time())
         old = context["limit"]
         if old >= 10:
             raise ValueError("У этой подписки уже максимальный лимит — 10 устройств")
