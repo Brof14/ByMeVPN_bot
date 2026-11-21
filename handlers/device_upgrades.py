@@ -135,10 +135,8 @@ async def cb_upgrade_device_screen(callback: CallbackQuery, bot: Bot):
         bot, callback,
         f"<b>Увеличить лимит устройств</b>\n\n"
         f"Сейчас: <b>{old} {current_word}</b>\n"
-        f"{rate_description}\n"
-        "Доплата рассчитывается за оставшийся оплаченный срок. "
-        "На этапе оплаты покажем сумму в выбранной валюте. "
-        "Срок VPN не изменится."
+        "Доплата зависит от оставшегося оплаченного срока. "
+        "Срок подписки не изменится."
         f"{disclaimer}\n\nВыберите новый лимит:",
         InlineKeyboardMarkup(inline_keyboard=rows),
         photo=DEVICES,
@@ -189,8 +187,8 @@ async def cb_device_upgrade_methods(callback: CallbackQuery, bot: Bot):
     await send_with_photo(
         bot, callback,
         f"<b>До {target} устройств</b>\n\n"
-        f"Доплата за остаток срока: <b>{quote} ₽</b> "
-        f"или <b>{quote} ⭐</b>. Срок доступа не изменится."
+        f"Доплата: <b>{quote} ₽</b> или <b>{quote} ⭐</b>. "
+        "Срок доступа не изменится."
         f"{upcoming}\n\nВыберите способ оплаты:",
         kb, photo=DEVICES,
     )
