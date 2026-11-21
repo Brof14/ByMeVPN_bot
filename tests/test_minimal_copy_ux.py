@@ -36,7 +36,7 @@ class MinimalCopyTests(unittest.IsolatedAsyncioTestCase):
         callbacks = actions(payment_kb(129, 30, devices=10))
         self.assertEqual(
             callbacks,
-            ["promo_enter", "pay_stars", "pay_yookassa", "pay_crypto", "devtier_10"],
+            ["pay_stars", "pay_yookassa", "pay_crypto", "promo_enter", "devtier_10"],
         )
 
     def test_renewal_intro_is_one_instruction(self):

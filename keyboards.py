@@ -196,7 +196,6 @@ def payment_kb(
 ) -> InlineKeyboardMarkup:
     """Show payment providers; YooKassa auto-renew is enabled by default."""
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="Промокод", callback_data="promo_enter"))
     kb.row(InlineKeyboardButton(
         text=f"Telegram Stars · {price_rub} зв.",
         callback_data="pay_stars",
@@ -209,6 +208,7 @@ def payment_kb(
         text=f"CryptoBot · {price_rub} ₽",
         callback_data="pay_crypto",
     ))
+    kb.row(InlineKeyboardButton(text="Есть промокод?", callback_data="promo_enter"))
     kb.row(InlineKeyboardButton(text="← Назад", callback_data=f"devtier_{devices}"))
     return kb.as_markup()
 
