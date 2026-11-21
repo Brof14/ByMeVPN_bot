@@ -22,6 +22,8 @@ class AdminFlow(StatesGroup):
     edit_key_days = State()      # waiting for new days value
     edit_key_name = State()      # waiting for new key name (rename)
     grant_key_days = State()     # waiting for days when granting key to user
+    grant_key_devices = State()  # choosing device limit for a granted key
+    grant_trial_devices = State()  # choosing device limit for an admin trial key
     send_personal_msg = State()  # waiting for message text to send to user
     refund_amount = State()      # waiting for refund amount
     refund_reason = State()      # waiting for refund reason

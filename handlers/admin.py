@@ -47,7 +47,12 @@ from database import (
 )
 from states import AdminFlow
 from utils import safe_answer
-from constants import format_timestamp as fmt_date, format_days_left as fmt_days_left, MAX_GRANT_DAYS
+from constants import (
+    format_timestamp as fmt_date,
+    format_days_left as fmt_days_left,
+    MAX_GRANT_DAYS,
+    VALID_DEVICE_LIMITS,
+)
 from xui_client import delete_xui_user
 from bot_style import themed_button as InlineKeyboardButton
 
@@ -334,6 +339,26 @@ async def cb_subscription_recovery_confirm(callback: CallbackQuery):
 def _back_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Главное меню", callback_data="admin_menu")]
+    ])
+
+
+def _grant_device_limit_kb(action: str, user_id: int) -> InlineKeyboardMarkup:
+    """Device-limit choices for admin-issued keys; values match supported plans."""
+    def device_label(devices: int) -> str:
+        return f"{devices} устройства" if devices == 2 else f"{devices} устройств"
+
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=device_label(devices),
+            callback_data=f"admin_{action}_devices:{user_id}:{devices}",
+        ) for devices in VALID_DEVICE_LIMITS],
+        [InlineKeyboardButton(text="Отмена", callback_data=f"admin_grant_cancel:{user_id}")],
+    ])
+
+
+def _grant_cancel_kb(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Отмена", callback_data=f"admin_grant_cancel:{user_id}")]
     ])
 
 
@@ -1862,20 +1887,46 @@ async def cb_reset_trial(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("admin_grant_trial:"))
 async def cb_grant_trial(callback: CallbackQuery, bot: Bot, state: FSMContext):
-    """
-    Admin grants a free trial key directly to a user.
-    Resets trial flag, then starts the deliver flow on behalf of the user.
-    """
+    """Choose a device limit before granting an admin trial key."""
     if not _is_admin(callback.from_user.id):
         await safe_answer(callback, "Нет доступа.", alert=True); return
     await safe_answer(callback)
 
     uid = int(callback.data.split(":")[1])
+    await state.clear()
+    await state.set_state(AdminFlow.grant_trial_devices)
+    await state.update_data(grant_trial_user_id=uid)
+    await callback.message.edit_text(
+        f"🎁 <b>Выдача пробного ключа · {uid}</b>\n\n"
+        "Выберите, на сколько устройств выдать доступ:",
+        parse_mode="HTML",
+        reply_markup=_grant_device_limit_kb("grant_trial", uid),
+    )
 
-    # Reset trial flag so delivery is allowed
+
+@router.callback_query(F.data.startswith("admin_grant_trial_devices:"))
+async def cb_grant_trial_devices(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True); return
+    try:
+        _, raw_uid, raw_devices = callback.data.split(":", 2)
+        uid, devices = int(raw_uid), int(raw_devices)
+    except (ValueError, TypeError):
+        await safe_answer(callback, "Некорректный выбор.", alert=True); return
+    data = await state.get_data()
+    if (
+        await state.get_state() != AdminFlow.grant_trial_devices.state
+        or int(data.get("grant_trial_user_id") or 0) != uid
+        or devices not in VALID_DEVICE_LIMITS
+    ):
+        await safe_answer(callback, "Сессия выдачи истекла. Откройте карточку пользователя заново.", alert=True)
+        return
+    # Clear before external calls so a repeated button tap cannot create a duplicate key.
+    await state.clear()
+    await safe_answer(callback)
+    await callback.message.edit_text("⏳ Выдаю пробный ключ…")
+
     await reset_trial_for_user(uid)
-
-    # Deliver key directly without asking for config name — use "Admin" as name
     from config import TRIAL_DAYS
     from subscription import deliver_key
     config_name = f"Trial-{uid}"
@@ -1885,7 +1936,7 @@ async def cb_grant_trial(callback: CallbackQuery, bot: Bot, state: FSMContext):
         chat_id=uid,
         config_name=config_name,
         days=TRIAL_DAYS,
-        limit_ip=2,
+        limit_ip=devices,
         is_paid=False,
         amount=0,
         currency="RUB",
@@ -1897,7 +1948,7 @@ async def cb_grant_trial(callback: CallbackQuery, bot: Bot, state: FSMContext):
     if success:
         await callback.message.answer(
             f"✅ Пробный ключ выдан пользователю <code>{uid}</code> "
-            f"на {TRIAL_DAYS} дней (2 устройства).",
+            f"на {TRIAL_DAYS} дней (до {devices} устройств).",
             parse_mode="HTML",
             reply_markup=_back_kb(),
         )
@@ -1908,6 +1959,28 @@ async def cb_grant_trial(callback: CallbackQuery, bot: Bot, state: FSMContext):
             parse_mode="HTML",
             reply_markup=_back_kb(),
         )
+
+
+@router.callback_query(F.data.startswith("admin_grant_cancel:"))
+async def cb_admin_grant_cancel(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True); return
+    uid = int(callback.data.split(":", 1)[1])
+    data = await state.get_data()
+    expected_uid = data.get("grant_key_user_id") or data.get("grant_trial_user_id")
+    if int(expected_uid or 0) != uid:
+        await safe_answer(callback, "Сессия выдачи уже завершена.", alert=True)
+        return
+    await state.clear()
+    await safe_answer(callback, "Выдача отменена.")
+    await callback.message.edit_text(
+        f"Выдача ключа пользователю <code>{uid}</code> отменена.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="← К пользователю", callback_data=f"admin_user:{uid}")],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="admin_menu")],
+        ]),
+    )
 
 
 # ── Personal message ───────────────────────────────────────────────────────
@@ -3288,6 +3361,7 @@ async def cb_grant_key(callback: CallbackQuery, state: FSMContext):
     await safe_answer(callback)
     
     user_id = int(callback.data.split(":")[1])
+    await state.clear()
     await state.set_state(AdminFlow.grant_key_days)
     await state.update_data(grant_key_user_id=user_id)
     
@@ -3297,13 +3371,13 @@ async def cb_grant_key(callback: CallbackQuery, state: FSMContext):
         "• Например: <code>30</code> — ключ на 30 дней\n"
         "• Например: <code>365</code> — ключ на год\n\n"
         f"Ключ будет создан автоматически с названием 🇺🇸 Admin-Key-{user_id}",
-        parse_mode="HTML", reply_markup=_back_kb()
+        parse_mode="HTML", reply_markup=_grant_cancel_kb(user_id)
     )
 
 
 @router.message(StateFilter(AdminFlow.grant_key_days))
 async def receive_grant_key_days(message: Message, bot: Bot, state: FSMContext):
-    """Receive days and create key for user."""
+    """Receive duration, then let the admin choose the device limit."""
     if not _is_admin(message.from_user.id):
         return
     
@@ -3315,15 +3389,48 @@ async def receive_grant_key_days(message: Message, bot: Bot, state: FSMContext):
         await message.answer(f"❌ Введите число дней от 1 до {MAX_GRANT_DAYS}."); return
 
     data = await state.get_data()
-    await state.clear()
     uid = data.get("grant_key_user_id")
     
     if not uid:
         await message.answer("❌ Ошибка сессии. Начните заново."); return
-    
-    # Create key for user
+
+    await state.update_data(grant_key_days_value=days)
+    await state.set_state(AdminFlow.grant_key_devices)
+    await message.answer(
+        f"Выберите лимит устройств для ключа пользователя <code>{uid}</code> "
+        f"на {days} дней:",
+        parse_mode="HTML",
+        reply_markup=_grant_device_limit_kb("grant_key", uid),
+    )
+
+
+@router.callback_query(F.data.startswith("admin_grant_key_devices:"))
+async def cb_grant_key_devices(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True); return
+    try:
+        _, raw_uid, raw_devices = callback.data.split(":", 2)
+        uid, devices = int(raw_uid), int(raw_devices)
+    except (ValueError, TypeError):
+        await safe_answer(callback, "Некорректный выбор.", alert=True); return
+
+    data = await state.get_data()
+    days = int(data.get("grant_key_days_value") or 0)
+    if (
+        await state.get_state() != AdminFlow.grant_key_devices.state
+        or int(data.get("grant_key_user_id") or 0) != uid
+        or devices not in VALID_DEVICE_LIMITS
+        or not 1 <= days <= MAX_GRANT_DAYS
+    ):
+        await safe_answer(callback, "Сессия выдачи истекла. Начните выдачу заново.", alert=True)
+        return
+
+    # Clear before external calls so a repeated button tap cannot create duplicate keys.
+    await state.clear()
+    await safe_answer(callback)
+    await callback.message.edit_text("⏳ Выдаю ключ…")
+
     from subscription import deliver_key
-    
     config_name = f"🇺🇸 Admin-Key-{uid}"
     success = await deliver_key(
         bot=bot,
@@ -3331,7 +3438,7 @@ async def receive_grant_key_days(message: Message, bot: Bot, state: FSMContext):
         chat_id=uid,
         config_name=config_name,
         days=days,
-        limit_ip=2,
+        limit_ip=devices,
         is_paid=False,
         amount=0,
         currency="RUB",
@@ -3341,17 +3448,17 @@ async def receive_grant_key_days(message: Message, bot: Bot, state: FSMContext):
     )
     
     if success:
-        await message.answer(
+        await callback.message.answer(
             f"✅ <b>Ключ выдан!</b>\n\n"
             f"👤 Пользователь: <code>{uid}</code>\n"
             f"📅 Срок: {days} дней\n"
-            f"📱 Устройств: до 2\n"
+            f"📱 Устройств: до {devices}\n"
             f"🏷️ Название: <b>{config_name}</b>\n\n"
             f"Ключ отправлен пользователю в личные сообщения!",
             parse_mode="HTML", reply_markup=_back_kb()
         )
     else:
-        await message.answer(
+        await callback.message.answer(
             f"❌ Не удалось выдать ключ пользователю <code>{uid}</code>.\n"
             "Проверьте подключение к 3x-ui в логах.",
             parse_mode="HTML", reply_markup=_back_kb()
