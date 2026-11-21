@@ -19,6 +19,7 @@ class TestReferralStart(unittest.IsolatedAsyncioTestCase):
         bot = SimpleNamespace()
         state = SimpleNamespace(update_data=AsyncMock())
         with (
+            patch("database.is_account_tombstoned", new=AsyncMock(return_value=False)),
             patch("handlers.start.find_user_by_id", new=AsyncMock(side_effect=[None, {"user_id": inviter_id}])),
             patch("handlers.start.ensure_user", new=AsyncMock()),
             patch("database.log_analytics_event", new=AsyncMock()),
@@ -43,6 +44,7 @@ class TestReferralStart(unittest.IsolatedAsyncioTestCase):
         )
         state = SimpleNamespace(update_data=AsyncMock())
         with (
+            patch("database.is_account_tombstoned", new=AsyncMock(return_value=False)),
             patch("handlers.start.find_user_by_id", new=AsyncMock(side_effect=[None, None])),
             patch("handlers.start.ensure_user", new=AsyncMock()),
             patch("database.log_analytics_event", new=AsyncMock()),
@@ -63,6 +65,7 @@ class TestReferralStart(unittest.IsolatedAsyncioTestCase):
         bot = SimpleNamespace(get_me=AsyncMock(return_value=SimpleNamespace(username="ByMeVPNbot")))
         state = SimpleNamespace(update_data=AsyncMock())
         with (
+            patch("database.is_account_tombstoned", new=AsyncMock(return_value=False)),
             patch("handlers.start.find_user_by_id", new=AsyncMock(return_value=None)),
             patch("handlers.start.ensure_user", new=AsyncMock()),
             patch("database.log_analytics_event", new=AsyncMock()),

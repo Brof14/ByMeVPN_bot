@@ -179,6 +179,9 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         with (
             patch("handlers.start.safe_answer", new=AsyncMock()),
             patch("handlers.start.has_trial_used", new=AsyncMock(return_value=True)),
+            patch("handlers.start.has_ever_had_key", new=AsyncMock(return_value=False)),
+            patch("handlers.start.get_user_keys", new=AsyncMock(return_value=[])),
+            patch("handlers.start.has_active_subscription", new=AsyncMock(return_value=False)),
             patch("xui_client.get_xui_client_details", new=AsyncMock()) as panel,
             patch("handlers.start.reserve_trial_claim", new=AsyncMock()) as reserve,
         ):

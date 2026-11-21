@@ -27,11 +27,11 @@ class CustomerUxFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             message=SimpleNamespace(),
         )
 
-    def test_renew_only_near_expiration(self):
+    def test_renewal_stays_out_of_home_menu(self):
         long_term = main_menu_active(9, "", user_id=1001, remaining_days=24)
         urgent = main_menu_active(9, "", user_id=1001, remaining_days=2)
         self.assertNotIn("key_renew:9", button_actions(long_term))
-        self.assertIn("key_renew:9", button_actions(urgent))
+        self.assertNotIn("key_renew:9", button_actions(urgent))
         self.assertEqual(next(iter(urgent.inline_keyboard[0])).callback_data, "key_instructions:9")
 
     def test_active_home_uses_direct_signed_https_button(self):

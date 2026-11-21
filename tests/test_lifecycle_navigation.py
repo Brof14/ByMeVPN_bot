@@ -11,9 +11,10 @@ def actions(markup):
 
 
 class CustomerNavigationTests(unittest.IsolatedAsyncioTestCase):
-    def test_expired_single_key_has_direct_renewal(self):
+    def test_expired_single_key_goes_to_subscription_details(self):
         markup = main_menu_expired(key_ids=[7])
-        self.assertEqual(actions(markup)[0], "key_renew:7")
+        self.assertEqual(actions(markup)[0], "my_keys")
+        self.assertNotIn("key_renew:7", actions(markup))
         self.assertNotIn("trial_free", actions(markup))
         self.assertIn("free_vpn", actions(markup))
         self.assertTrue(markup.inline_keyboard[-1][-1].url.startswith("https://t.me/ByMeVPNSupportBot"))
@@ -21,10 +22,17 @@ class CustomerNavigationTests(unittest.IsolatedAsyncioTestCase):
     def test_expired_multiple_keys_choose_subscription_first(self):
         self.assertEqual(actions(main_menu_expired(key_ids=[7, 8]))[0], "my_keys")
 
+    def test_expired_home_never_shows_renewal_action(self):
+        for key_ids in ([7], [7, 8], []):
+            self.assertFalse(any(
+                action and action.startswith("key_renew:")
+                for action in actions(main_menu_expired(key_ids=list(key_ids)))
+            ))
+
     def test_expired_no_key_can_choose_plan(self):
         self.assertEqual(actions(main_menu_expired(key_ids=[]))[0], "buy_vpn")
 
-    async def test_expired_home_picks_latest_key(self):
+    async def test_expired_home_points_to_subscription_details(self):
         from handlers.start import _send_main_menu
         user = SimpleNamespace()
         with (

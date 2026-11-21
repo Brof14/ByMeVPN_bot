@@ -302,8 +302,8 @@ async def _send_main_menu(
             "<b>Срок подписки закончился</b>\n\n"
             "Продлите доступ или получите бонусные дни."
         )
-        # The first action must renew the actual existing key, not reset its
-        # device choice through a new-purchase checkout.
+        # Keep existing subscribers on their subscription details; renewal is
+        # available there and is not a separate action in the main menu.
         user_keys = await get_user_keys(user_id)
         kb = main_menu_expired(key_ids=[int(k["id"]) for k in user_keys])
     else:  # active

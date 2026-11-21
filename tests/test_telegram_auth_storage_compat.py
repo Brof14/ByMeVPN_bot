@@ -217,6 +217,7 @@ class TelegramLegacyStorageHttpTests(unittest.IsolatedAsyncioTestCase):
             answer=AsyncMock(),
         )
         with (
+            patch("database.is_account_tombstoned", new=AsyncMock(return_value=False)),
             patch("handlers.start.find_user_by_id", new=AsyncMock(return_value={"user_id": 981234})),
             patch("handlers.start.ensure_user", new=AsyncMock()),
         ):
@@ -246,6 +247,7 @@ class TelegramLegacyStorageHttpTests(unittest.IsolatedAsyncioTestCase):
             answer=AsyncMock(),
         )
         with (
+            patch("database.is_account_tombstoned", new=AsyncMock(return_value=False)),
             patch("handlers.start.find_user_by_id", new=AsyncMock(return_value={"user_id": 981234})),
             patch("handlers.start.ensure_user", new=AsyncMock()),
             patch.object(api_router, "confirm_telegram_session", new=AsyncMock(return_value=False)) as confirm,

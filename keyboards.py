@@ -91,12 +91,14 @@ def main_menu_panel_active(
 
 
 def main_menu_expired(*, key_ids: list[int]) -> InlineKeyboardMarkup:
-    """When access has ended, lead with renewal instead of an unused trial.
+    """When access has ended, point customers to their subscription or tariffs.
 
-    A single key can renew directly while users with several keys first
-    choose which subscription to extend. This does not touch pricing logic.
+    Renewal itself stays inside subscription details, keeping the home menu
+    consistent for expired, trial, and paid accounts.
     """
     kb = InlineKeyboardBuilder()
+    if key_ids:
+        kb.row(InlineKeyboardButton(text="Подписка", callback_data="my_keys"))
     kb.row(InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn", style="primary"))
     kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn", style="primary"))
     kb.row(
