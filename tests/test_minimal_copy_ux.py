@@ -91,7 +91,7 @@ class MinimalCopyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_photo_screen_becomes_plain_text(self):
         callback = MagicMock(spec=CallbackQuery)
-        callback.message.photo = [object()]
+        callback.message = SimpleNamespace(photo=[object()])
         with (
             patch("utils._replace_text_screen", new=AsyncMock()) as replace,
             patch("utils.send_or_edit", new=AsyncMock()) as edit,
