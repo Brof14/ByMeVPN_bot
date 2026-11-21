@@ -26,14 +26,14 @@ class ExpiryReminderRegression(unittest.IsolatedAsyncioTestCase):
         state = SimpleNamespace(get_data=AsyncMock(return_value={"promo_info": promo, "promo_code": "BOUND", "promo_discount": 30}), update_data=AsyncMock())
         with (
             patch("handlers.buy.safe_answer", new=AsyncMock()),
-            patch("handlers.buy.send_with_photo", new=AsyncMock()) as send,
+            patch("handlers.buy.send_text_screen", new=AsyncMock()) as send,
             patch("handlers.buy.validate_promo_code", new=AsyncMock()) as validate,
             patch("database.save_checkout_draft", new=AsyncMock()),
             patch("database.log_analytics_event", new=AsyncMock()),
         ):
             await cb_select_tariff(callback, object(), state)
         validate.assert_not_awaited()
-        self.assertIn("К оплате сейчас: <b>89 ₽</b>", send.await_args.args[2])
+        self.assertIn("К оплате: <b>89 ₽</b>", send.await_args.args[2])
         self.assertIn("Промокод для другого срока не применён", send.await_args.args[2])
         self.assertEqual(state.update_data.await_args.kwargs["promo_code"], "")
 
@@ -58,14 +58,14 @@ class ExpiryReminderRegression(unittest.IsolatedAsyncioTestCase):
         state = SimpleNamespace(get_data=AsyncMock(return_value={"promo_info": promo, "promo_code": "BOUND", "promo_discount": 30}), update_data=AsyncMock())
         with (
             patch("handlers.buy.safe_answer", new=AsyncMock()),
-            patch("handlers.buy.send_with_photo", new=AsyncMock()) as send,
+            patch("handlers.buy.send_text_screen", new=AsyncMock()) as send,
             patch("handlers.buy.validate_promo_code", new=AsyncMock(return_value=promo)),
             patch("handlers.buy.has_user_used_promo", new=AsyncMock(return_value=False)),
             patch("database.save_checkout_draft", new=AsyncMock()),
             patch("database.log_analytics_event", new=AsyncMock()),
         ):
             await cb_select_tariff(callback, object(), state)
-        self.assertIn("К оплате сейчас: <b>221 ₽</b>", send.await_args.args[2])
+        self.assertIn("К оплате: <b>221 ₽</b>", send.await_args.args[2])
         self.assertEqual(state.update_data.await_args.kwargs["promo_code"], "BOUND")
 
     async def test_zero_price_promo_is_delivered_without_an_invoice(self):
@@ -218,7 +218,7 @@ class ExpiryDatabaseRegression(unittest.IsolatedAsyncioTestCase):
     async def test_legacy_fixed_and_free_day_promotions_apply_to_order(self):
         from handlers.buy import cb_select_tariff
         for code, legacy_type, canonical_type, expected in (
-            ("FIXED10", "fixed", "fixed_rub", "К оплате сейчас: <b>79 ₽</b>"),
+            ("FIXED10", "fixed", "fixed_rub", "К оплате: <b>79 ₽</b>"),
             ("DAYS5", "days", "free_days", "35 дней"),
         ):
             await self.db.create_promo_code(code, promo_type=legacy_type, discount_value=10 if legacy_type == "fixed" else 5)
@@ -231,7 +231,7 @@ class ExpiryDatabaseRegression(unittest.IsolatedAsyncioTestCase):
             callback = SimpleNamespace(data="tariff_1_2", from_user=SimpleNamespace(id=9801))
             with (
                 patch("handlers.buy.safe_answer", new=AsyncMock()),
-                patch("handlers.buy.send_with_photo", new=AsyncMock()) as send,
+                patch("handlers.buy.send_text_screen", new=AsyncMock()) as send,
             ):
                 await cb_select_tariff(callback, object(), state)
             self.assertIn(expected, send.await_args.args[2])
