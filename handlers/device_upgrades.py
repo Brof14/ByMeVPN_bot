@@ -111,10 +111,10 @@ async def cb_upgrade_device_screen(callback: CallbackQuery, bot: Bot):
     for target in (5, 10):
         if target <= old:
             continue
-        quote = upgrade_price_stars(old, target, remaining)
-        # Device limit first, then the existing unchanged payment provider screen.
+        # First choose only the new limit. The next, existing screen displays
+        # the exact surcharge and every unchanged payment provider.
         rows.append([InlineKeyboardButton(
-            text=f"До {target} устройств · доплата {quote}",
+            text=f"До {target} устройств",
             callback_data=f"device_upgrade_methods:{key_id}:{target}",
         )])
     rows.append([InlineKeyboardButton(text="← К устройствам", callback_data=f"key_devices:{key_id}")])
