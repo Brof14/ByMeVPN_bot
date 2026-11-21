@@ -71,6 +71,24 @@ class TestSectionArtwork(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(send.call_args.kwargs["photo"], bot_assets.PLANS)
         self.assertIn("Выберите количество устройств", send.call_args.args[2])
 
+    async def test_key_renewal_screen_uses_renewal_artwork(self):
+        from handlers.keys import cb_key_renew
+        import time
+
+        key = {"id": 7, "user_id": 5, "expiry": int(time.time()) + 3600, "limit_ip": 5}
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=5), data="key_renew:7",
+        )
+        state = SimpleNamespace(update_data=AsyncMock(), set_state=AsyncMock())
+        with (
+            patch("handlers.keys.safe_answer", new=AsyncMock()),
+            patch("handlers.keys.get_key_by_id", new=AsyncMock(return_value=key)),
+            patch("handlers.keys.get_user_keys", new=AsyncMock(return_value=[key])),
+            patch("handlers.keys.send_with_photo", new=AsyncMock()) as send,
+        ):
+            await cb_key_renew(callback, object(), state)
+        self.assertEqual(send.call_args.kwargs["photo"], bot_assets.RENEWAL)
+
     async def test_platform_guides_use_matching_artwork(self):
         from app_links import render_connection_choice_page
         page = render_connection_choice_page("https://panel.example/sub/test")

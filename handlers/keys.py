@@ -1084,10 +1084,11 @@ async def cb_key_renew(callback: CallbackQuery, bot: Bot, state: FSMContext):
     from handlers.buy import _tariff_intro
     renewal_text = _tariff_intro(key_devices, renewal=True)
 
-    await send_text_screen(
+    await send_with_photo(
         bot, callback,
         renewal_text,
         tariff_selection_kb(devices=key_devices),
+        photo=RENEWAL,
     )
 
 
