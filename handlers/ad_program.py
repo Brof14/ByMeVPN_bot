@@ -161,10 +161,10 @@ async def cb_ad_program(callback: CallbackQuery, bot: Bot, state: FSMContext):
 
     text = (
         "<b>VPN за рекламу</b>\n\n"
-        "Опубликуйте официальный рекламный пост в своём Telegram-канале и получите бонусные месяцы.\n\n"
-        "<b>1.</b> Укажите канал — покажем возможный бонус.\n"
-        "<b>2.</b> Разместите официальный пост и отправьте ссылку.\n"
-        "<b>3.</b> Сохраните публикацию на 30 дней для итоговой проверки. Бонус начислим после проверки поста."
+        "Перешлите официальный рекламный пост ByMeVPN в свой Telegram-канал "
+        "и оставьте его на 30 дней.\n\n"
+        "Бонус начислим после проверки поста. Срок зависит от числа подписчиков."
+
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Начать · указать канал", callback_data="ad_check_channel")],
@@ -222,12 +222,11 @@ async def cb_ad_check_channel(callback: CallbackQuery, bot: Bot, state: FSMConte
         return
 
     text = (
-        "<b>Проверим ваш канал</b>\n\n"
-        "Отправьте ссылку на Telegram-канал — публичный или приватный.\n\n"
+        "<b>Ваш канал</b>\n\n"
+        "Отправьте @username канала или ссылку на него.\n"
         "Например: <code>@mychannel</code> или <code>https://t.me/+…</code>\n\n"
-        "Если канал приватный, мы попросим указать количество подписчиков.\n\n"
-        "<b>Добавлять бота в администраторы не нужно.</b>\n\n"
-        "После проверки покажем доступный бонус и следующий шаг."
+        "Для приватного канала понадобится указать число подписчиков. "
+        "Добавлять бота в администраторы не нужно."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Отмена", callback_data="ad_program")],
@@ -516,10 +515,8 @@ async def cb_ad_get_post(callback: CallbackQuery, bot: Bot):
         return
     text = (
         "<b>Рекламный пост</b>\n\n"
-        "Перешлите официальный рекламный пост из @ByMeVPN в свой канал.\n"
-        "Не копируйте текст, не редактируйте пост и не добавляйте свою рекламу.\n\n"
-        "После публикации отправьте ссылку на пересланное сообщение. "
-        "Не удаляйте его 30 дней."
+        "Перешлите оригинальный пост из @ByMeVPN без изменений.\n\n"
+        "Отправьте ссылку на пересланное сообщение и оставьте публикацию на 30 дней."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
@@ -550,9 +547,8 @@ async def cb_ad_submit_post(callback: CallbackQuery, bot: Bot, state: FSMContext
 
     text = (
         "<b>Ссылка на репост</b>\n\n"
-        "Отправьте ссылку на пересланное из @ByMeVPN сообщение в вашем канале.\n"
-        "Текст и оформление оригинала менять нельзя.\n\n"
-        "Пример: <code>https://t.me/mychannel/123</code>"
+        "Отправьте ссылку на пересланный пост в вашем канале.\n"
+        "Например: <code>https://t.me/mychannel/123</code>"
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
