@@ -288,6 +288,10 @@ details[open] summary svg { transform: rotate(180deg); }
 .fallback a, .auth-help a { color: #8acfff; font-weight: 620; text-underline-offset: 3px; }
 .noscript { margin-top: 20px; }
 [hidden] { display: none !important; }
+@media (max-width: 720px) {
+  .platforms { justify-content: center; }
+  .platform { flex: 0 0 108px; min-width: 0; padding-right: 7px; padding-left: 7px; }
+}
 @media (max-width: 480px) {
   .main-actions { grid-template-columns: 1fr; }
   .recommended { padding: 18px; }
@@ -295,7 +299,6 @@ details[open] summary svg { transform: rotate(180deg); }
 }
 @media (max-width: 370px) {
   main { padding-right: 16px; padding-left: 16px; }
-  .platform { flex-basis: 95px; }
   .other { column-gap: 7px; }
   .other-actions { gap: 5px; }
   .small-action { padding: 7px 9px; }
@@ -324,7 +327,7 @@ details[open] summary svg { transform: rotate(180deg); }
 <symbol id="icon-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h2"/></symbol>
 </svg>
 <main>
-<header><div class="brand"><img src="/app/assets/bymevpn-logo.png?v=20261121" alt="" width="46" height="46" fetchpriority="high" decoding="async"><span><span class="brand-byme">ByMe</span><span class="brand-vpn">VPN</span></span></div><h1>Подключение VPN</h1><p class="intro">Выберите устройство. Покажем, как установить приложение и добавить подписку.</p></header>
+<header><div class="brand"><img src="/app/assets/bymevpn-logo.png?v=20261121" alt="" width="46" height="46" fetchpriority="high" decoding="async"><span><span class="brand-byme">ByMe</span><span class="brand-vpn">VPN</span></span></div><h1>Подключение VPN</h1><p class="intro">Установите приложение и добавьте подписку.</p></header>
 <div id="app" hidden>
 <section class="section" aria-labelledby="platform-title"><h2 class="section-title" id="platform-title">Ваше устройство</h2><div class="platforms" id="platforms" role="group" aria-label="Выбор устройства"></div><p class="platform-hint" id="platform-hint" role="status" hidden>Не удалось определить устройство. Выберите платформу выше.</p></section>
 <section class="recommended" id="recommendation-panel" aria-labelledby="recommended-name"><div class="app-heading"><span id="recommended-icon" class="app-icon" aria-hidden="true"></span><div><h2 id="recommended-name" class="app-name"></h2><span class="recommendation">Рекомендуем</span></div></div><p class="platform-note" id="windows-note" hidden>Приложение ByMeVPN для Windows находится в разработке. Пока рекомендуем Happ — подключение уже готово.</p><div class="main-actions">
