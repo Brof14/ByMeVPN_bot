@@ -151,14 +151,15 @@ def tariff_selection_kb(
     devices = validate_device_limit(devices)
     kb = InlineKeyboardBuilder()
 
-    # Three immediately visible choices; no nested device selector.
-    kb.row(*[
-        InlineKeyboardButton(
-            text=f"{'✓ ' if count == devices else ''}{count} устр.",
-            callback_data=f"devtier_{count}",
-        )
-        for count in (2, 5, 10)
-    ])
+    # Keep the common device tiers side by side and the 10-device option below.
+    for row in ((2, 5), (10,)):
+        kb.row(*[
+            InlineKeyboardButton(
+                text=f"{'✓ ' if count == devices else ''}{count} устр.",
+                callback_data=f"devtier_{count}",
+            )
+            for count in row
+        ])
 
     # The monthly rate applies to the complete 1 / 4 / 8 / 15-month package,
     # including its advertised bonus months. Never hide the total to pay.

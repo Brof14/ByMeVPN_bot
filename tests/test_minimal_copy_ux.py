@@ -22,16 +22,17 @@ class MinimalCopyTests(unittest.IsolatedAsyncioTestCase):
         for devices in (2, 5, 10):
             kb = tariff_selection_kb(devices)
             self.assertEqual(
-                actions(SimpleNamespace(inline_keyboard=kb.inline_keyboard[:1])),
-                ["devtier_2", "devtier_5", "devtier_10"],
+                [[button.callback_data for button in row] for row in kb.inline_keyboard[:2]],
+                [["devtier_2", "devtier_5"], ["devtier_10"]],
             )
-            self.assertIn("✓", kb.inline_keyboard[0][(2, 5, 10).index(devices)].text)
+            selected_button = next(button for row in kb.inline_keyboard for button in row if button.callback_data == f"devtier_{devices}")
+            self.assertIn("✓", selected_button.text)
             self.assertEqual(
                 [callback for callback in actions(kb) if callback.startswith("tariff_")],
                 [f"tariff_{months}_{devices}" for months in (1, 3, 6, 12)],
             )
             self.assertNotIn("promo_enter", actions(kb))
-            self.assertEqual(len(kb.inline_keyboard), 6)
+            self.assertEqual(len(kb.inline_keyboard), 7)
 
     def test_promo_is_on_payment_screen_before_providers(self):
         callbacks = actions(payment_kb(129, 30, devices=10))
