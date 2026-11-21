@@ -95,7 +95,6 @@ async def cb_upgrade_device_screen(callback: CallbackQuery, bot: Bot):
     try:
         key_id = int(callback.data.split(":")[1])
         context = await _upgrade_context(callback.from_user.id, key_id)
-        remaining = context["expiry"] - int(time.time())
         old = context["limit"]
         if old >= 10:
             raise ValueError("У этой подписки уже максимальный лимит — 10 устройств")
@@ -111,13 +110,10 @@ async def cb_upgrade_device_screen(callback: CallbackQuery, bot: Bot):
     for target in (5, 10):
         if target <= old:
             continue
-        quote = upgrade_price_stars(old, target, remaining)
+        # First choose only the new limit. The next, existing screen displays
+        # the exact surcharge and every unchanged payment provider.
         rows.append([InlineKeyboardButton(
-            text=f"До {target} устройств · {quote} ⭐",
-            callback_data=f"device_upgrade_buy:{key_id}:{target}",
-        )])
-        rows.append([InlineKeyboardButton(
-            text=f"Картой или CryptoBot · до {target} устройств",
+            text=f"До {target} устройств",
             callback_data=f"device_upgrade_methods:{key_id}:{target}",
         )])
     rows.append([InlineKeyboardButton(text="← К устройствам", callback_data=f"key_devices:{key_id}")])

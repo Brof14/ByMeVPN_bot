@@ -26,7 +26,7 @@ class ExpiryReminderRegression(unittest.IsolatedAsyncioTestCase):
         state = SimpleNamespace(get_data=AsyncMock(return_value={"promo_info": promo, "promo_code": "BOUND", "promo_discount": 30}), update_data=AsyncMock())
         with (
             patch("handlers.buy.safe_answer", new=AsyncMock()),
-            patch("handlers.buy.send_text_screen", new=AsyncMock()) as send,
+            patch("handlers.buy.send_with_photo", new=AsyncMock()) as send,
             patch("handlers.buy.validate_promo_code", new=AsyncMock()) as validate,
             patch("database.save_checkout_draft", new=AsyncMock()),
             patch("database.log_analytics_event", new=AsyncMock()),
@@ -58,7 +58,7 @@ class ExpiryReminderRegression(unittest.IsolatedAsyncioTestCase):
         state = SimpleNamespace(get_data=AsyncMock(return_value={"promo_info": promo, "promo_code": "BOUND", "promo_discount": 30}), update_data=AsyncMock())
         with (
             patch("handlers.buy.safe_answer", new=AsyncMock()),
-            patch("handlers.buy.send_text_screen", new=AsyncMock()) as send,
+            patch("handlers.buy.send_with_photo", new=AsyncMock()) as send,
             patch("handlers.buy.validate_promo_code", new=AsyncMock(return_value=promo)),
             patch("handlers.buy.has_user_used_promo", new=AsyncMock(return_value=False)),
             patch("database.save_checkout_draft", new=AsyncMock()),
@@ -231,7 +231,7 @@ class ExpiryDatabaseRegression(unittest.IsolatedAsyncioTestCase):
             callback = SimpleNamespace(data="tariff_1_2", from_user=SimpleNamespace(id=9801))
             with (
                 patch("handlers.buy.safe_answer", new=AsyncMock()),
-                patch("handlers.buy.send_text_screen", new=AsyncMock()) as send,
+                patch("handlers.buy.send_with_photo", new=AsyncMock()) as send,
             ):
                 await cb_select_tariff(callback, object(), state)
             self.assertIn(expected, send.await_args.args[2])

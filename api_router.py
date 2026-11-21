@@ -85,12 +85,16 @@ def _correlated_http_error(
     detail: str,
     correlation_id: str,
     error_code: Optional[str] = None,
+    *,
+    retry_after_seconds: Optional[int] = None,
 ) -> HTTPException:
     headers = {"X-Correlation-ID": correlation_id}
     if status_code == 401:
         headers["WWW-Authenticate"] = "Bearer"
     if error_code:
         headers["X-Error-Code"] = error_code
+    if retry_after_seconds is not None and status_code in (429, 503):
+        headers["Retry-After"] = str(max(1, min(int(retry_after_seconds), 120)))
     return HTTPException(
         status_code=status_code,
         detail=detail,
@@ -414,53 +418,10 @@ async def get_current_user_id(authorization: Optional[str] = Header(None)) -> in
 # ---------------------------------------------------------------------------
 
 def _detect_geo(remark: str) -> Tuple[str, str, str, str]:
-    """Detect country, code, city, and flag from inbound remark (Примечание)."""
-    flag_map = [
-        ("🇩🇪", ("Германия", "de", "Франкфурт")),
-        ("🇳🇱", ("Нидерланды", "nl", "Амстердам")),
-        ("🇺🇸", ("США", "us", "Нью-Йорк")),
-        ("🇫🇮", ("Финляндия", "fi", "Хельсинки")),
-        ("🇸🇪", ("Швеция", "se", "Стокгольм")),
-        ("🇬🇧", ("Великобритания", "gb", "Лондон")),
-        ("🇹🇷", ("Турция", "tr", "Стамбул")),
-        ("🇫🇷", ("Франция", "fr", "Париж")),
-        ("🇵🇱", ("Польша", "pl", "Варшава")),
-        ("🇷🇺", ("Россия", "ru", "Москва")),
-        ("🇨🇦", ("Канада", "ca", "Торонто")),
-        ("🇯🇵", ("Япония", "jp", "Токио")),
-        ("🇸🇬", ("Сингапур", "sg", "Сингапур")),
-        ("🇨🇭", ("Швейцария", "ch", "Цюрих")),
-        ("🇦🇹", ("Австрия", "at", "Вена")),
-        ("🇪🇸", ("Испания", "es", "Мадрид")),
-        ("🇮🇹", ("Италия", "it", "Милан")),
-    ]
-    for flag_emoji, (cname, ccode, city) in flag_map:
-        if flag_emoji in remark:
-            return cname, ccode, city, flag_emoji
-
-    lower = remark.lower()
-    if any(k in lower for k in ["nl", "amsterdam", "netherland", "нидерланд"]):
-        return "Нидерланды", "nl", "Амстердам", "🇳🇱"
-    if any(k in lower for k in ["de", "frankfurt", "german", "герман"]):
-        return "Германия", "de", "Франкфурт", "🇩🇪"
-    if any(k in lower for k in ["fi", "helsinki", "finland", "финлянд"]):
-        return "Финляндия", "fi", "Хельсинки", "🇫🇮"
-    if any(k in lower for k in ["se", "stockholm", "sweden", "швеци"]):
-        return "Швеция", "se", "Стокгольм", "🇸🇪"
-    if any(k in lower for k in ["us", "usa", "york", "сша", "miami", "america"]):
-        return "США", "us", "Нью-Йорк", "🇺🇸"
-    if any(k in lower for k in ["gb", "uk", "london", "британи", "англия"]):
-        return "Великобритания", "gb", "Лондон", "🇬🇧"
-    if any(k in lower for k in ["tr", "turkey", "турци", "istanbul"]):
-        return "Турция", "tr", "Стамбул", "🇹🇷"
-    if any(k in lower for k in ["fr", "france", "франци", "paris"]):
-        return "Франция", "fr", "Париж", "🇫🇷"
-    if any(k in lower for k in ["pl", "poland", "польш", "warsaw"]):
-        return "Польша", "pl", "Варшава", "🇵🇱"
-    if any(k in lower for k in ["ru", "russia", "росси", "moscow"]):
-        return "Россия", "ru", "Москва", "🇷🇺"
-
-    return "Сервер", "eu", "VPN", "🌐"
+    """Extract only explicit node location labels."""
+    from server_metadata import detect_server_geo
+    country, code, city, flag, _ = detect_server_geo(remark)
+    return country, code, city, flag
 
 
 def parse_single_node_line(line: str, index: int, fallback_uuid: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -518,17 +479,18 @@ def parse_single_node_line(line: str, index: int, fallback_uuid: Optional[str] =
                 "node_code": node_code,
                 "country": country,
                 "country_code": country_code,
-                "city": clean_remark,
+                "city": base_city,
                 "flag": flag,
                 "protocol": proto_badge,
                 "remark": clean_remark,
                 "display_name": disp_name,
                 "port": port,
-                "ping_ms": 25 + index * 6,
-                "load_percent": 18 + index * 4,
+                "ping_ms": None,
+                "load_percent": None,
+                "metrics_status": "not_measured",
                 "is_premium": False,
                 "country_en": country,
-                "city_en": clean_remark,
+                "city_en": base_city,
                 "config": {
                     "protocol": "vless",
                     "server": server_ip,
@@ -584,17 +546,18 @@ def parse_single_node_line(line: str, index: int, fallback_uuid: Optional[str] =
                 "node_code": node_code,
                 "country": country,
                 "country_code": country_code,
-                "city": clean_remark,
+                "city": base_city,
                 "flag": flag,
                 "protocol": proto_badge,
                 "remark": clean_remark,
                 "display_name": disp_name,
                 "port": port,
-                "ping_ms": 22 + index * 5,
-                "load_percent": 15,
+                "ping_ms": None,
+                "load_percent": None,
+                "metrics_status": "not_measured",
                 "is_premium": False,
                 "country_en": country,
-                "city_en": clean_remark,
+                "city_en": base_city,
                 "config": {
                     "protocol": "hysteria2",
                     "server": server_ip,
@@ -848,7 +811,10 @@ async def get_user_real_subscription(
     servers = await fetch_and_parse_real_nodes(sub_url, sub_uuid, request_headers)
 
     seconds_remaining = max(0, expiry_ts - now)
+    # Preserve the legacy display string for released clients.
+    # Prefer expires_at_utc or expires_at_unix for all new applications.
     expires_at = time.strftime("%Y-%m-%d %H:%M", time.localtime(expiry_ts))
+    expires_at_utc = datetime.fromtimestamp(expiry_ts, tz=timezone.utc).isoformat(timespec="seconds")
 
     period_code = {30: "1m", 120: "3m", 240: "6m", 450: "12m"}.get(days_count)
     plan_code = f"{period_code}_d{device_limit}" if period_code else None
@@ -871,6 +837,8 @@ async def get_user_real_subscription(
         "plan_code": plan_code,
         "plan_name": f"Подписка ByMeVPN ({days_count} дн.)",
         "expires_at": expires_at,
+        "expires_at_utc": expires_at_utc,
+        "expires_at_unix": expiry_ts,
         "seconds_remaining": seconds_remaining,
         "server_time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "max_devices": device_limit,
@@ -3205,6 +3173,7 @@ async def get_servers(
         raise _correlated_http_error(
             503, "Не удалось получить конфигурацию серверов. Подписка сохранена",
             correlation_id, "subscription_configuration_unavailable",
+            retry_after_seconds=15,
         )
     payload = {
         "servers": servers,
