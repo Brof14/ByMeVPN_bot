@@ -50,7 +50,7 @@ class CheckoutPersistenceTests(unittest.IsolatedAsyncioTestCase):
         keyboard = send.await_args.args[3]
         actions = [b.callback_data for row in keyboard.inline_keyboard for b in row]
         self.assertEqual(actions, ["key_renew:75", "back_to_menu"])
-        self.assertIn("продление", send.await_args.args[2].lower())
+        self.assertIn("Сохранён тариф", send.await_args.args[2])
 
     async def test_invalid_checkout_never_persisted(self):
         for months, devices in [(99, 2), (1, 99), (0, 5)]:
@@ -67,7 +67,7 @@ class CheckoutPersistenceTests(unittest.IsolatedAsyncioTestCase):
         text = send.await_args.args[2]
         kb = send.await_args.args[3]
         self.assertIn("Оплата пока не создаётся", text)
-        self.assertIn("промокод", text)
+        self.assertIn("Промокод", text)
         self.assertEqual(kb.inline_keyboard[0][0].callback_data, "tariff_6_5")
         self.assertEqual(kb.inline_keyboard[1][0].callback_data, "devtier_5")
 

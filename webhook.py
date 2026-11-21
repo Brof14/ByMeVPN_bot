@@ -1096,9 +1096,9 @@ async def _process_payment(bot: Bot, payment_id: str, verified_payment: Optional
                             chat_id=user_id,
                             text=(
                                 f"🔄 <b>Автопродление подключено</b>\n\n"
-                                f"По окончании оплаченного срока с вашего способа оплаты "
-                                f"спишется {recurring_terms[0]} ₽ за следующие {recurring_terms[1]} дней. \n\n"
-                                f"Вы можете в любой момент отключить автопродление в меню ключа."
+                                f"Следующее списание: <b>{recurring_terms[0]} ₽</b> "
+                                f"за {recurring_terms[1]} дней по окончании оплаченного срока.\n"
+                                "Отключить можно в настройках подписки."
                             ),
                             parse_mode="HTML",
                         )

@@ -77,12 +77,11 @@ async def _send_autorenew_upcoming(bot: Bot, item: dict, sub: dict) -> None:
     }.get((sub.get("payment_method_type") or "").lower(), "сохранённый способ оплаты")
 
     text = (
-        f"<b>Скоро автоматическое продление</b>\n\n"
-        f"Дата списания: <b>{date_str}</b> (через {days_left} {get_day_word(days_left)})\n"
-        f"Сумма: <b>{charge_label}</b> за следующие {sub.get('days') or 30} дней ({devices} устр.)\n"
+        "<b>Скоро автопродление</b>\n\n"
+        f"Списание: <b>{date_str}</b>\n"
+        f"Сумма: <b>{charge_label}</b> за {sub.get('days') or 30} дней ({devices} устр.)\n"
         f"Способ оплаты: {pm_title}\n\n"
-        f"Автопродление запланировано. Продление доступа подтвердим после успешной оплаты.\n"
-        "Автопродление можно отключить кнопкой ниже. "
+        "Отключить можно кнопкой ниже. "
         "Оплаченный доступ сохранится до конца периода."
     )
     key_id = int(sub.get("key_id") or item.get("key_id") or 0)
@@ -121,15 +120,15 @@ async def _send_urgent_notification(bot: Bot, item: dict) -> bool:
         text = (
             "<b>Пробный доступ заканчивается</b>\n\n"
             f"VPN будет работать до <b>{date_str}</b>. "
-            "Выберите подписку, чтобы продолжить пользоваться без перерыва.\n\n"
-            "Ваш ключ и настройки сохранятся."
+            "Выберите тариф, чтобы продолжить пользоваться без перерыва.\n\n"
+            "Настройки сохранятся."
         )
         action = "Выбрать подписку"
     else:
         text = (
             f"<b>Подписка заканчивается через {days_left} {get_day_word(days_left)}</b>\n\n"
             f"VPN будет работать до <b>{date_str}</b>. Продлите сейчас — срок добавится к текущему, "
-            "а ключ и настройки останутся прежними."
+            "а настройки сохранятся."
         )
         action = "Продлить подписку"
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -192,9 +191,8 @@ async def _send_winback_notification(bot: Bot, item: dict) -> bool:
         return False
     text = (
         "<b>Вернуться в ByMeVPN?</b>\n\n"
-        "Срок действия подписки закончился. Если VPN снова понадобится, "
-        "можно продлить доступ без повторной настройки.\n\n"
-        "Это единичное напоминание. От рекламных предложений можно отказаться."
+        "Срок подписки закончился. Продлите доступ без повторной настройки.\n\n"
+        "От предложений можно отказаться кнопкой ниже."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Продлить подписку", callback_data=_renewal_callback(item))],
@@ -420,11 +418,9 @@ async def _referral_nudge_pass(bot: Bot) -> None:
             await bot.send_message(
                 user_id,
                 "<b>Бонусные дни за друзей</b>\n\n"
-                "Получайте +15 дней за регистрацию друга и ещё +30 за его "
-                "первую успешную оплату подписки. "
-                "Также можно получить VPN за рекламу "
-                "в собственном Telegram-канале.\n\n"
-                "Это необязательно. Мы отправляем такое предложение только один раз.",
+                "<b>+15 дней</b> — за регистрацию друга по ссылке.\n"
+                "<b>+30 дней</b> — за его первую оплату.\n\n"
+                "Дополнительные дни доступны также за рекламу в своём Telegram-канале.",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [share_button],
@@ -477,7 +473,7 @@ async def _connection_reminder_pass(bot: Bot) -> None:
             await bot.send_message(
                 item["user_id"],
                 "<b>Помочь подключить VPN?</b>\n\n"
-                "Похоже, VPN ещё не подключён. Откройте страницу подключения, чтобы добавить подписку в приложение.",
+                "Откройте страницу подключения, чтобы добавить подписку в приложение.",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="Подключить VPN", callback_data=f"key_instructions:{key_id}")],

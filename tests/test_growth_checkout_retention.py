@@ -20,14 +20,13 @@ class CheckoutUxTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict("os.environ", {"BOT_PREMIUM_BUTTON_ICONS": "0"}):
             kb = tariff_selection_kb(devices=10)
         expected = [
-            ("devtier_2", "2 устройства"),
-            ("devtier_5", "5 устройств"),
-            ("devtier_10", "✓ 10 устройств"),
+            ("devtier_2", "2 устр."),
+            ("devtier_5", "5 устр."),
+            ("devtier_10", "✓ 10 устр."),
             ("tariff_1_10", "1 мес. — 129 ₽"),
             ("tariff_3_10", "3+1 мес. — 119 ₽/мес. · 476 ₽"),
             ("tariff_6_10", "6+2 мес. — 109 ₽/мес. · 872 ₽"),
             ("tariff_12_10", "12+3 мес. — 99 ₽/мес. · 1 485 ₽"),
-            ("promo_enter", "Есть промокод?"),
             ("back_to_menu", "← Назад"),
         ]
         actual = [
@@ -36,14 +35,14 @@ class CheckoutUxTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual(actual, expected)
         self.assertEqual(
-            [button.callback_data for row in kb.inline_keyboard[:2] for button in row],
+            [button.callback_data for row in kb.inline_keyboard[:1] for button in row],
             ["devtier_2", "devtier_5", "devtier_10"],
         )
         intro = _tariff_intro(10, renewal=True)
-        self.assertIn("<b>Устройства:</b> выбрано до 10 устройств", intro)
-        self.assertIn("<b>Срок:</b>", intro)
-        self.assertIn("3+1 мес.", intro)
-        self.assertIn("Полная сумма указана в каждом тарифе.", intro)
+        self.assertIn("<b>Продление подписки</b>", intro)
+        self.assertIn("Выберите количество устройств и срок подписки.", intro)
+        self.assertNotIn("3+1", intro)
+        self.assertEqual(len(kb.inline_keyboard), 6)
 
 
     def test_checkout_uses_bundles_and_discloses_future_charge(self):
@@ -56,10 +55,11 @@ class CheckoutUxTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("3+1 мес.", text)
         self.assertIn("316 ₽", text)
         self.assertIn("120 дней", text)
-        self.assertIn("Следующее списание", text)
-        self.assertIn("Оплата и автопродление", text)
+        self.assertIn("316 ₽ каждые 120 дней", text)
+        self.assertIn("условия автопродления", text)
+        self.assertIn("Политика конфиденциальности", text)
         legacy_display = _checkout_confirmation_text({**base, "autorenew_enabled": False})
-        self.assertIn("Автопродление ЮKassa включено по умолчанию", legacy_display)
+        self.assertIn("При оплате через ЮKassa включается автопродление", legacy_display)
 
     def test_promo_disclosure_shows_regular_future_billing_amount(self):
         from handlers.buy import _checkout_confirmation_text
@@ -68,8 +68,9 @@ class CheckoutUxTests(unittest.IsolatedAsyncioTestCase):
             "original_price": 316,
             "checkout_autorenew_disclosed": True, "autorenew_enabled": True,
         })
-        self.assertIn("К оплате сейчас: <b>221 ₽</b>", text)
-        self.assertIn("Следующее списание: 316 ₽ за 120 дней", text)
+        self.assertIn("К оплате: <b>221 ₽</b>", text)
+        self.assertIn("Без промокода: <s>316 ₽</s>", text)
+        self.assertIn("316 ₽ каждые 120 дней", text)
 
     def test_recurring_quote_is_validated_and_legacy_terms_preserved(self):
         from webhook import _recurring_terms_for_saved_method

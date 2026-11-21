@@ -23,7 +23,7 @@ from keyboards import (
     key_devices_kb, key_device_detail_kb, confirm_delete_device_kb, key_history_kb,
     confirm_reissue_kb, support_url,
 )
-from utils import send_with_photo, send_or_edit, safe_answer
+from utils import send_with_photo, send_or_edit, send_text_screen, safe_answer
 from constants import format_timestamp as fmt_date, format_days_left as fmt_days_left, format_expiry_msk as fmt_expiry_msk
 from states import BuyFlow
 from bot_assets import KEY, DEVICES, RENEWAL, AUTO_RENEWAL
@@ -234,7 +234,7 @@ async def _key_info_content(user_id: int, k: dict) -> tuple[str, object]:
     active = int(k["expiry"]) > now
     subscription_url = k.get("key", "")
     device_limit = int(k.get("limit_ip") or 0)
-    device_lines = [f"Лимит: <b>до {device_limit} устройств</b>"] if device_limit else []
+    device_lines = [f"Устройства: <b>до {device_limit}</b>"] if device_limit else []
 
     try:
         # Fetch live count only as an enhancement; never hide the paid limit.
@@ -249,8 +249,9 @@ async def _key_info_content(user_id: int, k: dict) -> tuple[str, object]:
         registered = len(device_state.get("devices") or [])
         server_limit = int(device_state.get("limit_hwid") or 0)
         if server_limit:
-            device_lines = [f"Лимит: <b>до {server_limit} устройств</b>"]
-        device_lines.append(f"Зарегистрировано: <b>{registered}</b>")
+            device_lines = [f"Устройства: <b>{registered} из {server_limit}</b>"]
+        else:
+            device_lines.append(f"Зарегистрировано устройств: <b>{registered}</b>")
 
     all_keys = await get_user_keys(user_id)
     has_history = any(
@@ -317,10 +318,10 @@ async def _key_devices_view(user_id: int, key: dict, page: int = 0) -> tuple[str
     lines = [
         "<b>Устройства</b>",
         usage_line,
-        "Место в лимите занимает каждое зарегистрированное устройство, даже если VPN выключен.",
+        "Каждое зарегистрированное устройство занимает одно место.",
     ]
     if devices:
-        lines.extend(["", "Выберите устройство, чтобы посмотреть детали или удалить его."])
+        lines.extend(["", "Выберите устройство для управления."])
         pages = max(1, (len(devices) + 9) // 10)
         if pages > 1:
             lines.append(f"Страница {min(page + 1, pages)} из {pages}")
@@ -394,8 +395,8 @@ async def cb_key_device(callback: CallbackQuery, bot: Bot):
             f"🔗 {name}\n"
             f"⚙️ Система: {escape(system or 'не определена')}\n"
             f"🕒 Последняя активность: {last_seen}\n\n"
-            "Для освобождения места удалите подписку со старого устройства. Если оно снова обновит подписку, "
-            "оно может зарегистрироваться повторно. Не узнаёте устройство? Напишите в поддержку — поможем проверить подключение."
+            "Не узнаёте устройство? Обратитесь в поддержку. "
+            "Для освобождения места удалите старое устройство из списка."
         )
         await send_or_edit(bot, callback, text, key_device_detail_kb(key_id, device_id), photo=DEVICES)
     except Exception:
@@ -418,8 +419,8 @@ async def cb_key_device_delete_prompt(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
         "<b>Удалить это устройство?</b>\n\n"
-        "Сначала удалите подписку со старого устройства. Если оно снова обновит подписку, "
-        "оно может зарегистрироваться повторно. Не узнаёте устройство? Напишите в поддержку — поможем проверить подключение."
+        "Устройство исчезнет из списка. Если VPN останется настроенным, "
+        "оно может зарегистрироваться снова."
     )
     await send_or_edit(bot, callback, text, confirm_delete_device_kb(key_id, device_id), photo=DEVICES)
 
@@ -504,10 +505,7 @@ async def cb_key_settings(callback: CallbackQuery, bot: Bot):
         await safe_answer(callback, "Подписка не найдена.", alert=True)
         return
 
-    text = (
-        "<b>Управление подпиской</b>\n\n"
-        "Обновите ссылку доступа или настройте оплату."
-    )
+    text = "<b>Управление подпиской</b>"
     await send_or_edit(bot, callback, text, key_settings_kb(key_id), photo=KEY)
 
 
@@ -613,9 +611,9 @@ async def cb_key_reissue_confirm(callback: CallbackQuery, bot: Bot, state: FSMCo
     })
     text = (
         "<b>Перевыпустить подписку?</b>\n\n"
-        "Старая ссылка подключения и VPN-конфигурация перестанут работать. "
-        "Срок подписки и лимит устройств сохранятся. После подтверждения "
-        "замените ссылку в VPN-приложении."
+        "Старая ссылка подключения перестанет работать. "
+        "После перевыпуска потребуется подключить VPN заново.\n\n"
+        "Оплаченный срок и лимит устройств сохранятся."
     )
     await send_or_edit(bot, callback, text, confirm_reissue_kb(key_id, challenge), photo=KEY)
 
@@ -712,41 +710,40 @@ def _get_payment_methods_text(
     sub: dict | None = None,
     expiry_str: str = "",
 ) -> str:
-    """Short, calm auto-renew summary based on the saved payment record."""
+    """Show billing state without repeating obvious button instructions."""
     if not card_title:
         return (
             "<b>Автопродление</b>\n\n"
-            "Автопродление пока не подключено. Оплатите продление через ЮKassa, чтобы включить его.\n\n"
-            "Telegram Stars и CryptoBot продлевают подписку вручную."
+            "Не подключено. При оплате через ЮKassa оно включается автоматически. "
+            "Stars и CryptoBot — разовые платежи."
         )
 
     active = bool(sub and sub.get("status") == "active")
-    amount = sub.get("amount_rub", 0) if sub else 0
-    days = sub.get("days", 30) if sub else 30
+    amount = int(sub.get("amount_rub") or 0) if sub else 0
+    days = int(sub.get("days") or 30) if sub else 30
     if active and sub.get("ambiguous_key"):
-        status = "⚠️ Требуется уточнить подписку"
-        next_charge = (
-            "Сохранённое автопродление не привязано к ключу: их несколько или нет ни одного. "
-            "Автоматического списания не будет до уточнения. Продлите нужную подписку вручную или обратитесь в поддержку."
+        return (
+            "<b>Автопродление</b>\n\n"
+            f"Способ оплаты: <b>{escape(card_title)}</b>\n"
+            "Нельзя однозначно выбрать подписку: возможно, их несколько. До уточнения новых списаний не будет."
         )
-    elif active:
-        next_charge = f"Следующее продление: <b>{amount} ₽</b> за {days} дней."
-        if expiry_str:
-            next_charge += f"\nДата: <b>{expiry_str}</b>."
-        status = "✅ Автопродление включено"
-    else:
-        next_charge = "Новых списаний не будет."
-        status = "Автопродление выключено"
-        if expiry_str:
-            next_charge += f" Доступ действует до <b>{expiry_str}</b>."
 
-    return (
-        "<b>Автопродление</b>\n\n"
-        f"Способ оплаты: <b>{escape(card_title)}</b>\n"
-        f"{status}\n"
-        f"{next_charge}\n\n"
-        "Отключить автопродление можно в любой момент. Оплаченный срок сохранится."
-    )
+    status = "включено" if active else "выключено"
+    lines = [
+        "<b>Автопродление</b>",
+        "",
+        f"Статус: <b>{status.capitalize()}</b>",
+        f"Способ оплаты: <b>{escape(card_title)}</b>",
+    ]
+    if active:
+        lines.append(f"Следующее продление: <b>{amount} ₽</b> за {days} дней.")
+        if expiry_str:
+            lines.append(f"Дата: <b>{expiry_str}</b>")
+    else:
+        lines.append("Новых списаний не будет.")
+        if expiry_str:
+            lines.append(f"Доступ действует до <b>{expiry_str}</b>.")
+    return "\n".join(lines)
 
 
 async def _load_autorenew_context(user_id: int, key_id: int) -> tuple[dict | None, str, str]:
@@ -813,16 +810,10 @@ async def cb_autorenew_unbind_prompt(callback: CallbackQuery, bot: Bot):
         await send_or_edit(bot, callback, text, kb, photo=AUTO_RENEWAL)
         return
 
-    warning = "Списания по выбранному автопродлению прекратятся."
+    warning = "Новых списаний не будет."
     if expiry_str:
-        warning += f" Доступ сохранится до <b>{expiry_str}</b>."
-
-    text = (
-        "<b>Отключить автопродление?</b>\n\n"
-        f"💳 Способ оплаты: <b>{escape(card_title)}</b>\n\n"
-        f"{warning}\n\n"
-        "Доступ сохранится до конца оплаченного срока. Автопродление можно подключить снова при следующей оплате через ЮKassa."
-    )
+        warning += f" VPN продолжит работать до <b>{expiry_str}</b>."
+    text = f"<b>Отключить автопродление?</b>\n\n{warning}"
     await send_or_edit(bot, callback, text, autorenew_cancel_confirm_kb(key_id), photo=AUTO_RENEWAL)
 
 
@@ -1093,11 +1084,10 @@ async def cb_key_renew(callback: CallbackQuery, bot: Bot, state: FSMContext):
     from handlers.buy import _tariff_intro
     renewal_text = _tariff_intro(key_devices, renewal=True)
 
-    await send_with_photo(
+    await send_text_screen(
         bot, callback,
         renewal_text,
         tariff_selection_kb(devices=key_devices),
-        photo=RENEWAL,
     )
 
 

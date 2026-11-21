@@ -44,7 +44,7 @@ class TariffDesignTests(unittest.TestCase):
     def test_five_device_selector_is_short_and_three_plus_one_has_no_extra_claim(self):
         keyboard = tariff_selection_kb(devices=5)
         labels = {b.callback_data: b.text for b in buttons(keyboard)}
-        self.assertIn("5 устройств", labels["devtier_5"])
+        self.assertIn("5 устр.", labels["devtier_5"])
         self.assertNotIn("оптимально", labels["devtier_5"].lower())
         self.assertNotIn("выгодно", labels["tariff_3_5"].lower())
 

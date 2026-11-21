@@ -195,7 +195,7 @@ class CheckoutPreferenceTests(unittest.IsolatedAsyncioTestCase):
 
     def test_auto_renew_is_default_and_checkout_has_no_toggle_button(self):
         text = _checkout_confirmation_text(self._checkout(False))
-        self.assertIn("Автопродление ЮKassa включено по умолчанию", text)
+        self.assertIn("При оплате через ЮKassa включается автопродление", text)
         self.assertNotIn("Автопродление ЮKassa: выключено", text)
         callbacks = [button.callback_data for row in payment_kb(89, 30).inline_keyboard for button in row]
         self.assertNotIn("checkout_autorenew_toggle", callbacks)

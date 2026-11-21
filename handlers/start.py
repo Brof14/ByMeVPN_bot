@@ -279,15 +279,13 @@ async def _send_main_menu(
             text = (
                 "<b>ByMeVPN</b>\n\n"
                 "Приглашение учтено.\n\n"
-                "<b>3 дня бесплатно</b> — без карты и оплаты.\n"
-                "Нажмите кнопку ниже, чтобы получить доступ."
+                "<b>3 дня бесплатно</b> — без оплаты и привязки карты."
             )
         else:
             text = (
                 "<b>ByMeVPN</b>\n\n"
                 "VPN для телефона и компьютера.\n\n"
-                "<b>3 дня бесплатно</b> — без карты и оплаты.\n\n"
-                "Получите доступ и следуйте короткой инструкции подключения."
+                "<b>3 дня бесплатно</b> — без оплаты и привязки карты."
             )
         kb = main_menu_new_user()
     elif state == "existing":
@@ -331,7 +329,7 @@ async def _send_main_menu(
                 text = (
                     f"<b>Подписка активна</b>\n\n"
                     f"{remaining_text}Действует до <b>{expires}</b>\n"
-                    f"Устройств в тарифе: <b>{device_count} {device_word}</b>"
+                    f"Устройства: <b>{device_count} {device_word}</b>"
                 )
             else:
                 text = (
@@ -356,7 +354,7 @@ async def _send_main_menu(
                     text = (
                         f"<b>Подписка активна</b>\n\n"
                         f"{remaining_text}Действует до <b>{expires}</b>\n"
-                        f"Устройств в тарифе: <b>{device_count} {device_word}</b>"
+                        f"Устройства: <b>{device_count} {device_word}</b>"
                     )
                 else:
                     text = (
@@ -937,11 +935,13 @@ async def cb_about(callback: CallbackQuery, bot: Bot):
     await safe_answer(callback)
     text = (
         "<b>О сервисе ByMeVPN</b>\n\n"
-        "Подключение на телефоне и компьютере через приложение. "
-        "Поддерживаются планы на 2, 5 и 10 устройств.\n\n"
-        "Новые пользователи могут попробовать сервис 3 дня бесплатно. "
-        "\nАктуальные приложения для подключения доступны на странице «Подключить VPN».\n\n"
-        "Если подключение не получается, откройте поддержку из меню."
+        "ByMeVPN — VPN для телефона и компьютера. Сервис помогает "
+        "пользоваться сайтами и приложениями через VPN-сервер.\n\n"
+        "<b>Как подключиться</b>\n"
+        "Активируйте 3 дня бесплатно или выберите тариф. Затем нажмите "
+        "«Подключить VPN» — откроется страница с инструкцией для вашего устройства.\n\n"
+        "<b>Тарифы</b>\n"
+        "2, 5 или 10 устройств. Срок и стоимость указаны при выборе тарифа."
     )
     # Keep this screen informative and minimal; primary actions live in the menu.
     from aiogram.types import InlineKeyboardMarkup
@@ -1056,11 +1056,10 @@ async def _render_free_vpn(callback: CallbackQuery, bot: Bot):
         channel_note = ""
     text = (
         "<b>Бесплатные дни</b>\n\n"
-        "<b>+10 дней</b> — за подписку на канал (один раз).\n"
-        "<b>До +45 дней</b> — за приглашение друга и его первую оплату.\n"
-        "<b>VPN за публикацию</b> — за размещение поста по условиям программы.\n\n"
-        + channel_note
-        + "Выберите способ:"
+        "<b>+10 дней</b> — за подписку на канал.\n"
+        "<b>До +45 дней</b> — за приглашение друга.\n"
+        "<b>VPN за рекламу</b> — за пост в своём канале."
+        + (f"\n\n{channel_note.strip()}" if channel_note else "")
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         *reward_rows,

@@ -51,7 +51,7 @@ class TestSectionArtwork(unittest.IsolatedAsyncioTestCase):
             await cb_free_vpn(callback, object())
         self.assertEqual(send.call_args.kwargs["photo"], bot_assets.FREE_VPN)
 
-    async def test_tariff_screen_uses_plans_banner(self):
+    async def test_tariff_screen_is_text_first(self):
         from handlers.buy import cb_buy_vpn
 
         callback = SimpleNamespace(from_user=SimpleNamespace(id=5))
@@ -65,10 +65,11 @@ class TestSectionArtwork(unittest.IsolatedAsyncioTestCase):
             # This is a visual contract test, not a real analytics writer.
             # Don't leak an aiosqlite thread from a mocked Telegram callback.
             patch("database.log_analytics_event", new=AsyncMock()),
-            patch("handlers.buy.send_with_photo", new=AsyncMock()) as send,
+            patch("handlers.buy.send_text_screen", new=AsyncMock()) as send,
         ):
             await cb_buy_vpn(callback, object(), state)
-        self.assertEqual(send.call_args.kwargs["photo"], bot_assets.PLANS)
+        self.assertNotIn("photo", send.call_args.kwargs)
+        self.assertIn("Выберите количество устройств", send.call_args.args[2])
 
     async def test_platform_guides_use_matching_artwork(self):
         from app_links import render_connection_choice_page
