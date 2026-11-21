@@ -151,16 +151,14 @@ def tariff_selection_kb(
     devices = validate_device_limit(devices)
     kb = InlineKeyboardBuilder()
 
-    # Show the two smaller options side by side, with 10 devices below.
-    for pair in ((2, 5), (10,)):
-        buttons = []
-        for count in pair:
-            selected = "✓ " if count == devices else ""
-            buttons.append(InlineKeyboardButton(
-                text=f"{selected}{count} устройства" if count == 2 else f"{selected}{count} устройств",
-                callback_data=f"devtier_{count}",
-            ))
-        kb.row(*buttons)
+    # Three immediately visible choices; no nested device selector.
+    kb.row(*[
+        InlineKeyboardButton(
+            text=f"{'✓ ' if count == devices else ''}{count} устр.",
+            callback_data=f"devtier_{count}",
+        )
+        for count in (2, 5, 10)
+    ])
 
     # The monthly rate applies to the complete 1 / 4 / 8 / 15-month package,
     # including its advertised bonus months. Never hide the total to pay.
@@ -188,7 +186,6 @@ def tariff_selection_kb(
             label += f" · −{discount_percent}%"
         kb.row(InlineKeyboardButton(text=label, callback_data=f"tariff_{months}_{devices}"))
 
-    kb.row(InlineKeyboardButton(text="Есть промокод?", callback_data="promo_enter"))
     kb.row(InlineKeyboardButton(text="← Назад", callback_data="back_to_menu"))
     return kb.as_markup()
 
@@ -199,6 +196,7 @@ def payment_kb(
 ) -> InlineKeyboardMarkup:
     """Show payment providers; YooKassa auto-renew is enabled by default."""
     kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="Промокод", callback_data="promo_enter"))
     kb.row(InlineKeyboardButton(
         text=f"Telegram Stars · {price_rub} зв.",
         callback_data="pay_stars",
@@ -211,7 +209,6 @@ def payment_kb(
         text=f"CryptoBot · {price_rub} ₽",
         callback_data="pay_crypto",
     ))
-    kb.row(InlineKeyboardButton(text="Есть промокод?", callback_data="promo_enter"))
     kb.row(InlineKeyboardButton(text="← Назад", callback_data=f"devtier_{devices}"))
     return kb.as_markup()
 
