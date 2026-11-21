@@ -36,16 +36,18 @@ _delivery_locks = weakref.WeakValueDictionary()
 
 
 def _activation_message(title: str, bonus_note: str, days: int, limit_ip: int, expiry: int | None = None) -> str:
-    """Use the current website-based setup flow in every activation message."""
+    """One clear confirmation and a single next action."""
+    word = "день" if days % 10 == 1 and days % 100 != 11 else (
+        "дня" if days % 10 in (2, 3, 4) and days % 100 not in (12, 13, 14)
+        else "дней"
+    )
     expiry_line = f"Действует до: <b>{format_timestamp(expiry)[:10]}</b>\n" if expiry else ""
     return (
         f"{title}\n\n{bonus_note}"
-        f"Доступ: <b>{days} дней</b>\n"
+        f"Доступ: <b>{days} {word}</b>\n"
         f"Устройства: <b>{limit_ip}</b>\n"
         f"{expiry_line}\n"
-        "Ваш ByMeVPN готов к использованию.\n\n"
-        "Нажмите «Подключить VPN» ниже — откроется страница, которая подберёт приложение "
-        "для вашего устройства и поможет добавить подписку."
+        "Нажмите «Подключить VPN», чтобы настроить устройство."
     )
 
 
@@ -376,10 +378,10 @@ async def _deliver_key_unlocked(
                 text = (
                     f"{title}\n\n"
                     f"{bonus_note}"
-                    f"<b>Ключ #{key_id}</b> продлён на <b>{days} дней</b>\n"
+                    f"Доступ продлён на <b>{days} дней</b>.\n"
                     f"Устройства: <b>{limit_ip}</b>\n"
                     f"Действует до: <b>{format_timestamp(new_expiry)[:10]}</b>\n\n"
-                    "Ссылка подключения не изменилась. Повторно подключать устройства не нужно."
+                    "Переподключать VPN не нужно."
                 )
                 
                 delivered = await _send_delivery_message(
