@@ -6,10 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from aiogram.types import CallbackQuery
 
 from constants import get_price_for_months
-from handlers.buy import _checkout_confirmation_text, _tariff_intro, cb_enter_promo
+from handlers.buy import _checkout_confirmation_text, _show_checkout, _tariff_intro, cb_enter_promo
 from keyboards import payment_kb, tariff_selection_kb
 from subscription import _activation_message
-from utils import send_text_screen
+from bot_assets import PAYMENT
+from utils import send_or_edit, send_text_screen
 
 
 def actions(markup):
@@ -82,12 +83,47 @@ class MinimalCopyTests(unittest.IsolatedAsyncioTestCase):
         )
         with (
             patch("handlers.buy.safe_answer", new=AsyncMock()),
-            patch("handlers.buy.send_text_screen", new=AsyncMock()) as send,
+            patch("handlers.buy.send_with_photo", new=AsyncMock()) as send,
         ):
             await cb_enter_promo(callback, object(), state)
         keyboard = send.await_args.args[3]
         self.assertEqual(keyboard.inline_keyboard[0][0].callback_data, "tariff_6_5")
         self.assertIn("Промокод", send.await_args.args[2])
+        self.assertEqual(send.await_args.kwargs["photo"], PAYMENT)
+
+    async def test_checkout_confirmation_keeps_photo_and_edits_current_screen(self):
+        callback = SimpleNamespace()
+        data = {"months": 1, "devices": 2, "price_rub": 79, "days": 30}
+        with patch("handlers.buy.send_with_photo", new=AsyncMock()) as send:
+            await _show_checkout(object(), callback, object(), data)
+        self.assertIs(send.await_args.args[1], callback)
+        self.assertEqual(send.await_args.kwargs["photo"], PAYMENT)
+        self.assertIn("Подтверждение подписки", send.await_args.args[2])
+
+    async def test_text_callback_edits_existing_message_without_link_preview(self):
+        callback = SimpleNamespace(chat=SimpleNamespace(id=12), message_id=34, photo=None)
+        bot = SimpleNamespace(
+            edit_message_text=AsyncMock(return_value="edited"),
+            send_message=AsyncMock(),
+        )
+        result = await send_or_edit(bot, callback, "Условия <a href='https://telegra.ph/test'>оферты</a>")
+        self.assertEqual(result, "edited")
+        bot.edit_message_text.assert_awaited_once()
+        bot.send_message.assert_not_awaited()
+        self.assertTrue(bot.edit_message_text.await_args.kwargs["link_preview_options"].is_disabled)
+
+    async def test_photo_callback_edits_the_existing_photo_message(self):
+        from bot_assets import PAYMENT
+
+        message = SimpleNamespace(
+            chat=SimpleNamespace(id=12), message_id=34, photo=[object()],
+        )
+        bot = SimpleNamespace(edit_message_media=AsyncMock(return_value="edited media"))
+        with patch("utils._photo_source", new=AsyncMock(return_value=("cached-photo", "cache-key"))), \
+             patch("utils._remember_photo_file_id", new=AsyncMock()):
+            result = await send_or_edit(bot, message, "Подтверждение", photo=PAYMENT)
+        self.assertEqual(result, "edited media")
+        bot.edit_message_media.assert_awaited_once()
 
     async def test_photo_screen_becomes_plain_text(self):
         callback = MagicMock(spec=CallbackQuery)

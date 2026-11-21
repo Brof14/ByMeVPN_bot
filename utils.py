@@ -12,6 +12,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     FSInputFile,
     InputMediaPhoto,
+    LinkPreviewOptions,
 )
 from aiogram.exceptions import TelegramBadRequest
 
@@ -25,6 +26,11 @@ _photo_cache_loaded: set[str] = set()
 _photo_cache_lock = asyncio.Lock()
 _PHOTO_CAPTION_LIMIT = 1024
 logger = logging.getLogger(__name__)
+
+
+def _no_link_preview() -> LinkPreviewOptions:
+    """Keep legal and support links clickable without embedding Instant View."""
+    return LinkPreviewOptions(is_disabled=True)
 
 
 async def get_cached_bot_info(bot: Bot):
@@ -146,6 +152,7 @@ async def send_photo_message(
         if long_text:
             return await bot.send_message(
                 chat_id=chat_id, text=text, parse_mode="HTML", reply_markup=reply_markup,
+                link_preview_options=_no_link_preview(),
             )
         return sent
     except Exception:
@@ -154,6 +161,7 @@ async def send_photo_message(
             text=text,
             parse_mode="HTML",
             reply_markup=reply_markup,
+            link_preview_options=_no_link_preview(),
         )
 
 # ---------------------------------------------------------------------------
@@ -170,6 +178,7 @@ async def _replace_text_screen(
         text=text,
         parse_mode="HTML",
         reply_markup=reply_markup,
+        link_preview_options=_no_link_preview(),
     )
     try:
         await bot.delete_message(current.chat.id, current.message_id)
@@ -233,6 +242,7 @@ async def send_or_edit(
                 await _remember_photo_file_id(cache_key, image, bot)
             updated = await bot.send_message(
                 chat_id=msg.chat.id, text=text, parse_mode="HTML", reply_markup=reply_markup,
+                link_preview_options=_no_link_preview(),
             )
             if not getattr(msg, "photo", None):
                 try:
@@ -294,6 +304,7 @@ async def send_or_edit(
             text=text,
             parse_mode="HTML",
             reply_markup=reply_markup,
+            link_preview_options=_no_link_preview(),
         )
     except TelegramBadRequest as e:
         if "message is not modified" in str(e):
@@ -340,6 +351,7 @@ async def send_with_photo(
 
     return await bot.send_message(
         chat_id=msg.chat.id, text=text, parse_mode="HTML", reply_markup=reply_markup,
+        link_preview_options=_no_link_preview(),
     )
 
 

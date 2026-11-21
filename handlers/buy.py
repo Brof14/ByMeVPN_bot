@@ -35,7 +35,7 @@ from database import (
     record_payment_idempotent, update_payment_status,
     validate_promo_code, has_user_used_promo,
 )
-from utils import send_with_photo, send_or_edit, send_text_screen, safe_answer
+from utils import send_with_photo, send_or_edit, safe_answer
 from bot_assets import PLANS, RENEWAL, PAYMENT, PROMO_CODE
 from bot_style import themed_button as InlineKeyboardButton
 
@@ -157,11 +157,12 @@ async def _show_checkout(
 ) -> None:
     if data is None:
         data = await state.get_data()
-    await send_text_screen(
+    await send_with_photo(
         bot, callback, _checkout_confirmation_text(data),
         payment_kb(
             int(data["price_rub"]), int(data["days"]), devices=int(data["devices"]),
         ),
+        photo=PAYMENT,
     )
 
 
@@ -177,7 +178,7 @@ async def cb_enter_promo(callback: CallbackQuery, bot: Bot, state: FSMContext):
     devices = validate_device_limit(data.get("devices", DEFAULT_DEVICE_LIMIT))
     back = f"tariff_{months}_{devices}" if months in (1, 3, 6, 12) else "buy_vpn"
     await state.set_state(PromoFlow.waiting_code)
-    await send_text_screen(
+    await send_with_photo(
         bot, callback,
         "<b>Промокод</b>\n\nОтправьте код одним сообщением.",
         InlineKeyboardMarkup(inline_keyboard=[[
@@ -186,6 +187,7 @@ async def cb_enter_promo(callback: CallbackQuery, bot: Bot, state: FSMContext):
                 callback_data=back,
             ),
         ]]),
+        photo=PAYMENT,
     )
 
 
