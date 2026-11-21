@@ -160,14 +160,16 @@ async def readiness_check():
 
 
 @app.get("/provisionz", include_in_schema=False)
-async def provisioning_health_check():
-    """Is provisioning currently possible? Keep core /readyz independent.
-
-    Return no panel addresses, credentials or other internal diagnostics.
-    """
-    import asyncio
+async def provisioning_health_check(request: Request):
+    """Operator-only provisioning health; no public 3x-ui probe or credentials."""
+    import os
     from fastapi import HTTPException
     from xui_client import test_xui_connection
+
+    token = os.getenv("BYMEVPN_MONITOR_TOKEN", "").strip()
+    supplied = request.headers.get("X-ByMeVPN-Monitor-Token", "")
+    if len(token) < 32 or not hmac.compare_digest(supplied, token):
+        raise HTTPException(status_code=404, detail="Not found")
 
     try:
         connected, _ = await asyncio.wait_for(test_xui_connection(), timeout=8.0)
