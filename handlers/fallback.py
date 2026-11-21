@@ -16,9 +16,7 @@ router = Router()
 
 
 async def _show_menu_hint(message: Message, *, unknown_command: bool = False) -> None:
-    caption = "Команда не найдена. Откройте меню." if unknown_command else (
-        "Не удалось распознать сообщение. Откройте меню."
-    )
+    caption = "Команда не найдена." if unknown_command else "Не удалось распознать сообщение."
     needs_help = not unknown_command and any(phrase in (message.text or "").lower() for phrase in ("не подключ", "не работает vpn", "ошибка vpn", "vpn отключ"))
     buttons = [[InlineKeyboardButton(text="Открыть меню", callback_data="back_to_menu")]]
     if needs_help:
