@@ -98,10 +98,13 @@ async def economic_overview(days: int = 30) -> dict:
         "milestones": milestones,
         "paid_from_views": int(funnel.get("paid_from_views", 0)),
         "paid_from_views_pct": funnel.get("purchase_pct"),
-        "cac_marketing_rub": (
+        # Marketing expenses / all new payers are NOT attributable CAC.
+        # Keep the ratio under an explicit non-CAC name.
+        "marketing_spend_per_new_payer_rub": (
             costs["marketing"] / funnel["paid"]
             if costs["marketing"] is not None and funnel.get("paid") else None
         ),
+        "cac_rub": None,  # Requires source-matched marketing spend and payers.
         "ltv_rub": None,  # Requires actual time-based customer cohorts.
         "warnings": (
             "RUB balance is not company net profit: XTR is not converted; "
