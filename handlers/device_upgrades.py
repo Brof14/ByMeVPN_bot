@@ -125,11 +125,6 @@ async def cb_upgrade_device_screen(callback: CallbackQuery, bot: Bot):
         "\n\nАвтопродление сохранится с новой ценой, которую покажем перед оплатой."
         if context["recurring"] else ""
     )
-    rate_description = (
-        "До 5 устройств — +20 ₽/мес.; до 10 — +40 ₽/мес. к тарифу на 2 устройства."
-        if old == 2 else
-        "До 10 устройств — дополнительно +20 ₽/мес. к текущему тарифу."
-    )
     current_word = "устройства" if old == 2 else "устройств"
     await send_with_photo(
         bot, callback,
