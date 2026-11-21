@@ -34,13 +34,12 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             for renewal in (False, True):
                 with self.subTest(devices=devices, renewal=renewal):
                     text = _tariff_intro(devices, renewal=renewal)
-                    self.assertIn(str(devices), text)
                     self.assertIn("<b>Продление подписки</b>" if renewal else "<b>Тарифы ByMeVPN</b>", text)
-                    self.assertIn("Чем дольше срок, тем ниже стоимость месяца.", text)
-                    self.assertIn("Полная сумма указана в каждом тарифе.", text)
+                    self.assertIn("Выберите количество устройств и срок подписки.", text)
+                    self.assertNotIn("Полная сумма указана", text)
 
     def test_tariff_copy_preserves_promo_duration_suffix(self):
-        self.assertIn("Промокод действует на тариф 3+1 мес.", _tariff_intro(2, promo_binding=3))
+        self.assertIn("Промокод: тариф 3+1 мес.", _tariff_intro(2, promo_binding=3))
 
     async def test_bot_identity_helper_uses_aiogram_cache_when_available(self):
         from utils import get_cached_bot_info
@@ -255,7 +254,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             "<b>Подписка активна</b>\n\n"
             "Осталось <b>1 день</b>\n"
             "Действует до <b>09.03.2027</b>\n"
-            "Устройств в тарифе: <b>2 устройства</b>",
+            "Устройства: <b>2 устройства</b>",
         )
         first_button = send.await_args.args[3].inline_keyboard[0][0]
         self.assertEqual(first_button.text, "Подписка")
@@ -512,7 +511,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
             await cb_partner(callback, bot)
 
         text = send.call_args.args[2]
-        self.assertIn("<b>Пригласите друга — получите до 45 дней</b>", text)
+        self.assertIn("<b>Пригласить друга</b>", text)
         self.assertIn("15 дней", text)
         self.assertIn("+30 дней", text)
         self.assertIn("Получено: <b>15 дней</b>", text)
