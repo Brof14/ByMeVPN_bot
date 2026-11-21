@@ -13,10 +13,7 @@ from bot_assets import LEGAL
 logger = logging.getLogger(__name__)
 router = Router()
 
-_LEGAL_TEXT = (
-    "<b>Документы ByMeVPN</b>\n\n"
-    "Выберите документ, чтобы ознакомиться с условиями сервиса."
-)
+_LEGAL_TEXT = "<b>Документы</b>"
 
 @router.message(F.text.startswith("/legal"))
 async def cmd_legal(message: Message, bot: Bot):
