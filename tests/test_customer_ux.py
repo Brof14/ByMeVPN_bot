@@ -59,8 +59,8 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(query["url"], [link])
         share_text = query["text"][0]
         self.assertIn("3 дня бесплатно", share_text)
-        self.assertIn("без карты", share_text)
-        self.assertIn("мне начислят бонусные дни", share_text)
+        self.assertIn("без оплаты и привязки карты", share_text)
+        self.assertIn("Если запустишь бота по моей ссылке, мне начислят 15 дней VPN.", share_text)
         self.assertNotIn("5352436388", share_text)
 
 
