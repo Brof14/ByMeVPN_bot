@@ -116,6 +116,10 @@ def _checkout_confirmation_text(data: dict) -> str:
     bonus = TARIFF_BONUS_MONTHS[months]
     term = f"{months}+{bonus} мес." if bonus else "1 месяц"
     recurring_price, recurring_days = get_price_for_months(months, devices)
+    actual_days = int(data.get("days") or recurring_days)
+    if actual_days != recurring_days:
+        # A free-days promotion must be visible in the checkout summary.
+        term += f" ({actual_days} дней с промокодом)"
     lines = [
         "<b>Подтверждение подписки</b>",
         "",
