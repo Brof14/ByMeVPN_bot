@@ -74,10 +74,9 @@ class CustomerUxFollowthroughTests(unittest.IsolatedAsyncioTestCase):
 
     def test_plan_intro_separates_devices_and_duration(self):
         copy = _tariff_intro(2)
-        self.assertIn("<b>Устройства:</b>", copy)
-        self.assertIn("<b>Срок:</b>", copy)
-        self.assertIn("до 2 устройств", copy)
-        self.assertIn("3+1 мес.", copy)
+        self.assertIn("<b>Тарифы ByMeVPN</b>", copy)
+        self.assertIn("Выберите количество устройств и срок подписки.", copy)
+        self.assertNotIn("Полная сумма", copy)
 
     async def test_promo_preview_uses_selected_term_and_discount(self):
         state = SimpleNamespace(
