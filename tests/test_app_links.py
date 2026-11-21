@@ -147,7 +147,7 @@ class TestAppOpenPage(unittest.TestCase):
             self.assertIn(label, page)
         self.assertNotIn("🤖", page)
         self.assertIn('id="platforms"', page)
-        self.assertIn("overflow-x:clip", page)
+        self.assertIn("overflow-x: clip", page)
         self.assertIn("prefers-reduced-motion", page)
         self.assertIn("Скопировать ссылку", page)
         self.assertNotIn("Если не открылось — скопировать", page)
