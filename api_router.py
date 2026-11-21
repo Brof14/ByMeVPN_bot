@@ -85,12 +85,16 @@ def _correlated_http_error(
     detail: str,
     correlation_id: str,
     error_code: Optional[str] = None,
+    *,
+    retry_after_seconds: Optional[int] = None,
 ) -> HTTPException:
     headers = {"X-Correlation-ID": correlation_id}
     if status_code == 401:
         headers["WWW-Authenticate"] = "Bearer"
     if error_code:
         headers["X-Error-Code"] = error_code
+    if retry_after_seconds is not None and status_code in (429, 503):
+        headers["Retry-After"] = str(max(1, min(int(retry_after_seconds), 120)))
     return HTTPException(
         status_code=status_code,
         detail=detail,
@@ -3169,6 +3173,7 @@ async def get_servers(
         raise _correlated_http_error(
             503, "Не удалось получить конфигурацию серверов. Подписка сохранена",
             correlation_id, "subscription_configuration_unavailable",
+            retry_after_seconds=15,
         )
     payload = {
         "servers": servers,
