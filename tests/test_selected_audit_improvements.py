@@ -143,7 +143,8 @@ class ActualEconomicsTests(unittest.IsolatedAsyncioTestCase):
         }):
             report = await economic_overview()
         self.assertIsNone(report["known_rub_balance"])
-        self.assertIsNone(report["cac_marketing_rub"])
+        self.assertIsNone(report["cac_rub"])
+        self.assertIsNone(report["marketing_spend_per_new_payer_rub"])
         self.assertFalse(report["costs_complete"])
 
     async def test_rub_costs_only_and_real_provider_receipts(self):
