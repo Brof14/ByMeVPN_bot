@@ -160,7 +160,7 @@ class TestAppOpenPage(unittest.TestCase):
         self.assertIn('window.addEventListener("load",()=>window.setTimeout(()=>{const n=', page)
         self.assertIn("Скачайте Happ для Windows", page)
         self.assertIn("Если Happ не открылся", page)
-        self.assertIn("Выберите устройство. Покажем, как установить приложение", page)
+        self.assertIn("Установите приложение и добавьте подписку.", page)
         self.assertIn("Не удалось определить устройство. Выберите платформу выше.", page)
         self.assertIn("Подключение без JavaScript", page)
         self.assertIn("Рекомендуем", page)
