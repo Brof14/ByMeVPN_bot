@@ -8,7 +8,7 @@ This change set deliberately **does not modify** promo codes, tariffs, payment m
 | --- | --- | --- |
 | P1.1 | Replaced fabricated node `ping_ms` and `load_percent` with JSON `null`, plus `metrics_status=not_measured` | Keys remain present; Android's parser treats unknown load as -1 and measures ping on-device. Verify Windows/other clients on staging before rollout |
 | P1.2 | Parse explicit flag, full country name or standalone ISO code; do not invent cities | Stable `country`, `country_code`, `city`, `flag` fields. Unknown location has empty code/city and 🌐 |
-| P1.3 | Added independent `GET /provisionz` for 3x-ui provisioning readiness | `/readyz` and `/healthz` still check local dependencies only; billing was not changed |
+| P1.3 | Added operator-token-protected `GET /provisionz` for 3x-ui provisioning readiness | `/readyz` and `/healthz` still check local dependencies only; billing was not changed |
 | P1.4 | Add `expires_at_utc` (ISO 8601 with offset) and `expires_at_unix` (UTC epoch seconds) | Preserve the old local `expires_at` string for existing clients; new clients should prefer new fields |
 | P1.5 | On temporary subscription-config failure, preserve structured code and add HTTP `Retry-After: 15` | No caching of VPN credentials or false access grants |
 | P1.7 | Manual review signal for small first **RUB** payments to referred users | +15/+30 referral bonuses, billing and automatic grant logic unchanged; Stars are never compared to RUB |
