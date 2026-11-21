@@ -231,8 +231,12 @@ async def cb_admin_economics(callback: CallbackQuery):
         lines.append(f"Частичный результат по RUB: <b>{data['known_rub_balance']} ₽</b>")
     else:
         lines.append("Прибыль не рассчитана: не указаны все реальные расходы.")
-    if data["cac_marketing_rub"] is not None:
-        lines.append(f"Ориентир CAC по рекламе: <b>{data['cac_marketing_rub']:.2f} ₽</b>")
+    if data["marketing_spend_per_new_payer_rub"] is not None:
+        lines.append(
+            "Реклама / новый платящий: "
+            f"<b>{data['marketing_spend_per_new_payer_rub']:.2f} ₽</b> "
+            "(не CAC; без разбивки по источникам)"
+        )
     lines += [
         "",
         "Этапы воронки — независимые события, не обязательная последовательность.",
