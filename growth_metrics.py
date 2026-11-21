@@ -81,7 +81,32 @@ async def referral_risk_snapshot(*, days: int = 1, min_invites: int = 5, limit: 
         {"referrer_id": int(row[0]), "invitations": int(row[1])}
         for row in await cursor.fetchall()
     ]
+    # An unusually small first *RUB* payment is only a manual review signal.
+    # Never compare Stars/XTR to RUB and never suppress the approved bonuses.
+    cursor = await db.execute(
+        """SELECT r.referrer_id, COUNT(DISTINCT r.referred_id)
+           FROM referrals r
+           JOIN users u ON u.user_id=r.referred_id AND u.referrer_id=r.referrer_id
+           JOIN payments p ON p.id=(
+               SELECT first.id FROM payments first
+               WHERE first.user_id=r.referred_id
+                 AND first.status='success' AND first.amount>0
+               ORDER BY first.created, first.id LIMIT 1
+           )
+           WHERE p.currency='RUB' AND p.amount<=?
+             AND p.created BETWEEN ? AND ?
+           GROUP BY r.referrer_id
+           ORDER BY COUNT(DISTINCT r.referred_id) DESC, r.referrer_id
+           LIMIT ?""",
+        (30, start, end, limit),
+    )
+    low_value = [
+        {"referrer_id": int(row[0]), "first_payments": int(row[1])}
+        for row in await cursor.fetchall()
+    ]
     return {
         "days": days,
         "suspicious_accounts": accounts,
+        "low_value_first_payments_rub": low_value,
+        "low_value_threshold_rub": 30,
     }
