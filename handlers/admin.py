@@ -189,6 +189,61 @@ async def cb_admin_source_revenue(callback: CallbackQuery):
     )
 
 
+@router.callback_query(F.data == "admin_economics")
+async def cb_admin_economics(callback: CallbackQuery):
+    """Read-only, per-currency commerce summary; never fabricate net profit."""
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True)
+        return
+    await safe_answer(callback)
+    from business_metrics import economic_overview
+    try:
+        data = await economic_overview()
+    except Exception as exc:
+        logger.warning("Economics report unavailable (%s)", type(exc).__name__)
+        await callback.message.answer("Отчёт временно недоступен.", reply_markup=_growth_kb())
+        return
+    lines = ["<b>Экономика и воронка · 30 дней</b>", "", "<b>Воронка</b>"]
+    for step in data["milestones"]:
+        lines.append(f"{step['label']}: <b>{step['users']}</b>")
+    conversion = data["paid_from_views_pct"]
+    lines.append(
+        "Оплатили после просмотра: <b>"
+        + (f"{conversion:.1f}%" if conversion is not None else "нет данных")
+        + "</b>"
+    )
+    lines += ["", "<b>Успешные платежи</b>"]
+    for currency, summary in data["payments"].items():
+        lines.append(f"{escape(currency)}: <b>{summary['gross']}</b> · {summary['count']} платежей")
+    if not data["payments"]:
+        lines.append("Нет подтверждённых платежей за период.")
+    lines += ["", "<b>Возвраты в учёте</b>"]
+    for currency, summary in data["recorded_refunds"].items():
+        lines.append(f"{escape(currency)}: <b>{summary['recorded_amount']}</b> · {summary['count']} операций")
+    if not data["recorded_refunds"]:
+        lines.append("Записанных возвратов нет.")
+    lines += ["", "<b>Учтённые расходы (₽)</b>"]
+    labels = {"vps": "Серверы", "marketing": "Реклама", "staff": "Сотрудники",
+              "processing": "Комиссии", "other": "Прочее"}
+    for code, amount in data["costs_rub"].items():
+        lines.append(f"{labels[code]}: {amount if amount is not None else 'не указаны'}")
+    if data["known_rub_balance"] is not None:
+        lines.append(f"Частичный результат по RUB: <b>{data['known_rub_balance']} ₽</b>")
+    else:
+        lines.append("Прибыль не рассчитана: не указаны все реальные расходы.")
+    if data["cac_marketing_rub"] is not None:
+        lines.append(f"Ориентир CAC по рекламе: <b>{data['cac_marketing_rub']:.2f} ₽</b>")
+    lines += [
+        "",
+        "Этапы воронки — независимые события, не обязательная последовательность.",
+        "Звёзды не переводятся в рубли. Возвраты — только записанные в базе.",
+        "Частичный RUB-результат не является полной чистой прибылью.",
+    ]
+    await callback.message.edit_text(
+        "\n".join(lines), parse_mode="HTML", reply_markup=_growth_kb(),
+    )
+
+
 @router.callback_query(F.data == "admin_payment_incidents")
 async def cb_admin_payment_incidents(callback: CallbackQuery):
     """Read-only reconciliation queue; never silently grant/refund twice."""
@@ -235,6 +290,7 @@ def _growth_kb() -> InlineKeyboardMarkup:
          InlineKeyboardButton(text="Оплаты / конверсия", callback_data="admin_checkout_funnel")],
         [InlineKeyboardButton(text="Органический рост", callback_data="admin_referral_funnel")],
         [InlineKeyboardButton(text="Выручка по источникам", callback_data="admin_source_revenue")],
+        [InlineKeyboardButton(text="Экономика · 30 дней", callback_data="admin_economics")],
         [InlineKeyboardButton(text="Причины ухода", callback_data="admin_churn_feedback")],
         [InlineKeyboardButton(text="Проверка рефералов", callback_data="admin_referral_risk")],
         [InlineKeyboardButton(text="Рассылки", callback_data="admin_broadcast")],
@@ -544,6 +600,16 @@ async def cb_admin_referral_risk(callback: CallbackQuery):
             )
     else:
         text.append("Нет таких пользователей за выбранные сутки.")
+    low_value = report.get("low_value_first_payments_rub") or []
+    text.extend(["", "<b>Первая оплата до 30 ₽ (только RUB):</b>"])
+    if low_value:
+        for row in low_value:
+            text.append(
+                f"ID <code>{row['referrer_id']}</code> · "
+                f"{row['first_payments']} первых оплат"
+            )
+    else:
+        text.append("Не обнаружено.")
     text.extend([
         "", "Это только индикаторы необычной активности, не доказательство нарушений. "
         "Начисления не блокируются автоматически.",
