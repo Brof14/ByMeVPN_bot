@@ -288,6 +288,20 @@ async def send_or_edit(
     return await _replace_text_screen(bot, msg, text, reply_markup)
 
 
+async def send_text_screen(
+    bot: Bot,
+    target: "Message | CallbackQuery",
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> Message:
+    """Show a compact text-only screen, replacing a previous photo if needed."""
+    reply_markup = normalize_navigation(reply_markup)
+    msg = target.message if isinstance(target, CallbackQuery) else target
+    if isinstance(target, CallbackQuery) and getattr(msg, "photo", None):
+        return await _replace_text_screen(bot, msg, text, reply_markup)
+    return await send_or_edit(bot, target, text, reply_markup)
+
+
 @monitor_performance("send_with_photo")
 async def send_with_photo(
     bot: Bot,
