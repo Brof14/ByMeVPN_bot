@@ -35,7 +35,7 @@ from database import (
     record_payment_idempotent, update_payment_status,
     validate_promo_code, has_user_used_promo,
 )
-from utils import send_with_photo, send_or_edit, safe_answer
+from utils import send_with_photo, send_or_edit, send_text_screen, safe_answer
 from bot_assets import PLANS, RENEWAL, PAYMENT, PROMO_CODE
 from bot_style import themed_button as InlineKeyboardButton
 
@@ -93,62 +93,55 @@ def _promo_purchase_keyboard(months: int | None = None, devices: int = DEFAULT_D
         rows.append([InlineKeyboardButton(
             text="Проверить заказ", callback_data=f"tariff_{months}_{validate_device_limit(devices)}",
         )])
-    rows.append([InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn")])
+    rows.append([InlineKeyboardButton(text="Другой тариф", callback_data="buy_vpn")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _tariff_intro(devices: int, *, renewal: bool = False, promo_binding: int | None = None) -> str:
-    """Consistent purchase/renewal copy, with current selection as context."""
-    devices = validate_device_limit(devices)
+    """Show only what a customer needs before choosing a plan."""
     title = "Продление подписки" if renewal else "Тарифы ByMeVPN"
-    text = (
-        f"<b>{title}</b>\n\n"
-        f"<b>Устройства:</b> выбрано до {devices} устройств. Измените лимит кнопкой выше.\n\n"
-        "<b>Срок:</b> выберите тариф ниже. Чем дольше срок, тем ниже стоимость месяца.\n"
-        "3+1 мес. — четыре месяца доступа по цене трёх. Полная сумма указана в каждом тарифе."
-    )
+    text = f"<b>{title}</b>\n\nВыберите количество устройств и срок подписки."
     if promo_binding in (1, 3, 6, 12):
-        extra = TARIFF_BONUS_MONTHS[promo_binding]
-        term = f"{promo_binding}+{extra}" if extra else "1"
-        text += f"\n\nПромокод действует на тариф {term} мес."
+        bonus = TARIFF_BONUS_MONTHS[promo_binding]
+        term = f"{promo_binding}+{bonus}" if bonus else "1"
+        text += f"\n\nПромокод: тариф {term} мес."
     return text
 
 
 def _checkout_confirmation_text(data: dict) -> str:
-    """All payment choices share one accurate checkout summary."""
+    """Concise checkout copy with full future billing and legal disclosures."""
     months = int(data["months"])
-    days = int(data["days"])
     devices = int(data["devices"])
     price_rub = int(data["price_rub"])
     bonus = TARIFF_BONUS_MONTHS[months]
     term = f"{months}+{bonus} мес." if bonus else "1 месяц"
     recurring_price, recurring_days = get_price_for_months(months, devices)
-    dev_name = DEVICE_CONFIG.get(devices, {}).get("name", f"{devices} устройств")
     lines = [
         "<b>Подтверждение подписки</b>",
         "",
-        f"Срок: <b>{term}</b> ({days} дней)",
-        f"Устройства: <b>{dev_name}</b>",
-        f"К оплате сейчас: <b>{price_rub} ₽</b>",
+        f"Срок: <b>{term}</b>",
+        f"Устройства: <b>{devices}</b>",
+        f"К оплате: <b>{price_rub} ₽</b>",
     ]
     original = int(data.get("original_price") or price_rub)
     if original > price_rub:
-        lines.append(f"Цена без промокода: <s>{original} ₽</s>")
+        lines.append(f"Без промокода: <s>{original} ₽</s>")
     if data.get("promo_mismatch"):
         lines.append("Промокод для другого срока не применён.")
-    lines.append("")
-    lines.append(
-        "<b>Автопродление ЮKassa включено по умолчанию.</b>\n"
-        f"Следующее списание: {recurring_price} ₽ за {recurring_days} дней "
-        "после окончания оплаченного срока. Управлять автопродлением можно "
-        "в разделе «Подписка» → «Оплата и автопродление»."
-    )
     lines.extend([
-        "Stars и CryptoBot — разовые платежи.",
-        "Доступ после подтверждения оплаты.",
-        "При оплате вы принимаете условия "
-        "<a href='https://telegra.ph/Publichnaya-oferta-na-okazanie-uslug-ByMeVPN-10-25'>оферты</a> "
-        "и <a href='https://telegra.ph/Politika-v-otnoshenii-obrabotki-personalnyh-dannyh-ByMeVPN-10-25'>политики конфиденциальности</a>.",
+        "",
+        "При оплате через ЮKassa включается автопродление: "
+        f"<b>{recurring_price} ₽ каждые {recurring_days} дней</b> "
+        "после окончания оплаченного срока. "
+        "Отключить можно в настройках подписки.",
+        "",
+        "Stars и CryptoBot — без автопродления.",
+        "",
+        "Оплачивая подписку, вы принимаете "
+        "<a href='https://telegra.ph/Publichnaya-oferta-na-okazanie-uslug-ByMeVPN-10-25'>оферту</a> "
+        "и <a href='https://telegra.ph/Soglashenie-ob-avtomaticheskom-prodlenii-podpiski-ByMeVPN-10-25'>условия автопродления</a> "
+        "(для ЮKassa). "
+        "<a href='https://telegra.ph/Politika-v-otnoshenii-obrabotki-personalnyh-dannyh-ByMeVPN-10-25'>Политика конфиденциальности</a>.",
         "",
         "<b>Выберите способ оплаты:</b>",
     ])
@@ -160,12 +153,11 @@ async def _show_checkout(
 ) -> None:
     if data is None:
         data = await state.get_data()
-    await send_with_photo(
+    await send_text_screen(
         bot, callback, _checkout_confirmation_text(data),
         payment_kb(
             int(data["price_rub"]), int(data["days"]), devices=int(data["devices"]),
         ),
-        photo=PAYMENT,
     )
 
 
@@ -176,15 +168,20 @@ async def _show_checkout(
 @router.callback_query(F.data == "promo_enter")
 async def cb_enter_promo(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await safe_answer(callback)
+    data = await state.get_data()
+    months = data.get("months")
+    devices = validate_device_limit(data.get("devices", DEFAULT_DEVICE_LIMIT))
+    back = f"tariff_{months}_{devices}" if months in (1, 3, 6, 12) else "buy_vpn"
     await state.set_state(PromoFlow.waiting_code)
-    await send_with_photo(
+    await send_text_screen(
         bot, callback,
-        "<b>Промокод</b>\n\nОтправьте действующий код одним сообщением. "
-        "Если код не подойдёт, можно сразу попробовать другой. После применения выберите тариф.",
+        "<b>Промокод</b>\n\nОтправьте код одним сообщением.",
         InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="← К тарифам", callback_data="buy_vpn"),
+            InlineKeyboardButton(
+                text="← К оплате" if months in (1, 3, 6, 12) else "← К тарифам",
+                callback_data=back,
+            ),
         ]]),
-        photo=PROMO_CODE,
     )
 
 
@@ -210,11 +207,10 @@ async def cb_buy_vpn(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await log_analytics_event(callback.from_user.id, "tariffs_viewed", devices=devices)
     
     text = _tariff_intro(devices, renewal=bool(renew_key_id), promo_binding=promo_binding)
-    await send_with_photo(
+    await send_text_screen(
         bot, callback,
         text,
         tariff_selection_kb(devices=devices, discount_percent=promo_discount, promo_tariff_months=promo_binding),
-        photo=RENEWAL if renew_key_id else PLANS,
     )
 
 
@@ -235,11 +231,10 @@ async def cb_select_devtier(callback: CallbackQuery, bot: Bot, state: FSMContext
 
     renew_key_id = data.get("renew_key_id")
     text = _tariff_intro(devices, renewal=bool(renew_key_id), promo_binding=promo_binding)
-    await send_with_photo(
+    await send_text_screen(
         bot, callback,
         text,
         tariff_selection_kb(devices=devices, discount_percent=promo_discount, promo_tariff_months=promo_binding),
-        photo=RENEWAL if renew_key_id else PLANS,
     )
 
 
@@ -495,15 +490,9 @@ async def _ask_tariff_again(bot: Bot, callback: CallbackQuery) -> None:
         label = f"{get_price_for_months(months, devices)[1]} дней"
         renewing = int(draft.get("renew_key_id") or 0)
         text = (
-            "<b>Заказ не завершён. Продолжить оформление?</b>\n\n"
-            f"Сохранён выбор: <b>{label}</b>, <b>{devices} устройств</b>.\n"
-            + ("Это продление существующей подписки. Для сохранения "
-               "её ключа нужно заново выбрать срок.\n\n"
-               if renewing else
-               "Вернитесь к заказу, чтобы проверить актуальную итоговую сумму "
-               "и заново выбрать способ оплаты.\n\n")
-            + "Если у вас есть промокод, введите его на экране тарифов через кнопку «Есть промокод?». "
-            "Оплата пока не создаётся — новый платёж возможен только после вашего подтверждения."
+            "<b>Продолжить оформление?</b>\n\n"
+            f"Сохранён тариф: <b>{label}</b> · <b>{devices} устр.</b>\n"
+            "Оплата пока не создаётся. Промокод можно ввести на экране оплаты."
         )
         if renewing:
             # key_renew validates ownership again and restores the renewal FSM.
@@ -520,11 +509,7 @@ async def _ask_tariff_again(bot: Bot, callback: CallbackQuery) -> None:
         await log_analytics_event(callback.from_user.id, "checkout_recovery_shown",
                                   tariff=f"{months}m", devices=devices)
     else:
-        text = (
-            "<b>Заказ не завершён. Продолжить оформление?</b>\n\n"
-            "Выберите тариф ещё раз. Оплата не создаётся, пока вы "
-            "не подтвердите новый заказ."
-        )
+        text = "<b>Продолжить оформление?</b>\n\nВыберите тариф. Оплата пока не создаётся."
         keyboard = tariff_selection_kb()
     await send_with_photo(bot, callback, text, keyboard, photo=PLANS)
 
