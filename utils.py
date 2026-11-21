@@ -1,6 +1,7 @@
 """Utility helpers for ByMeVPN bot."""
 import asyncio
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -23,6 +24,7 @@ _photo_file_ids: dict[str, str] = {}
 _photo_cache_loaded: set[str] = set()
 _photo_cache_lock = asyncio.Lock()
 _PHOTO_CAPTION_LIMIT = 1024
+logger = logging.getLogger(__name__)
 
 
 async def get_cached_bot_info(bot: Bot):
@@ -101,6 +103,31 @@ async def _remember_photo_file_id(key: str | None, message: Message, bot: Bot | 
             pass
 
 
+async def _send_photo_with_cache_fallback(
+    bot: Bot, chat_id: int, photo: str, caption: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> Message:
+    """Retry a rejected cached Telegram file_id with the bundled local image."""
+    source, cache_key = await _photo_source(photo, bot)
+    try:
+        sent = await bot.send_photo(
+            chat_id=chat_id, photo=source, caption=caption, parse_mode="HTML",
+            reply_markup=reply_markup,
+        )
+    except Exception as cached_error:
+        if not cache_key or isinstance(source, FSInputFile):
+            raise
+        namespace = _bot_media_namespace(bot)
+        _photo_file_ids.pop(f"{namespace}:{Path(photo).name}", None)
+        logger.info("Cached Telegram artwork was rejected; retrying local file (%s)", type(cached_error).__name__)
+        sent = await bot.send_photo(
+            chat_id=chat_id, photo=FSInputFile(photo), caption=caption,
+            parse_mode="HTML", reply_markup=reply_markup,
+        )
+    await _remember_photo_file_id(cache_key, sent, bot)
+    return sent
+
+
 async def send_photo_message(
     bot: Bot,
     chat_id: int,
@@ -110,17 +137,12 @@ async def send_photo_message(
 ) -> Message:
     """Send a local banner, caching Telegram's file_id for later sends."""
     reply_markup = normalize_navigation(reply_markup)
-    source, cache_key = await _photo_source(photo, bot)
     try:
         long_text = len(text) > _PHOTO_CAPTION_LIMIT
-        sent = await bot.send_photo(
-            chat_id=chat_id,
-            photo=source,
-            caption="ByMeVPN" if long_text else text,
-            parse_mode="HTML",
-            reply_markup=None if long_text else reply_markup,
+        sent = await _send_photo_with_cache_fallback(
+            bot, chat_id, photo, "ByMeVPN" if long_text else text,
+            None if long_text else reply_markup,
         )
-        await _remember_photo_file_id(cache_key, sent, bot)
         if long_text:
             return await bot.send_message(
                 chat_id=chat_id, text=text, parse_mode="HTML", reply_markup=reply_markup,
@@ -235,14 +257,9 @@ async def send_or_edit(
                 pass
 
         try:
-            sent = await bot.send_photo(
-                chat_id=msg.chat.id,
-                photo=source,
-                caption=text,
-                parse_mode="HTML",
-                reply_markup=reply_markup,
+            sent = await _send_photo_with_cache_fallback(
+                bot, msg.chat.id, photo, text, reply_markup,
             )
-            await _remember_photo_file_id(cache_key, sent, bot)
         except Exception:
             return await send_or_edit(bot, target, text, reply_markup)
         try:
