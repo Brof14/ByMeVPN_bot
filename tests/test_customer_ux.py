@@ -569,7 +569,7 @@ class TestCustomerMenus(unittest.IsolatedAsyncioTestCase):
         self.assertIs(loaded, sub)
         self.assertEqual(title, "Счёт СБП")
         text = _get_payment_methods_text(card_title=title, sub=sub)
-        self.assertIn("Автопродление включено", text)
+        self.assertIn("Статус: <b>Включено</b>", text)
         self.assertIn("Счёт СБП", text)
         actions = callbacks(manage_payment_methods_kb(
             card_title=title,
