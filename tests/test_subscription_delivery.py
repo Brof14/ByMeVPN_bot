@@ -22,11 +22,11 @@ class TestSubscriptionDelivery(unittest.IsolatedAsyncioTestCase):
         text = subscription._activation_message(
             "<b>Подписка активирована</b>", "", 3, 2, 1_800_000_000,
         )
-        self.assertIn("Доступ: <b>3 дней</b>", text)
+        self.assertIn("Доступ: <b>3 дня</b>", text)
         self.assertIn("Устройства: <b>2</b>", text)
         self.assertIn("Действует до:", text)
-        self.assertIn("Нажмите «Подключить VPN» ниже", text)
-        self.assertIn("подберёт приложение для вашего устройства", text)
+        self.assertIn("Нажмите «Подключить VPN»", text)
+        self.assertIn("чтобы настроить устройство", text)
         self.assertNotIn("Установите Happ", text)
         self.assertNotIn("<code>", text)
 
