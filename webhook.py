@@ -159,6 +159,25 @@ async def readiness_check():
     return {"status": "ready"}
 
 
+@app.get("/provisionz", include_in_schema=False)
+async def provisioning_health_check():
+    """Is provisioning currently possible? Keep core /readyz independent.
+
+    Return no panel addresses, credentials or other internal diagnostics.
+    """
+    import asyncio
+    from fastapi import HTTPException
+    from xui_client import test_xui_connection
+
+    try:
+        connected, _ = await asyncio.wait_for(test_xui_connection(), timeout=8.0)
+        if connected:
+            return {"status": "ready", "provisioning": "ready"}
+    except Exception as exc:
+        logger.warning("Provisioning health probe unavailable (%s)", type(exc).__name__)
+    raise HTTPException(status_code=503, detail="provisioning unavailable")
+
+
 @app.get("/app/login")
 async def app_login_redirect(sub: str = "", name: str = "", ticket: str = ""):
     """Open the ByMeVPN app from a Telegram inline button.
