@@ -23,7 +23,7 @@ from keyboards import (
     key_devices_kb, key_device_detail_kb, confirm_delete_device_kb, key_history_kb,
     confirm_reissue_kb, support_url,
 )
-from utils import send_with_photo, send_or_edit, safe_answer
+from utils import send_with_photo, send_or_edit, send_text_screen, safe_answer
 from constants import format_timestamp as fmt_date, format_days_left as fmt_days_left, format_expiry_msk as fmt_expiry_msk
 from states import BuyFlow
 from bot_assets import KEY, DEVICES, RENEWAL, AUTO_RENEWAL
@@ -397,7 +397,6 @@ async def cb_key_device(callback: CallbackQuery, bot: Bot):
             f"🕒 Последняя активность: {last_seen}\n\n"
             "Не узнаёте устройство? Обратитесь в поддержку. "
             "Для освобождения места удалите старое устройство из списка."
-
         )
         await send_or_edit(bot, callback, text, key_device_detail_kb(key_id, device_id), photo=DEVICES)
     except Exception:
@@ -733,7 +732,7 @@ def _get_payment_methods_text(
     lines = [
         "<b>Автопродление</b>",
         "",
-        f"Статус: <b>Автопродление {status}</b>",
+        f"Статус: <b>{status.capitalize()}</b>",
         f"Способ оплаты: <b>{escape(card_title)}</b>",
     ]
     if active:
@@ -1085,11 +1084,10 @@ async def cb_key_renew(callback: CallbackQuery, bot: Bot, state: FSMContext):
     from handlers.buy import _tariff_intro
     renewal_text = _tariff_intro(key_devices, renewal=True)
 
-    await send_with_photo(
+    await send_text_screen(
         bot, callback,
         renewal_text,
         tariff_selection_kb(devices=key_devices),
-        photo=RENEWAL,
     )
 
 
