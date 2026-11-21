@@ -5590,7 +5590,7 @@ async def set_key_device_limit(key_id: int, user_id: int, limit_ip: int) -> bool
                 (limit_ip, user_id, key_id, user_id),
             )
             await db.commit()
-            if cur.rowcount != 1:
+            if cur.rowcount < 1:
                 return False
             try:
                 from cache import invalidate_user_cache, invalidate_subscription_cache
