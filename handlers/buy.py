@@ -211,10 +211,11 @@ async def cb_buy_vpn(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await log_analytics_event(callback.from_user.id, "tariffs_viewed", devices=devices)
     
     text = _tariff_intro(devices, renewal=bool(renew_key_id), promo_binding=promo_binding)
-    await send_text_screen(
+    await send_with_photo(
         bot, callback,
         text,
         tariff_selection_kb(devices=devices, discount_percent=promo_discount, promo_tariff_months=promo_binding),
+        photo=RENEWAL if renew_key_id else PLANS,
     )
 
 
@@ -235,10 +236,11 @@ async def cb_select_devtier(callback: CallbackQuery, bot: Bot, state: FSMContext
 
     renew_key_id = data.get("renew_key_id")
     text = _tariff_intro(devices, renewal=bool(renew_key_id), promo_binding=promo_binding)
-    await send_text_screen(
+    await send_with_photo(
         bot, callback,
         text,
         tariff_selection_kb(devices=devices, discount_percent=promo_discount, promo_tariff_months=promo_binding),
+        photo=RENEWAL if renew_key_id else PLANS,
     )
 
 
