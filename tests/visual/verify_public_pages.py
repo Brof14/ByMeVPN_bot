@@ -72,13 +72,30 @@ def test_connection(browser, *, name, width, height, ua, selected):
         assert page.locator("#copy-subscription").is_visible()
     else:
         assert not page.locator("#recommendation-panel").is_visible()
-        assert "Выберите платформу" in page.locator("#status").inner_text()
+        assert "Выберите платформу" in page.locator("#platform-hint").inner_text()
+        page.screenshot(path=str(ARTIFACTS / f"connect-unknown-initial-{width}.png"), full_page=True)
         page.locator('[data-platform="android"]').click()
         assert page.locator("#recommendation-panel").is_visible()
+    assert page.locator("#installation-guide").get_attribute("open") is None
+    assert page.locator("#alternatives").get_attribute("open") is None
+    assert page.locator("#download-action").is_visible()
+    assert page.locator("#connect-action").is_visible()
+    assert "happ://add/" in page.locator("#connect-action").get_attribute("href")
+    if width <= 430:
+        download_top = page.locator("#download-action").bounding_box()["y"]
+        connect_top = page.locator("#connect-action").bounding_box()["y"]
+        assert download_top < connect_top, (name, download_top, connect_top)
     min_height = page.locator(".platform").first.bounding_box()["height"]
     assert min_height >= 44, (name, min_height)
     no_horizontal_overflow(page, name)
     page.screenshot(path=str(ARTIFACTS / f"connect-{name}-{width}.png"), full_page=True)
+    if name == "ios":
+        page.locator("#installation-guide summary").click()
+        assert page.locator("#guide-body li").count() == 3
+        page.locator("#alternatives summary").click()
+        assert page.locator("#other-apps .other").count() >= 3
+        no_horizontal_overflow(page, "ios-expanded")
+        page.screenshot(path=str(ARTIFACTS / "connect-ios-expanded-390.png"), full_page=True)
     context.close()
 
 
