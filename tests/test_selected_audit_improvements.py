@@ -71,16 +71,24 @@ class ExpiryAndReadinessTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("expires_at", sub)
 
     async def test_provisioning_health_is_independent_and_secrets_free(self):
-        with patch("xui_client.test_xui_connection", new=AsyncMock(return_value=(True, "secret panel detail"))):
-            self.assertEqual(
-                await provisioning_health_check(),
-                {"status": "ready", "provisioning": "ready"},
-            )
-        with patch("xui_client.test_xui_connection", new=AsyncMock(return_value=(False, "password is wrong"))):
-            with self.assertRaises(HTTPException) as error:
-                await provisioning_health_check()
-        self.assertEqual(error.exception.status_code, 503)
-        self.assertNotIn("password", str(error.exception.detail))
+        request = SimpleNamespace(headers={"X-ByMeVPN-Monitor-Token": "x" * 40})
+        with patch.dict(os.environ, {"BYMEVPN_MONITOR_TOKEN": "x" * 40}):
+            with patch("xui_client.test_xui_connection", new=AsyncMock(return_value=(True, "secret panel detail"))):
+                self.assertEqual(
+                    await provisioning_health_check(request),
+                    {"status": "ready", "provisioning": "ready"},
+                )
+            with patch("xui_client.test_xui_connection", new=AsyncMock(return_value=(False, "password is wrong"))):
+                with self.assertRaises(HTTPException) as error:
+                    await provisioning_health_check(request)
+            self.assertEqual(error.exception.status_code, 503)
+            self.assertNotIn("password", str(error.exception.detail))
+        with patch.dict(os.environ, {"BYMEVPN_MONITOR_TOKEN": "x" * 40}):
+            with patch("xui_client.test_xui_connection", new=AsyncMock()) as probe:
+                with self.assertRaises(HTTPException) as denied:
+                    await provisioning_health_check(SimpleNamespace(headers={}))
+                self.assertEqual(denied.exception.status_code, 404)
+                probe.assert_not_awaited()
 
     def test_retry_after_keeps_correlation_and_failure_code(self):
         error = _correlated_http_error(503, "Try again", "id1234", "subscription_configuration_unavailable", retry_after_seconds=15)
