@@ -100,16 +100,12 @@ def _promo_purchase_keyboard(months: int | None = None, devices: int = DEFAULT_D
 def _tariff_intro(devices: int, *, renewal: bool = False, promo_binding: int | None = None) -> str:
     """Consistent purchase/renewal copy, with current selection as context."""
     devices = validate_device_limit(devices)
-    device_word = "устройств"
-    audience = "для вас" if devices == 2 else "для вас и ваших близких"
     title = "Продление подписки" if renewal else "Тарифы ByMeVPN"
     text = (
         f"<b>{title}</b>\n\n"
-        f"<b>Устройства:</b> выбрано до {devices} {device_word} — {audience}.\n"
-        "Измените количество кнопкой выше тарифов.\n\n"
-        "<b>Срок:</b> выберите тариф ниже. Чем дольше срок, тем ниже стоимость месяца.\n"
-        "Для баланса срока и первоначальной суммы рассмотрите 3+1 мес.\n"
-        "Полная сумма указана в каждом тарифе."
+        f"<b>Устройств:</b> до {devices}. Выберите лимит кнопками выше.\n\n"
+        "<b>Срок:</b> нажмите подходящий тариф ниже. В длинных тарифах цена за месяц ниже.\n"
+        "Стоимость всего периода указана на каждой кнопке. Вариант 3+1 — четыре месяца доступа по цене трёх."
     )
     if promo_binding in (1, 3, 6, 12):
         extra = TARIFF_BONUS_MONTHS[promo_binding]

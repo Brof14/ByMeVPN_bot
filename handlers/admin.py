@@ -684,6 +684,7 @@ def _key_detail_kb(key_id: int, user_id: int, is_active: bool) -> InlineKeyboard
             InlineKeyboardButton(text="✏️ Указать срок", callback_data=f"admin_edit_key:{key_id}"),
             InlineKeyboardButton(text="🏷 Переименовать", callback_data=f"admin_rename_key:{key_id}"),
         ],
+        [InlineKeyboardButton(text="📱 Изменить лимит устройств", callback_data=f"admin_key_devices:{key_id}:{user_id}")],
         [InlineKeyboardButton(text="🗑️ Удалить ключ", callback_data=f"admin_del_key_confirm:{key_id}:{user_id}")],
         # Navigation
         [
@@ -3218,6 +3219,15 @@ async def cb_key_detail(callback: CallbackQuery):
     is_active = expiry > now
     status = "🟢 Активен" if is_active else "🔴 Истёк"
 
+    traffic_text = "недоступен"
+    try:
+        from xui_client import format_traffic, get_xui_user
+        panel_usage = await asyncio.wait_for(get_xui_user(int(key.get("user_id") or user_id)), timeout=1.5)
+        if panel_usage is not None:
+            traffic_text = format_traffic(int(panel_usage.get("used_traffic") or 0))
+    except Exception as exc:
+        logger.info("Admin traffic lookup unavailable for key %s (%s)", key_id, type(exc).__name__)
+
     # Get subscription URL from existing key
     subscription_url = key.get("key", "")
 
@@ -3229,13 +3239,79 @@ async def cb_key_detail(callback: CallbackQuery):
         f"⏱ <b>Осталось:</b> {days_left} дней\n"
         f"📅 <b>Истекает:</b> {fmt_date(expiry)[:16]}\n"
         f"👤 <b>Пользователь:</b> <code>{key.get('user_id')}</code>\n"
-        f"🌐 <b>Устройств:</b> {key.get('limit_ip', 1)}\n\n"
+        f"🌐 <b>Устройств:</b> {key.get('limit_ip', 1)}\n"
+        f"📊 <b>Использовано трафика:</b> {traffic_text}\n\n"
         f"🔑 <b>Подписка:</b>\n<code>{subscription_url}</code>\n\n"
     )
     
     await callback.message.edit_text(
         text, parse_mode="HTML",
         reply_markup=_key_detail_kb(key_id, user_id, is_active)
+    )
+
+
+@router.callback_query(F.data.startswith("admin_key_devices:"))
+async def cb_admin_key_devices(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True); return
+    try:
+        _, raw_key_id, raw_user_id = callback.data.split(":", 2)
+        key_id, user_id = int(raw_key_id), int(raw_user_id)
+    except (ValueError, TypeError):
+        await safe_answer(callback, "Некорректный ключ.", alert=True); return
+    from database import get_key_by_id
+    key = await get_key_by_id(key_id)
+    if not key or int(key.get("user_id") or 0) != user_id:
+        await safe_answer(callback, "Ключ не найден у этого пользователя.", alert=True); return
+    await safe_answer(callback)
+    current = int(key.get("limit_ip") or 2)
+    buttons = [InlineKeyboardButton(
+        text=("✓ " if devices == current else "") + f"До {devices} устройств",
+        callback_data=f"admin_key_device_set:{key_id}:{user_id}:{devices}",
+    ) for devices in VALID_DEVICE_LIMITS]
+    await callback.message.edit_text(
+        f"<b>Лимит устройств · ключ #{key_id}</b>\n\nТекущий лимит: до {current}. Выберите новый:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            buttons,
+            [InlineKeyboardButton(text="← К ключу", callback_data=f"admin_key_detail:{key_id}:{user_id}")],
+        ]),
+    )
+
+
+@router.callback_query(F.data.startswith("admin_key_device_set:"))
+async def cb_admin_key_device_set(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        await safe_answer(callback, "Нет доступа.", alert=True); return
+    try:
+        _, raw_key_id, raw_user_id, raw_limit = callback.data.split(":", 3)
+        key_id, user_id, limit_ip = int(raw_key_id), int(raw_user_id), int(raw_limit)
+    except (ValueError, TypeError):
+        await safe_answer(callback, "Некорректный выбор.", alert=True); return
+    if limit_ip not in VALID_DEVICE_LIMITS:
+        await safe_answer(callback, "Такой лимит не поддерживается.", alert=True); return
+    from database import get_key_by_id, set_key_device_limit
+    key = await get_key_by_id(key_id)
+    if not key or int(key.get("user_id") or 0) != user_id:
+        await safe_answer(callback, "Ключ не найден у этого пользователя.", alert=True); return
+    from xui_client import set_xui_client_limits
+    try:
+        panel_ok = await asyncio.wait_for(set_xui_client_limits(user_id, limit_ip=limit_ip), timeout=6)
+    except Exception as exc:
+        logger.warning("Admin device limit update failed for key %s (%s)", key_id, type(exc).__name__)
+        panel_ok = False
+    if not panel_ok:
+        await safe_answer(callback, "Панель не подтвердила итог. Сверьте лимит перед повторной попыткой.", alert=True)
+        return
+    if not await set_key_device_limit(key_id, user_id, limit_ip):
+        await safe_answer(callback, "Панель изменила лимит, но запись не обновилась. Нужна сверка ключа.", alert=True)
+        return
+    await safe_answer(callback, f"Лимит изменён: до {limit_ip} устройств.")
+    await callback.message.edit_text(
+        f"✅ Для ключа #{key_id} установлен лимит до {limit_ip} устройств.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Открыть ключ", callback_data=f"admin_key_detail:{key_id}:{user_id}")
+        ]]),
     )
 
 

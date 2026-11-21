@@ -58,10 +58,6 @@ def main_menu_active(
         InlineKeyboardButton(text="Подключить VPN", callback_data=f"key_instructions:{key_id}")
     )
     kb.row(connect_button)
-    if remaining_days is not None and 0 < remaining_days <= 3:
-        kb.row(InlineKeyboardButton(
-            text="Продлить подписку", callback_data=f"key_renew:{key_id}",
-        ))
     # Device management belongs to the subscription details, not the home hub.
     kb.row(InlineKeyboardButton(text="Подписка", callback_data="my_keys"))
     kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn", style="primary"))
@@ -100,15 +96,8 @@ def main_menu_expired(*, key_ids: list[int]) -> InlineKeyboardMarkup:
     A single key can renew directly while users with several keys first
     choose which subscription to extend. This does not touch pricing logic.
     """
-    if len(key_ids) == 1:
-        renew_action = f"key_renew:{key_ids[0]}"
-    elif key_ids:
-        renew_action = "my_keys"
-    else:
-        renew_action = "buy_vpn"
-
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="Продлить VPN", callback_data=renew_action))
+    kb.row(InlineKeyboardButton(text="Тарифы", callback_data="buy_vpn", style="primary"))
     kb.row(InlineKeyboardButton(text="Бесплатные дни", callback_data="free_vpn", style="primary"))
     kb.row(
         InlineKeyboardButton(text="О сервисе", callback_data="about"),

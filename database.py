@@ -5573,6 +5573,38 @@ async def set_key_expiry(key_id: int, expiry: int, limit_ip: Optional[int] = Non
             return False
 
 
+async def set_key_device_limit(key_id: int, user_id: int, limit_ip: int) -> bool:
+    """Update the device limit on one owned local key after panel confirmation."""
+    try:
+        key_id, user_id, limit_ip = int(key_id), int(user_id), int(limit_ip)
+    except (TypeError, ValueError):
+        return False
+    if key_id <= 0 or user_id <= 0 or limit_ip not in (2, 5, 10):
+        return False
+    db = await get_db()
+    async with _db_semaphore:
+        try:
+            cur = await db.execute(
+                "UPDATE keys SET limit_ip=? WHERE user_id=? AND EXISTS "
+                "(SELECT 1 FROM keys selected WHERE selected.id=? AND selected.user_id=?)",
+                (limit_ip, user_id, key_id, user_id),
+            )
+            await db.commit()
+            if cur.rowcount != 1:
+                return False
+            try:
+                from cache import invalidate_user_cache, invalidate_subscription_cache
+                invalidate_user_cache(user_id)
+                invalidate_subscription_cache(user_id)
+            except Exception:
+                pass
+            return True
+        except Exception:
+            await db.rollback()
+            logger.exception("set_key_device_limit failed for key %s", key_id)
+            return False
+
+
 async def extend_key(key_id: int, additional_days: int, limit_ip: Optional[int] = None) -> bool:
     """Extend key by additional days from max(current_expiry, now) and optionally update device limit atomically."""
     additional_days = normalize_days(additional_days)
