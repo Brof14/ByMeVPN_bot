@@ -112,12 +112,9 @@ async def cb_upgrade_device_screen(callback: CallbackQuery, bot: Bot):
         if target <= old:
             continue
         quote = upgrade_price_stars(old, target, remaining)
+        # Device limit first, then the existing unchanged payment provider screen.
         rows.append([InlineKeyboardButton(
-            text=f"До {target} устройств · {quote} ⭐",
-            callback_data=f"device_upgrade_buy:{key_id}:{target}",
-        )])
-        rows.append([InlineKeyboardButton(
-            text=f"Картой или CryptoBot · до {target} устройств",
+            text=f"До {target} устройств · доплата {quote}",
             callback_data=f"device_upgrade_methods:{key_id}:{target}",
         )])
     rows.append([InlineKeyboardButton(text="← К устройствам", callback_data=f"key_devices:{key_id}")])
