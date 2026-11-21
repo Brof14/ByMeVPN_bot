@@ -25,7 +25,7 @@ This change set deliberately **does not modify** promo codes, tariffs, payment m
 
 1. Compare the deployed immutable Git SHA/image digest with this reviewed PR. Keep the previous image for rollback. Do not replace persistent SQLite, Redis, or 3x-ui volumes.
 2. Run the full Python suite and quality gate. Check new field parsing with **actual Android and Windows clients**; do not deploy to real clients if either application crashes when ping/load is null or city/code is empty.
-3. Verify `/readyz` still serves local readiness and `/provisionz` reports 200 only when configured 3x-ui provisioning inbounds respond, otherwise 503 with no sensitive detail. Ensure alerts use distinct thresholds.
+3. Verify `/readyz` still serves local readiness. Set a random 32+ character `BYMEVPN_MONITOR_TOKEN` on VPS and probe `/provisionz` with header `X-ByMeVPN-Monitor-Token: <token>`; without an authenticated token it returns 404. With a valid token it reports 200 when configured provisioning responds, otherwise 503 with no sensitive detail. Monitor the endpoint at a conservative cadence (e.g. once per minute), not on every user request.
 4. Test account with active subscription, expired account, blocked device, invalid HWID and 3x-ui outage. Failed configuration fetch must not return invented servers or credentials; `/api/v1/servers` should send stable `X-Error-Code`, correlation ID and short retry hint.
 5. Test dates around UTC midnight; clients should display `expires_at_utc` or `expires_at_unix` using their own timezone. Legacy `expires_at` remains for old clients.
 6. Verify device upgrades 2→5, 2→10 and 5→10: target selection appears before the **unchanged** provider chooser; charged amounts and subscription expiry stay unchanged.
